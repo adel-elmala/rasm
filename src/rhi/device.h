@@ -53,6 +53,7 @@ namespace rasm::rhi
         bool            enableSyncValidation    = false;
         bool            enableGpuValidation     = false;
         bool            asyncCompute            = false;
+        bool            hostImageCopy           = true;     // false: every texture goes through the staging ring
     };
 
     struct Buffer
@@ -75,7 +76,28 @@ namespace rasm::rhi
         TextureDesc                         desc;
         TextureUsage                        state               = TextureUsage::UNKNOWN;
         uint32_t                            mipLevels           = 1;
+        bool                                hostCopy            = false;    // filled on the host; otherwise copied from the staging ring
     };
+
+    struct TextureCopy
+    {
+        Texture*                            dst                 = nullptr;
+        uint64_t                            srcOffset           = 0;
+        uint32_t                            mip                 = 0;
+        uint32_t                            y                   = 0;        // rows [y, y + height) of the mip, in texels
+        uint32_t                            height              = 0;
+        bool                                discard             = false;    // the texture's first copy: its old contents may go
+    };
+
+    struct FormatBlock
+    {
+        uint32_t                            width               = 1;
+        uint32_t                            height              = 1;
+        uint32_t                            bytes               = 0;
+    };
+
+    FormatBlock                             getFormatBlock(Format format);
+    uint64_t                                getTextureLevelSize(Format format, uint32_t width, uint32_t height);
 
     struct MemoryRequirements
     {
@@ -154,6 +176,7 @@ namespace rasm::rhi
         virtual void                memoryBarrier(PipelineStage before, PipelineStage after) = 0;
         virtual void                aliasingBarrier() = 0;
         virtual void                copyBuffers(Buffer* src, const BufferCopy* copies, uint32_t copyCount) = 0;
+        virtual void                copyToTextures(Buffer* src, const TextureCopy* copies, uint32_t copyCount) = 0;
         virtual void                writeTimestamp(QueryPool* pool, uint32_t index) = 0;
     };
 
@@ -237,7 +260,8 @@ namespace rasm::rhi
         virtual bool                    readBuffer(Buffer* buffer, void* data, size_t size, size_t offset) = 0;
         virtual void                    resetQueries(QueryPool* pool) = 0;
         virtual bool                    getTimestamps(QueryPool* pool, uint32_t firstQuery, uint32_t count, uint64_t* nanoseconds) = 0;
-        virtual bool                    fillTexture(Texture* texture, const void* data) = 0;
+        virtual bool                    supportsTextureFormat(Format format) const = 0;
+        virtual bool                    fillTexture(Texture* texture, const TextureLevel* levels, uint32_t levelCount) = 0;
         virtual void                    updateBindlessTexture(DescriptorSet* descriptorSet, uint32_t slot, Texture* texture, Sampler* sampler) = 0;
         virtual void                    updateBindlessStorageImage(DescriptorSet* descriptorSet, uint32_t slot, Texture* texture, uint32_t mip) = 0;
         virtual bool                    waitForFence(Fence* fence, uint64_t value, uint64_t timeout) = 0;

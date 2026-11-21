@@ -22,6 +22,7 @@ namespace rasm::gfx
     // MaterialData::flags. Must match shaders/lib/core.slang.
     constexpr uint32_t      MATERIAL_DOUBLE_SIDED       = 1u << 0;
     constexpr uint32_t      MATERIAL_TEXTURE_TRANSFORM  = 1u << 1;  // a texture has a KHR_texture_transform that is not the identity
+    constexpr uint32_t      MATERIAL_NORMAL_XY          = 1u << 2;  // the normal map has x and y only (BC5, EAC RG11): z is rebuilt
 
     // Selects how the uber shader's fragMain shades a model. Must match shaders/lib/core.slang.
     enum class MaterialId : uint32_t { PBR, UNLIT };

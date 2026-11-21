@@ -2,10 +2,10 @@
 #include "rhi/vulkan/vulkanCommandBuffer.h"
 #include "rhi/vulkan/vulkanSwapchain.h"
 #include "rhi/vulkan/vulkanUtils.h"
+#include "rhi/mipChain.h"
 #include "platform/windowSurface.h"
 
 #include "spdlog/spdlog.h"
-#include "stb_image_resize2.h"
 
 #include <algorithm>
 #include <cassert>
@@ -243,8 +243,7 @@ namespace rasm::rhi
             case TextureUsage::TRANSFER_DST:
                 return VK_IMAGE_USAGE_TRANSFER_DST_BIT;
             case TextureUsage::SAMPLED:
-                // VK_EXT_host_image_copy must be enabled for VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT to be valid.
-                return VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_HOST_TRANSFER_BIT;
+                return VK_IMAGE_USAGE_SAMPLED_BIT;
             case TextureUsage::STORAGE:
                 return VK_IMAGE_USAGE_STORAGE_BIT;
             case TextureUsage::COLOR_ATTACHMENT:
@@ -344,14 +343,11 @@ namespace rasm::rhi
             return false;
         }
 
-        // Only sampled RGBA8 images use the mip upload/generation path. Render targets and other formats keep one level,
-        // unless the desc asks for more; a count past the full chain is clamped to it.
+        // Only sampled RGBA8 images get the full chain by default (RenderContext::fillTexture makes it). Render targets and
+        // other formats keep one level, unless the desc asks for more; a count past the full chain is clamped to it.
         uint32_t mipLevelCount(const TextureDesc &desc)
         {
-            uint32_t fullChain = 1;
-            for (uint32_t size = std::max(desc.width, desc.height); size > 1; size /= 2)
-                ++fullChain;
-            fullChain = std::min(fullChain, MAX_TEXTURE_MIPS);
+            const uint32_t fullChain = std::min(getFullMipCount(desc.width, desc.height), MAX_TEXTURE_MIPS);
             if (desc.mipLevels > 0)
                 return std::min(desc.mipLevels, fullChain);
             if (desc.usage == TextureUsage::SAMPLED &&
@@ -361,10 +357,10 @@ namespace rasm::rhi
             return 1;
         }
 
-        // TODO: check if the format is supported by the device, and if not, find a compatible one
         // With a compute queue, images are shared by both families. Concurrent sharing needs no ownership
         // transfers between the queues; some GPUs compress such images less.
-        VkImageCreateInfo imageCreateInfo(const TextureDesc &desc, uint32_t mipLevels, const uint32_t *sharedFamilies, uint32_t sharedFamilyCount)
+        // A sampled texture is filled either on the host (host image copy) or by a copy from the staging ring.
+        VkImageCreateInfo imageCreateInfo(const TextureDesc &desc, uint32_t mipLevels, bool hostCopy, const uint32_t *sharedFamilies, uint32_t sharedFamilyCount)
         {
             VkImageCreateInfo imageInfo = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
             imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -378,6 +374,8 @@ namespace rasm::rhi
             imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
             imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             imageInfo.usage = toVkImageUsageFlags(desc.usage);
+            if (desc.usage == TextureUsage::SAMPLED)
+                imageInfo.usage |= hostCopy ? VK_IMAGE_USAGE_HOST_TRANSFER_BIT : VK_IMAGE_USAGE_TRANSFER_DST_BIT;
             imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
             imageInfo.sharingMode = sharedFamilyCount > 1 ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE;
             imageInfo.queueFamilyIndexCount = sharedFamilyCount > 1 ? sharedFamilyCount : 0;
@@ -482,6 +480,13 @@ namespace rasm::rhi
             return false;
         physicalDevice = vkbPhysicalDevice.value();
 
+        // Block-compressed textures, each family only where the GPU has it: BC on desktop and Apple GPUs, ASTC and ETC2
+        // on mobile and Apple GPUs. vk-bootstrap enables a set only when all of it is present, so one at a time.
+        const bool bc = physicalDevice.enable_features_if_present(VkPhysicalDeviceFeatures{.textureCompressionBC = VK_TRUE});
+        const bool astc = physicalDevice.enable_features_if_present(VkPhysicalDeviceFeatures{.textureCompressionASTC_LDR = VK_TRUE});
+        const bool etc2 = physicalDevice.enable_features_if_present(VkPhysicalDeviceFeatures{.textureCompressionETC2 = VK_TRUE});
+        spdlog::info("Texture compression: BC {}, ASTC {}, ETC2 {}.", bc ? "yes" : "no", astc ? "yes" : "no", etc2 ? "yes" : "no");
+
         auto vkbDevice = vkb::DeviceBuilder{physicalDevice}.build();
         if (!vkbDevice)
         {
@@ -490,6 +495,7 @@ namespace rasm::rhi
         }
         device = vkbDevice.value();
         dispatchTable = device.make_table();
+        queryFormatSupport(desc.hostImageCopy);
 
         auto queueRet = device.get_queue(vkb::QueueType::graphics);
         auto queueIndexRet = device.get_queue_index(vkb::QueueType::graphics);
@@ -601,13 +607,14 @@ namespace rasm::rhi
             return nullptr;
 
         const uint32_t mipLevels = mipLevelCount(desc);
-        const VkImageCreateInfo imageInfo = imageCreateInfo(desc, mipLevels, sharedFamilies, sharedFamilyCount);
+        const bool hostCopy = usesHostCopy(desc);
+        const VkImageCreateInfo imageInfo = imageCreateInfo(desc, mipLevels, hostCopy, sharedFamilies, sharedFamilyCount);
 
         VmaAllocationCreateInfo allocInfo = {};
         allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
         allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
 
-        if (desc.usage == TextureUsage::SAMPLED)
+        if (hostCopy)
         {
             allocInfo.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                                VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT;
@@ -616,6 +623,7 @@ namespace rasm::rhi
         auto *texture = new VulkanTexture();
         texture->desc = desc;
         texture->mipLevels = mipLevels;
+        texture->hostCopy = hostCopy;
 
         auto result = vmaCreateImage(allocator, &imageInfo, &allocInfo, &texture->image, &texture->allocation, nullptr);
         if (result != VK_SUCCESS)
@@ -641,7 +649,7 @@ namespace rasm::rhi
 
     MemoryRequirements VulkanDevice::getTextureMemoryRequirements(const TextureDesc &desc)
     {
-        const VkImageCreateInfo imageInfo = imageCreateInfo(desc, mipLevelCount(desc), sharedFamilies, sharedFamilyCount);
+        const VkImageCreateInfo imageInfo = imageCreateInfo(desc, mipLevelCount(desc), usesHostCopy(desc), sharedFamilies, sharedFamilyCount);
         const VkDeviceImageMemoryRequirements info = {.sType = VK_STRUCTURE_TYPE_DEVICE_IMAGE_MEMORY_REQUIREMENTS, .pCreateInfo = &imageInfo};
         VkMemoryRequirements2 requirements = {.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2};
         vkGetDeviceImageMemoryRequirements(device.device, &info, &requirements);
@@ -678,11 +686,13 @@ namespace rasm::rhi
             return nullptr;
 
         const uint32_t mipLevels = mipLevelCount(desc);
-        const VkImageCreateInfo imageInfo = imageCreateInfo(desc, mipLevels, sharedFamilies, sharedFamilyCount);
+        const bool hostCopy = usesHostCopy(desc);
+        const VkImageCreateInfo imageInfo = imageCreateInfo(desc, mipLevels, hostCopy, sharedFamilies, sharedFamilyCount);
 
         auto *texture = new VulkanTexture();
         texture->desc = desc;
         texture->mipLevels = mipLevels;
+        texture->hostCopy = hostCopy;
 
         auto result = vmaCreateAliasingImage2(allocator, static_cast<VulkanHeap *>(heap)->allocation, offset, &imageInfo, &texture->image);
         if (result != VK_SUCCESS)
@@ -1261,12 +1271,74 @@ namespace rasm::rhi
         return true;
     }
 
-    bool VulkanDevice::fillTexture(Texture *texture, const void *data)
+    // The format table is read once: the features of a format never change while the device lives. A block format also
+    // needs its compression feature, which initialize enabled where the GPU has it.
+    void VulkanDevice::queryFormatSupport(bool hostImageCopy)
+    {
+        const VkPhysicalDeviceFeatures &enabled = physicalDevice.features;
+        for (uint32_t value = 0; value < FORMAT_COUNT; ++value)
+        {
+            const auto format = static_cast<Format>(value);
+            const VkFormat vkFormat = toVkFormat(format);
+            if (vkFormat == VK_FORMAT_UNDEFINED)
+                continue;
+            switch (format)
+            {
+            case Format::BC4_UNORM:
+            case Format::BC5_UNORM:
+            case Format::BC7_UNORM:
+            case Format::BC7_SRGB:
+                if (!enabled.textureCompressionBC)
+                    continue;
+                break;
+            case Format::ASTC_4x4_UNORM:
+            case Format::ASTC_4x4_SRGB:
+                if (!enabled.textureCompressionASTC_LDR)
+                    continue;
+                break;
+            case Format::ETC2_R8G8B8A8_UNORM:
+            case Format::ETC2_R8G8B8A8_SRGB:
+            case Format::EAC_R11_UNORM:
+            case Format::EAC_R11G11_UNORM:
+                if (!enabled.textureCompressionETC2)
+                    continue;
+                break;
+            default:
+                break;
+            }
+
+            VkFormatProperties3 properties3 = {.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3};
+            VkFormatProperties2 properties = {.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2, .pNext = &properties3};
+            vkGetPhysicalDeviceFormatProperties2(physicalDevice.physical_device, vkFormat, &properties);
+            const VkFormatFeatureFlags2 features = properties3.optimalTilingFeatures;
+            const bool hostCopy = hostImageCopy && (features & VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT) != 0;
+            const bool filled = hostCopy || (features & VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT) != 0;
+            formatSupport[value] = {.sampled = filled && (features & VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT) != 0 &&
+                                               (features & VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0,
+                                    .hostCopy = hostCopy};
+        }
+    }
+
+    bool VulkanDevice::usesHostCopy(const TextureDesc &desc) const
+    {
+        const auto value = static_cast<uint32_t>(desc.format);
+        return desc.usage == TextureUsage::SAMPLED && value < FORMAT_COUNT && formatSupport[value].hostCopy;
+    }
+
+    bool VulkanDevice::supportsTextureFormat(Format format) const
+    {
+        const auto value = static_cast<uint32_t>(format);
+        return value < FORMAT_COUNT && formatSupport[value].sampled;
+    }
+
+    // Copies every mip on the host (VK_EXT_host_image_copy, core in 1.4), with no command buffer: the image goes from
+    // UNDEFINED to SHADER_READ_ONLY on the CPU first. Only for a texture created with hostCopy; the others go through
+    // the staging ring (RenderContext::fillTexture).
+    bool VulkanDevice::fillTexture(Texture *texture, const TextureLevel *levels, uint32_t levelCount)
     {
         auto *vkTexture = static_cast<VulkanTexture *>(texture);
-        assert(texture->desc.usage == TextureUsage::SAMPLED);
+        assert(texture->desc.usage == TextureUsage::SAMPLED && texture->hostCopy && levelCount == texture->mipLevels);
 
-        // Transition from UNDEFINED to SHADER_READ directly on the CPU (VK_EXT_host_image_copy).
         VkHostImageLayoutTransitionInfo transitionInfo = {};
         transitionInfo.sType = VK_STRUCTURE_TYPE_HOST_IMAGE_LAYOUT_TRANSITION_INFO;
         transitionInfo.image = vkTexture->image;
@@ -1285,49 +1357,22 @@ namespace rasm::rhi
             return false;
         }
 
-        // Generate the complete RGBA8 mip chain on the host, matching this backend's
-        // host-image-copy upload path. Color must be filtered in linear light; data maps
-        // (normal/MR/AO) must retain their linear encoding. No GPU blit support is required.
-        std::vector<std::vector<unsigned char>> mipData(vkTexture->mipLevels - 1);
-        std::vector<VkMemoryToImageCopy> regions(vkTexture->mipLevels);
-        const auto *pixels = static_cast<const unsigned char *>(data);
-        uint32_t width = texture->desc.width;
-        uint32_t height = texture->desc.height;
-        for (uint32_t level = 0; level < vkTexture->mipLevels; ++level)
+        // Each region's extent is the mip's size in texels; a block format's rows of blocks are read tightly packed.
+        std::vector<VkMemoryToImageCopy> regions(levelCount);
+        for (uint32_t level = 0; level < levelCount; ++level)
         {
             auto &region = regions[level];
             region.sType = VK_STRUCTURE_TYPE_MEMORY_TO_IMAGE_COPY;
-            region.pHostPointer = pixels;
+            region.pHostPointer = levels[level].data;
             region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1};
-            region.imageExtent = {width, height, 1};
-            if (level + 1 < vkTexture->mipLevels)
-            {
-                auto nextWidth = std::max(1u, width / 2);
-                auto nextHeight = std::max(1u, height / 2);
-                auto &next = mipData[level];
-                next.resize(static_cast<size_t>(nextWidth) * nextHeight * 4);
-                unsigned char *resized = nullptr;
-                if (texture->desc.format == Format::R8G8B8A8_SRGB ||
-                    texture->desc.format == Format::B8G8R8A8_SRGB)
-                    resized = stbir_resize_uint8_srgb(pixels, width, height, 0, next.data(), nextWidth, nextHeight, 0, STBIR_RGBA);
-                else
-                    resized = stbir_resize_uint8_linear(pixels, width, height, 0, next.data(), nextWidth, nextHeight, 0, STBIR_4CHANNEL);
-                if (!resized)
-                {
-                    spdlog::error("Failed to generate mip level {} for '{}'", level + 1, texture->desc.name);
-                    return false;
-                }
-                pixels = next.data();
-                width = nextWidth;
-                height = nextHeight;
-            }
+            region.imageExtent = {std::max(1u, texture->desc.width >> level), std::max(1u, texture->desc.height >> level), 1};
         }
 
         VkCopyMemoryToImageInfo copyInfo = {};
         copyInfo.sType = VK_STRUCTURE_TYPE_COPY_MEMORY_TO_IMAGE_INFO;
         copyInfo.dstImage = vkTexture->image;
         copyInfo.dstImageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        copyInfo.regionCount = static_cast<uint32_t>(regions.size());
+        copyInfo.regionCount = levelCount;
         copyInfo.pRegions = regions.data();
 
         result = vkCopyMemoryToImage(device.device, &copyInfo);

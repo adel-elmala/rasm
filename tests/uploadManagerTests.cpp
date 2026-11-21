@@ -21,6 +21,12 @@ namespace
         std::vector<uint8_t> bytes;
     };
 
+    // One byte vector per mip, tightly packed like the levels the upload reads.
+    struct FakeTexture : Texture
+    {
+        std::vector<std::vector<uint8_t>> mips;
+    };
+
     struct FakeFence : Fence
     {
         uint64_t completed = 0;
@@ -35,6 +41,7 @@ namespace
                 beganWhileInFlight = true;
             src = nullptr;
             copies.clear();
+            textureCopies.clear();
             return true;
         }
         bool end() override { return true; }
@@ -60,10 +67,16 @@ namespace
             src = source;
             copies.insert(copies.end(), list, list + count);
         }
+        void copyToTextures(Buffer *source, const TextureCopy *list, uint32_t count) override
+        {
+            src = source;
+            textureCopies.insert(textureCopies.end(), list, list + count);
+        }
         void writeTimestamp(QueryPool *, uint32_t) override {}
 
         Buffer *src = nullptr;
         std::vector<BufferCopy> copies;
+        std::vector<TextureCopy> textureCopies;
         bool inFlight = false;
         bool beganWhileInFlight = false;
     };
@@ -73,6 +86,7 @@ namespace
         FakeCommandBuffer *commandBuffer = nullptr;
         Buffer *src = nullptr;
         std::vector<BufferCopy> copies;
+        std::vector<TextureCopy> textureCopies;
         FakeFence *fence = nullptr;
         uint64_t signalValue = 0;
         std::vector<FenceWait> waits;
@@ -92,7 +106,7 @@ namespace
             {
                 auto *commandBuffer = static_cast<FakeCommandBuffer *>(desc.commandBuffers[i]);
                 commandBuffer->inFlight = true;
-                submissions.push_back({.commandBuffer = commandBuffer, .src = commandBuffer->src, .copies = commandBuffer->copies, .fence = static_cast<FakeFence *>(desc.signalFence), .signalValue = desc.signalValue, .waits = std::vector<FenceWait>(desc.waits, desc.waits + desc.waitCount)});
+                submissions.push_back({.commandBuffer = commandBuffer, .src = commandBuffer->src, .copies = commandBuffer->copies, .textureCopies = commandBuffer->textureCopies, .fence = static_cast<FakeFence *>(desc.signalFence), .signalValue = desc.signalValue, .waits = std::vector<FenceWait>(desc.waits, desc.waits + desc.waitCount)});
             }
             return true;
         }
@@ -193,7 +207,8 @@ namespace
         bool readBuffer(Buffer *, void *, size_t, size_t) override { return false; }
         void resetQueries(QueryPool *) override {}
         bool getTimestamps(QueryPool *, uint32_t, uint32_t, uint64_t *) override { return false; }
-        bool fillTexture(Texture *, const void *) override { return false; }
+        bool supportsTextureFormat(Format) const override { return true; }
+        bool fillTexture(Texture *, const TextureLevel *, uint32_t) override { return false; }
         void updateBindlessTexture(DescriptorSet *, uint32_t, Texture *, Sampler *) override {}
         void updateBindlessStorageImage(DescriptorSet *, uint32_t, Texture *, uint32_t) override {}
         bool waitForFence(Fence *fence, uint64_t value, uint64_t) override
@@ -217,6 +232,8 @@ namespace
             {
                 auto &submission = list[queue.executed++];
                 for (const auto &copy : submission.copies)
+                    execute(submission.src, copy);
+                for (const auto &copy : submission.textureCopies)
                     execute(submission.src, copy);
                 submission.commandBuffer->inFlight = false;
                 if (submission.fence)
@@ -243,6 +260,25 @@ namespace
                 return;
             }
             std::memcpy(dst->bytes.data() + copy.dstOffset, src->bytes.data() + copy.srcOffset, copy.size);
+        }
+
+        // Rows [y, y + height) of the mip, as whole rows of blocks, from the staging bytes at srcOffset.
+        void execute(Buffer *source, const TextureCopy &copy)
+        {
+            auto *src = static_cast<FakeBuffer *>(source);
+            auto *dst = static_cast<FakeTexture *>(copy.dst);
+            const FormatBlock block = getFormatBlock(dst->desc.format);
+            const uint32_t width = std::max(1u, dst->desc.width >> copy.mip);
+            const uint64_t rowBytes = static_cast<uint64_t>((width + block.width - 1) / block.width) * block.bytes;
+            const uint64_t offset = copy.y / block.height * rowBytes;
+            const uint64_t size = (copy.height + block.height - 1) / block.height * rowBytes;
+            if (!isLive(source) || copy.mip >= dst->mips.size() || copy.y % block.height != 0 || copy.srcOffset % block.bytes != 0 ||
+                copy.srcOffset + size > src->bytes.size() || offset + size > dst->mips[copy.mip].size())
+            {
+                ++badCopies;
+                return;
+            }
+            std::memcpy(dst->mips[copy.mip].data() + offset, src->bytes.data() + copy.srcOffset, size);
         }
 
         FakeQueue queue;
@@ -670,4 +706,136 @@ TEST_CASE_FIXTURE(UploadFixture, "every flush waits for the other queue's last s
         CHECK(submission.waits[0].fence == &computeFence);
         CHECK(submission.waits[0].value == 3);
     }
+}
+
+namespace
+{
+    // A texture with every mip and the level data to fill it, sized like RenderContext::fillTexture checks them.
+    struct TextureData
+    {
+        FakeTexture texture;
+        std::vector<std::vector<uint8_t>> bytes;
+        std::vector<TextureLevel> levels;
+
+        TextureData(Format format, uint32_t width, uint32_t height, uint32_t mipCount, uint32_t seed)
+        {
+            texture.desc = {.name = "texture", .width = width, .height = height, .format = format};
+            texture.mipLevels = mipCount;
+            for (uint32_t mip = 0; mip < mipCount; ++mip)
+            {
+                const uint64_t size = getTextureLevelSize(format, std::max(1u, width >> mip), std::max(1u, height >> mip));
+                texture.mips.emplace_back(size, 0);
+                bytes.push_back(makeBytes(size, seed + mip));
+            }
+            for (const auto &level : bytes)
+                levels.push_back({.data = level.data(), .size = level.size()});
+        }
+
+        bool arrived() const { return texture.mips == bytes; }
+    };
+}
+
+TEST_CASE_FIXTURE(UploadFixture, "a block-compressed texture's mips reach it after flush, and only its first copy discards")
+{
+    // 64 x 64 BC7: 16 x 16 blocks of 16 B at mip 0, down to a single (partial) block at 4 x 4 and below.
+    TextureData data(Format::BC7_SRGB, 64, 64, 7, 3);
+    REQUIRE(uploads.uploadTexture(&data.texture, data.levels.data(), 7));
+    CHECK_FALSE(data.arrived());
+    REQUIRE(uploads.flush());
+    device.finishGpuWork();
+
+    CHECK(data.arrived());
+    const auto &copies = device.queue.submissions.at(0).textureCopies;
+    REQUIRE(copies.size() == 7);
+    for (uint32_t mip = 0; mip < 7; ++mip)
+    {
+        CHECK(copies[mip].mip == mip);
+        CHECK(copies[mip].y == 0);
+        CHECK(copies[mip].height == std::max(1u, 64u >> mip));
+        CHECK(copies[mip].discard == (mip == 0));
+    }
+}
+
+TEST_CASE_FIXTURE(UploadFixture, "a level bigger than a chunk is split into whole rows, and a texture bigger than the ring arrives intact")
+{
+    // 4096 x 2048 RGBA8 is 32 MiB at mip 0, and 42.7 MiB with its mips: more than the 16 MiB chunk and, with a second
+    // texture, more than the 64 MiB ring.
+    TextureData first(Format::R8G8B8A8_SRGB, 4096, 2048, 13, 5);
+    TextureData second(Format::R8G8B8A8_UNORM, 4096, 2048, 13, 50);
+    REQUIRE(uploads.uploadTexture(&first.texture, first.levels.data(), 13));
+    REQUIRE(uploads.uploadTexture(&second.texture, second.levels.data(), 13));
+    REQUIRE(uploads.flush());
+    device.finishGpuWork();
+
+    CHECK(first.arrived());
+    CHECK(second.arrived());
+    CHECK(device.blockingWaits > 0);
+    uint32_t discards = 0;
+    for (const auto &submission : device.queue.submissions)
+    {
+        for (const auto &copy : submission.textureCopies)
+        {
+            CHECK(static_cast<uint64_t>(copy.height) * 4096 * 4 <= 16 * MB);
+            discards += copy.discard ? 1 : 0;
+        }
+    }
+    CHECK(discards == 2);
+}
+
+TEST_CASE_FIXTURE(UploadFixture, "texture copies start at a multiple of 16 bytes in the ring")
+{
+    auto *dst = createDeviceLocal(64);
+    REQUIRE(upload(dst, makeBytes(3, 1), 0));
+    TextureData data(Format::BC4_UNORM, 8, 8, 4, 9);
+    REQUIRE(uploads.uploadTexture(&data.texture, data.levels.data(), 4));
+    REQUIRE(uploads.flush());
+    device.finishGpuWork();
+
+    CHECK(data.arrived());
+    for (const auto &copy : device.queue.submissions.at(0).textureCopies)
+        CHECK(copy.srcOffset % 16 == 0);
+}
+
+TEST_CASE_FIXTURE(UploadFixture, "an RGB8 texture's copies start at a multiple of 48 bytes: 16 and its 3-byte texel")
+{
+    auto *dst = createDeviceLocal(64);
+    REQUIRE(upload(dst, makeBytes(5, 1), 0));
+    TextureData data(Format::R8G8B8_UNORM, 10, 6, 3, 13);
+    REQUIRE(uploads.uploadTexture(&data.texture, data.levels.data(), 3));
+    REQUIRE(uploads.flush());
+    device.finishGpuWork();
+
+    CHECK(data.arrived());
+    for (const auto &copy : device.queue.submissions.at(0).textureCopies)
+        CHECK(copy.srcOffset % 48 == 0);
+}
+
+TEST_CASE_FIXTURE(UploadFixture, "filling a texture twice in one batch starts a new batch, and the second fill wins")
+{
+    TextureData data(Format::BC5_UNORM, 16, 16, 1, 11);
+    TextureData again(Format::BC5_UNORM, 16, 16, 1, 12);
+    REQUIRE(uploads.uploadTexture(&data.texture, data.levels.data(), 1));
+    REQUIRE(uploads.uploadTexture(&data.texture, again.levels.data(), 1));
+    REQUIRE(uploads.flush());
+    device.finishGpuWork();
+
+    CHECK(device.queue.submissions.size() == 2);
+    CHECK(data.texture.mips == again.bytes);
+}
+
+TEST_CASE_FIXTURE(UploadFixture, "cancelled texture uploads never run, and submitted ones are waited for")
+{
+    TextureData kept(Format::BC7_UNORM, 16, 16, 1, 21);
+    TextureData cancelled(Format::BC7_UNORM, 16, 16, 1, 22);
+    REQUIRE(uploads.uploadTexture(&kept.texture, kept.levels.data(), 1));
+    REQUIRE(uploads.flush());
+    REQUIRE(uploads.uploadTexture(&cancelled.texture, cancelled.levels.data(), 1));
+
+    uploads.cancelUploads(&cancelled.texture);
+    uploads.cancelUploads(&kept.texture);
+    CHECK(device.blockingWaits == 1);
+    CHECK(kept.arrived());
+    REQUIRE(uploads.flush());
+    CHECK(device.queue.submissions.size() == 1);
+    CHECK_FALSE(cancelled.arrived());
 }

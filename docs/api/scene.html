@@ -347,7 +347,7 @@ engine.updateTransform(bunny, transform);</code></pre>
 <div class="api" id="loadGLTF">
   <pre class="sig">MeshHandle loadGLTF(const std::string&amp; path);</pre>
   <div class="body">
-    <p>The same as <code>loadMesh</code>; the file extension picks the importer. It reads <code>POSITION</code>, <code>NORMAL</code>, <code>TANGENT</code>, <code>TEXCOORD_0</code> to <code>_2</code> and <code>COLOR_0</code>, in floats or in the integer types of <code>KHR_mesh_quantization</code>, and the material extensions on the <a href="materials.html#gltf">materials page</a>. A file may require <code>KHR_materials_unlit</code>, <code>KHR_materials_emissive_strength</code>, <code>KHR_texture_transform</code> and <code>KHR_mesh_quantization</code>; one that requires any other extension fails to load. Other extensions it only uses are ignored.</p>
+    <p>The same as <code>loadMesh</code>; the file extension picks the importer. It reads <code>POSITION</code>, <code>NORMAL</code>, <code>TANGENT</code>, <code>TEXCOORD_0</code> to <code>_2</code> and <code>COLOR_0</code>, in floats or in the integer types of <code>KHR_mesh_quantization</code>, and the material extensions on the <a href="materials.html#gltf">materials page</a>. A file may require <code>KHR_materials_unlit</code>, <code>KHR_materials_emissive_strength</code>, <code>KHR_texture_transform</code>, <code>KHR_mesh_quantization</code> and <code>KHR_texture_basisu</code>; one that requires any other extension fails to load. Other extensions it only uses are ignored.</p>
     <pre><code>rasm::MeshHandle room = engine.loadGLTF("models/gltf/coffee-room/scene.gltf");
 if (!room.isValid())
     return 1;

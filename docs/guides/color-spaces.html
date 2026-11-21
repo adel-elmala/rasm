@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Color Spaces: sRGB and Linear · RASM</title>
 <meta name="description" content="How sRGB and linear color work: the sRGB transfer function, why lighting, filtering and blending must happen in linear light, which textures are color and which are data, how _SRGB formats convert in hardware, tone mapping, and how RASM does it.">
-<meta name="rasm-sources" content="src/assets/material.cpp src/assets/texture.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/engine.cpp include/rasm/types.h include/rasm/engine.h shaders/lib/pbr.slang shaders/lib/unlit.slang shaders/lib/core.slang shaders/passes/rasm.slang shaders/passes/statsOverlay.slang shaders/passes/toneMap.slang src/renderer/toneMap.cpp src/renderer/renderer.cpp examples/05_city/main.cpp">
+<meta name="rasm-sources" content="src/assets/material.cpp src/assets/texture.cpp src/assets/ktxImage.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/engine.cpp include/rasm/types.h include/rasm/engine.h shaders/lib/pbr.slang shaders/lib/unlit.slang shaders/lib/core.slang shaders/passes/rasm.slang shaders/passes/statsOverlay.slang shaders/passes/toneMap.slang src/renderer/toneMap.cpp src/renderer/renderer.cpp examples/05_city/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -871,7 +871,7 @@ encode (linear light L → sRGB code s):
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>Color vs data textures</td><td>section 4</td><td>glTF: base color and emissive are uploaded as <code>R8G8B8A8_SRGB</code>, metallic-roughness, normal and occlusion as <code>R8G8B8A8_UNORM</code> (<code>loadMaterial</code>). <code>loadTexture</code> takes the format from the caller, <code>R8G8B8A8_SRGB</code> by default, and refuses any other format than these two.</td></tr>
+  <tr><td>Color vs data textures</td><td>section 4</td><td>glTF: base color and emissive are uploaded as <code>R8G8B8A8_SRGB</code>, metallic-roughness, normal and occlusion as <code>R8G8B8A8_UNORM</code> (<code>loadMaterial</code>). <code>loadTexture</code> takes the format from the caller, <code>R8G8B8A8_SRGB</code> by default, and refuses any other format than these two. A KTX2 texture follows the slot too, not the file: a color slot gets an sRGB format (<code>BC7_SRGB</code>, <code>ASTC_4x4_SRGB</code>, …), a data slot a UNORM one, whatever transfer function the file names (<a href="texture-compression.html#mips-color">texture compression</a>).</td></tr>
   <tr><td>Decoding</td><td>by the format, before filtering</td><td>The same: the sampler decodes <samp>_SRGB</samp> textures. No shader calls the curve.</td></tr>
   <tr><td>Mips</td><td>averaged in linear</td><td>Yes, for sRGB formats (see <a href="mipmaps-sampling.html#in-rasm">mipmaps</a>).</td></tr>
   <tr><td>Factors</td><td>linear</td><td>glTF factors are linear and copied as they are. Hand-made materials start with white base color (<code>createMaterial</code>); a color typed in by hand must be linear.</td></tr>

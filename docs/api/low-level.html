@@ -553,7 +553,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
   <pre class="sig">TextureHandle createTexture(const TextureDesc&amp; desc);</pre>
   <div class="body">
     <p>Creates a new 2D texture every time (<code>B1</code>). With <code>mipLevels</code> 0, a <code>SAMPLED</code> texture in an RGBA8 format (<code>R8G8B8A8_UNORM</code>, <code>R8G8B8A8_SRGB</code>, <code>B8G8R8A8_SRGB</code>) gets a full mip chain and every other texture one level. Fill a sampled texture with <code>fillTexture</code>.</p>
-    <p><span class="tag">errors</span> A size above the device's limit, or a failed allocation, logs an error and returns an invalid handle.</p>
+    <p><span class="tag">errors</span> A size above the device's limit, a <code>SAMPLED</code> texture in a format the device can't sample (<a href="#supportsTextureFormat"><code>supportsTextureFormat</code></a>), or a failed allocation, logs an error and returns an invalid handle.</p>
   </div>
 </div>
 
@@ -576,7 +576,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
       <dt>format</dt><dd>See <a href="types.html#Format">Format</a>. Color data uses <code>R8G8B8A8_SRGB</code>; normal, metallic-roughness and occlusion data <code>R8G8B8A8_UNORM</code>.</dd>
       <dt>usage</dt><dd>What the texture is created for, see <a href="#TextureUsage">TextureUsage</a>.</dd>
       <dt>cube</dt><dd><code>true</code>: <code>CUBE_FACES</code> square layers, one per face of a cube, in Vulkan's order +X, −X, +Y, −Y, +Z, −Z. Its bindless slot holds a cube view, which a shader reads as a <var>SamplerCube</var>; each face also has its own view, which <a href="#beginRendering"><code>beginRendering</code></a> draws into. A render target with <code>RenderTargetDesc::cube</code> makes one for its depth. Only a depth attachment (<code>DEPTH_STENCIL_ATTACHMENT</code> or <code>SAMPLED_DEPTH_ATTACHMENT</code>) or a <code>SAMPLED_STORAGE</code> texture can be a cube: <code>createTexture</code> rejects any other usage with an error.</dd>
-      <dt>mipLevels</dt><dd>0: the rule above. Any other count makes that many levels, at most the full chain down to 1 × 1. Only a <code>SAMPLED_STORAGE</code> texture (compute writes its mips) or a <code>SAMPLED</code> RGBA8 one (<code>fillTexture</code> makes them) may ask for more than 1: <code>createTexture</code> refuses any other with an error, since an attachment is drawn into one mip and <code>fillTexture</code> makes mips only for RGBA8.</dd>
+      <dt>mipLevels</dt><dd>0: the rule above. Any other count makes that many levels, at most the full chain down to 1 × 1. Only a <code>SAMPLED_STORAGE</code> texture (compute writes its mips) or a <code>SAMPLED</code> one (<code>fillTexture</code> copies them, or makes them for RGBA8) may ask for more than 1: <code>createTexture</code> refuses any other with an error, since an attachment is drawn into one mip.</dd>
     </dl>
   </div>
 </div>
@@ -626,13 +626,33 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
 </div>
 
 <div class="api" id="fillTexture">
-  <pre class="sig">bool fillTexture(const TextureHandle&amp; texture, const void* data);</pre>
+  <pre class="sig">bool fillTexture(const TextureHandle&amp; texture, const void* data);
+bool fillTexture(const TextureHandle&amp; texture, const TextureLevel* levels, uint32_t levelCount);</pre>
   <div class="body">
-    <p>Copies pixels from the CPU straight into a <code>SAMPLED</code> texture (host image copy), builds its whole mip chain on the CPU (sRGB-aware for sRGB formats), and leaves it ready for sampling. It finishes before it returns; there is no command buffer involved.</p>
+    <p>Fills a <code>SAMPLED</code> texture from the CPU and leaves it ready for sampling. The first form takes mip 0 and, for an RGBA8 texture, builds the rest of the chain on the CPU (sRGB-aware for sRGB formats); any other format must have one mip. The second takes every mip, for instance the levels of a block-compressed file.</p>
     <dl>
       <dt>data</dt><dd><code>width × height</code> pixels of the texture's format (4 bytes for RGBA8, 8 for <code>R16G16B16A16_SFLOAT</code>), rows top to bottom, no padding.</dd>
+      <dt>levels, levelCount</dt><dd>One <a href="#TextureLevel"><code>TextureLevel</code></a> per mip, <code>levelCount</code> equal to the texture's mip count. Each must be exactly the level's size: whole 4 × 4 blocks for a block-compressed format (a level of <var>w</var> × <var>h</var> is ⌈<var>w</var>/4⌉ × ⌈<var>h</var>/4⌉ blocks of 8 or 16 bytes).</dd>
     </dl>
-    <p>The texture must not be in use by a frame the GPU is still running. Returns <code>false</code> with an error when a copy step fails.</p>
+    <p>Where the device can copy the format on the host (host image copy), the data is in the texture when the call returns. Otherwise, or with <code>EngineConfig::hostImageCopy</code> false, it goes into the staging ring and a copy on the graphics queue with the next submit, which comes before any frame that samples it. Either way the CPU data may be freed once the call returns. The texture must not be in use by a frame the GPU is still running. Returns <code>false</code> with an error for a wrong level count or size, or when a copy step fails.</p>
+  </div>
+</div>
+
+<div class="api" id="TextureLevel">
+  <pre class="sig">struct TextureLevel
+{
+    const void* data = nullptr;
+    uint64_t    size = 0;
+};</pre>
+  <div class="body">
+    <p>One mip of a texture's data, tightly packed: rows of texels, or rows of 4 × 4 blocks for a block-compressed format. Mip 0 comes first.</p>
+  </div>
+</div>
+
+<div class="api" id="supportsTextureFormat">
+  <pre class="sig">bool supportsTextureFormat(Format format) const;</pre>
+  <div class="body">
+    <p>True when the device can sample <code>format</code> with linear filtering and fill it, so a <code>SAMPLED</code> texture can be created in it. Block-compressed formats depend on the GPU: BC on desktop GPUs and Apple Silicon, ASTC and ETC2 on mobile GPUs. False without a device. <code>loadTexture</code> uses it to pick a KTX2 file's format.</p>
   </div>
 </div>
 

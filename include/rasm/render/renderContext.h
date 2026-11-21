@@ -83,6 +83,8 @@ namespace rasm
         bool                                getTimestamps(const QueryPoolHandle& pool, uint32_t firstQuery, uint32_t count, uint64_t* nanoseconds);
         void                                writeTimestamp(const CommandBufferHandle& commandBuffer, const QueryPoolHandle& pool, uint32_t index);
         bool                                fillTexture(const TextureHandle& texture, const void* data);
+        bool                                fillTexture(const TextureHandle& texture, const TextureLevel* levels, uint32_t levelCount);
+        bool                                supportsTextureFormat(Format format) const;
         [[nodiscard]] SwapchainStatus       recreateSwapchain();
         bool                                beginRendering(const CommandBufferHandle& commandBuffer, const TextureHandle* colorAttachments, uint32_t colorCount, TextureHandle depthAttachment, const glm::vec4& clearColor, const AttachmentOps& ops = {}, uint32_t face = 0);
         bool                                endRendering(const CommandBufferHandle& commandBuffer);

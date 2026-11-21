@@ -257,7 +257,7 @@ namespace rasm
         }
 
         // Most materials have no texture transform, so their shading skips the transforms and does not load them.
-        gfx::MaterialData toMaterialData(Engine &engine, const Material &mat)
+        gfx::MaterialData toMaterialData(Engine &engine, const Material &mat, Format normalMapFormat)
         {
             gfx::MaterialData row{.material = convertToGfxMaterial(engine, mat),
                                   .materialId = getGfxMaterialId(mat.type),
@@ -272,6 +272,10 @@ namespace rasm
                 if (!isIdentity(transform))
                     row.flags |= gfx::MATERIAL_TEXTURE_TRANSFORM;
             }
+            // A two-channel format holds a normal map's x and y. The flag follows the texture, so a normal map that
+            // updateMaterial replaces sets it again.
+            if (normalMapFormat == Format::BC5_UNORM || normalMapFormat == Format::EAC_R11G11_UNORM)
+                row.flags |= gfx::MATERIAL_NORMAL_XY;
             return row;
         }
     }
@@ -493,7 +497,9 @@ namespace rasm
     void Engine::writeMaterialRow(MaterialHandle material)
     {
         const Material &materialRef = registry.materials[material.index];
-        const gfx::MaterialData row = toMaterialData(*this, materialRef);
+        const TextureHandle normalMap = materialRef.textures[static_cast<uint32_t>(PbrSlot::NORMAL)];
+        const Format normalMapFormat = normalMap.isValid() ? ctx.getTextureDesc(normalMap).format : Format::UNKNOWN;
+        const gfx::MaterialData row = toMaterialData(*this, materialRef, normalMapFormat);
         gpuScene->materials.setRow(static_cast<uint32_t>(material.index), &row);
     }
 

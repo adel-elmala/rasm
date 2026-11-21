@@ -1,5 +1,6 @@
 #include "rasm/mesh.h"
 #include "rasm/engine.h"
+#include "assets/ktxImage.h"
 #include "assets/meshImport.h"
 #include "assets/meshLod.h"
 #include "platform/paths.h"
@@ -9,6 +10,7 @@
 #include "tracy/Tracy.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -129,9 +131,10 @@ namespace rasm
 
         // The worker reads and decodes the file and builds the LODs; beginFrame uploads the result (finishLoads).
         const bool lods = config.meshLods;
-        auto import = [path, lods]()
+        const uint64_t textureFormats = getSupportedTextureFormats(ctx);
+        auto import = [path, lods, textureFormats]()
         {
-            GLTFRaw raw = importMeshFile(path);
+            GLTFRaw raw = importMeshFile(path, textureFormats);
             if (lods)
             {
                 for (auto &sub : raw.subGltfRaws)
@@ -159,6 +162,7 @@ namespace rasm
         ZoneScoped;
 
         // The CPU copy of the geometry and the glTF model are freed when raw goes out of scope (P6).
+        const auto mainThreadStart = std::chrono::steady_clock::now();
         GLTFRaw raw = load.result.get();
         Mesh &mesh = registry.meshes[load.handle.index];
         mesh.state = MeshState::FAILED;
@@ -184,7 +188,7 @@ namespace rasm
             return;
         }
 
-        GltfImportCache cache;
+        GltfImportCache cache{.raw = &raw};
         for (const auto &sub : raw.subGltfRaws)
         {
             SubMesh subMesh{.transform = sub.transform};
@@ -200,8 +204,8 @@ namespace rasm
         }
 
         mesh.state = MeshState::READY;
-        spdlog::info("Loaded mesh {}: {} sub-meshes, geometry pool at {}/{} vertices and {}/{} indices.",
-                     load.path, mesh.subMeshes.size(), geometryPool->vertexCount(), config.geometryPoolVertices, geometryPool->indexCount(), config.geometryPoolIndices);
+        spdlog::info("Loaded mesh {} ({:.1f} ms on the main thread): {} sub-meshes, geometry pool at {}/{} vertices and {}/{} indices.",
+                     load.path, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - mainThreadStart).count(), mesh.subMeshes.size(), geometryPool->vertexCount(), config.geometryPoolVertices, geometryPool->indexCount(), config.geometryPoolIndices);
     }
 
     MeshSize Engine::getMeshByteSize(const MeshHandle &handle) const

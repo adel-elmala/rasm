@@ -11,3 +11,9 @@ set(VCPKG_OSX_ARCHITECTURES arm64)
 if(PORT STREQUAL "tracy")
     list(APPEND VCPKG_CMAKE_CONFIGURE_OPTIONS -DTRACY_ONLY_LOCALHOST=ON)
 endif()
+
+# libktx without its ETC software decoder (lib/etcdec.cxx, under Ericsson's license, which covers only OpenGL, OpenGL ES
+# and WebGL products) and without OpenGL upload: RASM only transcodes on the CPU and never uploads through GL.
+if(PORT STREQUAL "ktx")
+    list(APPEND VCPKG_CMAKE_CONFIGURE_OPTIONS -DKTX_FEATURE_ETC_UNPACK=OFF -DKTX_FEATURE_GL_UPLOAD=OFF)
+endif()

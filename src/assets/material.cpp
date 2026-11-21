@@ -1,5 +1,7 @@
 #include "rasm/material.h"
 #include "rasm/engine.h"
+#include "assets/ktxImage.h"
+#include "assets/meshImport.h"
 
 #include "spdlog/spdlog.h"
 
@@ -221,22 +223,58 @@ namespace rasm
 
             // Color textures are sRGB; material data is linear (glTF 2.0).
             // Expand to RGBA8 to avoid unsupported RGB Vulkan formats and mismatched upload sizes.
-            auto uploadTexture = [&](int textureIndex, bool srgb) -> TextureHandle
+            auto uploadTexture = [&](int textureIndex, KtxSlot slot) -> TextureHandle
             {
                 if (textureIndex < 0 || textureIndex >= static_cast<int>(model.textures.size()))
                     return {};
-                int source = model.textures[textureIndex].source;
+                const SamplerType sampler = toSamplerType(model, model.textures[textureIndex].sampler);
+                const bool srgb = slot == KtxSlot::COLOR;
+
+                // KHR_texture_basisu first, transcoded on the worker for this kind of slot. Without it, or when its
+                // image failed, the texture's own source (a PNG or JPEG fallback) is used.
+                const int basisuSource = getBasisuSource(model, textureIndex);
+                const TextureRaw *ktx = nullptr;
+                if (basisuSource >= 0 && cache.raw)
+                {
+                    const auto format = cache.raw->ktxFormats.find(getKtxSlotKey(basisuSource, slot));
+                    const auto image = format != cache.raw->ktxFormats.end() ? cache.raw->ktxImages.find(getKtxImageKey(basisuSource, format->second)) : cache.raw->ktxImages.end();
+                    ktx = image != cache.raw->ktxImages.end() ? &image->second : nullptr;
+                }
+                const int source = ktx ? basisuSource : model.textures[textureIndex].source;
                 if (source < 0 || source >= static_cast<int>(model.images.size()))
                     return {};
 
-                // Upload each (image, color space, sampler) once per model. A texture handle has one bindless
-                // slot, so the rare image used with two samplers is uploaded twice.
-                const SamplerType sampler = toSamplerType(model, model.textures[textureIndex].sampler);
-                const uint64_t cacheKey = (static_cast<uint64_t>(source) << 4) | (static_cast<uint64_t>(sampler) << 1) | (srgb ? 1u : 0u);
+                // Upload each (image, format, sampler) once per model. A texture handle has one bindless slot, so the
+                // rare image used with two samplers is uploaded twice.
+                const Format format = ktx ? ktx->format : srgb ? Format::R8G8B8A8_SRGB
+                                                               : Format::R8G8B8A8_UNORM;
+                const uint64_t cacheKey = (static_cast<uint64_t>(source) << 16) | (static_cast<uint64_t>(sampler) << 8) | static_cast<uint64_t>(format);
                 if (auto it = cache.imageTextures.find(cacheKey); it != cache.imageTextures.end())
                     return it->second;
 
                 const auto &image = model.images[source];
+                const std::string name = image.uri.empty() ? "glTF image " + std::to_string(source) : image.uri;
+                if (ktx)
+                {
+                    const TextureRaw &raw = *ktx;
+                    auto texture = createTexture({.name = name,
+                                                  .width = raw.width,
+                                                  .height = raw.height,
+                                                  .format = raw.format,
+                                                  .usage = TextureUsage::SAMPLED,
+                                                  .mipLevels = static_cast<uint32_t>(raw.levelSizes.size())});
+                    if (!texture.isValid())
+                        return {};
+                    if (!fillTextureLevels(texture, raw))
+                    {
+                        ctx.destroyTexture(texture);
+                        return {};
+                    }
+                    addBindlessTexture(bindlessDescriptorSet, texture, sampler);
+                    cache.imageTextures[cacheKey] = texture;
+                    return texture;
+                }
+
                 if (image.bits != 8 || image.component < 1 || image.component > 4 ||
                     image.width <= 0 || image.height <= 0)
                 {
@@ -264,29 +302,34 @@ namespace rasm
                     }
                     rgbaData = rgba.data();
                 }
-                auto texture = createTexture({.name = image.uri.empty() ? "glTF image " + std::to_string(source) : image.uri,
+                auto texture = createTexture({.name = name,
                                               .width = static_cast<uint32_t>(image.width),
                                               .height = static_cast<uint32_t>(image.height),
-                                              .format = srgb ? Format::R8G8B8A8_SRGB : Format::R8G8B8A8_UNORM,
+                                              .format = format,
                                               .usage = TextureUsage::SAMPLED});
-                if (!texture.isValid() || !ctx.fillTexture(texture, rgbaData))
+                if (!texture.isValid())
                     return {};
+                if (!ctx.fillTexture(texture, rgbaData))
+                {
+                    ctx.destroyTexture(texture);
+                    return {};
+                }
                 addBindlessTexture(bindlessDescriptorSet, texture, sampler);
                 cache.imageTextures[cacheKey] = texture;
                 return texture;
             };
 
             mat.textures[static_cast<uint32_t>(PbrSlot::ALBEDO)] =
-                uploadTexture(material->pbrMetallicRoughness.baseColorTexture.index, true);
+                uploadTexture(material->pbrMetallicRoughness.baseColorTexture.index, KtxSlot::COLOR);
             // Unlit shading reads only the base color; the PBR textures are a fallback for viewers without the extension.
             if (mat.type != MaterialType::UNLIT)
             {
-                auto mr = uploadTexture(material->pbrMetallicRoughness.metallicRoughnessTexture.index, false);
+                auto mr = uploadTexture(material->pbrMetallicRoughness.metallicRoughnessTexture.index, KtxSlot::DATA);
                 mat.textures[static_cast<uint32_t>(PbrSlot::METALLIC)] = mr;
                 mat.textures[static_cast<uint32_t>(PbrSlot::ROUGHNESS)] = mr;
-                mat.textures[static_cast<uint32_t>(PbrSlot::NORMAL)] = uploadTexture(material->normalTexture.index, false);
-                mat.textures[static_cast<uint32_t>(PbrSlot::OCCLUSION)] = uploadTexture(material->occlusionTexture.index, false);
-                mat.textures[static_cast<uint32_t>(PbrSlot::EMISSIVE)] = uploadTexture(material->emissiveTexture.index, true);
+                mat.textures[static_cast<uint32_t>(PbrSlot::NORMAL)] = uploadTexture(material->normalTexture.index, KtxSlot::NORMAL);
+                mat.textures[static_cast<uint32_t>(PbrSlot::OCCLUSION)] = uploadTexture(material->occlusionTexture.index, KtxSlot::OCCLUSION);
+                mat.textures[static_cast<uint32_t>(PbrSlot::EMISSIVE)] = uploadTexture(material->emissiveTexture.index, KtxSlot::COLOR);
             }
             mat.params[static_cast<uint32_t>(PbrParam::NORMAL_SCALE)] = static_cast<float>(material->normalTexture.scale);
             mat.params[static_cast<uint32_t>(PbrParam::OCCLUSION_STRENGTH)] = static_cast<float>(material->occlusionTexture.strength);

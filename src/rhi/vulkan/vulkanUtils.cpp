@@ -28,6 +28,26 @@ namespace rasm::rhi
             return VK_FORMAT_R32G32B32A32_SFLOAT;
         case Format::R8G8B8_UNORM:
             return VK_FORMAT_R8G8B8_UNORM;
+        case Format::BC4_UNORM:
+            return VK_FORMAT_BC4_UNORM_BLOCK;
+        case Format::BC5_UNORM:
+            return VK_FORMAT_BC5_UNORM_BLOCK;
+        case Format::BC7_UNORM:
+            return VK_FORMAT_BC7_UNORM_BLOCK;
+        case Format::BC7_SRGB:
+            return VK_FORMAT_BC7_SRGB_BLOCK;
+        case Format::ASTC_4x4_UNORM:
+            return VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
+        case Format::ASTC_4x4_SRGB:
+            return VK_FORMAT_ASTC_4x4_SRGB_BLOCK;
+        case Format::ETC2_R8G8B8A8_UNORM:
+            return VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK;
+        case Format::ETC2_R8G8B8A8_SRGB:
+            return VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK;
+        case Format::EAC_R11_UNORM:
+            return VK_FORMAT_EAC_R11_UNORM_BLOCK;
+        case Format::EAC_R11G11_UNORM:
+            return VK_FORMAT_EAC_R11G11_UNORM_BLOCK;
         case Format::UNKNOWN:
         default:
             return VK_FORMAT_UNDEFINED;

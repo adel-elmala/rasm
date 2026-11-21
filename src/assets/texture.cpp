@@ -1,10 +1,15 @@
 #include "rasm/engine.h"
 
+#include "assets/ktxImage.h"
+#include "platform/paths.h"
+
 #include "spdlog/spdlog.h"
 #include "tracy/Tracy.hpp"
 
 #include "stb_image.h"
 
+#include <algorithm>
+#include <fstream>
 #include <future>
 #include <string>
 #include <unordered_set>
@@ -14,7 +19,7 @@ namespace rasm
 {
     namespace
     {
-        const std::unordered_set<std::string> supportedTextureExtensions = {"png", "jpg", "jpeg"};
+        const std::unordered_set<std::string> supportedTextureExtensions = {"png", "jpg", "jpeg", "ktx2"};
 
         // Runs on a worker thread: it must not touch the engine.
         TextureRaw decodeTexture(const std::string &path)
@@ -27,13 +32,34 @@ namespace rasm
                 return {};
             return {.width = static_cast<uint32_t>(width), .height = static_cast<uint32_t>(height), .data = data};
         }
+
+        // Runs on a worker thread: reads the file and transcodes it, or takes its levels, in the format the main thread
+        // picked when it read the header.
+        TextureRaw decodeKtxFile(const std::string &path, Format format)
+        {
+            ZoneScoped;
+
+            std::ifstream file(pathFromUtf8(path), std::ios::binary | std::ios::ate);
+            std::vector<unsigned char> bytes(file ? static_cast<size_t>(file.tellg()) : 0);
+            file.seekg(0);
+            if (!file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size())))
+                bytes.clear();
+            TextureRaw raw;
+            std::string error;
+            if (bytes.empty() || !decodeKtx(bytes.data(), bytes.size(), format, raw, error))
+            {
+                spdlog::error("Failed to decode KTX2 texture {}: {}", path, bytes.empty() ? "the file can't be read" : error);
+                return {};
+            }
+            return raw;
+        }
     }
 
     TextureHandle Engine::loadTexture(const std::string &assetPath, Format format)
     {
         if (format != Format::R8G8B8A8_SRGB && format != Format::R8G8B8A8_UNORM)
         {
-            spdlog::error("loadTexture requires RGBA8 sRGB or UNORM format.");
+            spdlog::error("loadTexture takes R8G8B8A8_SRGB for a color slot or R8G8B8A8_UNORM for a data slot.");
             return {};
         }
         const std::string path = resolveAssetPath(assetPath);
@@ -52,14 +78,40 @@ namespace rasm
         }
 
         // Only the header is read here, so the texture exists (and can go into a material) before its pixels do.
-        int width, height, nChannels;
-        if (!stbi_info(path.c_str(), &width, &height, &nChannels))
+        TextureDesc desc = {.name = path, .format = format, .usage = TextureUsage::SAMPLED};
+        if (extension == "ktx2")
         {
-            spdlog::error("Failed to load texture: {}", path);
-            return TextureHandle{};
+            KtxInfo info;
+            std::string error;
+            if (!readKtxInfo(path, info, error))
+            {
+                spdlog::error("Failed to load KTX2 texture {}: {}", path, error);
+                return TextureHandle{};
+            }
+            desc.format = chooseKtxFormat(info, format == Format::R8G8B8A8_SRGB ? KtxSlot::COLOR : KtxSlot::CHANNELS, getSupportedTextureFormats(ctx));
+            if (desc.format == Format::UNKNOWN)
+            {
+                spdlog::error("Failed to load KTX2 texture {}: the device can't sample its format.", path);
+                return TextureHandle{};
+            }
+            warnAboutKtxFormat(path, info, desc.format);
+            desc.width = info.width;
+            desc.height = info.height;
+            desc.mipLevels = getKtxMipCount(info, desc.format);
+        }
+        else
+        {
+            int width, height, nChannels;
+            if (!stbi_info(path.c_str(), &width, &height, &nChannels))
+            {
+                spdlog::error("Failed to load texture: {}", path);
+                return TextureHandle{};
+            }
+            desc.width = static_cast<uint32_t>(width);
+            desc.height = static_cast<uint32_t>(height);
         }
 
-        auto textureHandle = ctx.createTexture({.name = path, .width = static_cast<uint32_t>(width), .height = static_cast<uint32_t>(height), .format = format, .usage = TextureUsage::SAMPLED});
+        auto textureHandle = ctx.createTexture(desc);
         if (!textureHandle.isValid())
         {
             spdlog::error("Failed to create texture: {}", path);
@@ -67,13 +119,26 @@ namespace rasm
         }
 
         registry.loadedTextures[cacheKey] = textureHandle;
-        pendingTextures.emplace(textureHandle, PendingTextureLoad{textureHandle, path, std::async(std::launch::async, decodeTexture, path)});
+        auto result = extension == "ktx2" ? std::async(std::launch::async, decodeKtxFile, path, desc.format) : std::async(std::launch::async, decodeTexture, path);
+        pendingTextures.emplace(textureHandle, PendingTextureLoad{textureHandle, path, std::move(result)});
         return textureHandle;
     }
 
     bool Engine::isLoaded(TextureHandle texture) const
     {
         return texture.isValid() && !pendingTextures.contains(texture);
+    }
+
+    bool Engine::fillTextureLevels(TextureHandle texture, const TextureRaw &raw)
+    {
+        std::vector<TextureLevel> levels(raw.levelSizes.size());
+        uint64_t offset = 0;
+        for (size_t level = 0; level < levels.size(); ++level)
+        {
+            levels[level] = {.data = raw.levels.data() + offset, .size = raw.levelSizes[level]};
+            offset += raw.levelSizes[level];
+        }
+        return ctx.fillTexture(texture, levels.data(), static_cast<uint32_t>(levels.size()));
     }
 
     void Engine::finishTextureLoad(PendingTextureLoad &load)
@@ -90,19 +155,30 @@ namespace rasm
             return;
         }
 
-        // A material may already sample the texture, so a failed decode leaves it white instead of undefined.
-        if (!raw.data || raw.width != desc.width || raw.height != desc.height)
+        // A material may already sample the texture, so a failed decode or upload leaves it plain (white, or a flat
+        // normal for a two-channel format) instead of undefined: an image makes its mips from white pixels, a KTX2
+        // texture gets every level of constant blocks.
+        const bool ktx = desc.mipLevels > 0;
+        const bool decoded = ktx ? !raw.levelSizes.empty() && raw.format == desc.format && raw.width == desc.width && raw.height == desc.height
+                                 : raw.data && raw.width == desc.width && raw.height == desc.height;
+        if (!decoded)
+            spdlog::error("Failed to decode texture {}; it stays plain white.", load.path);
+        const bool filled = decoded && (ktx ? fillTextureLevels(load.handle, raw) : ctx.fillTexture(load.handle, raw.data));
+        if (decoded && !filled)
+            spdlog::error("Failed to fill texture {}; it stays plain white.", load.path);
+        if (!filled && ktx)
         {
-            spdlog::error("Failed to decode texture {}; it stays white.", load.path);
+            TextureRaw blank;
+            makeBlankKtxLevels(desc.format, desc.width, desc.height, desc.mipLevels, blank);
+            fillTextureLevels(load.handle, blank);
+        }
+        else if (!filled)
+        {
             std::vector<unsigned char> white(static_cast<size_t>(desc.width) * desc.height * 4, 255);
             ctx.fillTexture(load.handle, white.data());
         }
-        else if (!ctx.fillTexture(load.handle, raw.data))
-        {
-            spdlog::error("Failed to fill texture: {}", load.path);
-        }
 
-        // fillTexture copies on the host (host image copy), so the pixels are not needed once it returns (P6).
+        // fillTexture copies the pixels (on the host, or into the staging ring), so they are not needed once it returns (P6).
         stbi_image_free(raw.data);
     }
 }

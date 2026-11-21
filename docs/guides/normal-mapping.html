@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Normal Mapping · RASM</title>
 <meta name="description" content="How normal mapping works: storing normals in a texture, tangent space and the TBN matrix, the tangent sign and mirrored UVs, MikkTSpace, Gram–Schmidt, transforming normals with the inverse-transpose, frames from derivatives, two-channel maps, and how RASM does it.">
-<meta name="rasm-sources" content="shaders/lib/pbr.slang shaders/passes/rasm.slang shaders/lib/core.slang src/assets/meshImport.cpp src/assets/material.cpp src/renderer/gpuScene.cpp include/rasm/mesh.h">
+<meta name="rasm-sources" content="shaders/lib/pbr.slang shaders/passes/rasm.slang shaders/lib/core.slang src/assets/ktxImage.cpp src/assets/meshImport.cpp src/assets/material.cpp src/renderer/gpuScene.cpp include/rasm/mesh.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -949,7 +949,7 @@ B  ∝ (dp/dy · du/dx − dp/dx · du/dy) · sign(det)</code></pre>
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>Texture format</td><td>UNORM, maybe two channels</td><td><code>R8G8B8A8_UNORM</code>, all three channels read. <var>z</var> comes from the texture; it is not rebuilt from <var>x</var> and <var>y</var>. No BC5.</td></tr>
+  <tr><td>Texture format</td><td>UNORM, maybe two channels</td><td>An image is <code>R8G8B8A8_UNORM</code>, all three channels read. A two-channel KTX2 normal map is <code>BC5_UNORM</code> or <code>EAC_R11G11_UNORM</code>: the material row gets <code>MATERIAL_NORMAL_XY</code> and <code>getNormalFromMap</code> rebuilds <var>z</var> = √(1 − <var>x</var>² − <var>y</var>²) before the scale. Its RGBA8 fallback gets <var>z</var> on the CPU (<a href="texture-compression.html#normals">texture compression</a>).</td></tr>
   <tr><td>Green convention</td><td>+<var>y</var> up or down</td><td>+<var>y</var> up, as glTF defines it.</td></tr>
   <tr><td>Strength</td><td>multiply <var>x</var>, <var>y</var></td><td>The same, with the glTF <code>scale</code> (default 1).</td></tr>
   <tr><td>Where tangents come from</td><td>Lengyel or MikkTSpace on load</td><td>Only from the file: glTF <samp>TANGENT</samp>, used only when the primitive has <samp>NORMAL</samp> too (the glTF rule). RASM computes no tangents: no MikkTSpace. Meshes without them use the derivative frame.</td></tr>
@@ -983,7 +983,7 @@ B  ∝ (dp/dy · du/dx − dp/dx · du/dy) · sign(det)</code></pre>
   <strong>Keep these true</strong>
   <ul>
     <li><code>tangent.w</code> is +1, −1 or 0, and 0 means "no tangent". A new importer must snap <var>w</var> or leave it 0.</li>
-    <li>Normal maps are <code>R8G8B8A8_UNORM</code>.</li>
+    <li>Normal maps are UNORM: <code>R8G8B8A8_UNORM</code>, or a KTX2 format picked for a data slot. A two-channel format must set <code>MATERIAL_NORMAL_XY</code>, which <code>writeMaterialRow</code> does from the texture's format.</li>
     <li>The authored frame and the derivative frame must agree: <var>B</var> points toward decreasing <var>v</var> in both (<code>B19</code>).</li>
     <li>Tangents move with the model matrix, normals with <code>normalMatrix</code>, and the sign with the determinant.</li>
   </ul>

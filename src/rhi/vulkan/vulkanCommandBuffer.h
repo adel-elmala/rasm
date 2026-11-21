@@ -37,6 +37,7 @@ namespace rasm::rhi
         void                        memoryBarrier(PipelineStage before, PipelineStage after) override;
         void                        aliasingBarrier() override;
         void                        copyBuffers(Buffer* src, const BufferCopy* copies, uint32_t copyCount) override;
+        void                        copyToTextures(Buffer* src, const TextureCopy* copies, uint32_t copyCount) override;
         void                        writeTimestamp(QueryPool* queryPool, uint32_t index) override;
         VkCommandBuffer             getVkCommandBuffer() const;
 

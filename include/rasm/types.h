@@ -47,6 +47,16 @@ namespace rasm
         R32G32_SFLOAT,
         U16_UINT,
         U32_UINT,
+        BC4_UNORM,
+        BC5_UNORM,
+        BC7_UNORM,
+        BC7_SRGB,
+        ASTC_4x4_UNORM,
+        ASTC_4x4_SRGB,
+        ETC2_R8G8B8A8_UNORM,
+        ETC2_R8G8B8A8_SRGB,
+        EAC_R11_UNORM,
+        EAC_R11G11_UNORM,       // the last value: VulkanDevice::FORMAT_COUNT
     };
 
     enum class ShaderType
@@ -111,6 +121,7 @@ namespace rasm
         float       lodErrorPixels          = 1.0f;
         int32_t     forcedLod               = -1;
         bool        asyncCompute            = false;
+        bool        hostImageCopy           = true;     // false: textures are copied from the staging ring, as on a device without host image copy
     };
 
     struct FrameResources
@@ -130,9 +141,12 @@ namespace rasm
 
     struct TextureRaw
     {
-        uint32_t        width   = 0;
-        uint32_t        height  = 0;
-        unsigned char*  data    = nullptr;
+        uint32_t                    width       = 0;
+        uint32_t                    height      = 0;
+        unsigned char*              data        = nullptr;          // stb_image pixels
+        Format                      format      = Format::UNKNOWN;  // KTX2: the format of levels
+        std::vector<unsigned char>  levels;                         // KTX2: every level, one after another
+        std::vector<uint64_t>       levelSizes;
     };
 
     struct EnvironmentRaw

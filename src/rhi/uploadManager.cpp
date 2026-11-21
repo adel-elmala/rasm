@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <numeric>
 #include <string>
 
 namespace rasm::rhi
@@ -78,7 +79,7 @@ namespace rasm::rhi
         {
             const uint64_t chunk = std::min<uint64_t>(size, MAX_CHUNK_SIZE);
             uint64_t ringOffset = 0;
-            if (!allocate(chunk, ringOffset) || !device->fillBuffer(staging, bytes, chunk, ringOffset))
+            if (!allocate(chunk, 1, ringOffset) || !device->fillBuffer(staging, bytes, chunk, ringOffset))
                 return false;
 
             addCopy({.dst = dst, .srcOffset = ringOffset, .dstOffset = offset, .size = chunk});
@@ -89,9 +90,50 @@ namespace rasm::rhi
         return true;
     }
 
+    // Each mip goes in whole rows of blocks, as many as fit in a chunk, so a level bigger than a chunk (or than the
+    // ring) is split across chunks and batches. The texture's first copy may drop its old contents; the later
+    // ones keep what the earlier batches wrote.
+    bool UploadManager::uploadTexture(Texture *dst, const TextureLevel *levels, uint32_t levelCount)
+    {
+        // The copies of one batch have no barriers between them, so filling a texture twice needs a new batch.
+        const bool pending = std::any_of(pendingTextureCopies.begin(), pendingTextureCopies.end(), [dst](const TextureCopy &copy)
+                                         { return copy.dst == dst; });
+        if (pending && !flush())
+            return false;
+
+        const FormatBlock block = getFormatBlock(dst->desc.format);
+        // A copy into an image starts at a multiple of the block size; 16 as well keeps the rows of every format
+        // aligned for the copy engine. lcm(16, bytes): 16 for 4, 8 and 16 bytes, 48 for 3 and 12.
+        const uint64_t alignment = std::lcm<uint64_t>(16, block.bytes);
+        bool first = true;
+        for (uint32_t mip = 0; mip < levelCount; ++mip)
+        {
+            const uint32_t width = std::max(1u, dst->desc.width >> mip);
+            const uint32_t height = std::max(1u, dst->desc.height >> mip);
+            const uint64_t rowBytes = static_cast<uint64_t>((width + block.width - 1) / block.width) * block.bytes;
+            const uint32_t blockRows = (height + block.height - 1) / block.height;
+            assert(rowBytes <= MAX_CHUNK_SIZE && levels[mip].size == rowBytes * blockRows);
+            const uint32_t rowsPerChunk = static_cast<uint32_t>(std::min<uint64_t>(MAX_CHUNK_SIZE / rowBytes, blockRows));
+
+            const auto *bytes = static_cast<const uint8_t *>(levels[mip].data);
+            for (uint32_t row = 0; row < blockRows; row += rowsPerChunk)
+            {
+                const uint32_t rows = std::min(rowsPerChunk, blockRows - row);
+                const uint64_t size = rows * rowBytes;
+                uint64_t ringOffset = 0;
+                if (!allocate(size, alignment, ringOffset) || !device->fillBuffer(staging, bytes + row * rowBytes, size, ringOffset))
+                    return false;
+                const uint32_t y = row * block.height;
+                pendingTextureCopies.push_back({.dst = dst, .srcOffset = ringOffset, .mip = mip, .y = y, .height = std::min(rows * block.height, height - y), .discard = first});
+                first = false;
+            }
+        }
+        return true;
+    }
+
     bool UploadManager::flush()
     {
-        if (pendingCopies.empty())
+        if (pendingCopies.empty() && pendingTextureCopies.empty())
             return true;
 
         ZoneScoped;
@@ -101,7 +143,10 @@ namespace rasm::rhi
         bool recorded = device->waitForFence(fence, batch.fenceValue, UINT64_MAX) && batch.commandBuffer->begin();
         if (recorded)
         {
-            batch.commandBuffer->copyBuffers(staging, pendingCopies.data(), static_cast<uint32_t>(pendingCopies.size()));
+            if (!pendingCopies.empty())
+                batch.commandBuffer->copyBuffers(staging, pendingCopies.data(), static_cast<uint32_t>(pendingCopies.size()));
+            if (!pendingTextureCopies.empty())
+                batch.commandBuffer->copyToTextures(staging, pendingTextureCopies.data(), static_cast<uint32_t>(pendingTextureCopies.size()));
             recorded = batch.commandBuffer->end();
         }
 
@@ -130,8 +175,15 @@ namespace rasm::rhi
         batch.buffers.clear();
         for (const auto &range : pendingRanges)
             batch.buffers.push_back(range.dst);
+        batch.textures.clear();
+        for (const auto &copy : pendingTextureCopies)
+        {
+            if (batch.textures.empty() || batch.textures.back() != copy.dst)
+                batch.textures.push_back(copy.dst);
+        }
         pendingCopies.clear();
         pendingRanges.clear();
+        pendingTextureCopies.clear();
         currentBatch = (currentBatch + 1) % 2;
         return true;
     }
@@ -164,14 +216,29 @@ namespace rasm::rhi
         }
     }
 
+    void UploadManager::cancelUploads(const Texture *texture)
+    {
+        std::erase_if(pendingTextureCopies, [texture](const TextureCopy &copy)
+                      { return copy.dst == texture; });
+
+        for (const auto &batch : batches)
+        {
+            if (std::find(batch.textures.begin(), batch.textures.end(), texture) != batch.textures.end() &&
+                !device->waitForFence(fence, batch.fenceValue, UINT64_MAX))
+                spdlog::error("Failed to wait for the uploads to a texture that is being destroyed.");
+        }
+    }
+
     // head and tail count bytes since the start and never wrap: head - tail bytes are in use, and
-    // head % RING_SIZE is where the next chunk goes.
-    bool UploadManager::allocate(uint64_t size, uint64_t &ringOffset)
+    // head % RING_SIZE is where the next chunk goes. A chunk that would cross the end starts again at offset 0,
+    // which is aligned for any alignment.
+    bool UploadManager::allocate(uint64_t size, uint64_t alignment, uint64_t &ringOffset)
     {
         assert(size <= MAX_CHUNK_SIZE);
 
         const uint64_t position = head % RING_SIZE;
-        const uint64_t padding = position + size > RING_SIZE ? RING_SIZE - position : 0;
+        const uint64_t alignPadding = (alignment - position % alignment) % alignment;
+        const uint64_t padding = position + alignPadding + size > RING_SIZE ? RING_SIZE - position : alignPadding;
 
         reclaim();
         if (head + padding + size - tail > RING_SIZE)

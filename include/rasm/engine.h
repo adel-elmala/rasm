@@ -79,7 +79,8 @@ namespace rasm
         MeshHandle                  createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices, std::vector<uint32_t> colors = {});
         MeshHandle                  loadMesh(const std::string& path);
         MeshHandle                  loadGLTF(const std::string& path);
-        // Color images default to sRGB; pass R8G8B8A8_UNORM for normal/MR/AO data.
+        // format names the slot: R8G8B8A8_SRGB for color (base color, emissive), R8G8B8A8_UNORM for data (normal,
+        // metallic-roughness, occlusion). A .ktx2 file gets the best GPU format the device has for that slot.
         TextureHandle               loadTexture(const std::string& path, Format format = Format::R8G8B8A8_SRGB);
         EnvironmentHandle           loadEnvironment(const std::string& path);
         bool                        isLoaded(MeshHandle mesh) const;
@@ -245,6 +246,7 @@ namespace rasm
         MaterialHandle              loadMaterial(const tinygltf::Model& model, int materialIndex, GltfImportCache& cache);
         void                        finishMeshLoad(PendingMeshLoad& load);
         void                        finishTextureLoad(PendingTextureLoad& load);
+        bool                        fillTextureLevels(TextureHandle texture, const TextureRaw& raw);
         void                        finishEnvironmentLoad(PendingEnvironmentLoad& load);
         bool                        createEnvironments();
         void                        recordEnvironmentBakes();
