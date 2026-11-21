@@ -81,20 +81,36 @@ bool isBackFace(float handedness, bool isFrontFace)
 }
 
 // The color the pipeline writes. A BLEND pipeline (RASM_ALPHA_BLEND) premultiplies it by alpha: the target keeps
-// (1 - alpha) of what is behind. The others write alpha too, which the target ignores.
-float4 toTarget(float4 color)
+// (1 - alpha) of what is behind. An alpha-to-coverage pipeline (RASM_ALPHA_TO_COVERAGE) writes the coverage as alpha,
+// and the rasterizer keeps that share of the pixel's samples. The others write alpha too, which the target ignores.
+float4 toTarget(float4 color, float coverage)
 {
 #if defined(RASM_ALPHA_BLEND)
     float alpha = saturate(color.a);
     return float4(color.rgb * alpha, alpha);
+#elif defined(RASM_ALPHA_TO_COVERAGE)
+    return float4(color.rgb, coverage);
 #else
     return color;
 #endif
 }
 
+// A cut-out's alpha made sharp around the cutoff: 0.5 exactly at alphaCutoff, and from 0 to 1 over one pixel's change
+// of alpha (fwidth). Alpha-to-coverage then covers samples by where the edge crosses the pixel, at any distance, while
+// the edge stays where the cutoff puts it. Where alpha does not change, there is no edge to place, and the cutoff
+// decides as discard does: alpha at the cutoff (a cutoff of 1 on opaque texels) is covered.
+float getCoverage(float alpha, float cutoff)
+{
+    float change = fwidth(alpha);
+    if (change < 1e-4)
+        return alpha >= cutoff ? 1.0 : 0.0;
+    return saturate((alpha - cutoff) / change + 0.5);
+}
+
 // One entry point for the three alpha modes, compiled once per mode (gpuScene.cpp): the opaque pipeline has no
-// discard, so it keeps the early depth test. RASM_ALPHA_MASK (glTF MASK) draws nothing where alpha < alphaCutoff;
-// with 1 sample per pixel that is a plain cut-out, and alpha-to-coverage waits for MSAA. RASM_ALPHA_BLEND (glTF
+// discard, so it keeps the early depth test. RASM_ALPHA_MASK (glTF MASK) draws nothing where alpha < alphaCutoff:
+// with 1 sample per pixel that is a plain cut-out; with several (RASM_ALPHA_TO_COVERAGE too) it covers the share of
+// the samples its sharpened alpha says, instead of discarding, so the edge is smooth. RASM_ALPHA_BLEND (glTF
 // BLEND) is drawn back to front by the Transparent pass; its run is not culled by face, so that it stays in one
 // sorted order, and a single-sided material drops its back faces here instead. The shading stays in the entry point
 // rather than in a function that takes the varyings: such a call reads every varying up front, which costs the opaque
@@ -104,9 +120,15 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
 {
     // A pointer, so the unlit path loads only the fields it reads.
     MaterialData *model = pc.scene->materialsPtr + input.materialIndex;
+    float coverage = 1.0;
 #if defined(RASM_ALPHA_MASK)
-    if (getBaseAlpha(gTextures, model, input.uv0, input.uv1, input.uv2, input.color.a) < model->alphaCutoff)
+    float alpha = getBaseAlpha(gTextures, model, input.uv0, input.uv1, input.uv2, input.color.a);
+#if defined(RASM_ALPHA_TO_COVERAGE)
+    coverage = getCoverage(alpha, model->alphaCutoff);
+#else
+    if (alpha < model->alphaCutoff)
         discard;
+#endif
 #endif
 #if defined(RASM_ALPHA_BLEND)
     // handedness covers a mirroring model matrix only. A shaded view's view matrix never mirrors (a camera has no
@@ -119,7 +141,7 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     {
         MetallicRoughnessMaterial metallicRoughness = model->material.metallicRoughness;
         float2 uv = getTextureUV(model, TRANSFORM_BASE_COLOR, metallicRoughness.baseColorTextureCoordinate, input.uv0, input.uv1, input.uv2);
-        return toTarget(shadeUnlit(gTextures, metallicRoughness, uv, input.color));
+        return toTarget(shadeUnlit(gTextures, metallicRoughness, uv, input.color), coverage);
     }
 
     Material material = model->material;
@@ -156,7 +178,7 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     info.environment.intensity      = pc.scene->environmentIntensity;
     info.environment.rotation       = pc.scene->environmentRotation;
 
-    return toTarget(shadePBR(gTextures, gCubeTextures, info));
+    return toTarget(shadePBR(gTextures, gCubeTextures, info), coverage);
 }
 
 // clang-format on

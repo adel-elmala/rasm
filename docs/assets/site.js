@@ -59,6 +59,7 @@ const SECTIONS = [
             { path: "guides/transparency.html",          title: "Transparency and alpha modes",        blurb: "Cut-outs, see-through surfaces, blend order and see-through shadows." },
             { path: "guides/image-based-lighting.html",  title: "Image-based lighting",                blurb: "Light from a photo of the whole sky: irradiance, prefiltered mips and the split sum." },
             { path: "guides/tone-mapping.html",          title: "Tone mapping and exposure",           blurb: "Bring unbounded scene light into the screen's 0 to 1." },
+            { path: "guides/msaa.html",                  title: "MSAA and alpha-to-coverage",          blurb: "Several samples per pixel smooth edges; a weighted resolve keeps bright edges smooth too." },
             { path: "guides/bloom.html",                 title: "Bloom",                               blurb: "Light brighter than white spreads into a glow: blurs at many sizes from a chain of half-size images." },
             { path: "guides/shadow-mapping.html",        title: "Shadow mapping",                      blurb: "Depth from the light answers \"is this point lit?\"." },
             { path: "guides/cascaded-shadows.html",      title: "Cascaded shadow maps",                blurb: "One shadow map per slice of the view: sharp near, still there far." },

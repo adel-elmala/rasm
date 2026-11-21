@@ -137,6 +137,9 @@ namespace rasm
         void                        render(SceneHandle scene, CameraHandle camera);
         bool                        addScenePasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, const SceneShadow* shadows = nullptr, uint32_t shadowCount = 0);
         SceneShadow                 addShadowPasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const ShadowDesc& desc);
+        // Resolves a multisampled target's color 0 into a new single-sample target (weighted by brightness, so bright
+        // edges stay smooth), which addBloomPasses and addToneMapPass read. Returns invalid on failure.
+        RenderTargetHandle          addMsaaResolvePass(RenderGraph& graph, const RenderTargetHandle& source, CameraHandle camera);
         // Returns the bloom target for addToneMapPass, or invalid on failure.
         RenderTargetHandle          addBloomPasses(RenderGraph& graph, const RenderTargetHandle& source, CameraHandle camera);
         bool                        addToneMapPass(RenderGraph& graph, const RenderTargetHandle& source, CameraHandle camera, const RenderTargetHandle& bloom = {});
@@ -214,6 +217,7 @@ namespace rasm
         std::unique_ptr<StatsOverlay>                               statsOverlay                            = {};
         std::unique_ptr<Renderer>                                   renderer                                = {};
         PipelineHandle                                              toneMapPipeline                         = {};
+        PipelineHandle                                              msaaResolvePipeline                     = {};
         PipelineHandle                                              bloomFirstDownPipeline                  = {};
         PipelineHandle                                              bloomDownPipeline                       = {};
         PipelineHandle                                              bloomUpPipeline                         = {};
@@ -260,8 +264,8 @@ namespace rasm
             std::future<EnvironmentRaw>     result;
         };
 
-        PipelineHandle              createGraphicsPipeline(const std::string& name, const std::string& shaderSource, const Format* colorFormats, Format depthFormat, const char* vertexEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite);
-        PipelineHandle              createScenePipeline(const std::string& name, const std::string& shaderFile, const std::string& defines, const RenderTargetHandle& renderTarget, const char* vertexEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite);
+        PipelineHandle              createGraphicsPipeline(const std::string& name, const std::string& shaderSource, const Format* colorFormats, Format depthFormat, const char* vertexEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite, uint32_t samples = 1, bool alphaToCoverage = false);
+        PipelineHandle              createScenePipeline(const std::string& name, const std::string& shaderFile, const std::string& defines, const RenderTargetHandle& renderTarget, const char* vertexEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite, bool alphaToCoverage = false);
         MaterialHandle              loadMaterial(const tinygltf::Model& model, int materialIndex, GltfImportCache& cache);
         void                        finishMeshLoad(PendingMeshLoad& load);
         void                        finishTextureLoad(PendingTextureLoad& load);

@@ -376,7 +376,7 @@ namespace rasm::rhi
             imageInfo.usage = toVkImageUsageFlags(desc.usage);
             if (desc.usage == TextureUsage::SAMPLED)
                 imageInfo.usage |= hostCopy ? VK_IMAGE_USAGE_HOST_TRANSFER_BIT : VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-            imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+            imageInfo.samples = static_cast<VkSampleCountFlagBits>(std::max(desc.samples, 1u));
             imageInfo.sharingMode = sharedFamilyCount > 1 ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE;
             imageInfo.queueFamilyIndexCount = sharedFamilyCount > 1 ? sharedFamilyCount : 0;
             imageInfo.pQueueFamilyIndices = sharedFamilyCount > 1 ? sharedFamilies : nullptr;
@@ -515,6 +515,10 @@ namespace rasm::rhi
         vkGetPhysicalDeviceProperties2(physicalDevice.physical_device, &properties2);
         maxBufferSize = maintenance4.maxBufferSize;
         maxStorageImages = std::min(vulkan12.maxDescriptorSetUpdateAfterBindStorageImages, vulkan12.maxPerStageDescriptorUpdateAfterBindStorageImages);
+        // A multisampled scene target is drawn into (color and depth), and its color and depth are sampled: the resolve
+        // and the Hi-Z read them sample by sample.
+        const VkPhysicalDeviceLimits &limits = physicalDevice.properties.limits;
+        sampleCounts = limits.framebufferColorSampleCounts & limits.framebufferDepthSampleCounts & limits.sampledImageColorSampleCounts & limits.sampledImageDepthSampleCounts;
 
         // A queue family with compute and no graphics runs beside the graphics queue. Its timestamps must match the
         // graphics queue's, since the GPU timers of both share one mask.
@@ -886,8 +890,9 @@ namespace rasm::rhi
 
         VkPipelineMultisampleStateCreateInfo multisampleInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-            .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
-            .sampleShadingEnable = VK_FALSE};
+            .rasterizationSamples = static_cast<VkSampleCountFlagBits>(std::max(desc.samples, 1u)),
+            .sampleShadingEnable = VK_FALSE,
+            .alphaToCoverageEnable = desc.alphaToCoverage ? VK_TRUE : VK_FALSE};
 
         VkGraphicsPipelineCreateInfo pipelineInfo = {
             .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
@@ -1348,6 +1353,12 @@ namespace rasm::rhi
     {
         const auto value = static_cast<uint32_t>(format);
         return value < FORMAT_COUNT && formatSupport[value].sampled;
+    }
+
+    // VkSampleCountFlagBits are the counts themselves (VK_SAMPLE_COUNT_4_BIT is 4), so the mask is already 2^n per bit n.
+    uint32_t VulkanDevice::supportedSampleCounts() const
+    {
+        return sampleCounts;
     }
 
     // Copies every mip on the host (VK_EXT_host_image_copy, core in 1.4), with no command buffer: the image goes from

@@ -23,6 +23,11 @@ namespace rasm
             return false;
         }
 
+        if (ctx.getRenderTarget(source).samples > 1)
+        {
+            spdlog::error("addToneMapPass samples one value per pixel: resolve a multisampled target first (addMsaaResolvePass).");
+            return false;
+        }
         if (bloom.isValid() && ctx.getRenderTarget(bloom).colorCount == 0)
         {
             spdlog::error("addToneMapPass needs a bloom target from addBloomPasses.");

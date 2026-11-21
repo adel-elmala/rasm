@@ -323,9 +323,24 @@ private:
     bool        asyncCompute          = false;
     bool        clusteredLighting     = true;
     bool        hostImageCopy         = true;
+    bool        bloom                 = false;
+    AntiAliasing antiAliasing         = AntiAliasing::NONE;
 };</pre>
   <div class="body">
     <p>The engine's settings, given to its constructor. Every field is explained on the <a href="engine.html#EngineConfig">Engine page</a>.</p>
+  </div>
+</div>
+
+<div class="api" id="AntiAliasing">
+  <pre class="sig">enum class AntiAliasing
+{
+    NONE,
+    MSAA_2X,
+    MSAA_4X,
+    MSAA_8X,
+};</pre>
+  <div class="body">
+    <p>How <code>Engine::render</code> smooths edges (<code>EngineConfig::antiAliasing</code>). <code>MSAA_nX</code> draws the scene with n samples per pixel and resolves them in a pass of the graph (<a href="engine.html#addMsaaResolvePass"><code>addMsaaResolvePass</code></a>); a count the device does not have falls back to the most it has, with a warning. See <a href="../guides/msaa.html">MSAA and alpha-to-coverage</a>.</p>
   </div>
 </div>
 
@@ -363,9 +378,11 @@ struct RenderTarget
     Format                  depthFormat;
     glm::vec4               clearColor;
     bool                    history;
+    uint32_t                samples = 1;
+    uint32_t                storageSlots[rasm::MAX_COLOR_ATTACHMENTS] = {};
 };</pre>
   <div class="body">
-    <p>A render target as <a href="low-level.html#getRenderTarget">RenderContext::getRenderTarget</a> returns it: the values of its <a href="render-graph.html#RenderTargetDesc">RenderTargetDesc</a>, plus one <code>RenderTargetAttachments</code> entry (its colors, its depth) per frame slot. Only the first <code>colorCount</code> colors are used. Without <code>history</code> every entry holds the same textures; with it each slot has its own. <code>getRenderTargetTexture(rt, i)</code> picks <code>attachments[slot].color[i]</code> for the current slot, and <code>getPreviousRenderTargetTexture</code> the previous slot's.</p>
+    <p>A render target as <a href="low-level.html#getRenderTarget">RenderContext::getRenderTarget</a> returns it: the values of its <a href="render-graph.html#RenderTargetDesc">RenderTargetDesc</a>, plus one <code>RenderTargetAttachments</code> entry (its colors, its depth) per frame slot. Only the first <code>colorCount</code> colors are used. Without <code>history</code> every entry holds the same textures; with it each slot has its own. <code>getRenderTargetTexture(rt, i)</code> picks <code>attachments[slot].color[i]</code> for the current slot, and <code>getPreviousRenderTargetTexture</code> the previous slot's. <code>samples</code> is the desc's samples per pixel; <code>storageSlots</code> holds a storage target's slot per color (<code>UINT32_MAX</code> for any other target), which <code>getRenderTargetStorageIndex</code> returns.</p>
   </div>
 </div>
 

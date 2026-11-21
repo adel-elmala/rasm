@@ -16,6 +16,7 @@
 #include "tracy/Tracy.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <vector>
@@ -46,6 +47,13 @@ namespace rasm
         uint64_t getBlendSortBufferSize(uint32_t capacity)
         {
             return static_cast<uint64_t>(capacity) * (2 * sizeof(uint32_t) + sizeof(gfx::DrawInfo));
+        }
+
+        // The pipelines that match the view's target: its sample count picks the set.
+        ShadedPipelines &getShadedPipelines(GpuScene &gpuScene, RenderContext &ctx, const SceneView &view)
+        {
+            const uint32_t samples = ctx.getRenderTarget(view.renderTarget).samples;
+            return gpuScene.shaded[std::min(static_cast<uint32_t>(std::countr_zero(samples)), SAMPLE_VARIANTS - 1)];
         }
 
         bool hasRun(const SceneDrawList &drawList, AlphaMode alphaMode)
@@ -1049,10 +1057,11 @@ namespace rasm
         }
 
         // A shader error retries every frame, so a shader fixed on disk is picked up while the application runs.
-        if (!view.depthOnly && !gpuScene->pipeline.isValid())
+        ShadedPipelines &shaded = getShadedPipelines(*gpuScene, ctx, view);
+        if (!view.depthOnly && !shaded.pipeline.isValid())
         {
-            gpuScene->pipeline = createScenePipeline("rasm", "passes/rasm.slang", "", view.renderTarget, "vertMain", "fragMain", BlendMode::NONE, true);
-            if (!gpuScene->pipeline.isValid())
+            shaded.pipeline = createScenePipeline("rasm", "passes/rasm.slang", "", view.renderTarget, "vertMain", "fragMain", BlendMode::NONE, true);
+            if (!shaded.pipeline.isValid())
             {
                 spdlog::error("Failed to create the uber material pipeline for the scene.");
                 return;
@@ -1073,16 +1082,20 @@ namespace rasm
         // front, which costs the opaque draws, and Slang's API does not compile an entry point that calls another.
         const bool hasMask = hasRun(drawList, AlphaMode::MASK);
         const bool hasBlend = hasRun(drawList, AlphaMode::BLEND);
-        if (!view.depthOnly && hasMask && !gpuScene->maskPipeline.isValid())
+        // With several samples per pixel, MASK covers the samples its sharpened alpha says (alpha-to-coverage) instead of
+        // discarding, so a cut-out's edge is as smooth as a triangle's.
+        const bool multisampled = ctx.getRenderTarget(view.renderTarget).samples > 1;
+        if (!view.depthOnly && hasMask && !shaded.maskPipeline.isValid())
         {
-            gpuScene->maskPipeline = createScenePipeline("rasmMask", "passes/rasm.slang", "#define RASM_ALPHA_MASK 1\n", view.renderTarget, "vertMain", "fragMain", BlendMode::NONE, true);
-            if (!gpuScene->maskPipeline.isValid())
+            const char *defines = multisampled ? "#define RASM_ALPHA_MASK 1\n#define RASM_ALPHA_TO_COVERAGE 1\n" : "#define RASM_ALPHA_MASK 1\n";
+            shaded.maskPipeline = createScenePipeline("rasmMask", "passes/rasm.slang", defines, view.renderTarget, "vertMain", "fragMain", BlendMode::NONE, true, multisampled);
+            if (!shaded.maskPipeline.isValid())
                 spdlog::error("Failed to create the MASK pipeline; the scene is drawn without its cut-out materials.");
         }
-        if (!view.depthOnly && hasBlend && !gpuScene->blendPipeline.isValid())
+        if (!view.depthOnly && hasBlend && !shaded.blendPipeline.isValid())
         {
-            gpuScene->blendPipeline = createScenePipeline("rasmBlend", "passes/rasm.slang", "#define RASM_ALPHA_BLEND 1\n", view.renderTarget, "vertMain", "fragMain", BlendMode::PREMULTIPLIED_ALPHA, false);
-            if (!gpuScene->blendPipeline.isValid())
+            shaded.blendPipeline = createScenePipeline("rasmBlend", "passes/rasm.slang", "#define RASM_ALPHA_BLEND 1\n", view.renderTarget, "vertMain", "fragMain", BlendMode::PREMULTIPLIED_ALPHA, false);
+            if (!shaded.blendPipeline.isValid())
                 spdlog::error("Failed to create the BLEND pipeline; the scene is drawn without its see-through materials.");
         }
         if (view.depthOnly && (hasMask || hasBlend) && !gpuScene->depthMaskPipeline.isValid())
@@ -1091,7 +1104,7 @@ namespace rasm
             if (!gpuScene->depthMaskPipeline.isValid())
                 spdlog::error("Failed to create the depth-only MASK pipeline; cut-out and see-through materials cast no shadow.");
         }
-        view.drawMask = view.depthOnly ? gpuScene->depthMaskPipeline.isValid() : gpuScene->maskPipeline.isValid();
+        view.drawMask = view.depthOnly ? gpuScene->depthMaskPipeline.isValid() : shaded.maskPipeline.isValid();
         // Without the culling pipelines the scene is still drawn, only unculled, so a culling shader error does not blank it.
         if (!gpuScene->cullCountPipeline.isValid() || !gpuScene->cullWritePipeline.isValid())
         {
@@ -1109,7 +1122,7 @@ namespace rasm
             if (drawList.runs[i].alphaMode == AlphaMode::BLEND)
                 view.blendRun = i;
         }
-        view.drawBlend = view.blendRun < gfx::MAX_DRAW_RUNS && gpuScene->blendPipeline.isValid();
+        view.drawBlend = view.blendRun < gfx::MAX_DRAW_RUNS && shaded.blendPipeline.isValid();
         bool sortPipelines = true;
         for (const PipelineHandle &pipeline : gpuScene->sortPipelines)
             sortPipelines = sortPipelines && pipeline.isValid();
@@ -1273,6 +1286,7 @@ namespace rasm
         sceneData.blendRun = view.blendRun;
         sceneData.hizLevelCount = view.hizLevelCount;
         sceneData.depthTexture = depthSlot;
+        sceneData.depthSamples = renderTargetData.samples;
         sceneData.viewportWidth = width;
         sceneData.viewportHeight = height;
         sceneData.lodErrorPixels = config.lodErrorPixels;
@@ -1434,15 +1448,16 @@ namespace rasm
         // Opaque draws use the pipeline that never discards; a depth-only view draws MASK and BLEND with its cut-out one,
         // and a shaded view leaves BLEND to the Transparent pass.
         PipelineHandle bound = {};
+        const ShadedPipelines &shaded = getShadedPipelines(*gpuScene, ctx, view);
         gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, static_cast<uint32_t>(frameCount), viewIndex)};
         for (uint32_t i = 0; i < drawList.runs.size(); ++i)
         {
             const DrawRun &run = drawList.runs[i];
             if (i == view.blendRun || (run.alphaMode != AlphaMode::NONE && !view.drawMask))
                 continue;
-            PipelineHandle pipeline = view.depthOnly ? gpuScene->depthPipeline : gpuScene->pipeline;
+            PipelineHandle pipeline = view.depthOnly ? gpuScene->depthPipeline : shaded.pipeline;
             if (run.alphaMode != AlphaMode::NONE)
-                pipeline = view.depthOnly ? gpuScene->depthMaskPipeline : gpuScene->maskPipeline;
+                pipeline = view.depthOnly ? gpuScene->depthMaskPipeline : shaded.maskPipeline;
             if (pipeline != bound)
             {
                 ctx.bindPipeline(commandBuffer, pipeline);
@@ -1478,11 +1493,12 @@ namespace rasm
         const DrawRun &run = gpuScene->drawLists[view.scene.index].runs[view.blendRun];
         const auto commandBuffer = frameResources[frame].commandBuffer;
         const gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, frame, viewIndex), .firstDraw = run.first};
-        ctx.bindPipeline(commandBuffer, gpuScene->blendPipeline);
-        ctx.bindDescriptorSet(commandBuffer, gpuScene->blendPipeline, bindlessDescriptorSet, 0);
+        const PipelineHandle blendPipeline = getShadedPipelines(*gpuScene, ctx, view).blendPipeline;
+        ctx.bindPipeline(commandBuffer, blendPipeline);
+        ctx.bindDescriptorSet(commandBuffer, blendPipeline, bindlessDescriptorSet, 0);
         ctx.bindIndexBuffer(commandBuffer, geometryPool->indexBuffer(), 0, Format::U32_UINT);
         ctx.setCullMode(commandBuffer, CullMode::NONE);
-        ctx.pushConstants(commandBuffer, gpuScene->blendPipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
+        ctx.pushConstants(commandBuffer, blendPipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
         if (view.culled)
             ctx.drawIndexedIndirectCount(commandBuffer, view.visibleDraws[frame], run.first * sizeof(gfx::DrawInfo), view.visibleDraws[frame],
                                          getDrawCountsOffset(view.visibleCapacity[frame]) + view.blendRun * sizeof(uint32_t), run.count, sizeof(gfx::DrawInfo));
@@ -1497,10 +1513,11 @@ namespace rasm
         const SceneView &view = gpuScene->views[viewIndex];
         if (!view.sky)
             return;
-        if (!gpuScene->skyPipeline.isValid())
+        PipelineHandle &skyPipeline = getShadedPipelines(*gpuScene, ctx, view).skyPipeline;
+        if (!skyPipeline.isValid())
         {
-            gpuScene->skyPipeline = createScenePipeline("sky", "passes/sky.slang", "", view.renderTarget, "vertMain", "fragMain", BlendMode::NONE, true);
-            if (!gpuScene->skyPipeline.isValid())
+            skyPipeline = createScenePipeline("sky", "passes/sky.slang", "", view.renderTarget, "vertMain", "fragMain", BlendMode::NONE, true);
+            if (!skyPipeline.isValid())
             {
                 spdlog::error("Failed to create the sky pipeline; the scene has no sky.");
                 return;
@@ -1508,9 +1525,9 @@ namespace rasm
         }
         const auto commandBuffer = frameResources[frameCount].commandBuffer;
         const gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, static_cast<uint32_t>(frameCount), viewIndex)};
-        ctx.bindPipeline(commandBuffer, gpuScene->skyPipeline);
-        ctx.bindDescriptorSet(commandBuffer, gpuScene->skyPipeline, bindlessDescriptorSet, 0);
-        ctx.pushConstants(commandBuffer, gpuScene->skyPipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
+        ctx.bindPipeline(commandBuffer, skyPipeline);
+        ctx.bindDescriptorSet(commandBuffer, skyPipeline, bindlessDescriptorSet, 0);
+        ctx.pushConstants(commandBuffer, skyPipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
         ctx.setCullMode(commandBuffer, CullMode::NONE);
         ctx.draw(commandBuffer, 3);
     }

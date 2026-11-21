@@ -10,8 +10,26 @@ static const uint   HIZ_GROUP_SIZE      = 8;            // Must match HIZ_GROUP_
 [[vk::binding(0, 0)]]
 Sampler2D gTextures[];
 
-// Builds Hi-Z level pc.argument: each texel is the farthest of the 2x2 texels under it in the level before, or
-// in the depth texture for level 0. Odd sizes repeat the last row or column, so every pixel is covered.
+// The same bindless array, for a multisampled depth: a slot is read only through the declaration that matches it.
+[[vk::binding(0, 0)]]
+Sampler2DMS<float> gMsTextures[];
+
+// The farthest depth (reversed-Z: the smallest) of one pixel: with several samples per pixel, the farthest sample, so
+// the Hi-Z stays conservative where a pixel holds an edge. No resolved depth is needed.
+float loadDepth(SceneData *scene, uint2 pixel)
+{
+    if (scene->depthSamples <= 1)
+        return gTextures[scene->depthTexture].Load(int3(int2(pixel), 0)).r;
+    Sampler2DMS<float> depth = gMsTextures[scene->depthTexture];
+    float farthest = 1.0;
+    for (uint sample = 0; sample < scene->depthSamples; ++sample)
+        farthest = min(farthest, depth.Load(int2(pixel), int(sample)));
+    return farthest;
+}
+
+// Builds Hi-Z level pc.argument: each texel is the farthest of the 2x2 texels under it in the level before, or of
+// the 2x2 pixels (every sample of each) in the depth texture for level 0. Odd sizes repeat the last row or column, so
+// every pixel is covered.
 [shader("compute")]
 [numthreads(HIZ_GROUP_SIZE, HIZ_GROUP_SIZE, 1)]
 void hizMain(uint3 threadId : SV_DispatchThreadID)
@@ -33,9 +51,8 @@ void hizMain(uint3 threadId : SV_DispatchThreadID)
     float farthest;
     if (level == 0)
     {
-        Sampler2D depth = gTextures[scene->depthTexture];
-        farthest        = min(min(depth.Load(int3(p0.x, p0.y, 0)).r, depth.Load(int3(p1.x, p0.y, 0)).r),
-                              min(depth.Load(int3(p0.x, p1.y, 0)).r, depth.Load(int3(p1.x, p1.y, 0)).r));
+        farthest        = min(min(loadDepth(scene, p0), loadDepth(scene, uint2(p1.x, p0.y))),
+                              min(loadDepth(scene, uint2(p0.x, p1.y)), loadDepth(scene, p1)));
     }
     else
     {

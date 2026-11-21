@@ -100,6 +100,11 @@ namespace rasm
             spdlog::error("addBloomPasses needs a render target with a color attachment.");
             return {};
         }
+        if (ctx.getRenderTarget(source).samples > 1)
+        {
+            spdlog::error("addBloomPasses samples one value per pixel: resolve a multisampled target first (addMsaaResolvePass).");
+            return {};
+        }
 
         const RenderTargetDesc sourceDesc = ctx.getRenderTargetDesc(source);
         BloomChain chain;

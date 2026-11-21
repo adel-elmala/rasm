@@ -663,6 +663,7 @@ Lifetimes (W write, R read, P read of the frame before, - alive between uses, . 
     bool        history        = false;
     bool        cube           = false;
     bool        storage        = false;
+    uint32_t    samples        = 1;
 
     bool operator==(const RenderTargetDesc&amp;) const = default;
 };</pre>
@@ -677,6 +678,7 @@ Lifetimes (W write, R read, P read of the frame before, - alive between uses, . 
       <dt>history</dt><dd><code>true</code> keeps one copy per frame slot, so a pass can read last frame's color with <code>readPrevious</code>. It costs twice the memory. Leave it <code>false</code> for a target that is drawn and read in the same frame. A depth-only target can't have it: history keeps only colors.</dd>
       <dt>cube</dt><dd><code>true</code>: the depth is a cube texture of <code>CUBE_FACES</code> (6) square faces, sampled in a shader as a <var>SamplerCube</var>. Only for a depth-only target with a fixed square size (no colors, <code>swapchainScale</code> 0, <code>width</code> = <code>height</code>); anything else is rejected. Each pass draws one face, named with <a href="#write-renderTarget"><code>write(rt, face)</code></a>. A point light's shadow is one (<a href="../guides/local-light-shadows.html">Spot and point light shadows</a>).</dd>
       <dt>storage</dt><dd><code>true</code>: a target that compute passes write instead of drawing. Its colors are <code>SAMPLED_STORAGE</code> textures, each in a storage slot (<a href="#getRenderTargetStorageIndex"><code>getRenderTargetStorageIndex</code></a>) and in the bindless set, so a later pass samples it like any target. It needs at least one color, every color <code>R16G16B16A16_SFLOAT</code> (<code>SCENE_COLOR_FORMAT</code>, the format shaders declare binding 1 with), and no depth, and can't be a cube or have history; anything else is rejected. Only a compute pass writes it (<a href="#write-renderTarget"><code>write(rt)</code></a> in <a href="#addComputePass"><code>addComputePass</code></a>), each frame from <code>STORAGE</code>. The <a href="engine.html#addBloomPasses">bloom passes</a> use 11 of them. A shader writes it through binding 1, declared with its format: <code>[format("rgba16f")] RWTexture2DArray&lt;float4&gt;</code> for <code>SCENE_COLOR_FORMAT</code> (layer 0).</dd>
+      <dt>samples</dt><dd>Samples per pixel of its color and depth: 1, or 2, 4 or 8 when the device has them (<a href="low-level.html#supportsSampleCount"><code>RenderContext::supportsSampleCount</code></a>), for MSAA. A multisampled target needs a color, and can't have history, be storage or be a cube; anything else is rejected. Pipelines that draw into it need the same count, which <a href="#createPipeline-target"><code>createPipeline(name, source, renderTarget)</code></a> takes from it. A shader reads its color and depth sample by sample (<var>Sampler2DMS</var>); the bloom and tone-map passes read the single-sample target that <a href="engine.html#addMsaaResolvePass"><code>Engine::addMsaaResolvePass</code></a> makes from it. Memory grows with the count: at 1920 × 1080, RGBA16F color and D32 depth take 94.9 MiB at 4 and 189.8 MiB at 8. See <a href="../guides/msaa.html">MSAA and alpha-to-coverage</a>.</dd>
     </dl>
     <p>The full target, with its per-slot textures, is the <a href="types.html#RenderTarget">RenderTarget</a> that <a href="low-level.html#getRenderTarget">RenderContext::getRenderTarget</a> returns.</p>
   </div>
@@ -862,7 +864,7 @@ if (engine.beginFrame(camera))
                               const std::string&amp; shaderSource,
                               const RenderTargetHandle&amp; renderTarget);</pre>
   <div class="body">
-    <p>The same, but the pipeline draws into targets with <code>renderTarget</code>'s formats: its color formats, in order, and its depth format. Use it for every pass that draws into a render target: a target always has a depth, and the two-argument overload has none. The target's textures need not exist yet: a transient target's handle is enough. In the shader, <code>fragMain</code> returns a struct with one output per attachment, in the target's order:</p>
+    <p>The same, but the pipeline draws into targets with <code>renderTarget</code>'s formats and sample count: its color formats, in order, its depth format and its <code>samples</code>. Use it for every pass that draws into a render target: a target always has a depth, and the two-argument overload has none. The target's textures need not exist yet: a transient target's handle is enough. In the shader, <code>fragMain</code> returns a struct with one output per attachment, in the target's order:</p>
     <pre><code class="lang-slang">struct Targets
 {
     float4 color : SV_TARGET0;

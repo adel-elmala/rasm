@@ -216,7 +216,7 @@ struct SceneData
     uint32_t            globalLightCount;   // directional lights and lights without a range, shaded at every pixel
     uint32_t            localLightCount;    // lights with a range, sorted into clusters
     float               nearZ;              // the camera's near plane, where the clusters start
-    uint32_t            padding;            // keeps the size a multiple of 8
+    uint32_t            depthSamples;       // samples per pixel of depthTexture; the Hi-Z build reads each one
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.

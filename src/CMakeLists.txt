@@ -51,6 +51,7 @@ target_sources(rasm PRIVATE
     "renderer/renderer.cpp"
     "renderer/shaderCompiler.cpp"
     "renderer/localShadows.cpp"
+    "renderer/msaaResolve.cpp"
     "renderer/shadowCascades.cpp"
     "renderer/statsOverlay.cpp"
     "renderer/toneMap.cpp"
