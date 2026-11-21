@@ -1,0 +1,178 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-16 -16 792 262" width="792" height="262" role="img" aria-label="Light along a line through a point, on a log scale, from 200 pixels left to 200 pixels right. Six bell curves, of widths 2 to 64 pixels, each holding the same light: the narrow ones are tall, the wide ones low and wide. Their sum is a sharp peak at the point with a long tail that reaches far to both sides."><style>:root { --bg:           #fbfaf7;
+    --bg-soft:      #f3f1eb;
+    --bg-code:      #f0eee8;
+    --bg-raised:    #ffffff;
+    --fg:           #1d1d1b;
+    --fg-soft:      #55534d;
+    --fg-faint:     #8a877e;
+    --line:         #dcd8ce;
+    --link:         #1f5fbf;
+    --accent:       #c2410c;
+    --accent-fill:  #fde3d3;
+
+    /* the color code shared by every diagram */
+    --cpu:          #2563eb;   --cpu-fill:     #dbe7fd;
+    --gpu:          #15803d;   --gpu-fill:     #d5f0dd;
+    --mem:          #b45309;   --mem-fill:     #fbe8c8;
+    --shader:       #7c3aed;   --shader-fill:  #e9defd;
+    --muted-fill:   #ebe8e0;
+
+    /* right / wrong, light rays, shadowed areas */
+    --ok:           #0f7b6c;   --ok-fill:      #d3efe9;
+    --bad:          #b91c1c;   --bad-fill:     #fbdcdc;
+    --light:        #b8860b;   --light-fill:   #fdf0b5;
+    --shade:        rgba(29, 29, 27, 0.4);
+
+    --note:         #2563eb;
+    --warn:         #b45309;
+    --rule:         #b91c1c;
+
+    /* syntax highlighting */
+    --tok-kw:       #a626a4;
+    --tok-type:     #0e7490;
+    --tok-fn:       #1f5fbf;
+    --tok-str:      #3f7d20;
+    --tok-num:      #b45309;
+    --tok-const:    #9a5b00;
+    --tok-com:      #8a877e;
+    --tok-pre:      #c2410c;
+    --tok-ns:       #6b6860;
+
+    --shadow:       0 1px 2px rgba(40, 30, 10, 0.06), 0 6px 20px rgba(40, 30, 10, 0.06);
+    --radius:       10px;
+    --sidebar:      280px;
+    --toc:          230px;
+    --content:      860px;
+    --mono:         "JetBrains Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
+    --sans:         "Inter", "Segoe UI", system-ui, -apple-system, sans-serif; }
+@media (prefers-color-scheme: dark) { :root { --bg:           #15161a;
+        --bg-soft:      #1c1e23;
+        --bg-code:      #22252b;
+        --bg-raised:    #1f2228;
+        --fg:           #e8e6e1;
+        --fg-soft:      #b3b0a8;
+        --fg-faint:     #7f7d77;
+        --line:         #33363d;
+        --link:         #7fb0ff;
+        --accent:       #fb923c;
+        --accent-fill:  #40260f;
+        --cpu:          #7fa8ff;   --cpu-fill:     #1c2a47;
+        --gpu:          #5fd08a;   --gpu-fill:     #173326;
+        --mem:          #f0b45a;   --mem-fill:     #3a2a12;
+        --shader:       #b794ff;   --shader-fill:  #2c2147;
+        --muted-fill:   #2a2c32;
+        --ok:           #4fd1b8;   --ok-fill:      #12332e;
+        --bad:          #f87171;   --bad-fill:     #401a1a;
+        --light:        #f5cf4a;   --light-fill:   #3a3110;
+        --shade:        rgba(0, 0, 0, 0.55);
+        --note:         #7fa8ff;
+        --warn:         #f0b45a;
+        --rule:         #f87171;
+        --tok-kw:       #c678dd;
+        --tok-type:     #56b6c2;
+        --tok-fn:       #61afef;
+        --tok-str:      #98c379;
+        --tok-num:      #d19a66;
+        --tok-const:    #e5c07b;
+        --tok-com:      #7f848e;
+        --tok-pre:      #e06c75;
+        --tok-ns:       #9da5b4;
+        --shadow:       0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 20px rgba(0, 0, 0, 0.25); } }
+svg { font-family: var(--sans); }
+svg { font-family: var(--sans); font-size: 13px; }
+svg text { fill: var(--fg); }
+svg text.small { font-size: 11px; fill: var(--fg-soft); }
+svg text.title { font-weight: 700; }
+svg text.big { font-size: 16px; font-weight: 700; }
+svg text.mono { font-family: var(--mono); font-size: 12px; }
+svg text.mid { text-anchor: middle; }
+svg text.end { text-anchor: end; }
+svg text.halo { paint-order: stroke; stroke: var(--bg-raised); stroke-width: 4px; stroke-linejoin: round; }
+svg .box     { fill: var(--muted-fill);  stroke: var(--fg-faint); stroke-width: 1.5; }
+svg .cpu     { fill: var(--cpu-fill);    stroke: var(--cpu);      stroke-width: 1.5; }
+svg .gpu     { fill: var(--gpu-fill);    stroke: var(--gpu);      stroke-width: 1.5; }
+svg .mem     { fill: var(--mem-fill);    stroke: var(--mem);      stroke-width: 1.5; }
+svg .shader  { fill: var(--shader-fill); stroke: var(--shader);   stroke-width: 1.5; }
+svg .ghost   { fill: none; stroke: var(--fg-faint); stroke-width: 1.2; stroke-dasharray: 5 4; }
+svg .hot     { fill: none; stroke: var(--accent); stroke-width: 2.5; }
+svg .zone    { fill: var(--bg-soft); stroke: var(--line); stroke-width: 1; }
+svg .accent  { fill: var(--accent-fill); stroke: var(--accent);   stroke-width: 1.5; }
+svg .ok      { fill: var(--ok-fill);     stroke: var(--ok);       stroke-width: 1.5; }
+svg .bad     { fill: var(--bad-fill);    stroke: var(--bad);      stroke-width: 1.5; }
+svg .light   { fill: var(--light-fill);  stroke: var(--light);    stroke-width: 1.5; }
+svg .shade   { fill: var(--shade);       stroke: none; }
+svg .lit     { fill: var(--light-fill);  stroke: none; }
+svg .solid   { fill: var(--fg-faint);    stroke: var(--fg-soft);  stroke-width: 1.5; }
+svg .paper   { fill: var(--bg-raised);   stroke: var(--line);     stroke-width: 1; }
+svg .surface { fill: none; stroke: var(--fg); stroke-width: 3; stroke-linecap: round; }
+svg .grid    { fill: none; stroke: var(--line); stroke-width: 1; }
+svg .thick   { stroke-width: 3; }
+svg .thin    { stroke-width: 1; }
+svg .nofill  { fill: none; }
+svg .o-25    { opacity: 0.25; }
+svg .o-50    { opacity: 0.5; }
+svg .o-75    { opacity: 0.75; }
+svg .badge   { fill: var(--accent); stroke: none; }
+svg text.badge-n { fill: var(--bg-raised); font-size: 12px; font-weight: 700; text-anchor: middle; }
+svg .arrow        { fill: none; stroke: var(--fg-soft); stroke-width: 1.6; }
+svg .arrow.cpu    { stroke: var(--cpu); fill: none; }
+svg .arrow.gpu    { stroke: var(--gpu); fill: none; }
+svg .arrow.mem    { stroke: var(--mem); fill: none; }
+svg .arrow.shader { stroke: var(--shader); fill: none; }
+svg .arrow.hot    { stroke: var(--accent); fill: none; }
+svg .arrow.ok     { stroke: var(--ok); fill: none; }
+svg .arrow.bad    { stroke: var(--bad); fill: none; }
+svg .arrow.light  { stroke: var(--light); fill: none; }
+svg .arrow.thick  { stroke-width: 3; }
+svg .dashed       { stroke-dasharray: 6 4; }
+svg :where(line.dashed, path.dashed, rect.dashed, circle.dashed, polygon.dashed, polyline.dashed) { stroke: var(--fg-faint); fill: none; }
+svg .flowing { stroke-dasharray: 6 5; animation: flowing 1.2s linear infinite; }
+@keyframes flowing { to { stroke-dashoffset: -22; } }
+svg .head         { fill: var(--fg-soft); }
+svg .head.cpu     { fill: var(--cpu); stroke: none; }
+svg .head.gpu     { fill: var(--gpu); stroke: none; }
+svg .head.mem     { fill: var(--mem); stroke: none; }
+svg .head.shader  { fill: var(--shader); stroke: none; }
+svg .head.hot     { fill: var(--accent); stroke: none; }
+svg .head.ok      { fill: var(--ok); stroke: none; }
+svg .head.bad     { fill: var(--bad); stroke: none; }
+svg .head.light   { fill: var(--light); stroke: none; }
+svg .t-cpu,    svg text.t-cpu    { fill: var(--cpu); }
+svg .t-gpu,    svg text.t-gpu    { fill: var(--gpu); }
+svg .t-mem,    svg text.t-mem    { fill: var(--mem); }
+svg .t-shader, svg text.t-shader { fill: var(--shader); }
+svg .t-hot,    svg text.t-hot    { fill: var(--accent); }
+svg .t-ok,     svg text.t-ok     { fill: var(--ok); }
+svg .t-bad,    svg text.t-bad    { fill: var(--bad); }
+svg .t-light,  svg text.t-light  { fill: var(--light); }
+svg .t-faint,  svg text.t-faint  { fill: var(--fg-faint); }
+svg a:hover rect, svg a:hover circle { stroke-width: 2.5; }
+svg a:hover text { text-decoration: underline; }
+svg .handle { fill: var(--accent); stroke: var(--bg-raised); stroke-width: 2.5; cursor: grab; touch-action: none; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35)); }
+svg .handle:hover, svg .handle:focus-visible { stroke: var(--fg); outline: none; }
+svg .handle.dragging { cursor: grabbing; }
+svg .pick { cursor: pointer; }
+svg .pick:hover, svg .pick:focus-visible { stroke-width: 3; outline: none; }
+svg g.pick:hover > :is(rect, circle, polygon), svg g.pick:focus-visible > :is(rect, circle, polygon) { stroke-width: 3; }
+svg g.pick text { pointer-events: none; }
+svg .off { opacity: 0.28; }
+svg .hide { display: none; }
+.card { fill: var(--bg-raised); stroke: var(--line); stroke-width: 1; }</style><defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker><marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker><marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker><marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker><marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker><marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker><marker id="ah-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker><marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker><marker id="ah-light" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head light"/></marker></defs><rect class="card" x="-15.5" y="-15.5" width="791" height="261" rx="12"/>
+    <rect x="60" y="40" width="640" height="150" class="zone"/>
+    <path d="M60,77.5H700M60,115H700M60,152.5H700M220,40V190M380,40V190M540,40V190" class="grid"/>
+    <path d="M367,188 L369,158 L370,131 L372,109 L374,91 L375,76 L377,66 L378,60 L380,58 L382,60 L383,66 L385,76 L386,91 L388,109 L390,131 L391,158 L393,188" class="arrow gpu"/>
+    <path d="M358,169 L361,143 L364,120 L367,102 L370,88 L374,77 L377,71 L378,70 L380,69 L382,70 L383,71 L386,77 L390,88 L393,102 L396,120 L399,143 L402,169" class="arrow gpu"/>
+    <path d="M335,180 L342,154 L348,131 L354,113 L361,99 L367,89 L374,83 L377,81 L380,81 L383,81 L386,83 L393,89 L399,99 L406,113 L412,131 L418,154 L425,180" class="arrow gpu"/>
+    <path d="M303,165 L316,143 L329,124 L342,110 L354,100 L367,94 L377,92 L380,92 L383,92 L393,94 L406,100 L418,110 L431,124 L444,143 L457,165" class="arrow gpu"/>
+    <path d="M214,189 L239,165 L265,144 L290,128 L316,116 L342,108 L367,104 L380,103 L393,104 L418,108 L444,116 L470,128 L495,144 L521,165 L546,189" class="arrow gpu"/>
+    <path d="M86,182 L111,170 L137,160 L162,151 L188,143 L214,136 L239,130 L265,125 L290,121 L316,118 L342,116 L367,115 L380,114 L393,115 L418,116 L444,118 L470,121 L495,125 L521,130 L546,136 L572,143 L598,151 L623,160 L649,170 L674,182" class="arrow gpu"/>
+    <path d="M73,188 L86,182 L98,176 L111,170 L124,165 L137,160 L150,156 L162,151 L175,147 L188,143 L201,139 L214,135 L226,132 L239,128 L252,124 L265,120 L278,116 L290,112 L303,108 L316,104 L329,99 L342,93 L354,85 L367,72 L377,51 L378,48 L380,47 L382,48 L383,51 L393,72 L406,85 L418,93 L431,99 L444,104 L457,108 L470,112 L482,116 L495,120 L508,124 L521,128 L534,132 L546,135 L559,139 L572,143 L585,147 L598,151 L610,156 L623,160 L636,165 L649,170 L662,176 L674,182 L687,188" class="arrow shader thick"/>
+    <text x="54" y="44" class="end small">10%</text>
+    <text x="54" y="119" class="end small">0.1%</text>
+    <text x="54" y="194" class="end small">0.001%</text>
+    <text x="60" y="208" class="mid small">−200 px</text>
+    <text x="380" y="208" class="mid small">the point</text>
+    <text x="700" y="208" class="mid small">+200 px</text>
+    <text x="60" y="26" class="small">share of the point's light per pixel, log scale: one grid line = 10 times</text>
+    <text x="700" y="225" class="end small t-faint">the curves are Gaussians of standard deviation 2 to 64 pixels</text>
+  </svg>
