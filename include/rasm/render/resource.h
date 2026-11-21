@@ -115,6 +115,7 @@ namespace rasm
         TextureUsage                usage                           = TextureUsage::SAMPLED;
         bool                        cube                            = false;    // CUBE_FACES layers, sampled as a cube, drawn one face at a time
         uint32_t                    mipLevels                       = 0;        // 0: one, or the full chain for a sampled RGBA8 texture; at most the full chain
+        uint32_t                    samples                         = 1;        // per pixel: 1, 2, 4 or 8; above 1 an attachment with one mip
 
         bool                        operator==(const TextureDesc&) const = default;
     };
@@ -147,6 +148,8 @@ namespace rasm
         Format                      depthStencilAttachmentFormat                  = Format::UNKNOWN;
         BlendMode                   blendMode                                     = BlendMode::NONE;
         bool                        depthWrite                                    = true;
+        uint32_t                    samples                                       = 1;     // of the attachments it draws into
+        bool                        alphaToCoverage                               = false; // color 0's alpha decides which samples are covered
 
         bool                        operator==(const PipelineDesc&) const = default;
     };
@@ -163,6 +166,7 @@ namespace rasm
         bool                        history                                       = false;
         bool                        cube                                          = false; // depth-only and square: its depth is a cube texture, and each pass draws one face
         bool                        storage                                       = false; // colors only, no depth: compute passes write them as storage images
+        uint32_t                    samples                                       = 1;     // per pixel: 1, 2, 4 or 8 (RenderContext::supportsSampleCount); read a multisampled color through addMsaaResolvePass
 
         bool                        operator==(const RenderTargetDesc&) const = default;
     };

@@ -129,7 +129,7 @@ namespace rasm
                 }
             }
 
-            // The tone-map pass, the bloom passes and the environment bake have their own push constants.
+            // The tone-map pass, the MSAA resolve, the bloom passes and the environment bake have their own push constants.
             if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "ToneMapPushConstants") == 0)
             {
                 return validateStruct(pushConstants, "ToneMapPushConstants", sizeof(gfx::ToneMapPushConstants),
@@ -137,6 +137,14 @@ namespace rasm
                                        {"exposure", offsetof(gfx::ToneMapPushConstants, exposure)},
                                        {"bloom", offsetof(gfx::ToneMapPushConstants, bloom)},
                                        {"bloomStrength", offsetof(gfx::ToneMapPushConstants, bloomStrength)}});
+            }
+            if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "ResolvePushConstants") == 0)
+            {
+                return validateStruct(pushConstants, "ResolvePushConstants", sizeof(gfx::ResolvePushConstants),
+                                      {{"source", offsetof(gfx::ResolvePushConstants, source)},
+                                       {"target", offsetof(gfx::ResolvePushConstants, target)},
+                                       {"samples", offsetof(gfx::ResolvePushConstants, samples)},
+                                       {"exposure", offsetof(gfx::ResolvePushConstants, exposure)}});
             }
             if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "BloomPushConstants") == 0)
             {
@@ -221,7 +229,7 @@ namespace rasm
                                      {"globalLightCount", offsetof(gfx::SceneData, globalLightCount)},
                                      {"localLightCount", offsetof(gfx::SceneData, localLightCount)},
                                      {"nearZ", offsetof(gfx::SceneData, nearZ)},
-                                     {"padding", offsetof(gfx::SceneData, padding)}});
+                                     {"depthSamples", offsetof(gfx::SceneData, depthSamples)}});
 
             valid &= validateStruct(fieldStruct(scene, "shadowedLights"), "ShadowedLight", sizeof(gfx::ShadowedLight),
                                     {{"light", offsetof(gfx::ShadowedLight, light)},

@@ -61,8 +61,15 @@ namespace rasm
         // frame, so a depth-only target has none. A storage target is written by compute passes, which draw nothing, so
         // it has colors and no depth; history copies are cleared by drawing into them, so it has no history either. Its
         // colors are R16G16B16A16_SFLOAT, the format shaders declare binding 1 with ([format("rgba16f")]).
-        bool checkRenderTargetDesc(const RenderTargetDesc &desc, const char *caller)
+        bool checkRenderTargetDesc(const RenderTargetDesc &desc, uint32_t sampleCounts, const char *caller)
         {
+            // A multisampled target is a scene's color and depth, resolved by a compute pass that reads its samples: so
+            // it has colors, and no history, storage or cube, which hold or write single samples.
+            const bool power = desc.samples > 0 && (desc.samples & (desc.samples - 1)) == 0;
+            if (!checkArgument(power && (sampleCounts & desc.samples) != 0, caller, "the device can't draw this many samples per pixel (supportsSampleCount).") ||
+                !checkArgument(desc.samples == 1 || (colorAttachmentCount(desc.colorFormats) > 0 && !desc.history && !desc.storage && !desc.cube), caller,
+                               "a multisampled render target has colors, and no history, storage or cube."))
+                return false;
             const uint32_t colorCount = colorAttachmentCount(desc.colorFormats);
             const bool contiguous = std::all_of(desc.colorFormats + colorCount, std::end(desc.colorFormats), [](Format format)
                                                 { return format == Format::UNKNOWN; });
@@ -93,14 +100,15 @@ namespace rasm
                     .width = size.x,
                     .height = size.y,
                     .format = desc.colorFormats[index],
-                    .usage = desc.storage ? TextureUsage::SAMPLED_STORAGE : TextureUsage::SAMPLED_COLOR_ATTACHMENT};
+                    .usage = desc.storage ? TextureUsage::SAMPLED_STORAGE : TextureUsage::SAMPLED_COLOR_ATTACHMENT,
+                    .samples = desc.samples};
         }
 
         // Everything but the textures, which createAttachments makes, and the storage slots, which
         // Impl::allocateStorageSlots gives a storage target.
         RenderTarget renderTargetFromDesc(const RenderTargetDesc &desc, glm::uvec2 size)
         {
-            RenderTarget rt = {.width = size.x, .height = size.y, .colorCount = colorAttachmentCount(desc.colorFormats), .depthFormat = desc.depthFormat, .clearColor = desc.clearColor, .history = desc.history};
+            RenderTarget rt = {.width = size.x, .height = size.y, .colorCount = colorAttachmentCount(desc.colorFormats), .depthFormat = desc.depthFormat, .clearColor = desc.clearColor, .history = desc.history, .samples = desc.samples};
             std::copy(std::begin(desc.colorFormats), std::end(desc.colorFormats), std::begin(rt.colorFormats));
             std::fill(std::begin(rt.storageSlots), std::end(rt.storageSlots), UINT32_MAX);
             return rt;
@@ -116,7 +124,8 @@ namespace rasm
                     .height = size.y,
                     .format = desc.depthFormat,
                     .usage = sampled ? TextureUsage::SAMPLED_DEPTH_ATTACHMENT : TextureUsage::DEPTH_STENCIL_ATTACHMENT,
-                    .cube = desc.cube};
+                    .cube = desc.cube,
+                    .samples = desc.samples};
         }
 
         // The target's textures at its current size: its colors, then its depth, which a storage target does not have.
@@ -303,6 +312,7 @@ namespace rasm
         // The current pass's attachment formats. A pipeline must match them for its draws to be defined.
         Format                                                                                                                  passColorFormats[MAX_COLOR_ATTACHMENTS] = {};
         Format                                                                                                                  passDepthFormat = Format::UNKNOWN;
+        uint32_t                                                                                                                passSamples     = 1;
         // Recording state of the command buffer being recorded. beginCommandBuffer resets it.
         bool                                                                                                                    skipDraws       = false; // a mismatched or missing pipeline was rejected
         bool                                                                                                                    computeBound    = false; // a compute pipeline is bound, so dispatches are defined
@@ -475,6 +485,11 @@ namespace rasm
         if (!checkArgument(desc.usage != TextureUsage::SAMPLED || impl->device->supportsTextureFormat(desc.format), __func__,
                            "the device can't sample this format (supportsTextureFormat)."))
             return {};
+        // Samples are drawn: only an attachment has more than one, with one mip and one layer.
+        const bool attachment = depthAttachment || desc.usage == TextureUsage::COLOR_ATTACHMENT || desc.usage == TextureUsage::SAMPLED_COLOR_ATTACHMENT;
+        if (!checkArgument(desc.samples == 1 || (supportsSampleCount(desc.samples) && attachment && desc.mipLevels <= 1 && !desc.cube), __func__,
+                           "only a color or depth attachment of one mip, not a cube, has more than one sample, and only a count the device supports."))
+            return {};
         auto *texture = impl->device->createTexture(desc);
         if (!texture)
             return {};
@@ -622,7 +637,7 @@ namespace rasm
 
     RenderTargetHandle RenderContext::createRenderTarget(const RenderTargetDesc &desc)
     {
-        if (!checkRenderTargetDesc(desc, __func__))
+        if (!checkRenderTargetDesc(desc, impl->device->supportedSampleCounts(), __func__))
             return {};
 
         RenderTarget rt = renderTargetFromDesc(desc, renderTargetSize(desc, getSwapchainExtent()));
@@ -644,7 +659,7 @@ namespace rasm
     RenderTargetHandle RenderContext::createTransientRenderTarget(const RenderTargetDesc &desc)
     {
         if (!checkArgument(!desc.history, __func__, "a history render target lives across frames, so it can't be transient.") ||
-            !checkRenderTargetDesc(desc, __func__))
+            !checkRenderTargetDesc(desc, impl->device->supportedSampleCounts(), __func__))
             return {};
 
         RenderTarget rt = renderTargetFromDesc(desc, renderTargetSize(desc, getSwapchainExtent()));
@@ -1165,6 +1180,12 @@ namespace rasm
         return true;
     }
 
+    bool RenderContext::supportsSampleCount(uint32_t samples) const
+    {
+        const bool power = samples > 0 && (samples & (samples - 1)) == 0;
+        return impl->device && power && (impl->device->supportedSampleCounts() & samples) != 0;
+    }
+
     bool RenderContext::supportsTextureFormat(Format format) const
     {
         return impl->device && impl->device->supportsTextureFormat(format);
@@ -1328,6 +1349,7 @@ namespace rasm
         for (uint32_t i = 0; i < MAX_COLOR_ATTACHMENTS; ++i)
             impl->passColorFormats[i] = i < colorCount ? colors[i]->desc.format : Format::UNKNOWN;
         impl->passDepthFormat = depth ? depth->desc.format : Format::UNKNOWN;
+        impl->passSamples = colorCount > 0 ? colors[0]->desc.samples : depth->desc.samples;
         impl->skipDraws = false;
         impl->insidePass = true;
         return true;
@@ -1511,9 +1533,9 @@ namespace rasm
         }
 
         if (!std::equal(std::begin(desc.colorAttachmentFormats), std::end(desc.colorAttachmentFormats), std::begin(impl->passColorFormats)) ||
-            desc.depthStencilAttachmentFormat != impl->passDepthFormat)
+            desc.depthStencilAttachmentFormat != impl->passDepthFormat || desc.samples != impl->passSamples)
         {
-            spdlog::error("Pipeline '{}' does not match the formats of the pass's attachments, so its draws are skipped.", desc.name);
+            spdlog::error("Pipeline '{}' does not match the formats or the sample count of the pass's attachments, so its draws are skipped.", desc.name);
             impl->skipDraws = true;
             return;
         }

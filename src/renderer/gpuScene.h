@@ -91,21 +91,29 @@ namespace rasm
         uint32_t                        height                                                              = 0;
     };
 
+    // A shaded view's pipelines for one sample count of its target: they must match the attachments they draw into.
+    constexpr uint32_t                  SAMPLE_VARIANTS                                                     = 4;        // 1, 2, 4 and 8 samples
+
+    struct ShadedPipelines
+    {
+        PipelineHandle                  pipeline                                                            = {};
+        PipelineHandle                  maskPipeline                                                        = {};       // alpha-to-coverage with more than one sample
+        PipelineHandle                  blendPipeline                                                       = {};
+        PipelineHandle                  skyPipeline                                                         = {};
+    };
+
     struct GpuScene
     {
         GpuTable                        instances;
         GpuTable                        materials;
         BufferHandle                    sceneData[MAX_FRAMES_IN_FLIGHT]                                     = {};
-        PipelineHandle                  pipeline                                                            = {};
-        PipelineHandle                  maskPipeline                                                        = {};
-        PipelineHandle                  blendPipeline                                                       = {};
+        ShadedPipelines                 shaded[SAMPLE_VARIANTS]                                             = {};       // by log2 of the target's samples
         PipelineHandle                  depthPipeline                                                       = {};
         PipelineHandle                  depthMaskPipeline                                                   = {};
         PipelineHandle                  sortPipelines[BLEND_SORT_STEPS]                                     = {};
         PipelineHandle                  cullCountPipeline                                                   = {};
         PipelineHandle                  cullWritePipeline                                                   = {};
         PipelineHandle                  hizPipeline                                                         = {};
-        PipelineHandle                  skyPipeline                                                         = {};
         BufferHandle                    cullStats[MAX_FRAMES_IN_FLIGHT]                                     = {};
         SceneView                       views[MAX_SCENE_VIEWS];
         DrawTotals                      drawTotals[MAX_FRAMES_IN_FLIGHT]                                    = {};

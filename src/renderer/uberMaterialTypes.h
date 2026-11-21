@@ -206,7 +206,7 @@ namespace rasm::gfx
         uint32_t         globalLightCount;          // directional lights and lights without a range, at every pixel
         uint32_t         localLightCount;           // lights with a range, sorted into clusters
         float            nearZ;                     // the camera's near plane, where the clusters start
-        uint32_t         padding;                   // keeps the size a multiple of 8
+        uint32_t         depthSamples;              // samples per pixel of depthTexture; the Hi-Z build reads each one
     };
 
     struct PushConstants
@@ -233,6 +233,16 @@ namespace rasm::gfx
         float            exposure;
         uint32_t         bloom;
         float            bloomStrength;
+    };
+
+    // The MSAA resolve's push constants (shaders/passes/msaaResolve.slang): source is the multisampled color's bindless
+    // index, target the resolved color's storage slot.
+    struct ResolvePushConstants
+    {
+        uint32_t         source;
+        uint32_t         target;
+        uint32_t         samples;
+        float            exposure;
     };
 
     // The bloom passes' push constants (shaders/passes/bloom.slang). source and base are bindless textures, target a
@@ -320,6 +330,8 @@ namespace rasm::gfx
     static_assert(sizeof(PushConstants) == PUSH_CONSTANTS_SIZE, "PushConstants must fill the pipelines' push-constant range");
     static_assert(sizeof(ToneMapPushConstants) == PUSH_CONSTANTS_SIZE, "ToneMapPushConstants must fill the push-constant range");
     static_assert(offsetof(ToneMapPushConstants, bloomStrength) == 12, "ToneMapPushConstants must match the shader's scalar layout");
+    static_assert(sizeof(ResolvePushConstants) == PUSH_CONSTANTS_SIZE, "ResolvePushConstants must fill the push-constant range");
+    static_assert(offsetof(ResolvePushConstants, exposure) == 12, "ResolvePushConstants must match the shader's scalar layout");
     static_assert(sizeof(BloomPushConstants) == PUSH_CONSTANTS_SIZE, "BloomPushConstants must fill the push-constant range");
     static_assert(offsetof(BloomPushConstants, scale) == 12, "BloomPushConstants must match the shader's scalar layout");
     static_assert(sizeof(EnvironmentPushConstants) == PUSH_CONSTANTS_SIZE, "EnvironmentPushConstants must fill the pipelines' push-constant range");

@@ -21,11 +21,12 @@
 //   shadow is as dense as they are (hashed alpha in the shadow map).
 //
 // - Bloom: the glow around the bright emissive cubes and the sky (addBloomPasses, Camera::bloomStrength).
+// - MSAA with --aa msaa2|msaa4|msaa8: the scene is drawn with several samples per pixel and resolved
+//   (addMsaaResolvePass); the MASK leaves of AlphaBlendModeTest use alpha-to-coverage then.
 //
 // --glass <count> sets the number of cubes. --no-bloom leaves the bloom out, --bloom-strength <s> sets its share (0.04
-// by default). --render-size <width> <height> draws the
-// scene at that size instead of the window's, which the tone map scales to the window. --gpu-times prints the mean GPU
-// time of each timed pass over frames 300 to 600, then quits.
+// by default). --render-size <width> <height> draws the scene at that size instead of the window's, which the tone map
+// scales to the window. --gpu-times prints the mean GPU time of each timed pass over frames 300 to 600, then quits.
 
 namespace
 {
@@ -91,8 +92,14 @@ int main(int argc, char **argv)
     float bloomStrength = -1.0f;
     uint32_t renderWidth = 0;
     uint32_t renderHeight = 0;
+    uint32_t samples = 1;
     for (int i = 1; i < argc; ++i)
     {
+        if (std::strcmp(argv[i], "--aa") == 0 && i + 1 < argc)
+        {
+            const char *mode = argv[++i];
+            samples = std::strcmp(mode, "msaa2") == 0 ? 2 : (std::strcmp(mode, "msaa4") == 0 ? 4 : (std::strcmp(mode, "msaa8") == 0 ? 8 : 1));
+        }
         if (std::strcmp(argv[i], "--glass") == 0 && i + 1 < argc)
             glassCount = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
         if (std::strcmp(argv[i], "--gpu-times") == 0)
@@ -181,8 +188,8 @@ int main(int argc, char **argv)
     if (!camera.isValid() || !sun.isValid())
         return 1;
 
-    // Shadow cascades, the shaded view (its draws, the sky, then the see-through draws back to front), the bloom, the
-    // tone map.
+    // Shadow cascades, the shaded view (its draws, the sky, then the see-through draws back to front), the MSAA resolve,
+    // the bloom, the tone map.
     rasm::RenderGraph graph = engine.createRenderGraph();
     const bool fixedSize = renderWidth > 0 && renderHeight > 0;
     const rasm::RenderTargetHandle sceneTarget = graph.createRenderTarget({
@@ -192,12 +199,16 @@ int main(int argc, char **argv)
         .swapchainScale = fixedSize ? 0.0f : 1.0f,
         .colorFormats = {rasm::SCENE_COLOR_FORMAT},
         .depthFormat = rasm::Format::D32_SFLOAT,
+        .samples = samples,
     });
     const rasm::SceneShadow shadow = engine.addShadowPasses(graph, scene, camera, rasm::ShadowDesc{.light = sun, .cascadeCount = CASCADE_COUNT, .size = 2048, .distance = 30.0f, .splitLambda = 0.7f});
     if (shadow.mapCount == 0 || !engine.addScenePasses(graph, scene, camera, sceneTarget, &shadow, 1))
         return 1;
-    const rasm::RenderTargetHandle bloomTarget = bloom ? engine.addBloomPasses(graph, sceneTarget, camera) : rasm::RenderTargetHandle{};
-    if ((bloom && !bloomTarget.isValid()) || !engine.addToneMapPass(graph, sceneTarget, camera, bloomTarget))
+    const rasm::RenderTargetHandle resolved = samples > 1 ? engine.addMsaaResolvePass(graph, sceneTarget, camera) : sceneTarget;
+    if (!resolved.isValid())
+        return 1;
+    const rasm::RenderTargetHandle bloomTarget = bloom ? engine.addBloomPasses(graph, resolved, camera) : rasm::RenderTargetHandle{};
+    if ((bloom && !bloomTarget.isValid()) || !engine.addToneMapPass(graph, resolved, camera, bloomTarget))
         return 1;
 
     std::vector<std::string> timerNames;

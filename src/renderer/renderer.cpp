@@ -6,10 +6,31 @@
 
 namespace rasm
 {
+    namespace
+    {
+        // The samples per pixel of EngineConfig::antiAliasing, or the most the device has below them, with a warning.
+        uint32_t getSceneSamples(RenderContext &ctx, AntiAliasing antiAliasing)
+        {
+            uint32_t samples = 1;
+            if (antiAliasing == AntiAliasing::MSAA_2X)
+                samples = 2;
+            if (antiAliasing == AntiAliasing::MSAA_4X)
+                samples = 4;
+            if (antiAliasing == AntiAliasing::MSAA_8X)
+                samples = 8;
+            uint32_t supported = samples;
+            while (supported > 1 && !ctx.supportsSampleCount(supported))
+                supported /= 2;
+            if (supported != samples)
+                spdlog::warn("The device can't draw {} samples per pixel; the scene uses {}.", samples, supported);
+            return supported;
+        }
+    }
+
     Renderer::Renderer(Engine &owner) : engine(owner), graph(&owner) {}
 
-    // The frame is a graph of the view's scene passes into an HDR target, with EngineConfig::bloom the bloom passes,
-    // then the tone-map pass into the swapchain.
+    // The frame is a graph of the view's scene passes into an HDR target (multisampled with EngineConfig::antiAliasing,
+    // then resolved), with EngineConfig::bloom the bloom passes, then the tone-map pass into the swapchain.
     // It is built for one view and built again only when the view changes. Adding the passes fails on bad handles or
     // a failed allocation, and building again every frame would make a new target each time, so such a view runs the
     // passes it has, or an empty frame that presents the clear color. Shader errors retry inside the passes. F3 logs
@@ -21,17 +42,22 @@ namespace rasm
         if (!built || !(view.scene == graphView.scene && view.camera == graphView.camera))
         {
             graph = engine.createRenderGraph();
+            const EngineConfig config = engine.getConfig();
             const RenderTargetHandle sceneColor = graph.createRenderTarget({
                 .name = "scene_hdr",
                 .swapchainScale = 1.0f,
                 .colorFormats = {SCENE_COLOR_FORMAT},
                 .depthFormat = Format::D32_SFLOAT,
                 .clearColor = BACKGROUND_COLOR,
+                .samples = getSceneSamples(engine.getRenderContext(), config.antiAliasing),
             });
-            if (engine.addScenePasses(graph, view.scene, view.camera, sceneColor))
+            if (sceneColor.isValid() && engine.addScenePasses(graph, view.scene, view.camera, sceneColor))
             {
-                const RenderTargetHandle bloom = engine.getConfig().bloom ? engine.addBloomPasses(graph, sceneColor, view.camera) : RenderTargetHandle{};
-                engine.addToneMapPass(graph, sceneColor, view.camera, bloom);
+                const bool multisampled = engine.getRenderContext().getRenderTarget(sceneColor).samples > 1;
+                const RenderTargetHandle resolved = multisampled ? engine.addMsaaResolvePass(graph, sceneColor, view.camera) : sceneColor;
+                const RenderTargetHandle bloom = config.bloom && resolved.isValid() ? engine.addBloomPasses(graph, resolved, view.camera) : RenderTargetHandle{};
+                if (resolved.isValid())
+                    engine.addToneMapPass(graph, resolved, view.camera, bloom);
             }
             built = true;
             graphView = view;

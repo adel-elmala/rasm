@@ -3,7 +3,11 @@
 
 #include "rasm/rasm.h"
 
-int main()
+#include <cstring>
+
+// --aa msaa2|msaa4|msaa8 draws the scene with several samples per pixel (EngineConfig::antiAliasing): the palm leaves
+// are cut-outs (glTF MASK), whose edges alpha-to-coverage smooths then.
+int main(int argc, char **argv)
 {
     // Create engine instance
     rasm::EngineConfig config = {
@@ -16,6 +20,18 @@ int main()
         .shaderDir = RASM_EXAMPLE_SHADER_DIR
 
     };
+
+    for (int i = 1; i + 1 < argc; ++i)
+    {
+        if (std::strcmp(argv[i], "--aa") != 0)
+            continue;
+        if (std::strcmp(argv[i + 1], "msaa2") == 0)
+            config.antiAliasing = rasm::AntiAliasing::MSAA_2X;
+        if (std::strcmp(argv[i + 1], "msaa4") == 0)
+            config.antiAliasing = rasm::AntiAliasing::MSAA_4X;
+        if (std::strcmp(argv[i + 1], "msaa8") == 0)
+            config.antiAliasing = rasm::AntiAliasing::MSAA_8X;
+    }
 
     rasm::Engine engine(config);
     if (!engine.running())

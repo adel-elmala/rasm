@@ -195,3 +195,16 @@ TEST_CASE("every render target field takes part in equality")
     swapchainScale.swapchainScale = 0.5f;
     CHECK_FALSE(base == swapchainScale);
 }
+
+TEST_CASE("a pipeline's sample count and alpha-to-coverage take part in equality and the hash")
+{
+    auto multisampled = makePipelineDesc();
+    multisampled.samples = 4;
+    CHECK_FALSE(makePipelineDesc() == multisampled);
+    CHECK(rasm::PipelineDescHash{}(makePipelineDesc()) != rasm::PipelineDescHash{}(multisampled));
+
+    auto coverage = multisampled;
+    coverage.alphaToCoverage = true;
+    CHECK_FALSE(multisampled == coverage);
+    CHECK(rasm::PipelineDescHash{}(multisampled) != rasm::PipelineDescHash{}(coverage));
+}
