@@ -236,7 +236,7 @@ target_link_libraries(my_app PRIVATE rasm::rasm)
 
 ## Profiling with Tracy
 
-Every build is instrumented with [Tracy](https://github.com/wolfpld/tracy) in on-demand mode: nothing is recorded until a profiler connects, so an unprofiled run does not buffer events. Zones from before the connection are lost, so start the profiler first to see startup work such as `createPipeline`, `fillTexture` and the first `syncGpuScene`.
+Every build is instrumented with [Tracy](https://github.com/wolfpld/tracy) in on-demand mode: nothing is recorded until a profiler connects, so an unprofiled run does not buffer events. The client listens on `127.0.0.1` only (`TRACY_ONLY_LOCALHOST`, set for the `tracy` port in the overlay triplets in `cmake/triplets/`), so running an example does not make the firewall ask for network access. Connect from the same machine; to profile from another one, remove that option and rebuild. Zones from before the connection are lost, so start the profiler first to see startup work such as `createPipeline`, `fillTexture` and the first `syncGpuScene`.
 
 The profiler must be the same version as the client that vcpkg installed (0.13.1 today), or it refuses the connection. Use the matching Tracy release, or build it from the port's `gui-tools` feature. For a capture without the GUI, the `cli-tools` feature builds `tracy-capture` and `tracy-csvexport`:
 
