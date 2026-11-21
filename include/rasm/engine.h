@@ -320,13 +320,14 @@ namespace rasm
         bool                        uploadMeshAnimation(MeshHandle mesh, const GLTFRaw& raw);
         void                        startPendingAnimation(EntityHandle entity);
         void                        startAnimation(EntityHandle entity, const AnimationPlay& play, uint32_t firstSync);
-        bool                        growAnimationBuffers(uint32_t transformCount, uint32_t poseCount, uint32_t firstSync);
+        bool                        growAnimationBuffers(uint32_t transformCount, uint32_t poseCount, uint32_t jointCount, uint32_t skinnedCount, uint32_t firstSync);
         int32_t                     getAnimationRow(EntityHandle entity, uint32_t subMesh) const;
         bool                        animationCanMirror(MeshHandle mesh, uint32_t subMesh) const;
         void                        writeAnimationRow(EntityHandle entity);
         void                        syncGpuAnimation();
         void                        addAnimationPass(RenderGraph& graph);
         void                        recordAnimation();
+        void                        recordSkinning();
         bool                        addSceneViewPasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, uint32_t face, const SceneShadow* shadows, uint32_t shadowCount, bool depthOnly);
         uint32_t                    createSceneView(SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, uint32_t face, const SceneShadow* shadows, uint32_t shadowCount, bool depthOnly);
         void                        releaseSceneView(uint32_t view);

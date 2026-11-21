@@ -31,6 +31,7 @@ target_sources(rasm PRIVATE
     "assets/meshImport.cpp"
     "assets/gltfAccessor.cpp"
     "assets/animationImport.cpp"
+    "assets/skinImport.cpp"
     "assets/meshLod.cpp"
     "assets/ktxImage.cpp"
     "assets/texture.cpp"

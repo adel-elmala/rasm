@@ -169,10 +169,10 @@ TEST_CASE("the pool data has a channel row per clip, then one with every clip's 
         clip.channels.push_back({.node = c, .path = c == 0 ? rasm::AnimationPath::TRANSLATION : rasm::AnimationPath::SCALE, .sampler = 0});
         animation.clips.push_back(clip);
     }
-    const int32_t subMeshNodes[] = {1};
+    const rasm::gfx::AnimationSubMeshData subMeshes[] = {{.node = 1}};
     const uint64_t address = 0x10000;
-    const std::vector<uint8_t> bytes = rasm::buildAnimationPoolData(animation, subMeshNodes, 1, address);
-    REQUIRE(bytes.size() == rasm::getAnimationPoolBytes(animation, 1));
+    const std::vector<uint8_t> bytes = rasm::buildAnimationPoolData(animation, subMeshes, 1, nullptr, 0, address);
+    REQUIRE(bytes.size() == rasm::getAnimationPoolBytes(animation, 1, 0));
 
     rasm::gfx::AnimationMeshData header;
     std::memcpy(&header, bytes.data(), sizeof(header));

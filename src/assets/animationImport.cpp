@@ -1,5 +1,6 @@
 #include "assets/animationImport.h"
 #include "assets/gltfAccessor.h"
+#include "assets/skinImport.h"
 
 #include "spdlog/spdlog.h"
 
@@ -78,8 +79,10 @@ namespace rasm
     }
 
     // Keeps the part of the node tree that a clip can move: a node is kept when a clip moves it or one of its parents,
-    // and it holds a mesh or is the parent of a kept node. A kept node whose parent is not kept hangs below a node
-    // that holds that parent's world matrix, so the GPU never walks static nodes.
+    // and it holds a mesh or is the parent of a kept node. A skin's joint is always kept, moved or not, since its
+    // matrix places the skinned vertices; a skinned mesh's own node is not, since its matrix is ignored. A kept node
+    // whose parent is not kept hangs below a node that holds that parent's world matrix, so the GPU never walks
+    // static nodes.
     AnimationRaw importAnimations(const tinygltf::Model &model, const GltfNodeWalk &walk, std::vector<SubGLTFRaw> &subMeshes)
     {
         AnimationRaw raw;
@@ -110,10 +113,21 @@ namespace rasm
         }
 
         std::vector<bool> hasMesh(nodeCount, false);
+        std::vector<bool> isJoint(nodeCount, false);
         for (const auto &sub : subMeshes)
         {
-            if (sub.node >= 0 && static_cast<size_t>(sub.node) < nodeCount)
+            if (sub.skin >= 0 && !sub.objRaw.skin.empty())
+            {
+                for (int joint : model.skins[sub.skin].joints)
+                {
+                    if (isMovable(joint))
+                        isJoint[joint] = true;
+                }
+            }
+            else if (sub.node >= 0 && static_cast<size_t>(sub.node) < nodeCount)
+            {
                 hasMesh[sub.node] = true;
+            }
         }
 
         std::vector<bool> moved(nodeCount, false);
@@ -126,7 +140,7 @@ namespace rasm
         for (auto it = walk.order.rbegin(); it != walk.order.rend(); ++it)
         {
             const int node = *it;
-            if (hasMesh[node] && moved[node])
+            if ((hasMesh[node] && moved[node]) || isJoint[node])
                 kept[node] = true;
             const int parent = walk.parents[node];
             if (kept[node] && parent >= 0 && moved[parent])
@@ -172,9 +186,10 @@ namespace rasm
 
         for (auto &sub : subMeshes)
         {
-            if (sub.node >= 0 && static_cast<size_t>(sub.node) < nodeCount)
+            if (sub.skin < 0 && sub.node >= 0 && static_cast<size_t>(sub.node) < nodeCount)
                 sub.animatedNode = keptIndex[sub.node];
         }
+        importSkinJoints(model, keptIndex, subMeshes, raw);
 
         // Every glTF animation becomes a clip with the same index, also one left without channels, so clip indices
         // match the file.

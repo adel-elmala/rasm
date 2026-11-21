@@ -73,10 +73,18 @@ namespace rasm
         std::vector<AnimationChannel>   channels;
     };
 
+    // A joint of a skin: the node that moves it, and the inverse of the node's world matrix in the bind pose.
+    struct AnimationJoint
+    {
+        uint32_t                        node            = 0;                            // in AnimationRaw::nodes
+        glm::mat4                       inverseBind     = glm::mat4(1.0f);
+    };
+
     struct AnimationRaw
     {
         std::vector<AnimationNode>      nodes;                                          // parents before children
         std::vector<AnimationClipRaw>   clips;
+        std::vector<AnimationJoint>     joints;                                         // every skin's joints, one skin after another
     };
 
 }

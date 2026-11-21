@@ -880,9 +880,13 @@ namespace rasm
             if (!sceneView.depthOnly)
                 builder.write(sceneView.sortBuffers);
         };
+        // A shaded view's draws also read where the frame before drew a skinned vertex, for motion.
         auto drawScenePass = [&sceneView, &clusters, &animation, renderTarget, face](PassBuilder &builder)
         {
             builder.read(animation.transforms);
+            builder.read(animation.skinnedVertices);
+            if (!sceneView.depthOnly)
+                builder.readPrevious(animation.skinnedVertices);
             builder.read(sceneView.visibleDraws);
             if (clusters.buffers[0].isValid())
                 builder.read(clusters.buffers);
@@ -1342,6 +1346,8 @@ namespace rasm
         }
         sceneData.colorsPtr = ctx.getBufferDeviceAddress(geometryPool->colorBuffer());
         sceneData.animatedTransformsPtr = ctx.getBufferDeviceAddress(gpuAnimation->transforms[frame]);
+        sceneData.skinnedVertsPtr = ctx.getBufferDeviceAddress(gpuAnimation->skinnedVertices[frame]);
+        sceneData.previousSkinnedVertsPtr = ctx.getBufferDeviceAddress(gpuAnimation->skinnedVertices[(frame + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT]);
         if (view.sortBlend)
         {
             const uint32_t sortCapacity = getBlendSortCapacity(drawList.runs[view.blendRun].count);

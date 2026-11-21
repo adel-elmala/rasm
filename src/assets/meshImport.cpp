@@ -1,6 +1,7 @@
 #include "assets/meshImport.h"
 #include "assets/gltfAccessor.h"
 #include "assets/animationImport.h"
+#include "assets/skinImport.h"
 #include "assets/ktxImage.h"
 #include "platform/paths.h"
 
@@ -208,6 +209,13 @@ namespace rasm
                     }
                 }
 
+                // JOINTS_0 / WEIGHTS_0 of a node with a skin, into the skin stream. A skinned primitive ignores its
+                // node's matrix (glTF): its joints place it.
+                std::vector<SkinVertex> skin;
+                const int skinIndex = getNodeSkin(model, nodeIndex);
+                if (skinIndex >= 0)
+                    readSkinVertices(model, primitive, vertexCount, static_cast<uint32_t>(model.skins[skinIndex].joints.size()), primitiveName, skin);
+
                 // Interleave the data into our standard Vertex struct
                 std::vector<Vertex> vertices(vertexCount);
                 for (size_t i = 0; i < vertexCount; ++i)
@@ -284,7 +292,15 @@ namespace rasm
                 }
 
                 // Materials create textures, so the main thread turns the index into a handle (finishMeshLoad).
-                subGltfs.push_back({{.vertices = std::move(vertices), .indices = std::move(indices), .colors = std::move(colors)}, globalTransform, primitive.material, nodeIndex});
+                SubGLTFRaw sub{{.vertices = std::move(vertices), .indices = std::move(indices), .colors = std::move(colors)}, globalTransform, primitive.material, nodeIndex};
+                if (!skin.empty())
+                {
+                    sub.transform = glm::mat4(1.0f);
+                    sub.skin = skinIndex;
+                    sub.jointSpheres = getJointSpheres(sub.objRaw.vertices, skin, static_cast<uint32_t>(model.skins[skinIndex].joints.size()));
+                    sub.objRaw.skin = std::move(skin);
+                }
+                subGltfs.push_back(std::move(sub));
             }
 
             return subGltfs;
@@ -494,6 +510,15 @@ namespace rasm
             GltfNodeWalk walk;
             raw.subGltfRaws = processGLTF(*model, walk);
             raw.animation = importAnimations(*model, walk, raw.subGltfRaws);
+            // A primitive whose skin did not import draws its bind pose and needs no skin stream.
+            for (SubGLTFRaw &sub : raw.subGltfRaws)
+            {
+                if (sub.jointCount == 0)
+                {
+                    sub.objRaw.skin.clear();
+                    sub.jointSpheres.clear();
+                }
+            }
             // Every accessor has been read. Materials need only the decoded images, so the raw buffers go now (P6).
             model->buffers.clear();
             transcodeKtxImages(*model, supportedTextureFormats, raw);

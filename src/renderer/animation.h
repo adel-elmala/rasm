@@ -5,6 +5,7 @@
 #include "rasm/handle.h"
 #include "rasm/types.h"
 #include "renderer/gpuTable.h"
+#include "renderer/uberMaterialTypes.h"
 
 #include <cstdint>
 #include <vector>
@@ -20,6 +21,8 @@ namespace rasm
         std::vector<int32_t>            subMeshTransforms;                                          // per sub-mesh: its row among the entity's transforms, -1: static
         std::vector<uint8_t>            subMeshMirrors;                                             // per sub-mesh: 1 when a clip can mirror it (a scale through 0)
         uint32_t                        transformCount                                  = 0;        // the animated sub-meshes
+        uint32_t                        jointCount                                      = 0;
+        uint32_t                        skinnedVertexCount                              = 0;        // its skinned sub-meshes' vertices
     };
 
     struct EntityAnimation
@@ -27,6 +30,8 @@ namespace rasm
         uint32_t                        row                                             = UINT32_MAX;   // in the animated entity table, from its first play
         uint32_t                        firstTransform                                  = 0;
         uint32_t                        firstNode                                       = 0;
+        uint32_t                        firstJoint                                      = 0;
+        uint32_t                        firstSkinnedVertex                              = 0;
         bool                            playing                                         = false;
         bool                            pending                                         = false;    // asked while its mesh loads
         uint32_t                        resetSync                                       = 0;
@@ -47,15 +52,24 @@ namespace rasm
         BufferHandle                    pose                                            = {};
         uint32_t                        poseCapacity                                    = 0;        // nodes
         uint32_t                        poseCount                                       = 0;
+        BufferHandle                    joints[MAX_FRAMES_IN_FLIGHT]                    = {};       // 3 rows per joint matrix
+        uint32_t                        jointCapacity                                   = 0;
+        uint32_t                        jointCount                                      = 0;
+        BufferHandle                    skinnedVertices[MAX_FRAMES_IN_FLIGHT]           = {};       // what the Skin pass writes
+        uint32_t                        skinnedCapacity                                 = 0;
+        uint32_t                        skinnedCount                                    = 0;
+        uint32_t                        maxSkinnedVertices                              = 0;        // the most of one entity
         BufferHandle                    frames[MAX_FRAMES_IN_FLIGHT]                    = {};
         PipelineHandle                  pipeline                                        = {};
+        PipelineHandle                  skinPipeline                                    = {};
         double                          clock                                           = 0.0;
         double                          base                                            = 0.0;
         uint32_t                        recordedSync                                    = UINT32_MAX;   // the last sync whose frame ran the pass
     };
 
-    uint64_t                            getAnimationPoolBytes(const AnimationRaw& animation, uint32_t subMeshCount);
-    std::vector<uint8_t>                buildAnimationPoolData(const AnimationRaw& animation, const int32_t* subMeshNodes, uint32_t subMeshCount, uint64_t address);
+    uint64_t                            getAnimationPoolBytes(const AnimationRaw& animation, uint32_t subMeshCount, uint32_t sphereCount);
+    std::vector<uint8_t>                buildAnimationPoolData(const AnimationRaw& animation, const gfx::AnimationSubMeshData* subMeshes, uint32_t subMeshCount,
+                                                               const glm::vec4* spheres, uint32_t sphereCount, uint64_t address);
 
 }
 // clang-format on
