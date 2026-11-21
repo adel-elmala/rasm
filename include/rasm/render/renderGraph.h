@@ -32,6 +32,7 @@ namespace rasm
         std::vector<TextureHandle>          outputTextures;
         std::vector<BufferHandle>           outputBuffers;
         std::vector<FrameBuffers>           frameInputBuffers;
+        std::vector<FrameBuffers>           framePreviousBuffers;       // the slot the frame before wrote
         std::vector<FrameBuffers>           frameOutputBuffers;
         RenderTargetHandle                  outputRenderTarget;
         uint32_t                            outputFace          = 0;    // of a cube target
@@ -67,6 +68,7 @@ namespace rasm
         void                    read(const BufferHandle (&perFrame)[MAX_FRAMES_IN_FLIGHT]);
         void                    readPrevious(RenderTargetHandle handle);
         void                    readPrevious(BufferHandle handle);
+        void                    readPrevious(const BufferHandle (&perFrame)[MAX_FRAMES_IN_FLIGHT]);
         void                    readDepth(RenderTargetHandle handle);
         void                    write(TextureHandle handle);
         void                    write(BufferHandle handle);
@@ -135,6 +137,7 @@ namespace rasm
         void                read(uint32_t passIdx, const BufferHandle (&perFrame)[MAX_FRAMES_IN_FLIGHT]);
         void                readPrevious(uint32_t passIdx, RenderTargetHandle h);
         void                readPrevious(uint32_t passIdx, BufferHandle h);
+        void                readPrevious(uint32_t passIdx, const BufferHandle (&perFrame)[MAX_FRAMES_IN_FLIGHT]);
         void                readDepth(uint32_t passIdx, RenderTargetHandle h);
         void                write(uint32_t passIdx, TextureHandle h);
         void                write(uint32_t passIdx, BufferHandle h);
@@ -153,6 +156,7 @@ namespace rasm
         uint64_t                                                    transientUses[QUEUE_COUNT] = {}; // per queue, the batch value of this frame's last pass that used a transient target
         bool                                                        transientsPlaced = false;
         std::vector<uint32_t>                                       sceneViews;     // Engine::addScenePasses's views
+        bool                                                        animationPass = false;  // Engine::addAnimationPass ran
         Engine*                                                     engine   = nullptr;
         bool                                                        compiled = false;
     };

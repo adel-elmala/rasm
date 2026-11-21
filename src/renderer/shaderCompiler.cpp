@@ -115,6 +115,67 @@ namespace rasm
             return valid;
         }
 
+        bool validateInstanceTransform(slang::TypeLayoutReflection *transform)
+        {
+            return validateStruct(transform, "InstanceTransform", sizeof(gfx::InstanceTransform),
+                                  {{"worldMatrix", offsetof(gfx::InstanceTransform, worldMatrix)},
+                                   {"normalMatrix", offsetof(gfx::InstanceTransform, normalMatrix)},
+                                   {"previousWorld", offsetof(gfx::InstanceTransform, previousWorld)}});
+        }
+
+        // The Animate pass: pc -> frame -> the table, the mesh data in the pool and the transforms.
+        bool validateAnimationStructs(slang::TypeLayoutReflection *pushConstants)
+        {
+            auto frame = fieldStruct(pushConstants, "frame");
+            auto entity = fieldStruct(frame, "entities");
+            auto mesh = fieldStruct(entity, "mesh");
+            bool valid = validateStruct(pushConstants, "AnimatePushConstants", sizeof(gfx::AnimatePushConstants),
+                                        {{"frame", offsetof(gfx::AnimatePushConstants, frame)},
+                                         {"padding", offsetof(gfx::AnimatePushConstants, padding)}});
+            valid &= validateStruct(frame, "AnimationFrame", sizeof(gfx::AnimationFrame),
+                                    {{"entities", offsetof(gfx::AnimationFrame, entities)},
+                                     {"transforms", offsetof(gfx::AnimationFrame, transforms)},
+                                     {"previousTransforms", offsetof(gfx::AnimationFrame, previousTransforms)},
+                                     {"pose", offsetof(gfx::AnimationFrame, pose)},
+                                     {"clock", offsetof(gfx::AnimationFrame, clock)},
+                                     {"sync", offsetof(gfx::AnimationFrame, sync)},
+                                     {"entityCount", offsetof(gfx::AnimationFrame, entityCount)},
+                                     {"padding", offsetof(gfx::AnimationFrame, padding)}});
+            valid &= validateStruct(entity, "AnimatedEntity", sizeof(gfx::AnimatedEntity),
+                                    {{"entityMatrix", offsetof(gfx::AnimatedEntity, entityMatrix)},
+                                     {"mesh", offsetof(gfx::AnimatedEntity, mesh)},
+                                     {"phase", offsetof(gfx::AnimatedEntity, phase)},
+                                     {"speed", offsetof(gfx::AnimatedEntity, speed)},
+                                     {"duration", offsetof(gfx::AnimatedEntity, duration)},
+                                     {"clip", offsetof(gfx::AnimatedEntity, clip)},
+                                     {"loop", offsetof(gfx::AnimatedEntity, loop)},
+                                     {"firstTransform", offsetof(gfx::AnimatedEntity, firstTransform)},
+                                     {"firstNode", offsetof(gfx::AnimatedEntity, firstNode)},
+                                     {"resetSync", offsetof(gfx::AnimatedEntity, resetSync)}});
+            valid &= validateStruct(mesh, "AnimationMeshData", sizeof(gfx::AnimationMeshData),
+                                    {{"nodes", offsetof(gfx::AnimationMeshData, nodes)},
+                                     {"samplers", offsetof(gfx::AnimationMeshData, samplers)},
+                                     {"channels", offsetof(gfx::AnimationMeshData, channels)},
+                                     {"subMeshNodes", offsetof(gfx::AnimationMeshData, subMeshNodes)},
+                                     {"keys", offsetof(gfx::AnimationMeshData, keys)},
+                                     {"nodeCount", offsetof(gfx::AnimationMeshData, nodeCount)},
+                                     {"subMeshCount", offsetof(gfx::AnimationMeshData, subMeshCount)}});
+            valid &= validateStruct(fieldStruct(mesh, "nodes"), "AnimationNodeData", sizeof(gfx::AnimationNodeData),
+                                    {{"rest", offsetof(gfx::AnimationNodeData, rest)},
+                                     {"translation", offsetof(gfx::AnimationNodeData, translation)},
+                                     {"parent", offsetof(gfx::AnimationNodeData, parent)},
+                                     {"rotation", offsetof(gfx::AnimationNodeData, rotation)},
+                                     {"scale", offsetof(gfx::AnimationNodeData, scale)},
+                                     {"padding", offsetof(gfx::AnimationNodeData, padding)}});
+            valid &= validateStruct(fieldStruct(mesh, "samplers"), "AnimationSamplerData", sizeof(gfx::AnimationSamplerData),
+                                    {{"firstTime", offsetof(gfx::AnimationSamplerData, firstTime)},
+                                     {"firstValue", offsetof(gfx::AnimationSamplerData, firstValue)},
+                                     {"keyCount", offsetof(gfx::AnimationSamplerData, keyCount)},
+                                     {"interpolation", offsetof(gfx::AnimationSamplerData, interpolation)}});
+            valid &= validateInstanceTransform(fieldStruct(frame, "transforms"));
+            return valid;
+        }
+
         // Walks pc -> scene -> pointers because only that reports the layout the shaders read. ProgramLayout::getTypeLayout
         // has no LayoutRules value for data behind a pointer, so it adds std140/std430 padding.
         bool validateRasmStructs(slang::ProgramLayout *programLayout)
@@ -170,6 +231,11 @@ namespace rasm
                                        {"target", offsetof(gfx::EnvironmentPushConstants, target)},
                                        {"roughness", offsetof(gfx::EnvironmentPushConstants, roughness)},
                                        {"size", offsetof(gfx::EnvironmentPushConstants, size)}});
+            }
+
+            if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "AnimatePushConstants") == 0)
+            {
+                return validateAnimationStructs(pushConstants);
             }
 
             // Custom pipelines bring their own push constants and do not share core.slang.
@@ -242,7 +308,10 @@ namespace rasm
                                      {"previousViewProjection", offsetof(gfx::SceneData, previousViewProjection)},
                                      {"jitter", offsetof(gfx::SceneData, jitter)},
                                      {"textureLodBias", offsetof(gfx::SceneData, textureLodBias)},
-                                     {"padding", offsetof(gfx::SceneData, padding)}});
+                                     {"padding", offsetof(gfx::SceneData, padding)},
+                                     {"animatedTransformsPtr", offsetof(gfx::SceneData, animatedTransformsPtr)}});
+
+            valid &= validateInstanceTransform(fieldStruct(scene, "animatedTransformsPtr"));
 
             valid &= validateStruct(fieldStruct(scene, "shadowedLights"), "ShadowedLight", sizeof(gfx::ShadowedLight),
                                     {{"light", offsetof(gfx::ShadowedLight, light)},
@@ -282,7 +351,8 @@ namespace rasm
                                      {"normalMatrix", offsetof(gfx::InstanceData, normalMatrix)},
                                      {"geometryIndex", offsetof(gfx::InstanceData, geometryIndex)},
                                      {"materialIndex", offsetof(gfx::InstanceData, materialIndex)},
-                                     {"previousWorld", offsetof(gfx::InstanceData, previousWorld)}});
+                                     {"previousWorld", offsetof(gfx::InstanceData, previousWorld)},
+                                     {"animationRow", offsetof(gfx::InstanceData, animationRow)}});
 
             valid &= validateStruct(fieldStruct(scene, "geometryPtr"), "GeometryData", sizeof(gfx::GeometryData),
                                     {{"vertexOffset", offsetof(gfx::GeometryData, vertexOffset)},

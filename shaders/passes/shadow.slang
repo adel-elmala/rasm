@@ -16,7 +16,7 @@ float4 vertMain(VSInput input) : SV_POSITION
     InstanceData *instance  = pc.scene->instancesPtr + draw->firstInstance;
     // SV_VertexID is the raw index-buffer value, as in rasm.slang.
     VertexFull vert         = pc.scene->vertsPtr[input.vertexID + draw->vertexOffset];
-    return mul(pc.scene->projection, mul(pc.scene->view, mul(instance->worldMatrix, float4(vert.pos, 1.0))));
+    return mul(pc.scene->projection, mul(pc.scene->view, mul(getWorldMatrix(pc.scene, instance), float4(vert.pos, 1.0))));
 }
 
 [shader("fragment")]
@@ -43,7 +43,7 @@ MaskOutput vertMask(VSInput input)
     VertexFull vert         = pc.scene->vertsPtr[input.vertexID + draw->vertexOffset];
 
     MaskOutput output       = {};
-    output.clipPosition     = mul(pc.scene->projection, mul(pc.scene->view, mul(instance->worldMatrix, float4(vert.pos, 1.0))));
+    output.clipPosition     = mul(pc.scene->projection, mul(pc.scene->view, mul(getWorldMatrix(pc.scene, instance), float4(vert.pos, 1.0))));
     output.objectPosition   = vert.pos;
     output.vertexAlpha      = getVertexColor(pc.scene, instance->geometryIndex, input.vertexID).a;
     output.uv0              = vert.uv[0];

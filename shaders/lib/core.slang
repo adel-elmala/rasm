@@ -1,6 +1,8 @@
 // clang-format off
 #pragma once
 
+#include "animationTypes.slang"
+
 // Constants
 static const uint   INVALID_TEXTURE_INDEX = 0xFFFFFFFF;
 // A run per alpha mode and cull mode, and one blend run. Must match rasm::gfx::MAX_DRAW_RUNS.
@@ -147,6 +149,7 @@ struct InstanceData
     uint32_t        geometryIndex;
     uint32_t        materialIndex;
     float4          previousWorld[3];   // the rows of the affine world matrix the frame before drew, for motion
+    int32_t         animationRow;       // its InstanceTransform in SceneData::animatedTransformsPtr, -1: the matrices above
 };
 
 struct GeometryLod
@@ -221,7 +224,8 @@ struct SceneData
     float4x4            previousViewProjection; // the frame before's, without jitter, for motion
     float2              jitter;             // NDC offset added to clip x and y (times w): TAA's sub-pixel jitter
     float               textureLodBias;     // added to the material textures' mip level: -1 while jittered, sharper
-    uint32_t            padding;            // keeps the size a multiple of 8
+    uint32_t            padding;            // keeps animatedTransformsPtr 8-byte aligned
+    InstanceTransform*  animatedTransformsPtr;  // this slot's rows, written by the Animate pass
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.
@@ -319,6 +323,32 @@ float decodeSrgb(float encoded)
 
 // A vertex's COLOR_0 as linear RGBA, white for a sub-mesh without colors (the color stream, geometryPool.cpp). The
 // stream is indexed like the vertices, by the sub-mesh's own index.
+// An animated instance's matrices come from the Animate pass, every other one's from its instance row.
+float4x4 getWorldMatrix(SceneData *scene, InstanceData *instance)
+{
+    if (instance->animationRow >= 0)
+        return scene->animatedTransformsPtr[instance->animationRow].worldMatrix;
+    return instance->worldMatrix;
+}
+
+float3x3 getNormalMatrix(SceneData *scene, InstanceData *instance)
+{
+    if (instance->animationRow >= 0)
+        return scene->animatedTransformsPtr[instance->animationRow].normalMatrix;
+    return instance->normalMatrix;
+}
+
+// Where the frame before drew an object-space position.
+float3 getPreviousWorldPosition(SceneData *scene, InstanceData *instance, float4 position)
+{
+    if (instance->animationRow >= 0)
+    {
+        InstanceTransform *transform = scene->animatedTransformsPtr + instance->animationRow;
+        return float3(dot(transform->previousWorld[0], position), dot(transform->previousWorld[1], position), dot(transform->previousWorld[2], position));
+    }
+    return float3(dot(instance->previousWorld[0], position), dot(instance->previousWorld[1], position), dot(instance->previousWorld[2], position));
+}
+
 float4 getVertexColor(SceneData *scene, uint geometryIndex, uint vertexIndex)
 {
     int colorOffset = scene->geometryPtr[geometryIndex].colorOffset;

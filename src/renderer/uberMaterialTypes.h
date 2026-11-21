@@ -138,6 +138,75 @@ namespace rasm::gfx
         uint32_t        geometryIndex;
         uint32_t        materialIndex;
         glm::vec4       previousWorld[3];           // the rows of the affine world matrix the frame before drew, for motion
+        int32_t         animationRow;               // its InstanceTransform in SceneData::animatedTransformsPtr, -1: the matrices above
+    };
+
+    struct InstanceTransform
+    {
+        glm::mat4       worldMatrix;
+        glm::mat3       normalMatrix;
+        glm::vec4       previousWorld[3];
+    };
+
+    struct AnimationNodeData
+    {
+        glm::vec4       rest[3];                    // the rows of the local matrix at rest
+        glm::vec3       translation;
+        int32_t         parent;                     // an earlier node, -1 for a root
+        glm::vec4       rotation;                   // quaternion x, y, z, w
+        glm::vec3       scale;
+        uint32_t        padding;
+    };
+
+    struct AnimationSamplerData
+    {
+        uint32_t        firstTime;                  // in AnimationMeshData::keys
+        uint32_t        firstValue;                 // in keys, 4 floats per value
+        uint32_t        keyCount;
+        uint32_t        interpolation;              // rasm::AnimationInterpolation
+    };
+
+    struct AnimationMeshData
+    {
+        uint64_t        nodes;                      // AnimationNodeData[nodeCount]
+        uint64_t        samplers;                   // AnimationSamplerData[]
+        uint64_t        channels;                   // int32_t per clip, node and path: the sampler of translation, rotation, scale; -1: rest
+        uint64_t        subMeshNodes;               // uint32_t per animated sub-mesh: the node it follows
+        uint64_t        keys;                       // float
+        uint32_t        nodeCount;
+        uint32_t        subMeshCount;
+    };
+
+    struct AnimatedEntity
+    {
+        glm::mat4       entityMatrix;
+        uint64_t        mesh;                       // AnimationMeshData in the animation pool
+        float           phase;                      // the clip's time at the clock's base
+        float           speed;
+        float           duration;
+        int32_t         clip;                       // -1: no clip plays
+        uint32_t        loop;
+        uint32_t        firstTransform;             // its first row in AnimationFrame::transforms
+        uint32_t        firstNode;                  // its first node in AnimationFrame::pose
+        uint32_t        resetSync;                  // the sync whose frame has no motion from the frame before
+    };
+
+    struct AnimationFrame
+    {
+        uint64_t        entities;                   // AnimatedEntity[entityCount], this slot's table
+        uint64_t        transforms;                 // InstanceTransform, this slot's
+        uint64_t        previousTransforms;         // the other slot's, written by the frame before
+        uint64_t        pose;                       // glm::vec4, 3 per local matrix, then 3 per world matrix of each node
+        float           clock;                      // seconds since the clock's base
+        uint32_t        sync;
+        uint32_t        entityCount;
+        uint32_t        padding;
+    };
+
+    struct AnimatePushConstants
+    {
+        uint64_t        frame;                      // AnimationFrame
+        uint32_t        padding[2];
     };
 
     struct GeometryLod
@@ -211,7 +280,8 @@ namespace rasm::gfx
         glm::mat4        previousViewProjection;    // the frame before's, without jitter, for motion
         glm::vec2        jitter;                    // NDC offset added to clip x and y (times w): TAA's sub-pixel jitter
         float            textureLodBias;            // added to the material textures' mip level: -1 while jittered, sharper
-        uint32_t         padding;                   // keeps the size a multiple of 8
+        uint32_t         padding;                   // keeps animatedTransformsPtr 8-byte aligned
+        uint64_t         animatedTransformsPtr;     // this slot's InstanceTransform rows, written by the Animate pass
     };
 
     struct PushConstants
@@ -290,8 +360,6 @@ namespace rasm::gfx
     static_assert(offsetof(MaterialData, alphaMode) == 88, "MaterialData must match the shader's scalar layout");
     static_assert(offsetof(MaterialData, flags) == 96, "MaterialData must match the shader's scalar layout");
     static_assert(offsetof(MaterialData, textureTransforms) == 100, "MaterialData must match the shader's scalar layout");
-    static_assert(sizeof(InstanceData) == 156, "InstanceData must match the shader's scalar layout");
-    static_assert(offsetof(InstanceData, previousWorld) == 108, "InstanceData must match the shader's scalar layout");
     static_assert(offsetof(InstanceData, normalMatrix) == 64, "InstanceData must match the shader's scalar layout");
     static_assert(offsetof(InstanceData, geometryIndex) == 100, "InstanceData must match the shader's scalar layout");
     static_assert(offsetof(InstanceData, materialIndex) == 104, "InstanceData must match the shader's scalar layout");
@@ -303,7 +371,25 @@ namespace rasm::gfx
     static_assert(offsetof(GeometryData, boundsRadius) == 16, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, lodCount) == 20, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, lods) == 24, "GeometryData must match the shader's scalar layout");
-    static_assert(sizeof(SceneData) == 1800, "SceneData must match the shader's scalar layout");
+    static_assert(sizeof(SceneData) == 1808, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, animatedTransformsPtr) == 1800, "SceneData must match the shader's scalar layout");
+    static_assert(sizeof(InstanceData) == 160, "InstanceData must match the shader's scalar layout");
+    static_assert(offsetof(InstanceData, previousWorld) == 108, "InstanceData must match the shader's scalar layout");
+    static_assert(offsetof(InstanceData, animationRow) == 156, "InstanceData must match the shader's scalar layout");
+    static_assert(sizeof(InstanceTransform) == 148, "InstanceTransform must match the shader's scalar layout");
+    static_assert(offsetof(InstanceTransform, previousWorld) == 100, "InstanceTransform must match the shader's scalar layout");
+    static_assert(sizeof(AnimationNodeData) == 96, "AnimationNodeData must match the shader's scalar layout");
+    static_assert(offsetof(AnimationNodeData, parent) == 60, "AnimationNodeData must match the shader's scalar layout");
+    static_assert(offsetof(AnimationNodeData, scale) == 80, "AnimationNodeData must match the shader's scalar layout");
+    static_assert(sizeof(AnimationSamplerData) == 16, "AnimationSamplerData must match the shader's scalar layout");
+    static_assert(sizeof(AnimationMeshData) == 48, "AnimationMeshData must match the shader's scalar layout");
+    static_assert(offsetof(AnimationMeshData, nodeCount) == 40, "AnimationMeshData must match the shader's scalar layout");
+    static_assert(sizeof(AnimatedEntity) == 104, "AnimatedEntity must match the shader's scalar layout");
+    static_assert(offsetof(AnimatedEntity, mesh) == 64, "AnimatedEntity must match the shader's scalar layout");
+    static_assert(offsetof(AnimatedEntity, resetSync) == 100, "AnimatedEntity must match the shader's scalar layout");
+    static_assert(sizeof(AnimationFrame) == 48, "AnimationFrame must match the shader's scalar layout");
+    static_assert(offsetof(AnimationFrame, clock) == 32, "AnimationFrame must match the shader's scalar layout");
+    static_assert(sizeof(AnimatePushConstants) == PUSH_CONSTANTS_SIZE, "AnimatePushConstants must fill the push-constant range");
     static_assert(offsetof(SceneData, previousViewProjection) == 1720, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, textureLodBias) == 1792, "SceneData must match the shader's scalar layout");
     static_assert(sizeof(SceneData) % 8 == 0, "views' SceneData sit one after another, so their pointers must stay 8-byte aligned");

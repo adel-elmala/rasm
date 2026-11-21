@@ -5,6 +5,7 @@ find_package(Ktx CONFIG REQUIRED)
 
 add_executable(rasm_tests
             "main.cpp"
+            "animationTests.cpp"
             "blendSortTests.cpp"
             "bloomTests.cpp"
             "cameraTests.cpp"

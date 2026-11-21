@@ -48,6 +48,8 @@ target_sources(rasm PRIVATE
     "renderer/geometryPool.cpp"
     "renderer/gpuScene.cpp"
     "renderer/lightClusters.cpp"
+    "renderer/animation.cpp"
+    "renderer/animationTime.cpp"
     "renderer/gpuTable.cpp"
     "renderer/renderGraph.cpp"
     "renderer/renderer.cpp"

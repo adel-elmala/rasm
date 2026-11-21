@@ -20,7 +20,7 @@ Sphere getWorldSphere(SceneData *scene, DrawInfo draw)
     // transpose(M) * M, whose entries are the dot products of M's columns. Its largest row sum of absolute
     // values bounds that eigenvalue (Gershgorin), exactly when the columns are orthogonal, and never too small
     // when a non-uniform scale is followed by a rotation.
-    float4x4 world          = instance->worldMatrix;
+    float4x4 world          = getWorldMatrix(scene, instance);
     float3x3 world3         = (float3x3)world;
     float3 c0               = mul(world3, float3(1.0, 0.0, 0.0));
     float3 c1               = mul(world3, float3(0.0, 1.0, 0.0));

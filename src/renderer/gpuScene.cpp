@@ -9,6 +9,7 @@
 #include "renderer/environmentBake.h"
 #include "renderer/geometryPool.h"
 #include "renderer/lightClusters.h"
+#include "renderer/animation.h"
 #include "renderer/localShadows.h"
 #include "renderer/shadowCascades.h"
 #include "renderer/uberMaterialTypes.h"
@@ -410,6 +411,7 @@ namespace rasm
                     gpuScene->instanceAlphaModes.resize(gpuScene->instanceCount, AlphaMode::NONE);
                     state.syncedMatrix = entityRef.transform.toMatrix();
                     writeInstanceRows(entity, false);
+                    startPendingAnimation(entity);
                     if (state.waitingForTextures)
                         gpuScene->entitiesWaitingForTextures.push_back(entity);
                     else
@@ -450,6 +452,7 @@ namespace rasm
         }
 
         const auto frame = static_cast<uint32_t>(frameCount);
+        syncGpuAnimation();
         gpuScene->instances.upload(ctx, frame);
         gpuScene->materials.upload(ctx, frame);
         for (auto &drawList : gpuScene->drawLists)
@@ -492,10 +495,13 @@ namespace rasm
                                         .normalMatrix = glm::transpose(glm::inverse(glm::mat3(model))),
                                         .geometryIndex = subMesh.geometry.geometryIndex,
                                         .materialIndex = static_cast<uint32_t>(getSubMeshMaterial(*this, entityRef, subMesh).handle.index),
-                                        .previousWorld = {previous[0], previous[1], previous[2]}};
+                                        .previousWorld = {previous[0], previous[1], previous[2]},
+                                        .animationRow = getAnimationRow(entity, i)};
             gpuScene->instances.setRow(state.firstInstance + i, &row);
         }
 
+        // An animated entity's matrix also goes to its row of the animated entity table.
+        writeAnimationRow(entity);
         // A transform can start or stop mirroring the entity (D8).
         updateDrawModes(entity);
     }
@@ -839,6 +845,8 @@ namespace rasm
         if (view == UINT32_MAX)
             return false;
         graph.sceneViews.push_back(view);
+        // Every view of the graph draws the animated sub-meshes with the matrices of one Animate pass.
+        addAnimationPass(graph);
         const SceneView &sceneView = gpuScene->views[view];
         const bool occlusion = sceneView.visibility.isValid();
         std::string drawName = depthOnly ? "Shadow" : "Scene";
@@ -864,14 +872,17 @@ namespace rasm
         // Each frame uses only its slot's draw list and Hi-Z, so culling the next frame does not wait for
         // this frame's draws on the other queue. A shaded view's culling also sorts the blend run, in the late pass,
         // or in the early one in a frame without a Hi-Z.
-        auto writeCulling = [&sceneView](PassBuilder &builder)
+        const GpuAnimation &animation = *gpuAnimation;
+        auto writeCulling = [&sceneView, &animation](PassBuilder &builder)
         {
+            builder.read(animation.transforms);
             builder.write(sceneView.visibleDraws);
             if (!sceneView.depthOnly)
                 builder.write(sceneView.sortBuffers);
         };
-        auto drawScenePass = [&sceneView, &clusters, renderTarget, face](PassBuilder &builder)
+        auto drawScenePass = [&sceneView, &clusters, &animation, renderTarget, face](PassBuilder &builder)
         {
+            builder.read(animation.transforms);
             builder.read(sceneView.visibleDraws);
             if (clusters.buffers[0].isValid())
                 builder.read(clusters.buffers);
@@ -1330,6 +1341,7 @@ namespace rasm
             sceneData.hizPtr = ctx.getBufferDeviceAddress(view.hiz[frame]);
         }
         sceneData.colorsPtr = ctx.getBufferDeviceAddress(geometryPool->colorBuffer());
+        sceneData.animatedTransformsPtr = ctx.getBufferDeviceAddress(gpuAnimation->transforms[frame]);
         if (view.sortBlend)
         {
             const uint32_t sortCapacity = getBlendSortCapacity(drawList.runs[view.blendRun].count);
