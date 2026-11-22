@@ -782,6 +782,7 @@ bool fillTexture(const TextureHandle&amp; texture, const TextureLevel* levels, u
     Format                    depthStencilAttachmentFormat = Format::UNKNOWN;
     BlendMode                 blendMode = BlendMode::NONE;
     bool                      depthWrite = true;
+    bool                      depthTest = true;
     uint32_t                  samples = 1;
     bool                      alphaToCoverage = false;
 
@@ -796,6 +797,7 @@ bool fillTexture(const TextureHandle&amp; texture, const TextureLevel* levels, u
       <dt>depthStencilAttachmentFormat</dt><dd>The same for the depth format. With a depth format the depth test is on (reversed-Z, <code>GREATER_OR_EQUAL</code>).</dd>
       <dt>blendMode</dt><dd>See <a href="types.html#BlendMode">BlendMode</a>. <code>Engine::createPipeline</code> always uses <code>NONE</code>.</dd>
       <dt>depthWrite</dt><dd>Writes depth when there is a depth format. <code>false</code> keeps the test but not the write, as see-through draws need.</dd>
+      <dt>depthTest</dt><dd>Tests depth when there is a depth format. <code>false</code> draws over everything, as the culling view's ghosts do; depth is then not written either.</dd>
       <dt>samples</dt><dd>The sample count of the attachments it draws into: 1, 2, 4 or 8, of those the device has (<code>createPipeline</code> refuses any other with an error); <code>bindPipeline</code> rejects it in a pass with another. <code>Engine::createPipeline(name, source, renderTarget)</code> takes the target's.</dd>
       <dt>alphaToCoverage</dt><dd>Color 0's alpha decides which samples a fragment covers, for cut-outs with several samples per pixel (<a href="../guides/msaa.html#a2c">alpha-to-coverage</a>). Both fields take part in equality and the hash.</dd>
     </dl>

@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 #include <unordered_map>
 #include <vector>
 
@@ -818,6 +819,19 @@ namespace
         for (const Car &car : cars)
             engine.updateTransform(car.entity, rasm::Transform{carPosition(car, seconds), glm::identity<glm::quat>(), car.scale});
     }
+
+    // --debug-view's names, in the order of rasm::DebugView.
+    rasm::DebugView parseDebugView(const char *name)
+    {
+        const char *names[] = {"none", "normals", "uvs", "overdraw", "lods", "culling", "light-count"};
+        for (uint32_t i = 0; i < std::size(names); ++i)
+        {
+            if (std::strcmp(name, names[i]) == 0)
+                return static_cast<rasm::DebugView>(i);
+        }
+        std::printf("Unknown debug view '%s'.\n", name);
+        return rasm::DebugView::NONE;
+    }
 }
 
 int main(int argc, char **argv)
@@ -837,6 +851,13 @@ int main(int argc, char **argv)
     rasm::Engine engine(config);
     if (!engine.running())
         return 1;
+
+    // --debug-view <name> shows the scene's debug view, as the RASM window's View does.
+    for (int i = 1; i + 1 < argc; ++i)
+    {
+        if (std::strcmp(argv[i], "--debug-view") == 0)
+            engine.setDebugView(parseDebugView(argv[i + 1]));
+    }
 
     const auto buildStart = std::chrono::steady_clock::now();
     City city{.engine = &engine, .scene = engine.createScene()};
@@ -878,13 +899,22 @@ int main(int argc, char **argv)
         engine.addLightToScene(city.scene, light);
 
     // Seconds stay a double: a float would make the cars stutter after a day of running.
-    const bool fixedStep = argc > 1 && std::strcmp(argv[1], "--fixed-step") == 0;
+    // --freeze-culling freezes culling at frame 30, and the tour flies on past what it kept.
+    bool fixedStep = false;
+    bool freezeCulling = false;
+    for (int i = 1; i < argc; ++i)
+    {
+        fixedStep = fixedStep || std::strcmp(argv[i], "--fixed-step") == 0;
+        freezeCulling = freezeCulling || std::strcmp(argv[i], "--freeze-culling") == 0;
+    }
     double seconds = 0.0;
     std::chrono::steady_clock::time_point lastTime = std::chrono::steady_clock::now();
     bool touring = true;
     bool aviationOn = false;
-    while (engine.running())
+    for (uint32_t frame = 0; engine.running(); ++frame)
     {
+        if (freezeCulling && frame == 30)
+            engine.setCullingFrozen(true);
         // The tour sets the pose and re-seeds the free-fly controller from it. Mouse or WASD input then moves the
         // camera away from the pose, and from that frame on the user flies.
         rasm::Transform tour{};

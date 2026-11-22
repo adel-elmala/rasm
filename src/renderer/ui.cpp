@@ -227,7 +227,7 @@ namespace rasm
 
     // Runs in beginFrame after the slot's fence wait and before syncGpuScene, so what the UI changes reaches this frame.
     // Without the RASM window and a callback nothing is built: no ImGui frame, no events, no draws.
-    void Engine::buildUi()
+    void Engine::buildUi(CameraHandle camera)
     {
         ui->draws.clear();
         ui->drawn = false;
@@ -245,6 +245,7 @@ namespace rasm
 
         newUiPlatformFrame();
         ImGui::NewFrame();
+        drawFrozenFrustums(camera);
         if (config.showStats)
             drawEngineWindow();
         if (ui->callback)

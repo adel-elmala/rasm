@@ -10,3 +10,5 @@ A procedural night city, about 146k instances, drawn by the GPU-driven path in o
 The camera flies a two-minute tour. Drag the mouse or press WASD to take over.
 
 Animation follows the wall clock. Run with `--fixed-step` to advance 1/60 s per frame instead, so a given frame looks the same on every run (verify-change does this).
+
+`--debug-view <none|normals|uvs|overdraw|lods|culling|light-count>` starts in a debug view (`Engine::setDebugView`), and `--freeze-culling` freezes culling at frame 30 (`Engine::setCullingFrozen`): the tour flies on, and the culling view shows what the frozen frustum kept and left out. The RASM window (F1) has both under Debug views.

@@ -3,6 +3,9 @@
 #include "pbr.slang"
 #include "unlit.slang"
 #include "shadow.slang"
+#if defined(RASM_DEBUG_VIEW)
+#include "debugViews.slang"
+#endif
 
 struct VSInput
 {
@@ -28,6 +31,9 @@ struct VSOutput
 #if defined(RASM_MOTION_VECTORS)
     float4 currentClip   : TEXCOORD4;   // without jitter
     float4 previousClip  : TEXCOORD5;   // where the frame before drew the same point
+#endif
+#if defined(RASM_DEBUG_VIEW)
+    nointerpolation uint lod;           // the LOD the draw draws, for DEBUG_VIEW_LODS
 #endif
 };
 
@@ -71,6 +77,9 @@ VSOutput vertMain(VSInput input)
     float3 previousWorld        = getPreviousWorldPosition(pc.scene, instance, float4(previousPosition, 1.0));
     output.currentClip          = removeJitter(pc.scene, output.clipPosition);
     output.previousClip         = mul(pc.scene->previousViewProjection, float4(previousWorld, 1.0));
+#endif
+#if defined(RASM_DEBUG_VIEW)
+    output.lod                  = getDrawLod(pc.scene, instance, draw);
 #endif
 
     return output;
@@ -126,6 +135,11 @@ FragmentOutput toOutput(float4 color, float4 currentClip, float4 previousClip)
 #else
     output.motion = float4(getMotion(currentClip, previousClip), 0.0, 0.0);
 #endif
+#if defined(RASM_DEBUG_VIEW)
+    // OVERDRAW's pipelines add up what they write, so its fragments leave the motion as it is.
+    if (pc.scene->debugView == DEBUG_VIEW_OVERDRAW)
+        output.motion = float4(0.0);
+#endif
     return output;
 }
 #define TO_OUTPUT(color) toOutput(color, input.currentClip, input.previousClip)
@@ -178,7 +192,11 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     if ((model->flags & MATERIAL_DOUBLE_SIDED) == 0 && isBackFace(input.handedness, isFrontFace))
         discard;
 #endif
-
+#if defined(RASM_DEBUG_VIEW)
+    // A debug view (Engine::setDebugView) shows a value of the fragment instead of its shading; cut-outs still cut.
+    return TO_OUTPUT(getDebugColor(gTextures, pc.scene, model, input.worldPosition, input.worldNormal, input.worldTangent, input.uv0, input.uv1, input.uv2,
+                                   input.clipPosition.xy, isBackFace(input.handedness, isFrontFace), input.lod));
+#else
     if (model->materialId == MaterialId.UNLIT)
     {
         MetallicRoughnessMaterial metallicRoughness = model->material.metallicRoughness;
@@ -221,6 +239,7 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     info.environment.rotation       = pc.scene->environmentRotation;
 
     return TO_OUTPUT(toTarget(shadePBR(gTextures, gCubeTextures, info), coverage));
+#endif
 }
 
 // clang-format on

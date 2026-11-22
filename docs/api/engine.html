@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Engine · RASM</title>
 <meta name="description" content="The Engine class: EngineConfig, construction and shutdown, the frame functions, loading, frame stats, paths and the window, plus an index of every Engine method.">
-<meta name="rasm-sources" content="include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h src/engine.cpp src/platform/window.cpp src/platform/paths.cpp src/renderer/frameStats.cpp src/renderer/gpuScene.cpp src/renderer/renderGraph.cpp src/renderer/renderer.cpp src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/msaaResolve.cpp src/renderer/taa.cpp src/rhi/renderContext.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.cpp src/assets/mesh.cpp src/assets/texture.cpp src/renderer/geometryPool.cpp src/renderer/gpuTable.cpp CMakeLists.txt shaders/lib/shadow.slang shaders/passes/shadow.slang examples/06_shadows/main.cpp">
+<meta name="rasm-sources" content="include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h src/engine.cpp src/platform/window.cpp src/platform/paths.cpp src/renderer/frameStats.cpp src/renderer/gpuScene.cpp src/renderer/renderGraph.cpp src/renderer/renderer.cpp src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/msaaResolve.cpp src/renderer/taa.cpp src/renderer/engineUi.cpp src/renderer/debugViews.cpp src/rhi/renderContext.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.cpp src/assets/mesh.cpp src/assets/texture.cpp src/renderer/geometryPool.cpp src/renderer/gpuTable.cpp CMakeLists.txt shaders/lib/shadow.slang shaders/passes/shadow.slang examples/06_shadows/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -51,6 +51,8 @@
   <tr><td><a href="#addUiPass"><code>addUiPass</code></a></td><td>draw the ImGui windows over the image</td><td>this page</td></tr>
   <tr><td><a href="#setUiCallback"><code>setUiCallback</code></a></td><td>your own ImGui windows, every frame</td><td>this page</td></tr>
   <tr><td><a href="#getUiTexture"><code>getUiTexture</code></a></td><td>a texture as an <code>ImTextureID</code> for <code>ImGui::Image</code></td><td>this page</td></tr>
+  <tr><td><a href="#setDebugView"><code>setDebugView</code></a></td><td>show normals, UVs, overdraw, LODs, culling or light counts</td><td>this page</td></tr>
+  <tr><td><a href="#setCullingFrozen"><code>setCullingFrozen</code></a></td><td>keep the culling of one frame while the camera moves</td><td>this page</td></tr>
   <tr><td><a href="#getCurrentFrameResources"><code>getCurrentFrameResources</code></a></td><td>this frame's command buffer and depth</td><td>this page</td></tr>
   <tr><td><a href="#recreateSwapchain"><code>recreateSwapchain</code></a></td><td>rebuild after a resize</td><td>this page</td></tr>
   <tr><td><a href="#waitForLoads"><code>waitForLoads</code></a></td><td>finish every background load now</td><td>this page</td></tr>
@@ -755,7 +757,7 @@ engine.endGpuTimer(commandBuffer, timer);</code></pre>
 
 <h2 id="ui"><span class="n">6</span>UI with Dear ImGui</h2>
 
-<p>With <code>EngineConfig::ui</code> the engine runs <a href="https://github.com/ocornut/imgui">Dear ImGui</a>: <kbd>F1</kbd> shows the RASM window (the frame stats, the forced LOD, the graph dump), and the application adds windows of its own in a callback. How it works: <a href="../guides/immediate-mode-ui.html">Immediate-mode UI</a>.</p>
+<p>With <code>EngineConfig::ui</code> the engine runs <a href="https://github.com/ocornut/imgui">Dear ImGui</a>: <kbd>F1</kbd> shows the RASM window (the frame stats, the forced LOD, the <a href="#debug-views">debug views</a>, the graph dump), and the application adds windows of its own in a callback. How it works: <a href="../guides/immediate-mode-ui.html">Immediate-mode UI</a>.</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 200" role="img" aria-label="One frame with the UI. On the CPU, beginFrame reads the input, which goes to ImGui and the camera, then builds the UI: ImGui's new frame, the RASM window, the application's callback and ImGui's render, which copies the vertices into the frame slot's buffers. Then the scene is uploaded. On the GPU, the scene passes and the tone map run, then the UI pass draws the windows over the image.">
@@ -838,7 +840,52 @@ engine.addUiPass(graph);</code></pre>
   </div>
 </div>
 
-<h2 id="paths"><span class="n">7</span>Paths and config</h2>
+<h2 id="debug-views"><span class="n">7</span>Debug views</h2>
+
+<p>A debug view shows a value of each pixel instead of its shading: the normal, the UVs, how many fragments were shaded, the LOD, what culling did, or how many lights were shaded. The RASM window (<kbd>F1</kbd>) has a <b>View</b> list and a <b>Freeze culling</b> box under <b>Debug views</b>; without the UI, call the two functions below. How each view is made and how to read it: <a href="../guides/debug-views.html">Debug views</a>.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th><code>DebugView</code></th><th>Each pixel shows</th><th>Shown as</th></tr>
+  <tr><td><code>NONE</code></td><td>the shaded scene</td><td>tone mapped</td></tr>
+  <tr><td><code>NORMALS</code></td><td>the shading normal, after the normal map, in world space</td><td>x, y, z as red, green, blue (0.5 is 0)</td></tr>
+  <tr><td><code>UVS</code></td><td>the fraction of UV set 0</td><td>u red, v green, over a checker of 8 squares per unit</td></tr>
+  <tr><td><code>OVERDRAW</code></td><td>the fragments shaded there, in every draw pass</td><td>heat color</td></tr>
+  <tr><td><code>LODS</code></td><td>the LOD the draw uses, 0 to 7</td><td>a color per LOD</td></tr>
+  <tr><td><code>CULLING</code></td><td>drawn in the early or the late pass; culled draws as see-through ghosts</td><td>green, yellow; red ghost: occluded, blue ghost: outside the frustum</td></tr>
+  <tr><td><code>LIGHT_COUNT</code></td><td>the lights the shading loops over there</td><td>heat color</td></tr>
+</table>
+</div>
+
+<div class="api" id="setDebugView">
+  <pre class="sig">void setDebugView(DebugView view);</pre>
+  <div class="body">
+    <p>Every shaded scene view draws <code>view</code> from the next frame on, until you set <code>DebugView::NONE</code> again. A debug view replaces the shading in the scene passes; the tone map then shows the values as they are (or a count as a heat color), without exposure, and the bloom passes dispatch nothing. MSAA and TAA stay on, so edges are smooth, and a new view starts TAA's history over. Shadow maps are drawn as usual. A value outside the enum logs an error and changes nothing.</p>
+    <p>Each view's pipelines are compiled the first time it is chosen, so the first frame of a view can take longer. With <code>DebugView::NONE</code> nothing of it runs: the normal shaders have no debug branch.</p>
+    <pre><code>// From examples/15_debug_ui/main.cpp: --debug-view overdraw
+for (int i = 1; i + 1 &lt; argc; ++i)
+{
+    if (std::strcmp(argv[i], "--debug-view") == 0)
+        engine.setDebugView(parseDebugView(argv[i + 1]));
+}</code></pre>
+  </div>
+</div>
+
+<div class="api" id="setCullingFrozen">
+  <pre class="sig">void setCullingFrozen(bool frozen);</pre>
+  <div class="body">
+    <p>While <code>frozen</code> is true, each shaded scene view culls as in the frame it froze in: with that frame's frustum, LOD camera and occlusion results. The camera still moves and draws, so you can fly out and look at what was kept. With the UI on, the frozen frustum is drawn as orange lines. Best seen with <code>DebugView::CULLING</code>.</p>
+    <ul>
+      <li>Only the early culling pass runs. The Hi-Z and the late pass record nothing.</li>
+      <li>See-through (BLEND) draws are culled in the early pass too, and drawn in list order, not sorted.</li>
+      <li>Shadow maps are not frozen: they follow the camera, with the frozen LOD camera.</li>
+      <li>What the frozen visibility never saw stays hidden until you unfreeze: an entity added after the freeze, or a mesh that finished loading after it.</li>
+      <li>Freeze after a few frames of normal culling: a view's first frame has seen nothing yet.</li>
+    </ul>
+  </div>
+</div>
+
+<h2 id="paths"><span class="n">8</span>Paths and config</h2>
 
 <div class="table-wrap">
 <table>
@@ -865,7 +912,7 @@ engine.addUiPass(graph);</code></pre>
   </div>
 </div>
 
-<h2 id="window"><span class="n">8</span>The window</h2>
+<h2 id="window"><span class="n">9</span>The window</h2>
 
 <div class="split">
   <div>
@@ -908,7 +955,7 @@ const float aspect = width / height;</code></pre>
   </div>
 </div>
 
-<h2 id="resources"><span class="n">9</span>Raw GPU resources</h2>
+<h2 id="resources"><span class="n">10</span>Raw GPU resources</h2>
 
 <p>For your own passes you may need buffers and textures that are not part of a scene. These two functions forward to <code>RenderContext</code>. The descriptors (<a href="low-level.html#BufferDesc"><code>BufferDesc</code></a>, <a href="low-level.html#TextureDesc"><code>TextureDesc</code></a>) and how to fill, read and bind the resources are on <a href="low-level.html">RenderContext and resources</a>.</p>
 

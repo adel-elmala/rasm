@@ -374,7 +374,7 @@ namespace rasm
                                      {"previousViewProjection", offsetof(gfx::SceneData, previousViewProjection)},
                                      {"jitter", offsetof(gfx::SceneData, jitter)},
                                      {"textureLodBias", offsetof(gfx::SceneData, textureLodBias)},
-                                     {"padding", offsetof(gfx::SceneData, padding)},
+                                     {"debugView", offsetof(gfx::SceneData, debugView)},
                                      {"animatedTransformsPtr", offsetof(gfx::SceneData, animatedTransformsPtr)},
                                      {"skinnedVertsPtr", offsetof(gfx::SceneData, skinnedVertsPtr)},
                                      {"previousSkinnedVertsPtr", offsetof(gfx::SceneData, previousSkinnedVertsPtr)}});

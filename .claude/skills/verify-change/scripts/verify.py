@@ -17,6 +17,7 @@ and gfxrecon-replay renders that frame to PNG. No engine change needed.
 import glob
 import os
 import re
+import shlex
 import shutil
 import struct
 import subprocess
@@ -205,7 +206,7 @@ def message_key(text):
     return m.group(0) if m else text[:120]
 
 
-def run_example(name, preset, frame, out_dir, keep):
+def run_example(name, preset, frame, out_dir, keep, extra_args):
     exe = os.path.join(REPO, "build", preset, "examples", name + (".exe" if os.name == "nt" else ""))
     if not os.path.isfile(exe):
         return {"error": "not built: %s" % exe}
@@ -224,7 +225,7 @@ def run_example(name, preset, frame, out_dir, keep):
     if os.name != "nt" and sdk and os.path.isdir(os.path.join(sdk, "share", "vulkan", "explicit_layer.d")):
         env["VK_ADD_LAYER_PATH"] = os.path.join(sdk, "share", "vulkan", "explicit_layer.d")
     try:
-        proc = subprocess.run([exe, "--fixed-step"], cwd=os.path.dirname(exe), env=env, capture_output=True, text=True, errors="replace", timeout=180)
+        proc = subprocess.run([exe, "--fixed-step"] + extra_args, cwd=os.path.dirname(exe), env=env, capture_output=True, text=True, errors="replace", timeout=180)
         log, code = proc.stdout + proc.stderr, proc.returncode
     except subprocess.TimeoutExpired as e:
         log, code = ((e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")), "timeout"
@@ -267,6 +268,7 @@ def cmd_check(args, make_baseline):
     no_build = take_flag(args, "--no-build")
     no_tests = take_flag(args, "--no-tests")
     keep = take_flag(args, "--keep-captures")
+    extra_args = shlex.split(take_opt(args, "--args", ""))
     layer_env = {}
     if take_flag(args, "--sync"):
         layer_env["VK_LAYER_VALIDATE_SYNC"] = "1"
@@ -300,7 +302,7 @@ def cmd_check(args, make_baseline):
         names = [n for n in names if n in only.split(",")]
     print("examples at frame %d, preset %s:" % (frame, preset))
     for name in names:
-        r = run_example(name, preset, frame, out_dir, keep)
+        r = run_example(name, preset, frame, out_dir, keep, extra_args)
         errs = [m for m in r.get("messages", []) if m[0] == "ERROR"]
         warns = [m for m in r.get("messages", []) if m[0] == "WARNING"]
         verdict = "OK"

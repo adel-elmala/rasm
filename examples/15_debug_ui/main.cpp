@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -16,7 +17,8 @@
 // UI callback, that changes the sun, the exposure and the helmet while the frame runs, and shows a texture with
 // ImGui::Image. Engine::render adds the UI pass after the tone map.
 // --gpu-times prints each GPU timer's mean over frames 300 to 600, then quits; --no-ui runs the same scene with the UI
-// off, for comparison.
+// off, for comparison. --debug-view <none|normals|uvs|overdraw|lods|culling|light-count> starts in that debug view, and
+// --freeze-culling freezes culling at frame 30, as the RASM window's Debug views section does.
 
 namespace
 {
@@ -42,16 +44,31 @@ namespace
         }
         return engine.createMesh(std::move(vertices), std::move(indices));
     }
+
+    // --debug-view's names, in the order of rasm::DebugView.
+    rasm::DebugView parseDebugView(const char *name)
+    {
+        const char *names[] = {"none", "normals", "uvs", "overdraw", "lods", "culling", "light-count"};
+        for (uint32_t i = 0; i < std::size(names); ++i)
+        {
+            if (std::strcmp(name, names[i]) == 0)
+                return static_cast<rasm::DebugView>(i);
+        }
+        std::printf("Unknown debug view '%s'.\n", name);
+        return rasm::DebugView::NONE;
+    }
 }
 
 int main(int argc, char **argv)
 {
     bool printGpuTimes = false;
     bool ui = true;
+    bool freezeCulling = false;
     for (int i = 1; i < argc; ++i)
     {
         printGpuTimes = printGpuTimes || std::strcmp(argv[i], "--gpu-times") == 0;
         ui = ui && std::strcmp(argv[i], "--no-ui") != 0;
+        freezeCulling = freezeCulling || std::strcmp(argv[i], "--freeze-culling") == 0;
     }
 
     rasm::EngineConfig config = {
@@ -68,6 +85,13 @@ int main(int argc, char **argv)
     rasm::Engine engine(config);
     if (!engine.running())
         return 1;
+
+    // --debug-view <name> shows the scene's debug view, as the RASM window's View does.
+    for (int i = 1; i + 1 < argc; ++i)
+    {
+        if (std::strcmp(argv[i], "--debug-view") == 0)
+            engine.setDebugView(parseDebugView(argv[i + 1]));
+    }
 
     rasm::SceneHandle scene = engine.createScene();
     const rasm::EnvironmentHandle sunset = engine.loadEnvironment("environments/venice_sunset_2k.hdr");
@@ -148,6 +172,9 @@ int main(int argc, char **argv)
     std::vector<double> timerSums;
     for (uint32_t frame = 0; engine.running(); ++frame)
     {
+        // Culling freezes after a few frames, once it has seen the scene.
+        if (freezeCulling && frame == 30)
+            engine.setCullingFrozen(true);
         // A fixed angle per frame, so frame N looks the same in every run.
         if (turn)
             engine.updateTransform(helmetEntity, engine.getTransform(helmetEntity).rotate(glm::vec3(0.0f, 1.0f, 0.0f), glm::radians(turnSpeed)));

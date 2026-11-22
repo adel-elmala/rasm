@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Debug views · RASM</title>
+<meta name="description" content="How a renderer shows what it does instead of the shaded image: normals and UVs as colors, overdraw counted with additive blending, light counts per cluster, LODs as tints, and a culling view with ghosts of the culled draws and a frozen frustum. How the values reach the screen without a tone curve, and how such views cost nothing while they are off.">
+<meta name="rasm-sources" content="src/renderer/debugViews.cpp shaders/lib/debugViews.slang shaders/passes/rasm.slang shaders/passes/debugGhosts.slang shaders/passes/toneMap.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/engineUi.cpp src/renderer/ui.cpp include/rasm/engine.h include/rasm/types.h include/rasm/render/resource.h src/rhi/resource.cpp src/rhi/vulkan/vulkanDevice.cpp src/renderer/uberMaterialTypes.h shaders/lib/core.slang examples/15_debug_ui/main.cpp examples/05_city/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/debug-views.js"></script>
+</head>
+<body data-root="../" data-page="guides/debug-views.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker>
+    <marker id="ah-light" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head light"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Culling and the frame</p>
+<h1>Debug views</h1>
+<p class="lead">A shaded image hides why it looks the way it does, and why it is slow. A debug view draws the same scene, but each pixel shows one value of the work behind it: a normal, a UV, how many fragments were shaded, which LOD, what culling did, how many lights. This page explains how each view is made and how to read it. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>A debug view is the scene's own shader with the shading swapped for one value. Everything else stays: the same draws, depth test, culling and cut-outs.</li>
+    <li><b>Values</b> (normals, UVs, LOD tints, culling colors) are written as colors and shown <b>as they are</b>, without exposure or a tone curve.</li>
+    <li><b>Counts</b> (overdraw, lights) are numbers. Overdraw adds 1 per fragment with <b>additive blending</b>; the display turns each count into a <b>heat color</b>.</li>
+    <li>The culling view also draws what culling <b>left out</b>, as see-through <b>ghosts</b>: the bounding box of each culled object. <b>Freezing</b> culling keeps one frame's results while the camera moves, so you can look at them from outside.</li>
+    <li>A view is a <b>shader variant</b> compiled with a define the first time it is chosen. While it is off, the normal shaders have no extra branch: it costs nothing.</li>
+  </ul>
+</div>
+
+<h2 id="views"><span class="n">1</span>Six views, six questions</h2>
+
+<p>Each view answers one question. Pick the view by the question you have.</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A sphere with arrows for its normals. Each normal becomes a color: x red, y green, z blue.">
+      <circle cx="80" cy="70" r="44" class="accent o-50"/>
+      <path d="M80,70 L80,18 M80,70 L122,48 M80,70 L38,48 M80,70 L124,82" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="150" y="50" class="small">x → red</text>
+      <text x="150" y="70" class="small">y → green</text>
+      <text x="150" y="90" class="small">z → blue</text>
+    </svg>
+    <h4>Normals</h4>
+    <p>Which way does the surface face? Shows a broken normal map, flipped faces, missing tangents.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A square with a checker pattern, the u axis going right and the v axis going down.">
+      <path d="M40,20 h20 v20 h-20 z M80,20 h20 v20 h-20 z M60,40 h20 v20 h-20 z M100,40 h20 v20 h-20 z M40,60 h20 v20 h-20 z M80,60 h20 v20 h-20 z M60,80 h20 v20 h-20 z M100,80 h20 v20 h-20 z" class="solid"/>
+      <rect x="40" y="20" width="80" height="80" class="nofill box"/>
+      <path d="M40,112 H124" class="arrow" marker-end="url(#ah)"/><text x="132" y="116" class="small">u → red</text>
+      <path d="M28,20 V104" class="arrow" marker-end="url(#ah)"/><text x="132" y="62" class="small">v → green</text>
+    </svg>
+    <h4>UVs</h4>
+    <p>Where does the texture go? Shows seams, stretching, mirrored or missing UVs.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Three overlapping rectangles. Where one covers the pixel it shows 1, where two overlap 2, where three overlap 3.">
+      <rect x="30" y="20" width="100" height="70" class="cpu o-50"/>
+      <rect x="70" y="40" width="100" height="70" class="cpu o-50"/>
+      <rect x="110" y="30" width="100" height="60" class="cpu o-50"/>
+      <text x="50" y="45" class="mid big">1</text>
+      <text x="96" y="70" class="mid big">2</text>
+      <text x="140" y="70" class="mid big">3</text>
+      <text x="190" y="104" class="mid big">1</text>
+    </svg>
+    <h4>Overdraw</h4>
+    <p>How many fragments were shaded at each pixel? Shows wasted shading work.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A camera and three objects farther and farther away, tinted by LOD 0, 1 and 2.">
+      <path d="M34,64 L14,52 L14,76 Z" class="cpu"/>
+      <circle cx="70" cy="64" r="22" class="ok"/><text x="70" y="68" class="mid small">LOD 0</text>
+      <circle cx="140" cy="64" r="16" class="accent"/><text x="140" y="68" class="mid small">1</text>
+      <circle cx="200" cy="64" r="11" class="bad"/><text x="200" y="68" class="mid small">2</text>
+      <path d="M34,104 H226" class="arrow" marker-end="url(#ah)"/><text x="130" y="120" class="mid small">distance</text>
+    </svg>
+    <h4>LODs</h4>
+    <p>Which level of detail does each draw use? Shows LODs that switch too early or too late.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Seen from above: a wall, a green box in front of it, a dashed red ghost behind it, and a dashed blue ghost outside the camera's view.">
+      <path d="M20,110 L80,20 M20,110 L150,40" class="arrow dashed"/>
+      <path d="M26,110 L14,104 L14,116 Z" class="cpu"/>
+      <rect x="60" y="64" width="22" height="18" class="ok"/>
+      <path d="M95,40 L115,90" class="surface"/>
+      <rect x="120" y="54" width="22" height="18" class="ghost"/>
+      <rect x="170" y="90" width="22" height="18" class="ghost"/>
+      <text x="140" y="48" class="small t-bad">occluded</text>
+      <text x="181" y="84" class="mid small t-cpu">outside</text>
+    </svg>
+    <h4>Culling</h4>
+    <p>What was drawn, when, and what was left out? Shows culling that keeps too much or too little.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A grid of screen tiles. Light circles overlap some tiles; each tile shows how many lights reach it: 0, 1, 2 or 3.">
+      <path d="M30,20 H210 M30,55 H210 M30,90 H210 M30,20 V90 M90,20 V90 M150,20 V90 M210,20 V90" class="grid"/>
+      <circle cx="90" cy="55" r="34" class="light o-50"/>
+      <circle cx="150" cy="40" r="30" class="light o-50"/>
+      <text x="60" y="42" class="mid">1</text><text x="120" y="42" class="mid">2</text><text x="180" y="42" class="mid">1</text>
+      <text x="60" y="77" class="mid">1</text><text x="120" y="77" class="mid">2</text><text x="180" y="77" class="mid">0</text>
+      <text x="120" y="112" class="mid small">lights per cluster</text>
+    </svg>
+    <h4>Light count</h4>
+    <p>How many lights does each pixel shade? Shows lights whose range is too large.</p>
+  </div>
+</div>
+
+<h2 id="swap"><span class="n">2</span>Swap the shading, keep the rest</h2>
+
+<p>A debug view must show the frame as it really is. So it does not draw the scene some other way: it runs the same draws, with the same vertex shader, depth test and culling, and changes only what the fragment shader writes. A cut-out leaf still cuts, a skinned arm is still where the skin pass put it.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="The scene's fragment shader in two forms. Both read the same inputs: position, normal, tangent, UVs and the material, and both test alpha first. The normal one then shades with every light and the environment and writes radiance. The debug one writes one value instead: a normal, a UV, a count of 1, a LOD color, a culling color, or a light count.">
+    <rect x="10" y="20" width="170" height="160" rx="6" class="paper"/>
+    <text x="95" y="42" class="mid title">inputs</text>
+    <text x="95" y="66" class="mid small">position, normal</text>
+    <text x="95" y="84" class="mid small">tangent, UVs</text>
+    <text x="95" y="102" class="mid small">material</text>
+    <text x="95" y="130" class="mid small">alpha test: a cut-out</text>
+    <text x="95" y="146" class="mid small">still discards</text>
+    <rect x="260" y="20" width="230" height="70" rx="6" class="shader"/>
+    <text x="375" y="46" class="mid">normal: shade</text>
+    <text x="375" y="66" class="mid small">lights, shadows, environment</text>
+    <rect x="260" y="110" width="230" height="70" rx="6" class="accent"/>
+    <text x="375" y="136" class="mid">debug: one value</text>
+    <text x="375" y="156" class="mid small">normal, UV, 1, LOD, phase, lights</text>
+    <path d="M180,80 H220 V55 H256 M220,80 V145 H256" class="arrow" marker-end="url(#ah)"/>
+    <rect x="570" y="20" width="180" height="70" rx="6" class="mem"/>
+    <text x="660" y="46" class="mid">radiance</text>
+    <text x="660" y="66" class="mid small">tone mapped</text>
+    <rect x="570" y="110" width="180" height="70" rx="6" class="mem"/>
+    <text x="660" y="136" class="mid">value or count</text>
+    <text x="660" y="156" class="mid small">shown as it is, or heat</text>
+    <path d="M490,55 H566 M490,145 H566" class="arrow mem" marker-end="url(#ah-mem)"/>
+  </svg>
+  <figcaption>The debug shader is the scene's shader with its last step replaced. The target it writes and the passes after it stay the same.</figcaption>
+</figure>
+
+<div class="formula">
+  <p class="eq">normal view = n × 0.5 + 0.5</p>
+  <p class="eq">UV view = (fract(u), fract(v), 0) × checker</p>
+  <p class="eq">checker = 1 or 0.7, 8 squares per unit</p>
+  <dl>
+    <dt>n</dt><dd>The shading normal in world space, after the normal map, turned around on a back face. Each part is −1 to 1, so it is moved to 0 to 1: a surface facing +y is (0.5, 1, 0.5), light green.</dd>
+    <dt>fract</dt><dd>The part after the point. A UV of 2.3 shows as 0.3: a texture that repeats shows the same ramp again. The checker shows how big a texel is and where UVs are stretched.</dd>
+  </dl>
+</div>
+
+<h2 id="overdraw"><span class="n">3</span>Count with additive blending</h2>
+
+<p>Overdraw is how many fragments were shaded at one pixel. Only one of them is seen; the others were work for nothing. To count them, every fragment writes 1 and the target adds what it gets: <b>additive blending</b>, result = source + target.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 220" role="img" aria-label="Seen from the side: a camera ray through three surfaces A, B and C at three depths. Drawn back to front, C, then B, then A each pass the depth test, so the pixel counts 3. Drawn front to back, A passes and writes its depth; B and C are behind it and fail, so the pixel counts 1.">
+    <path d="M36,110 L20,100 L20,120 Z" class="cpu"/>
+    <path d="M36,110 H400" class="arrow light dashed"/>
+    <path d="M140,60 V160" class="surface"/><text x="140" y="52" class="mid">A</text>
+    <path d="M240,60 V160" class="surface"/><text x="240" y="52" class="mid">B</text>
+    <path d="M340,60 V160" class="surface"/><text x="340" y="52" class="mid">C</text>
+    <text x="240" y="190" class="mid small">near → far</text>
+
+    <text x="440" y="40" class="title">back to front: C, B, A</text>
+    <rect x="440" y="52" width="40" height="28" class="ok"/><text x="460" y="71" class="mid small">C</text>
+    <rect x="486" y="52" width="40" height="28" class="ok"/><text x="506" y="71" class="mid small">B</text>
+    <rect x="532" y="52" width="40" height="28" class="ok"/><text x="552" y="71" class="mid small">A</text>
+    <text x="590" y="71" class="t-bad">count 3</text>
+
+    <text x="440" y="120" class="title">front to back: A, B, C</text>
+    <rect x="440" y="132" width="40" height="28" class="ok"/><text x="460" y="151" class="mid small">A</text>
+    <rect x="486" y="132" width="40" height="28" class="ghost"/><text x="506" y="151" class="mid small">B</text>
+    <rect x="532" y="132" width="40" height="28" class="ghost"/><text x="552" y="151" class="mid small">C</text>
+    <text x="590" y="151" class="t-ok">count 1</text>
+    <text x="440" y="190" class="small">dashed: failed the depth test before shading</text>
+  </svg>
+  <figcaption>The depth test stays on, so the count is the real shading work: a fragment that fails the test before its shader runs is not counted.</figcaption>
+</figure>
+
+<p>With the depth test on, the order of the draws matters. Front to back, the first surface writes its depth and the GPU rejects the ones behind it before they are shaded. Back to front, each nearer surface passes again. A see-through surface does not write depth, so everything behind it still counts.</p>
+
+<figure class="lab" data-lab="overdraw-count" data-title="Count the fragments of three quads">
+  <figcaption>Change the draw order and switch the depth test. Find the order where every covered pixel shades exactly once.</figcaption>
+</figure>
+
+<p>The count is shown as a <b>heat color</b>, one step for each doubling, because overdraw from 1 to 4 is normal and 30 is a problem:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Count</th><td>0</td><td>1</td><td>2</td><td>4</td><td>8</td><td>16</td><td>32</td><td>64 and more</td></tr>
+  <tr><th>Color</th><td>black</td><td>dark blue</td><td>blue</td><td>cyan</td><td>green</td><td>yellow</td><td>red</td><td>white</td></tr>
+</table>
+</div>
+
+<p>Counts between two steps blend between their colors. The lab above uses the same ramp.</p>
+
+<h2 id="lights"><span class="n">4</span>Count the lights of a pixel</h2>
+
+<p>With <a href="clustered-lighting.html">clustered lighting</a>, a pixel shades only the lights of its cluster: the box of the view, a screen tile times a depth slice, that it falls in. The light count view writes that number, plus the lights that reach every pixel (a sun), and shows it with the same heat ramp.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="Seen from the side: the view cut into depth slices. A pixel's ray hits a surface inside one cluster. Two light spheres reach that cluster, and a sun reaches everything, so the pixel counts 3.">
+    <path d="M36,100 L20,90 L20,110 Z" class="cpu"/>
+    <path d="M36,100 L700,20 M36,100 L700,180" class="arrow dashed"/>
+    <path d="M150,86 V114 M250,74 V126 M370,60 V140 M520,42 V158 M700,20 V180" class="grid"/>
+    <rect x="370" y="80" width="150" height="34" class="accent o-50"/>
+    <path d="M36,100 L450,96" class="arrow light" marker-end="url(#ah-light)"/>
+    <circle cx="450" cy="96" r="4" class="handle"/>
+    <circle cx="420" cy="70" r="50" class="light o-50"/>
+    <circle cx="560" cy="110" r="60" class="light o-50"/>
+    <circle cx="660" cy="150" r="22" class="light o-50"/>
+    <text x="445" y="132" class="mid small">this pixel's cluster</text>
+    <text x="660" y="190" class="mid small">misses</text>
+    <text x="40" y="180" class="small">count = 2 lights of the cluster + 1 sun = 3</text>
+  </svg>
+  <figcaption>The count is what the shading loops over, so it is the light part of the pixel's cost. A light whose sphere is much bigger than its visible glow raises the count for nothing.</figcaption>
+</figure>
+
+<h2 id="lods"><span class="n">5</span>Tint by LOD</h2>
+
+<p>A mesh with <a href="lod-selection.html">levels of detail</a> is drawn with one of its index ranges. The LOD view tints each draw by the level it uses, 0 to 7, and keeps a little light from the camera so the shapes stay readable. Distant objects should change color in rings around the camera. A pop you see in the shaded image shows here as a draw that changes color.</p>
+
+<p>The view does not need a new input: the draw already holds the first index of its range, and the mesh lists where each level's range starts. The level whose range starts there is the one drawn.</p>
+
+<h2 id="culling"><span class="n">6</span>Show what culling did</h2>
+
+<p><a href="occlusion-culling.html">Two-pass occlusion culling</a> draws in two passes. The <b>early</b> pass draws what was visible last frame. A Hi-Z is built from that depth, and the <b>late</b> pass draws what the early one missed and is visible now. The culling view colors each drawn object by its pass, and draws every culled object as a see-through <b>ghost</b>: a box around the bounding sphere that culling tested.</p>
+
+<div class="legend">
+  <span><i class="ok"></i>drawn early: seen last frame</span>
+  <span><i class="hot"></i>drawn late: seen only after the Hi-Z</span>
+  <span><i class="bad"></i>ghost: in the frustum, occluded</span>
+  <span><i class="cpu"></i>ghost: outside the frustum</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 290" role="img" aria-label="Seen from above. A frozen camera's frustum, dashed, and the live camera, moved to the side, that looks at it. Inside the frozen frustum: green boxes in front of a wall, drawn; a yellow box that came into view, drawn late; red ghosts behind the wall, occluded. Outside the frozen frustum: blue ghosts. The live camera sees all of them, the ghosts through what is in front.">
+    <path d="M60,250 L330,30 M60,250 L520,170" class="arrow hot dashed"/>
+    <path d="M66,250 L48,240 L48,260 Z" class="accent"/>
+    <text x="60" y="276" class="mid small t-hot">frozen camera</text>
+    <path d="M240,105 L380,175" class="surface"/><text x="392" y="186" class="small">wall</text>
+    <rect x="170" y="195" width="26" height="20" class="ok"/>
+    <rect x="230" y="200" width="26" height="20" class="ok"/>
+    <rect x="230" y="140" width="26" height="20" class="accent"/>
+    <rect x="300" y="90"  width="26" height="20" class="ghost"/><rect x="300" y="90" width="26" height="20" class="bad o-50"/>
+    <rect x="370" y="120" width="26" height="20" class="ghost"/><rect x="370" y="120" width="26" height="20" class="bad o-50"/>
+    <rect x="200" y="30"  width="26" height="20" class="ghost"/><rect x="200" y="30" width="26" height="20" class="cpu o-50"/>
+    <rect x="120" y="60"  width="26" height="20" class="ghost"/><rect x="120" y="60" width="26" height="20" class="cpu o-50"/>
+    <rect x="470" y="230" width="26" height="20" class="ghost"/><rect x="470" y="230" width="26" height="20" class="cpu o-50"/>
+    <path d="M690,140 L706,130 L706,150 Z" class="cpu"/>
+    <text x="700" y="170" class="mid small t-cpu">live camera</text>
+    <path d="M688,140 L460,60 M688,140 L460,250" class="arrow cpu dashed o-50"/>
+    <text x="560" y="40" class="small">the live camera sees the ghosts</text>
+    <text x="560" y="56" class="small">through what is in front of them</text>
+  </svg>
+  <figcaption>With culling frozen, the frozen camera's choices stay while the live camera flies around them. The ghosts are drawn without a depth test, so nothing hides them.</figcaption>
+</figure>
+
+<p>A ghost is a box, not the object's mesh. Drawing every culled mesh again would cost as much as drawing the whole scene without culling: in a city of 200 million triangles, about as much as 30 ms. The box is 12 triangles per object, and it is the shape culling really tested.</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A box for every draw of the scene. Its vertex shader asks whether the draw was drawn; if so, the box's triangles are moved behind the near plane and vanish.">
+      <rect x="20" y="30" width="60" height="40" class="ok"/><text x="50" y="55" class="mid small">drawn</text>
+      <path d="M80,50 H120" class="arrow" marker-end="url(#ah)"/>
+      <text x="170" y="54" class="mid small">dropped</text>
+      <rect x="20" y="80" width="60" height="40" class="ghost"/><text x="50" y="105" class="mid small">culled</text>
+      <path d="M80,100 H120" class="arrow" marker-end="url(#ah)"/>
+      <text x="170" y="104" class="mid small t-bad">ghost</text>
+    </svg>
+    <h4>Ghost boxes</h4>
+    <p>A box around each draw's bounding sphere, after the last pass. The vertex shader drops the ones culling kept.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Three ghost layers stacked: each adds a little red, so a pixel behind three ghosts is redder than one behind one.">
+      <rect x="40" y="30" width="80" height="60" class="bad o-25"/>
+      <rect x="70" y="45" width="80" height="60" class="bad o-25"/>
+      <rect x="100" y="60" width="80" height="60" class="bad o-25"/>
+      <text x="200" y="110" class="mid small">more red</text>
+    </svg>
+    <h4>Added, not tested</h4>
+    <p>No depth test and additive blending: a ghost shows through walls, and more ghosts make a brighter color.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A frustum drawn as lines, dashed, staying where it was frozen while the camera moves away.">
+      <path d="M30,100 L180,30 M30,100 L180,120 M180,30 V120" class="arrow hot dashed"/>
+      <path d="M200,70 L216,62 L216,78 Z" class="cpu"/>
+      <text x="90" y="40" class="mid small t-hot">frozen frustum</text>
+    </svg>
+    <h4>Freeze</h4>
+    <p>Keep one frame's frustum, LOD camera and visibility. The early pass then culls with them; the late pass stops.</p>
+  </div>
+</div>
+
+<h2 id="display"><span class="n">7</span>Show the values as they are</h2>
+
+<p>A tone curve and exposure would change a value: a normal of 0.5 would not show as 0.5. So while a debug view is on, the tone map pass binds a <b>debug display</b> instead. It shows a value as the color it is, or a count as its heat color, and the bloom adds nothing.</p>
+
+<ol class="flow">
+  <li class="shader"><b>Scene passes</b> write a value, or add 1, into the HDR target.</li>
+  <li class="gpu"><b>MSAA resolve or TAA</b> runs as usual.</li>
+  <li class="shader"><b>Debug display</b> shows the value, or round(count) as heat.</li>
+  <li class="gpu"><b>UI</b> draws over the image.</li>
+</ol>
+
+<div class="callout">
+  <strong>Anti-aliasing stays on</strong>
+  <p>Inside a surface every sample holds the same value, so the resolve and TAA give it back exactly. Only at edges do two values mix: a normal there is a blend of two normals, and a count is rounded to the nearer one. The image stays smooth and the inside of each surface stays exact.</p>
+</div>
+
+<h2 id="cost"><span class="n">8</span>Free while it is off</h2>
+
+<p>A debug tool must not slow down the frames it is meant to measure. A switch in the shader would cost every frame a branch, and its code would make the shader bigger even when it never runs.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="One shader with an if: if debug, write a value, else shade. Every frame pays for the test and the larger shader.">
+      <rect x="10" y="10" width="300" height="92" rx="4" class="paper"/>
+      <text x="22" y="34" class="mono small">if (debugView != NONE)</text>
+      <text x="40" y="54" class="mono small">return debugValue();</text>
+      <text x="22" y="74" class="mono small">return shade();</text>
+      <text x="22" y="124" class="small t-bad">every frame pays for the test</text>
+    </svg>
+    <h4>A branch</h4>
+    <p>One shader for both. The normal frame carries the debug code.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Two shaders from one file: one compiled without the define, which only shades; one compiled with it, which only writes the value. The engine picks one per draw run.">
+      <rect x="10" y="10" width="140" height="70" rx="4" class="shader"/><text x="80" y="40" class="mid small">no define</text><text x="80" y="58" class="mid small">shade()</text>
+      <rect x="170" y="10" width="140" height="70" rx="4" class="accent"/><text x="240" y="40" class="mid small">DEBUG_VIEW</text><text x="240" y="58" class="mid small">debugValue()</text>
+      <text x="22" y="124" class="small t-ok">the CPU picks one per draw run</text>
+    </svg>
+    <h4>A variant</h4>
+    <p>One file, compiled twice. The debug one is made the first time a view is chosen.</p>
+  </div>
+</div>
+
+<h2 id="pitfalls"><span class="n">9</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>The overdraw view is blue where nothing was drawn</dt><dd>Something is drawn there: a sky box, a ground plane far away. The view counts every fragment, even of a mesh you think of as background.</dd></div>
+  <div><dt>Overdraw is high on a flat wall</dt><dd>The draws behind it came first: back-to-front order, or a mesh drawn before the one in front. Sort opaque draws front to back, or draw a depth pre-pass.</dd></div>
+  <div><dt>A green object also has a red ghost</dt><dd>The early pass drew it, because it was seen last frame, and this frame's late test found it hidden. It is drawn now and will be culled next frame.</dd></div>
+  <div><dt>Ghost stripes over a green surface look yellow or white</dt><dd>A ghost adds its red to what is under it, and many ghosts add up. Read the stripes as "culled here", and their brightness as how many; the color of a stripe on black is its kind.</dd></div>
+  <div><dt>Everything is a ghost after freezing</dt><dd>Culling froze on a frame that had seen nothing yet, like the first frame, or the object appeared after the freeze. Frozen visibility never sees anything new. Freeze after a few frames, once the scene is loaded.</dd></div>
+  <div><dt>A see-through object looks wrong while frozen</dt><dd>Without a late pass its draws are not sorted back to front any more. The culling is right; only the order of the see-through draws changed.</dd></div>
+  <div><dt>Normals look right but the light is wrong</dt><dd>The view shows the normal the shading uses. Check the light count and the light itself next.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
+
+<p>An application calls <code>Engine::setDebugView</code> with a <code>DebugView</code>, and <code>Engine::setCullingFrozen</code>. The RASM window (<kbd>F1</kbd>, with <code>EngineConfig::ui</code>) has both under <b>Debug views</b>, with a color key for the view. <code>examples/15_debug_ui</code> and <code>examples/05_city</code> take <samp>--debug-view overdraw</samp> and <samp>--freeze-culling</samp>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="A scene view's passes with a debug view on. Cull 1, then Scene 1 with the debug pipelines and push constant argument 0, Hi-Z, Cull 2, Scene 2 with argument 1, Transparent with the debug blend pipeline and then the ghosts of the culling view. The sky is not drawn. Then the tone map binds the debug display or heat pipeline, and bloom dispatches nothing. With culling frozen, Hi-Z, Cull 2 and Scene 2 record nothing.">
+    <text x="10" y="22" class="title">a shaded scene view, debug view on</text>
+    <rect x="10"  y="36" width="80"  height="52" rx="6" class="gpu"/><text x="50"  y="58" class="mid small">Cull 1</text><text x="50" y="76" class="mid small">early</text>
+    <rect x="100" y="36" width="110" height="52" rx="6" class="shader"/><text x="155" y="58" class="mid small">Scene 1</text><text x="155" y="76" class="mid small">debug, arg 0</text>
+    <rect x="220" y="36" width="70"  height="52" rx="6" class="gpu"/><text x="255" y="58" class="mid small">Hi-Z</text>
+    <rect x="300" y="36" width="80"  height="52" rx="6" class="gpu"/><text x="340" y="58" class="mid small">Cull 2</text><text x="340" y="76" class="mid small">late</text>
+    <rect x="390" y="36" width="110" height="52" rx="6" class="shader"/><text x="445" y="58" class="mid small">Scene 2</text><text x="445" y="76" class="mid small">debug, arg 1</text>
+    <rect x="510" y="36" width="240" height="52" rx="6" class="shader"/><text x="630" y="58" class="mid small">Transparent</text><text x="630" y="76" class="mid small">debug blend run, then ghosts</text>
+    <path d="M220,96 H500" class="arrow hot dashed"/>
+    <text x="360" y="112" class="mid small t-hot">frozen: record nothing</text>
+    <rect x="10"  y="140" width="230" height="52" rx="6" class="mem"/><text x="125" y="162" class="mid small">scene_hdr: values or counts</text><text x="125" y="180" class="mid small">no sky behind them</text>
+    <rect x="260" y="140" width="150" height="52" rx="6" class="gpu"/><text x="335" y="162" class="mid small">MSAA resolve / TAA</text><text x="335" y="180" class="mid small">as usual</text>
+    <rect x="430" y="140" width="80"  height="52" rx="6" class="gpu o-50"/><text x="470" y="162" class="mid small">Bloom</text><text x="470" y="180" class="mid small">nothing</text>
+    <rect x="530" y="140" width="220" height="52" rx="6" class="shader"/><text x="640" y="162" class="mid small">Tone Map</text><text x="640" y="180" class="mid small">fragDebug or fragDebugHeat</text>
+    <path d="M240,166 H256" class="arrow" marker-end="url(#ah)"/><path d="M410,166 H426" class="arrow" marker-end="url(#ah)"/><path d="M510,166 H526" class="arrow" marker-end="url(#ah)"/>
+    <text x="10" y="226" class="small">SceneData::debugView says which view; PushConstants::argument says the pass (0 early, 1 late).</text>
+    <text x="10" y="246" class="small">Shadow maps and every other pass run unchanged.</text>
+  </svg>
+  <figcaption>The graph is the same with and without a debug view: only the pipelines each pass binds change. That is why switching a view needs no new graph.</figcaption>
+</figure>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Variant</td><td>the scene shader with a define</td><td><code>rasm.slang</code>'s <code>fragMain</code> with <code>RASM_DEBUG_VIEW</code>, for each alpha mode (MASK with <code>RASM_ALPHA_MASK</code> discards instead of alpha-to-coverage). <code>getDebugColor</code> in <code>shaders/lib/debugViews.slang</code> writes the value. The view is <code>SceneData::debugView</code>, the spare word that keeps <code>animatedTransformsPtr</code> 8-byte aligned, so <code>SceneData</code> keeps its size.</td></tr>
+  <tr><td>Pipelines</td><td>made when a view is first chosen</td><td><code>ShadedPipelines::debug</code> (no blending) and <code>ShadedPipelines::overdraw</code> (<code>BlendMode::ADDITIVE</code>), per sample count and motion target, made in <code>prepareSceneView</code> like the MASK and BLEND ones. <code>drawSceneView</code> and <code>drawTransparent</code> pick them per draw run from <code>SceneView::debugView</code>, the view this frame draws.</td></tr>
+  <tr><td>Overdraw</td><td>add 1 with the depth test on</td><td>Both draw passes and Transparent add; the opaque runs write depth, the blend run does not. Fragments write zero motion, so TAA's motion target is left as it was.</td></tr>
+  <tr><td>LOD</td><td>the level whose range the draw uses</td><td><code>getDrawLod</code>: the draw's <code>firstIndex</code> against <code>GeometryData::lods</code>, in the vertex shader.</td></tr>
+  <tr><td>Light count</td><td>lights of the pixel's cluster, plus global ones</td><td><code>getDebugLightCount</code>: the shadowed lights, the other global lights, and the cluster's lights (every local light when the view has no clusters): the same loops as <code>shadePBR</code>.</td></tr>
+  <tr><td>Early and late</td><td>color by pass</td><td><code>PushConstants::argument</code> of the draw passes: <code>CULL_EARLY</code> or <code>CULL_LATE</code>. The blend run is culled by the late pass, so see-through draws show late.</td></tr>
+  <tr><td>Ghosts</td><td>a box per culled object</td><td><code>drawCullingGhosts</code> in the Transparent pass: one instanced draw of 36 vertices per draw of the list, a box around <code>getWorldSphere</code>'s sphere, back faces culled, in diagonal bands so the surface shows between them; <code>shaders/passes/debugGhosts.slang</code>, a pipeline with <code>PipelineDesc::depthTest</code> false and additive blending. A draw counts as drawn when the visibility buffer saw it (with occlusion culling) or when culling gave it a slot (frustum culling only).</td></tr>
+  <tr><td>Freeze</td><td>one frame's culling kept</td><td><code>SceneView::frozen</code>: the frustum planes, <code>lodPixelsPerUnit</code> and <code>lodDepthPlane</code> of the frame it froze in. <code>SceneView::late</code> is false, so the Hi-Z, Cull 2 and Scene 2 record nothing. The early pass keeps the blend run too (<code>SceneData::blendRun</code> set to none) and the sort is skipped. Shaded views only: shadow maps follow the camera, with the frozen LOD camera, so a surface and its shadow keep the same triangles. A draw that the frozen visibility never saw (a new entity, or a mesh that loaded after the freeze) stays hidden until culling is unfrozen. <code>cull.slang</code> is unchanged.</td></tr>
+  <tr><td>Frozen frustum</td><td>lines in the world</td><td><code>drawFrozenFrustums</code> on ImGui's background draw list, with the UI on: the near rectangle, the edges, and a far rectangle at 200 times the near distance.</td></tr>
+  <tr><td>Display</td><td>values as they are, counts as heat</td><td><code>fragDebug</code> and <code>fragDebugHeat</code> in <code>toneMap.slang</code>, for the view the camera's scene views really drew (<code>getDrawnDebugView</code>: a view whose scene still loads, or whose debug pipeline failed, draws shaded and is tone mapped); <code>bloomRuns</code> is false then. No sky is drawn, so the clear color (<code>BACKGROUND_COLOR</code>, near black) is behind the scene and a count starts at 0.</td></tr>
+  <tr><td>TAA</td><td>—</td><td>A new view starts each camera's history over, so it does not blend with the frames before.</td></tr>
+</table>
+</div>
+
+<div class="stats" id="cost-numbers">
+  <div><b>0 ms</b><span>with <code>DebugView::NONE</code>: the same pipelines and passes as before</span><small>every GPU timer of 09 and 15 against main, Release, within ±2% run to run</small></div>
+  <div><b>1</b><span>compare per draw run on the CPU</span><small><code>SceneView::debugView</code></small></div>
+  <div><b>0 B</b><span>more <code>SceneData</code></span><small>the view uses a padding word</small></div>
+</div>
+
+<div class="stats">
+  <div><b>4.1–4.4 ms</b><span>GPU frame in each view (5.0 ms shaded)</span><small>09 at 1920 × 1080, RTX 3060, Release: no lights, sky or bloom</small></div>
+  <div><b>0.6 ms</b><span>the ghost boxes of 05_city, 145.6K draws</span><small>1.7 ms frozen, with many boxes outside</small></div>
+  <div><b>32 ms</b><span>the same ghosts as meshes at LOD 0</span><small>202M triangles: why they are boxes</small></div>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>API</td><td><code>Engine::setDebugView</code>, <code>Engine::setCullingFrozen</code>, <code>getDrawnDebugView</code> in <code>src/renderer/debugViews.cpp</code>; <code>DebugView</code> in <code>include/rasm/types.h</code></td></tr>
+  <tr><td>Pipelines, freeze, draws, ghosts</td><td><code>prepareSceneView</code>, <code>drawSceneView</code>, <code>drawTransparent</code>, <code>drawCullingGhosts</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Shaders</td><td><code>shaders/lib/debugViews.slang</code>, <code>shaders/passes/rasm.slang</code>, <code>shaders/passes/debugGhosts.slang</code>, <code>shaders/passes/toneMap.slang</code></td></tr>
+  <tr><td>Display</td><td><code>addToneMapPass</code> in <code>src/renderer/toneMap.cpp</code>, <code>bloomRuns</code> in <code>src/renderer/bloom.cpp</code></td></tr>
+  <tr><td>RASM window, frustum lines</td><td><code>drawEngineWindow</code>, <code>drawFrozenFrustums</code> in <code>src/renderer/engineUi.cpp</code></td></tr>
+  <tr><td>Blend and depth state</td><td><code>BlendMode::ADDITIVE</code>, <code>PipelineDesc::depthTest</code>, <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>The normal shaders get no debug branch: debug code lives inside <code>#if defined(RASM_DEBUG_VIEW)</code>.</li>
+    <li><code>DebugView</code>'s numbers match the <code>DEBUG_VIEW_*</code> constants of <code>debugViews.slang</code> (a <code>static_assert</code> in <code>gpuScene.cpp</code>), and the RASM window's color keys match the shaders' colors.</li>
+    <li>No time and no random numbers in a view, so a view's image is the same in every run.</li>
+    <li>A new value a view needs goes into the variant or into <code>SceneData</code>'s existing words, through <code>gpu-struct-sync</code>; never into the normal path.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>The <a href="occlusion-culling.html">two-pass occlusion culling</a>, <a href="clustered-lighting.html">clustered lighting</a> and <a href="lod-selection.html">LOD selection</a> guides: what the culling, light count and LOD views show.</li>
+  <li><a href="immediate-mode-ui.html">Immediate-mode UI</a>: the RASM window the views are chosen in.</li>
+  <li>RenderDoc's overlays (wireframe, depth test, overdraw) do the same on a captured frame.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

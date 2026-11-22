@@ -275,12 +275,14 @@ private:
 {
     NONE,
     PREMULTIPLIED_ALPHA,
+    ADDITIVE,
 };</pre>
   <div class="body">
     <p>How a pipeline's colors mix with what the target holds (<a href="low-level.html#PipelineDesc"><code>PipelineDesc::blendMode</code></a>).</p>
     <dl>
       <dt>NONE</dt><dd>The shader's color replaces the target's.</dd>
       <dt>PREMULTIPLIED_ALPHA</dt><dd>result = source + (1 − source alpha) × target, for color and alpha. The shader outputs its color already multiplied by its alpha. This is the "over" operator of see-through (glTF <code>BLEND</code>) draws; see the <a href="../guides/transparency.html">transparency guide</a>.</dd>
+      <dt>ADDITIVE</dt><dd>result = source + target, for color and alpha. Draws that write 1 count the fragments that reach a pixel: the overdraw view does this (<a href="../guides/debug-views.html">Debug views</a>).</dd>
     </dl>
   </div>
 </div>
@@ -351,6 +353,22 @@ private:
 };</pre>
   <div class="body">
     <p>How <code>Engine::render</code> smooths edges (<code>EngineConfig::antiAliasing</code>). <code>MSAA_nX</code> draws the scene with n samples per pixel and resolves them in a pass of the graph (<a href="engine.html#addMsaaResolvePass"><code>addMsaaResolvePass</code></a>); a count the device does not have falls back to the most it has, with a warning. <code>TAA</code> jitters the view and blends the frames (<a href="engine.html#addTaaPass"><code>addTaaPass</code></a>, <a href="../guides/taa.html">Temporal anti-aliasing</a>). See <a href="../guides/msaa.html">MSAA and alpha-to-coverage</a>.</p>
+  </div>
+</div>
+
+<div class="api" id="DebugView">
+  <pre class="sig">enum class DebugView
+{
+    NONE,
+    NORMALS,
+    UVS,
+    OVERDRAW,
+    LODS,
+    CULLING,
+    LIGHT_COUNT,
+};</pre>
+  <div class="body">
+    <p>What the scene's views show instead of their shading (<a href="engine.html#setDebugView"><code>Engine::setDebugView</code></a>). <code>OVERDRAW</code> and <code>LIGHT_COUNT</code> are counts, shown as a heat color. See <a href="engine.html#debug-views">Debug views</a> for what each one shows and <a href="../guides/debug-views.html">the guide</a> for how to read it.</p>
   </div>
 </div>
 

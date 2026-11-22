@@ -89,6 +89,13 @@ namespace rasm
         uint32_t                        blendRun                                                            = gfx::MAX_DRAW_RUNS;
         uint32_t                        groupCount                                                          = 0;
         uint32_t                        hizLevelCount                                                       = 0;
+        bool                            late                                                                = false;
+        DebugView                       debugView                                                           = DebugView::NONE;
+        bool                            frozen                                                              = false;
+        glm::vec4                       frozenPlanes[6]                                                     = {};
+        float                           frozenLodPixelsPerUnit                                              = 0.0f;
+        glm::vec4                       frozenLodDepthPlane                                                 = glm::vec4(0.0f);
+        glm::mat4                       frozenViewProjection                                                = glm::mat4(1.0f);
         uint32_t                        width                                                               = 0;
         uint32_t                        height                                                              = 0;
         bool                            jitter                                                              = false;    // addTaaPass: the projection takes a sub-pixel offset per frame
@@ -101,12 +108,22 @@ namespace rasm
     constexpr uint32_t                  SAMPLE_VARIANTS                                                     = 4;        // 1, 2, 4 and 8 samples
     constexpr uint32_t                  MOTION_VARIANT                                                      = SAMPLE_VARIANTS;  // 1 sample and a MOTION_FORMAT color
 
+    struct DebugPipelines
+    {
+        PipelineHandle                  pipeline                                                            = {};
+        PipelineHandle                  maskPipeline                                                        = {};
+        PipelineHandle                  blendPipeline                                                       = {};
+    };
+
     struct ShadedPipelines
     {
         PipelineHandle                  pipeline                                                            = {};
         PipelineHandle                  maskPipeline                                                        = {};       // alpha-to-coverage with more than one sample
         PipelineHandle                  blendPipeline                                                       = {};
         PipelineHandle                  skyPipeline                                                         = {};
+        DebugPipelines                  debug;
+        DebugPipelines                  overdraw;
+        PipelineHandle                  ghostPipeline                                                       = {};
     };
 
     struct GpuScene

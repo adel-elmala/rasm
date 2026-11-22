@@ -199,14 +199,14 @@ struct SceneData
     float4x4            previousViewProjection; // the frame before's, without jitter, for motion
     float2              jitter;             // NDC offset added to clip x and y (times w): TAA's sub-pixel jitter
     float               textureLodBias;     // added to the material textures' mip level: -1 while jittered, sharper
-    uint32_t            padding;            // keeps animatedTransformsPtr 8-byte aligned
+    uint32_t            debugView;          // rasm::DebugView: what a RASM_DEBUG_VIEW pipeline shows (debugViews.slang); also keeps animatedTransformsPtr 8-byte aligned
     InstanceTransform*  animatedTransformsPtr;  // this slot's rows, written by the Animate pass
     VertexFull*         skinnedVertsPtr;        // this slot's skinned vertices, written by the Skin pass
     VertexFull*         previousSkinnedVertsPtr;    // the other slot's: the frame before's
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.
-// argument is for compute passes: the cull phase or the Hi-Z level (cull.slang).
+// argument is the cull phase (cull.slang, and the draw passes for the culling debug view) or the Hi-Z level.
 struct PushConstants
 {
     SceneData* scene;

@@ -342,7 +342,7 @@ namespace rasm::gfx
         glm::mat4        previousViewProjection;    // the frame before's, without jitter, for motion
         glm::vec2        jitter;                    // NDC offset added to clip x and y (times w): TAA's sub-pixel jitter
         float            textureLodBias;            // added to the material textures' mip level: -1 while jittered, sharper
-        uint32_t         padding;                   // keeps animatedTransformsPtr 8-byte aligned
+        uint32_t         debugView;                 // rasm::DebugView: what a RASM_DEBUG_VIEW pipeline shows; also keeps animatedTransformsPtr 8-byte aligned
         uint64_t         animatedTransformsPtr;     // this slot's InstanceTransform rows, written by the Animate pass
         uint64_t         skinnedVertsPtr;           // this slot's skinned vertices, written by the Skin pass
         uint64_t         previousSkinnedVertsPtr;   // the other slot's, the frame before's
