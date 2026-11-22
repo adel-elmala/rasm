@@ -441,9 +441,10 @@ engine.resetCameraHistory(camera);</code></pre>
   <tr><td><kbd>W</kbd> <kbd>S</kbd></td><td>–</td><td>forward / back, <code>speed</code> units per second</td></tr>
   <tr><td><kbd>A</kbd> <kbd>D</kbd></td><td>–</td><td>left / right</td></tr>
   <tr><td><kbd>Esc</kbd>, closing the window</td><td colspan="2"><code>running</code> returns false from now on</td></tr>
-  <tr><td><kbd>F1</kbd></td><td colspan="2">turns the stats overlay on or off (<code>EngineConfig::showStats</code>)</td></tr>
+  <tr><td><kbd>F1</kbd></td><td colspan="2">shows or hides the stats (<code>EngineConfig::showStats</code>): the RASM window with <code>EngineConfig::ui</code>, else the stats overlay</td></tr>
   <tr><td><kbd>F2</kbd></td><td colspan="2">cycles the forced LOD: by distance, LOD 0, 1, … 7, by distance (<code>EngineConfig::forcedLod</code>)</td></tr>
   <tr><td><kbd>F3</kbd></td><td colspan="2">logs the graph of the next <code>Engine::render</code> (<a href="render-graph.html#dump"><code>RenderGraph::dump</code></a>)</td></tr>
+  <tr><td>A UI window under the mouse, or with the keyboard</td><td colspan="2">with <code>EngineConfig::ui</code>: the camera gets no drag, wheel or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>, and while a text field takes typing <kbd>Esc</kbd> and <kbd>F1</kbd>–<kbd>F3</kbd> do nothing (<a href="engine.html#ui">UI with Dear ImGui</a>)</td></tr>
 </table>
 </div>
 

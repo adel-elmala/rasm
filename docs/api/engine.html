@@ -48,6 +48,9 @@
   <tr><td><a href="#addTaaPass"><code>addTaaPass</code></a></td><td>anti-alias an HDR target over frames (TAA)</td><td>this page</td></tr>
   <tr><td><a href="#addBloomPasses"><code>addBloomPasses</code></a></td><td>add the bloom of an HDR target to a graph</td><td>this page</td></tr>
   <tr><td><a href="#addToneMapPass"><code>addToneMapPass</code></a></td><td>map an HDR target, with its bloom, into the window</td><td>this page</td></tr>
+  <tr><td><a href="#addUiPass"><code>addUiPass</code></a></td><td>draw the ImGui windows over the image</td><td>this page</td></tr>
+  <tr><td><a href="#setUiCallback"><code>setUiCallback</code></a></td><td>your own ImGui windows, every frame</td><td>this page</td></tr>
+  <tr><td><a href="#getUiTexture"><code>getUiTexture</code></a></td><td>a texture as an <code>ImTextureID</code> for <code>ImGui::Image</code></td><td>this page</td></tr>
   <tr><td><a href="#getCurrentFrameResources"><code>getCurrentFrameResources</code></a></td><td>this frame's command buffer and depth</td><td>this page</td></tr>
   <tr><td><a href="#recreateSwapchain"><code>recreateSwapchain</code></a></td><td>rebuild after a resize</td><td>this page</td></tr>
   <tr><td><a href="#waitForLoads"><code>waitForLoads</code></a></td><td>finish every background load now</td><td>this page</td></tr>
@@ -197,7 +200,7 @@ if (!engine.running())
   <tr><td><code>maxAnimatedEntities</code></td><td>2<sup>14</sup> = 16,384</td><td>Entities that have played a clip (<a href="scene.html#playAnimation"><code>playAnimation</code></a>), and entities of a skinned or morphed mesh, which are posed at rest; each keeps its row. 120 bytes each, two copies. A play past it is refused with an error. 0, or more than 65,535 (one Animate group per row), logs an error and the engine does not start.</td></tr>
   <tr><td><code>animationPoolBytes</code></td><td>16 MiB</td><td>The kept nodes, samplers, channel tables and keys of every loaded mesh with clips, uploaded once per mesh. A mesh that does not fit fails to load with an error that names this setting.</td></tr>
   <tr><td><code>maxMorphWeights</code></td><td>2<sup>16</sup> = 65,536</td><td>Morph weights of all posed entities together (<a href="scene.html#setMorphWeights"><code>setMorphWeights</code></a>); each entity of a morphed mesh keeps its range. 4 bytes each, four times: a weight buffer and an override table, each with one copy per frame slot (1 MiB). An entity past it is not posed, with an error that names this setting. 0 logs an error and the engine does not start.</td></tr>
-  <tr><td><code>showStats</code></td><td><code>false</code></td><td>Shows the stats overlay from the first frame. <kbd>F1</kbd> toggles it at runtime.</td></tr>
+  <tr><td><code>showStats</code></td><td><code>false</code></td><td>Shows the stats from the first frame: the RASM window with <code>ui</code>, the stats overlay without. <kbd>F1</kbd> toggles it at runtime.</td></tr>
   <tr><td><code>occlusionCulling</code></td><td><code>true</code></td><td>Two-pass Hi-Z occlusion culling in the <a href="#addScenePasses">scene passes</a>: draws hidden behind others are not drawn. It also makes <code>D32_SFLOAT</code> depth textures sampleable, which <a href="render-graph.html#readDepth"><code>readDepth</code></a> needs (a depth-only target's depth always is, and so is that of a target with a <a href="types.html#MOTION_FORMAT"><code>MOTION_FORMAT</code></a> color, for TAA). <code>false</code> keeps frustum culling only. See <a href="../guides/occlusion-culling.html">occlusion culling</a>.</td></tr>
   <tr><td><code>meshLods</code></td><td><code>true</code></td><td>Builds coarser levels of detail (<a href="scene.html#MeshLod">LODs</a>) of every sub-mesh with 1024 triangles or more as meshes load, on the worker thread for <code>loadMesh</code>. <code>false</code>: meshes have LOD 0 only.</td></tr>
   <tr><td><code>lodErrorPixels</code></td><td><code>1.0f</code></td><td>Culling draws the coarsest LOD whose error stays under this many pixels on screen. Larger is faster and coarser; 0 always draws LOD 0. See <a href="../guides/lod-selection.html">level of detail</a>.</td></tr>
@@ -207,6 +210,7 @@ if (!engine.running())
   <tr><td><code>hostImageCopy</code></td><td><code>true</code></td><td>Fills textures on the CPU through host image copy where the GPU allows it for the format. <code>false</code> copies every texture from the staging ring on the graphics queue instead, as on a GPU without host image copy: for testing that path, or to compare the two. Formats without host image copy use the staging ring either way. See <a href="../guides/gpu-memory.html">GPU memory and uploads</a>.</td></tr>
   <tr><td><code>antiAliasing</code></td><td><code>NONE</code></td><td>How <code>render</code> smooths edges (<a href="types.html#AntiAliasing"><code>AntiAliasing</code></a>): <code>MSAA_2X</code>, <code>MSAA_4X</code> or <code>MSAA_8X</code> draws the scene with that many samples per pixel and resolves them with <a href="#addMsaaResolvePass"><code>addMsaaResolvePass</code></a>; cut-out (MASK) materials then use alpha-to-coverage. A count the device does not have falls back to the most it has, with a warning. <code>TAA</code> gives the scene target a motion color and adds <a href="#addTaaPass"><code>addTaaPass</code></a>. See <a href="../guides/msaa.html">MSAA and alpha-to-coverage</a> and <a href="../guides/taa.html">Temporal anti-aliasing</a>.</td></tr>
   <tr><td><code>bloom</code></td><td><code>false</code></td><td><code>render</code> adds the <a href="#addBloomPasses">bloom passes</a> and mixes them in by the camera's <a href="camera.html#setCameraBloomStrength">bloom strength</a>. Off by default, so an engine update does not change how an application looks. See <a href="../guides/bloom.html">bloom</a>.</td></tr>
+  <tr><td><code>ui</code></td><td><code>false</code></td><td>Runs Dear ImGui: <kbd>F1</kbd> shows the RASM window instead of the stats overlay, and <a href="#setUiCallback"><code>setUiCallback</code></a> adds your windows. Needs a rasm built with the CMake option <code>RASM_IMGUI</code> (on by default); without it, a warning and no UI. Off: ImGui does nothing and costs nothing. See <a href="#ui">UI with Dear ImGui</a>.</td></tr>
 </table>
 </div>
 
@@ -225,11 +229,11 @@ if (!engine.running())
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 306" role="img" aria-label="beginFrame polls events, finishes loads for up to 4 milliseconds, waits for the frame slot, uploads scene changes and acquires a swapchain image. It returns false when the window is minimized, the swapchain cannot be rebuilt, or acquire fails. Then your passes run. endFrame clears the swapchain if no pass drew to it, draws the stats overlay if it is shown, submits the frame's batches and presents.">
+  <svg viewBox="0 0 760 306" role="img" aria-label="beginFrame polls events, finishes loads for up to 4 milliseconds, waits for the frame slot, builds the UI, uploads scene changes and acquires a swapchain image. It returns false when the window is minimized, the swapchain cannot be rebuilt, or acquire fails. Then your passes run. endFrame clears the swapchain if no pass drew to it, draws the UI if no UI pass drew it (or the stats overlay without the UI), submits the frame's batches and presents.">
     <text x="10" y="22" class="title mono">beginFrame(camera)</text>
     <rect x="10"  y="34" width="132" height="50" rx="6" class="cpu"/><text x="76"  y="55" class="mid">pollEvents</text><text x="76"  y="72" class="mid small">input, camera, quit</text>
     <rect x="157" y="34" width="132" height="50" rx="6" class="cpu"/><text x="223" y="55" class="mid">finishLoads</text><text x="223" y="72" class="mid small">up to 4 ms of loads</text>
-    <rect x="304" y="34" width="132" height="50" rx="6" class="cpu"/><text x="370" y="55" class="mid">wait for slot</text><text x="370" y="72" class="mid small">its fences</text>
+    <rect x="304" y="34" width="132" height="50" rx="6" class="cpu"/><text x="370" y="55" class="mid">wait for slot</text><text x="370" y="72" class="mid small">fences, then the UI</text>
     <rect x="451" y="34" width="132" height="50" rx="6" class="mem"/><text x="517" y="55" class="mid">syncGpuScene</text><text x="517" y="72" class="mid small">upload what changed</text>
     <rect x="598" y="34" width="132" height="50" rx="6" class="cpu"/><text x="664" y="55" class="mid">acquire image</text><text x="664" y="72" class="mid small">from the swapchain</text>
     <line x1="142" y1="59" x2="155" y2="59" class="arrow cpu" marker-end="url(#ah-cpu)"/>
@@ -251,7 +255,7 @@ if (!engine.running())
     <text x="175" y="180" class="title mono">endFrame()</text>
     <rect x="10"  y="188" width="150" height="50" rx="6" class="box"/><text x="85"  y="209" class="mid">your passes</text><text x="85"  y="226" class="mid small">graph or beginPass</text>
     <rect x="175" y="188" width="132" height="50" rx="6" class="cpu"/><text x="241" y="209" class="mid">clear if unused</text><text x="241" y="226" class="mid small">no pass drew the window</text>
-    <rect x="322" y="188" width="132" height="50" rx="6" class="cpu"/><text x="388" y="209" class="mid">stats overlay</text><text x="388" y="226" class="mid small">if shown (F1)</text>
+    <rect x="322" y="188" width="132" height="50" rx="6" class="cpu"/><text x="388" y="209" class="mid">UI or overlay</text><text x="388" y="226" class="mid small">if no pass drew it</text>
     <rect x="469" y="188" width="132" height="50" rx="6" class="cpu"/><text x="535" y="209" class="mid">submit</text><text x="535" y="226" class="mid small">each batch</text>
     <rect x="616" y="188" width="132" height="50" rx="6" class="cpu"/><text x="682" y="209" class="mid">present</text><text x="682" y="226" class="mid small">image to the window</text>
     <line x1="160" y1="213" x2="173" y2="213" class="arrow cpu" marker-end="url(#ah-cpu)"/>
@@ -268,7 +272,7 @@ if (!engine.running())
 <div class="api" id="render">
   <pre class="sig">void render(SceneHandle scene, CameraHandle camera);</pre>
   <div class="body">
-    <p>One whole frame of the scene, drawn into the window. The engine keeps a <a href="render-graph.html">render graph</a> with the scene's passes (<a href="#addScenePasses"><code>addScenePasses</code></a> into a 16-bit float target, with <code>EngineConfig::bloom</code> <a href="#addBloomPasses"><code>addBloomPasses</code></a>, then <a href="#addToneMapPass"><code>addToneMapPass</code></a> into the swapchain) and runs it with <code>RenderGraph::execute</code>: <code>beginFrame(camera)</code>, the passes, <code>endFrame</code>. It builds the graph again only when <code>scene</code> or <code>camera</code> is not the same as in the last call, also after a failure: a view whose passes could not be added is not tried again until one of them changes. When <code>beginFrame</code> returns false, no pass runs.</p>
+    <p>One whole frame of the scene, drawn into the window. The engine keeps a <a href="render-graph.html">render graph</a> with the scene's passes (<a href="#addScenePasses"><code>addScenePasses</code></a> into a 16-bit float target, with <code>EngineConfig::bloom</code> <a href="#addBloomPasses"><code>addBloomPasses</code></a>, then <a href="#addToneMapPass"><code>addToneMapPass</code></a> into the swapchain, and with <code>EngineConfig::ui</code> <a href="#addUiPass"><code>addUiPass</code></a> over it) and runs it with <code>RenderGraph::execute</code>: <code>beginFrame(camera)</code>, the passes, <code>endFrame</code>. It builds the graph again only when <code>scene</code> or <code>camera</code> is not the same as in the last call, also after a failure: a view whose passes could not be added is not tried again until one of them changes. When <code>beginFrame</code> returns false, no pass runs.</p>
     <dl>
       <dt>scene</dt><dd>The scene to draw. Invalid: an error is logged once, and the window is only cleared.</dd>
       <dt>camera</dt><dd>Gets this frame's input (mouse, keys) and is the view. It does not need to be in the scene.</dd>
@@ -317,6 +321,7 @@ if (!engine.running())
     bool loadDepth      = false;
     bool storeDepth     = false;
     bool firstWrite     = false;
+    bool encodedColor   = false;
 };</pre>
   <div class="body">
     <p>What a pass does with its attachments. The defaults clear both and throw depth away at the end.</p>
@@ -324,6 +329,7 @@ if (!engine.running())
       <dt>loadColor, loadDepth</dt><dd><code>true</code>: keep what the attachment holds, and draw on top. <code>false</code>: clear it (color to the target's clear color, depth to 0).</dd>
       <dt>storeDepth</dt><dd><code>true</code>: keep depth at the end of the pass, for a later pass that loads it or samples it. Color is always kept. A render graph sets it on the pass before one that loads the target or reads its depth (<a href="render-graph.html#readDepth"><code>readDepth</code></a>).</dd>
       <dt>firstWrite</dt><dd><code>true</code>: no earlier pass drew into the target this frame. For a cube target (<a href="render-graph.html#RenderTargetDesc"><code>RenderTargetDesc::cube</code></a>) a pass draws one face, but the layout change before it covers all six. Only with this set does <code>beginPass</code> let a clearing pass drop the whole cube's old contents; otherwise it keeps the other faces. A render graph sets it on a target's first pass of the frame. Leave it <code>false</code> when you draw a cube's faces by hand: every face you draw stays.</dd>
+      <dt>encodedColor</dt><dd><code>true</code>: draw the swapchain through its UNORM view, where the device has one (<a href="low-level.html#getSwapchainEncodedFormat"><code>getSwapchainEncodedFormat</code></a>). The pass then writes and blends the stored sRGB numbers as they are, and its pipelines must be made for that view's format. A render graph sets it for the <a href="#addUiPass">UI pass</a>. It has no effect on render targets or on a swapchain without the view.</dd>
     </dl>
     <pre><code>// A hand-written frame: two passes on the window, the second on top of the first
 engine.beginPass("Background");
@@ -669,7 +675,7 @@ bool ok = engine.isLoaded(mesh); // false if the file failed to parse</code></pr
     <rect x="580" y="60" width="170" height="50" rx="6" class="box"/><text x="665" y="81" class="mid">frame N+3</text><text x="665" y="98" class="mid small">slot 1</text>
     <path d="M95,60 C95,30 475,30 475,56" class="arrow hot" marker-end="url(#ah-hot)"/>
     <text x="285" y="24" class="mid small t-hot">getFrameStats() now shows frame N</text>
-    <text x="10" y="140" class="small">Measuring is off until the first getFrameStats() call or while the overlay is shown (showStats, F1).</text>
+    <text x="10" y="140" class="small">Measuring is off until the first getFrameStats() call or while the stats are shown (showStats, F1).</text>
     <text x="10" y="158" class="small">So the first values appear a few frames after the first call.</text>
   </svg>
   <figcaption>The GPU results of a frame can only be read after the GPU finished it. The engine reads them when the slot comes back, two frames later.</figcaption>
@@ -747,7 +753,92 @@ engine.endGpuTimer(commandBuffer, timer);</code></pre>
   </div>
 </div>
 
-<h2 id="paths"><span class="n">6</span>Paths and config</h2>
+<h2 id="ui"><span class="n">6</span>UI with Dear ImGui</h2>
+
+<p>With <code>EngineConfig::ui</code> the engine runs <a href="https://github.com/ocornut/imgui">Dear ImGui</a>: <kbd>F1</kbd> shows the RASM window (the frame stats, the forced LOD, the graph dump), and the application adds windows of its own in a callback. How it works: <a href="../guides/immediate-mode-ui.html">Immediate-mode UI</a>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="One frame with the UI. On the CPU, beginFrame reads the input, which goes to ImGui and the camera, then builds the UI: ImGui's new frame, the RASM window, the application's callback and ImGui's render, which copies the vertices into the frame slot's buffers. Then the scene is uploaded. On the GPU, the scene passes and the tone map run, then the UI pass draws the windows over the image.">
+    <text x="10" y="22" class="title t-cpu">CPU, in beginFrame</text>
+    <rect x="10"  y="34" width="120" height="50" rx="6" class="cpu"/><text x="70"  y="55" class="mid">input</text><text x="70"  y="72" class="mid small">to ImGui, camera</text>
+    <rect x="150" y="34" width="330" height="50" rx="6" class="cpu"/><text x="315" y="55" class="mid">build the UI</text><text x="315" y="72" class="mid small">NewFrame · RASM window · your callback · Render</text>
+    <rect x="500" y="34" width="120" height="50" rx="6" class="mem"/><text x="560" y="55" class="mid">vertices</text><text x="560" y="72" class="mid small">slot's buffers</text>
+    <rect x="640" y="34" width="110" height="50" rx="6" class="cpu"/><text x="695" y="55" class="mid">scene upload</text><text x="695" y="72" class="mid small">syncGpuScene</text>
+    <path d="M130,59 H146" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <path d="M480,59 H496" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <path d="M620,59 H636" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="10" y="122" class="title t-gpu">GPU, the graph</text>
+    <rect x="10"  y="134" width="300" height="50" rx="6" class="gpu"/><text x="160" y="155" class="mid">scene passes</text><text x="160" y="172" class="mid small">cull, draw, post</text>
+    <rect x="330" y="134" width="150" height="50" rx="6" class="gpu"/><text x="405" y="155" class="mid">Tone Map</text><text x="405" y="172" class="mid small">into the swapchain</text>
+    <rect x="500" y="134" width="250" height="50" rx="6" class="gpu"/><text x="625" y="155" class="mid">UI</text><text x="625" y="172" class="mid small">ImGui's draws over the image</text>
+    <path d="M310,159 H326" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <path d="M480,159 H496" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <path d="M560,84 V130" class="arrow mem dashed" marker-end="url(#ah-mem)"/>
+  </svg>
+  <figcaption>The UI is built while the frame starts, so what the callback changes shows in the same frame. The UI pass draws last.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Switch</th><th>Off</th><th>On</th></tr>
+  <tr><td>CMake <code>RASM_IMGUI</code> (default ON)</td><td>vcpkg does not install ImGui and nothing links it. <code>EngineConfig::ui</code> logs a warning and stays off.</td><td>rasm links ImGui and defines <code>RASM_IMGUI</code> for itself and for the application.</td></tr>
+  <tr><td><code>EngineConfig::ui</code> (default <code>false</code>)</td><td>No ImGui context, no font texture, no pipeline, no UI pass: nothing runs. <kbd>F1</kbd> shows the stats overlay.</td><td>ImGui is set up at startup. A frame builds a UI only while the RASM window is shown or a callback is set.</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>One ImGui for the whole program</strong>
+  <p>rasm links Dear ImGui PUBLIC, as a static library (vcpkg's <code>imgui</code> port, with its <code>sdl3-binding</code> feature), and owns the context. <code>find_package(rasm)</code> finds it for you and links it into your program, so your code includes <samp>imgui.h</samp> and calls <code>ImGui::</code> functions on that same library. Do not build or link a second copy of ImGui (another version, or its source files in your project): that gives two contexts, or two definitions of the same functions.</p>
+</div>
+
+<div class="api" id="setUiCallback">
+  <pre class="sig">void setUiCallback(std::function&lt;void()&gt; callback);</pre>
+  <div class="body">
+    <p>Your UI. The engine calls <code>callback</code> once per frame between <code>ImGui::NewFrame</code> and <code>ImGui::Render</code>, inside <a href="#beginFrame"><code>beginFrame</code></a>: after the input was read and the frame slot's fence was waited for, before the scene is uploaded. So a light or a transform you change in it shows in the same frame. Call <code>ImGui::</code> functions in it; do not render or begin a frame from it. An empty function removes the callback.</p>
+    <p>Without <code>EngineConfig::ui</code>: logs a warning and the callback never runs. Draw callbacks of ImGui (<samp>ImDrawList::AddCallback</samp>) run while the UI is built, not while it is drawn.</p>
+    <p>ImGui saves no <samp>imgui.ini</samp>: <code>ImGuiIO::IniFilename</code> is <code>nullptr</code>, so nothing is written into the working directory and every run starts the same. To keep window positions between runs, set your own path in the callback's first frame (<code>ImGui::GetIO().IniFilename = path;</code>, with a string that lives as long as the engine).</p>
+    <pre><code>// From examples/15_debug_ui/main.cpp
+engine.setUiCallback(
+    [&amp;]()
+    {
+        ImGui::Begin("Scene");
+        rasm::Light light = engine.getLight(sun);
+        if (ImGui::SliderFloat("Sun intensity", &amp;light.intensity, 0.0f, 10.0f))
+            engine.updateLight(sun, light);
+        ImGui::End();
+    });</code></pre>
+  </div>
+</div>
+
+<div class="api" id="addUiPass">
+  <pre class="sig">bool addUiPass(RenderGraph&amp; graph);</pre>
+  <div class="body">
+    <p>Adds a graphics pass named <code>UI</code> that draws the frame's ImGui windows into the swapchain, over what the passes before it drew. It keeps the image and has no depth. <a href="#render"><code>render</code></a> adds it after the tone map; in your own graph, add it after <a href="#addToneMapPass"><code>addToneMapPass</code></a> (or after your last pass on the swapchain).</p>
+    <dl>
+      <dt>graph</dt><dd>The graph to add to, before its <code>compile</code>.</dd>
+      <dt>returns</dt><dd><code>true</code> when the pass was added; <code>false</code>, with nothing added, when the UI is off.</dd>
+    </dl>
+    <p>A frame whose graph has no UI pass still shows the UI: <a href="#endFrame"><code>endFrame</code></a> draws it in a render pass of its own, so <kbd>F1</kbd> works in every program. That costs one more load and store of the swapchain image, only on frames that have something to draw; the first time, a debug-level log line says so. <code>addUiPass</code> draws in a pass the graph already orders, so it is the cheaper way.</p>
+    <p>The pass draws through the swapchain's UNORM view where the device has one (<a href="low-level.html#getSwapchainEncodedFormat"><code>getSwapchainEncodedFormat</code></a>), so ImGui's colors blend as the sRGB numbers ImGui is designed for; elsewhere they blend in linear light (<code>D31</code>).</p>
+    <pre><code>// From examples/08_ibl/main.cpp
+if (shadow.mapCount == 0 || !engine.addScenePasses(graph, scene, camera, sceneTarget, &amp;shadow, 1) || !engine.addToneMapPass(graph, sceneTarget, camera))
+    return 1;
+
+// The RASM window (F1) over the finished image.
+engine.addUiPass(graph);</code></pre>
+  </div>
+</div>
+
+<div class="api" id="getUiTexture">
+  <pre class="sig">uint64_t getUiTexture(const TextureHandle&amp; texture);</pre>
+  <div class="body">
+    <p>The <code>ImTextureID</code> that shows a sampled texture with <code>ImGui::Image</code>: its bindless slot, plus a bit that says whether its format is sRGB. The image shows the texture's stored colors either way. A loaded texture that no material samples yet gets a bindless slot here. Returns 0, which ImGui draws as nothing, while the texture still loads or for an invalid handle.</p>
+    <pre><code>if (engine.isLoaded(albedo))
+    ImGui::Image(ImTextureRef(engine.getUiTexture(albedo)), ImVec2(256.0f, 256.0f));</code></pre>
+  </div>
+</div>
+
+<h2 id="paths"><span class="n">7</span>Paths and config</h2>
 
 <div class="table-wrap">
 <table>
@@ -774,12 +865,12 @@ engine.endGpuTimer(commandBuffer, timer);</code></pre>
   </div>
 </div>
 
-<h2 id="window"><span class="n">7</span>The window</h2>
+<h2 id="window"><span class="n">8</span>The window</h2>
 
 <div class="split">
   <div>
     <h4>Built-in keys</h4>
-    <p><kbd>Esc</kbd> or closing the window: <code>running()</code> becomes false.<br><kbd>F1</kbd>: shows or hides the stats overlay.<br><kbd>F2</kbd>: cycles <code>forcedLod</code>: by distance, LOD 0, 1, … 7, by distance.<br><kbd>F3</kbd>: logs the graph of the next <code>render</code> call (<a href="render-graph.html#dump"><code>RenderGraph::dump</code></a>).<br>Mouse and <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>: move the camera passed to <code>beginFrame</code> (see <a href="camera.html#pollEvents">camera.html</a>).</p>
+    <p><kbd>Esc</kbd> or closing the window: <code>running()</code> becomes false.<br><kbd>F1</kbd>: shows or hides the stats: the RASM window with <code>EngineConfig::ui</code>, else the overlay.<br><kbd>F2</kbd>: cycles <code>forcedLod</code>: by distance, LOD 0, 1, … 7, by distance.<br><kbd>F3</kbd>: logs the graph of the next <code>render</code> call (<a href="render-graph.html#dump"><code>RenderGraph::dump</code></a>), and shows it in the RASM window.<br>While a UI window is under the mouse or has the keyboard, the camera gets none of it, and while a text field takes typing these keys do nothing.<br>Mouse and <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>: move the camera passed to <code>beginFrame</code> (see <a href="camera.html#pollEvents">camera.html</a>).</p>
   </div>
   <div>
     <h4>Two sizes</h4>
@@ -817,7 +908,7 @@ const float aspect = width / height;</code></pre>
   </div>
 </div>
 
-<h2 id="resources"><span class="n">8</span>Raw GPU resources</h2>
+<h2 id="resources"><span class="n">9</span>Raw GPU resources</h2>
 
 <p>For your own passes you may need buffers and textures that are not part of a scene. These two functions forward to <code>RenderContext</code>. The descriptors (<a href="low-level.html#BufferDesc"><code>BufferDesc</code></a>, <a href="low-level.html#TextureDesc"><code>TextureDesc</code></a>) and how to fill, read and bind the resources are on <a href="low-level.html">RenderContext and resources</a>.</p>
 
