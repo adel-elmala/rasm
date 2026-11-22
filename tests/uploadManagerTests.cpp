@@ -42,6 +42,7 @@ namespace
             src = nullptr;
             copies.clear();
             textureCopies.clear();
+            acquired.clear();
             return true;
         }
         bool end() override { return true; }
@@ -73,9 +74,11 @@ namespace
             src = source;
             textureCopies.insert(textureCopies.end(), list, list + count);
         }
+        void acquireTextures(Texture *const *list, uint32_t count) override { acquired.insert(acquired.end(), list, list + count); }
         void writeTimestamp(QueryPool *, uint32_t) override {}
 
         Buffer *src = nullptr;
+        std::vector<Texture *> acquired;
         std::vector<BufferCopy> copies;
         std::vector<TextureCopy> textureCopies;
         bool inFlight = false;
@@ -194,6 +197,8 @@ namespace
         void destroyHeap(Heap *) override {}
         Queue *getQueue(QueueType) override { return &queue; }
         bool hasAsyncCompute() const override { return false; }
+        bool hasTransferQueue() const override { return false; }
+        bool hasTimestamps(QueueType) const override { return false; }
         bool fillBuffer(Buffer *buffer, const void *data, size_t size, size_t offset) override
         {
             auto *fake = static_cast<FakeBuffer *>(buffer);
@@ -312,7 +317,7 @@ namespace
 
     struct UploadFixture
     {
-        UploadFixture() { REQUIRE(uploads.initialize(device)); }
+        UploadFixture() { REQUIRE(uploads.initialize(device, QueueType::GRAPHICS)); }
 
         ~UploadFixture()
         {
@@ -343,7 +348,7 @@ TEST_CASE("initialize creates a mapped staging ring, two command buffers and a f
 {
     FakeDevice device;
     UploadManager uploads;
-    REQUIRE(uploads.initialize(device));
+    REQUIRE(uploads.initialize(device, QueueType::GRAPHICS));
 
     REQUIRE(device.buffers.size() == 1);
     CHECK(device.buffers[0]->mapped);
@@ -694,7 +699,8 @@ TEST_CASE_FIXTURE(UploadFixture, "every flush waits for the other queue's last s
     auto *dst = createDeviceLocal(64);
     const auto data = makeBytes(64, 7);
     FakeFence computeFence;
-    uploads.waitFor({.fence = &computeFence, .value = 3});
+    const FenceWait computeWait = {.fence = &computeFence, .value = 3};
+    uploads.waitFor(&computeWait, 1);
 
     // Writing a range twice flushes the first write from inside upload.
     REQUIRE(upload(dst, data, 0));
@@ -840,4 +846,135 @@ TEST_CASE_FIXTURE(UploadFixture, "cancelled texture uploads never run, and submi
     REQUIRE(uploads.flush());
     CHECK(device.queue.submissions.size() == 1);
     CHECK_FALSE(cancelled.arrived());
+}
+
+TEST_CASE_FIXTURE(UploadFixture, "a fill in parts copies every row once: the first part discards and only the last one ends the fill")
+{
+    // 256 x 256 RGBA8 with its mips: 256 KiB at mip 0, about 341 KiB in all, in parts of 64 KiB.
+    TextureData data(Format::R8G8B8A8_UNORM, 256, 256, 9, 7);
+    TextureFillProgress progress;
+    uint32_t parts = 0;
+    while (!progress.done)
+    {
+        REQUIRE(uploads.uploadTexture(&data.texture, data.levels.data(), 9, progress, 64 * 1024ull));
+        REQUIRE(uploads.flush());
+        device.finishGpuWork();
+        ++parts;
+    }
+
+    CHECK(data.arrived());
+    CHECK(parts == 6);
+    uint32_t discards = 0;
+    uint32_t lasts = 0;
+    for (const auto &submission : device.queue.submissions)
+    {
+        for (const auto &copy : submission.textureCopies)
+        {
+            discards += copy.discard ? 1 : 0;
+            lasts += copy.last ? 1 : 0;
+        }
+    }
+    CHECK(discards == 1);
+    CHECK(lasts == 1);
+    CHECK(device.queue.submissions.back().textureCopies.back().last);
+}
+
+TEST_CASE_FIXTURE(UploadFixture, "a part with a byte limit stops at a full ring instead of waiting for the GPU")
+{
+    auto *dst = createDeviceLocal(60 * MB);
+    REQUIRE(upload(dst, makeBytes(60 * MB, 1), 0));
+    REQUIRE(uploads.flush());
+
+    // 2048 x 2048 RGBA8 is 16 MiB; parts of 8 MiB do not fit in the 4 MiB left.
+    TextureData data(Format::R8G8B8A8_UNORM, 2048, 2048, 1, 3);
+    TextureFillProgress progress;
+    REQUIRE(uploads.uploadTexture(&data.texture, data.levels.data(), 1, progress, 8 * MB));
+    CHECK(device.blockingWaits == 0);
+    CHECK(progress.row == 0);
+    CHECK_FALSE(progress.done);
+
+    // Once the GPU frees the ring, the parts go on where they stopped.
+    device.finishGpuWork();
+    REQUIRE(uploads.uploadTexture(&data.texture, data.levels.data(), 1, progress, 8 * MB));
+    CHECK(progress.row == 1024);
+    REQUIRE(uploads.uploadTexture(&data.texture, data.levels.data(), 1, progress, 8 * MB));
+    CHECK(progress.done);
+    REQUIRE(uploads.flush());
+    device.finishGpuWork();
+    CHECK(data.arrived());
+    CHECK(device.blockingWaits == 0);
+}
+
+TEST_CASE_FIXTURE(UploadFixture, "the covered value is the one the next flush signals while copies are pending")
+{
+    auto *dst = createDeviceLocal(64);
+    CHECK(uploads.coveredValue() == 0);
+    REQUIRE(upload(dst, makeBytes(64, 1), 0));
+    CHECK(uploads.coveredValue() == 1);
+    REQUIRE(uploads.flush());
+    CHECK(uploads.coveredValue() == 1);
+    CHECK(uploads.lastSubmit().value == 1);
+}
+
+TEST_CASE("on the transfer queue a texture's last copy releases it, and its acquire waits until the CPU saw the copies done")
+{
+    FakeDevice device;
+    UploadManager uploads;
+    REQUIRE(uploads.initialize(device, QueueType::TRANSFER));
+    CHECK(device.commandBuffers.size() == 5);
+
+    // Only a texture of the graphics family needs the acquire; a shared one (with a compute queue) does not.
+    TextureData exclusive(Format::R8G8B8A8_UNORM, 16, 16, 5, 1);
+    exclusive.texture.ownershipTransfer = true;
+    TextureData shared(Format::R8G8B8A8_UNORM, 16, 16, 5, 2);
+    REQUIRE(uploads.uploadTexture(&exclusive.texture, exclusive.levels.data(), 5));
+    REQUIRE(uploads.uploadTexture(&shared.texture, shared.levels.data(), 5));
+    CHECK(uploads.isFilling(&exclusive.texture));
+    REQUIRE(uploads.flush());
+
+    uint32_t lasts = 0;
+    for (const auto &copy : device.queue.submissions.at(0).textureCopies)
+        lasts += copy.last ? 1 : 0;
+    CHECK(lasts == 2);
+    CHECK(uploads.recordAcquires(0) == nullptr);
+
+    CHECK_FALSE(uploads.hasAcquires(0));
+    device.finishGpuWork();
+    CHECK(uploads.hasAcquires(1));
+    auto *acquire = static_cast<FakeCommandBuffer *>(uploads.recordAcquires(1));
+    REQUIRE(acquire != nullptr);
+    CHECK(acquire->acquired == std::vector<Texture *>{&exclusive.texture});
+    CHECK(uploads.isFilling(&exclusive.texture));
+    CHECK_FALSE(uploads.isFilling(&shared.texture));
+
+    // The submit that should have run it failed: the next one records the same acquires.
+    acquire = static_cast<FakeCommandBuffer *>(uploads.recordAcquires(1));
+    REQUIRE(acquire != nullptr);
+    CHECK(acquire->acquired == std::vector<Texture *>{&exclusive.texture});
+
+    FakeFence frame;
+    uploads.acquiresSubmitted(&frame, 1);
+    CHECK_FALSE(uploads.hasAcquires(1));
+    CHECK(uploads.recordAcquires(1) == nullptr);
+    CHECK_FALSE(uploads.isFilling(&exclusive.texture));
+    CHECK(exclusive.arrived());
+    CHECK(shared.arrived());
+    uploads.cleanup();
+    CHECK(device.commandBuffers.empty());
+}
+
+TEST_CASE("a texture destroyed before its acquire is not acquired")
+{
+    FakeDevice device;
+    UploadManager uploads;
+    REQUIRE(uploads.initialize(device, QueueType::TRANSFER));
+    TextureData data(Format::R8G8B8A8_UNORM, 8, 8, 4, 5);
+    data.texture.ownershipTransfer = true;
+    REQUIRE(uploads.uploadTexture(&data.texture, data.levels.data(), 4));
+    REQUIRE(uploads.flush());
+    device.finishGpuWork();
+
+    uploads.cancelUploads(&data.texture);
+    CHECK(uploads.recordAcquires(1) == nullptr);
+    uploads.cleanup();
 }

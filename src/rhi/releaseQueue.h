@@ -8,11 +8,12 @@
 
 namespace rasm::rhi
 {
-    // The timelines a release waits for: the graphics queue's frame fence, the compute queue's fence and the uploads'.
-    constexpr uint32_t                          RELEASE_TIMELINES       = 3;
+    // The timelines a release waits for: the graphics queue's frame fence, the compute queue's fence, the frame uploads' and
+    // the load uploads' (on the transfer queue, or the frame uploads' again without one).
+    constexpr uint32_t                          RELEASE_TIMELINES       = 4;
 
     // Frees that wait until the GPU can no longer use what they free. release() keeps one until the end of the frame,
-    // when tag() gives it the values the frame's submits signal (and the uploads' last one); collect() runs it once
+    // when tag() gives it the values the frame's submits signal (and the uploads' last ones); collect() runs it once
     // every timeline has reached them. Tagged values only grow, so the queue is in order and collect stops at the first
     // one that is not done.
     class ReleaseQueue

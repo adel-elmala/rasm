@@ -53,6 +53,7 @@ namespace rasm
         UNIFORM,
         STORAGE,
         DEVICE_ADDRESS,
+        TRANSFER,                   // only a copy source or destination, never read through its device address: a staging buffer
     };
 
     // Flags: a barrier can wait for, or be waited on by, several stages at once.
@@ -70,9 +71,10 @@ namespace rasm
     {
         GRAPHICS,
         COMPUTE,
+        TRANSFER,                   // the uploads' copy queue (EngineConfig::transferQueue); frames record on the other two
     };
 
-    constexpr uint32_t              QUEUE_COUNT                 = 2;
+    constexpr uint32_t              QUEUE_COUNT                 = 2;        // the queues a frame records on: GRAPHICS and COMPUTE
 
     enum class DescriptorType
     {
@@ -127,6 +129,14 @@ namespace rasm
     {
         const void*                 data                            = nullptr;
         uint64_t                    size                            = 0;
+    };
+
+    // Where a texture filled in parts stands (RenderContext::fillTexturePart): the next mip, and the next row of blocks in it.
+    struct TextureFillProgress
+    {
+        uint32_t                    mip                             = 0;
+        uint32_t                    row                             = 0;
+        bool                        done                            = false;
     };
 
     struct ShaderDesc

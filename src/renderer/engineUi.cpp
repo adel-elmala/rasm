@@ -40,7 +40,7 @@ namespace rasm
             ImGui::Text("Frame   %6.2f ms  %4.0f fps", stats.cpuFrameMs, fps);
             if (stats.gpuTimerCount == 0)
                 return;
-            ImGui::Text("GPU     %6.2f ms", stats.gpuFrameMs);
+            ImGui::Text("GPU     %6.2f ms  uploads %5.2f ms", stats.gpuFrameMs, stats.uploadGpuMs);
             if (ImGui::BeginTable("timers", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
             {
                 for (uint32_t i = 0; i < stats.gpuTimerCount; ++i)

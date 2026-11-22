@@ -222,6 +222,12 @@ namespace rasm
 
     bool Engine::fillTextureLevels(TextureHandle texture, const TextureRaw &raw)
     {
+        TextureFillProgress progress;
+        return fillTextureLevels(texture, raw, progress, UINT64_MAX);
+    }
+
+    bool Engine::fillTextureLevels(TextureHandle texture, const TextureRaw &raw, TextureFillProgress &progress, uint64_t maxBytes)
+    {
         std::vector<TextureLevel> levels(raw.levelSizes.size());
         uint64_t offset = 0;
         for (size_t level = 0; level < levels.size(); ++level)
@@ -229,12 +235,13 @@ namespace rasm
             levels[level] = {.data = raw.levels.data() + offset, .size = raw.levelSizes[level]};
             offset += raw.levelSizes[level];
         }
-        return ctx.fillTexture(texture, levels.data(), static_cast<uint32_t>(levels.size()));
+        return ctx.fillTexturePart(texture, levels.data(), static_cast<uint32_t>(levels.size()), progress, maxBytes);
     }
 
-    // The levels arrive whole, mips included, so this only copies them: on the host, or into the staging ring. They are
-    // freed when the load is erased (P6).
-    void Engine::finishTextureLoad(PendingTextureLoad &load)
+    // The levels arrive whole, mips included, so this only copies them: on the host, or into the staging ring, about
+    // maxBytes per call, so a big texture's copies spread over frames (P24). They are freed when the load is erased (P6).
+    // Returns whether the fill is over: its last part queued, failed, or its texture gone.
+    bool Engine::finishTextureLoad(PendingTextureLoad &load, uint64_t maxBytes)
     {
         ZoneScoped;
 
@@ -242,7 +249,7 @@ namespace rasm
 
         // The texture was destroyed through RenderContext while it decoded, so there is nothing to fill.
         if (!ctx.isAlive(load.handle))
-            return;
+            return true;
         const TextureDesc desc = ctx.getTextureDesc(load.handle);
 
         // A material may already sample the texture, so a failed decode or upload leaves it plain (white, or a flat
@@ -251,16 +258,16 @@ namespace rasm
         const bool decoded = !raw.levelSizes.empty() && raw.format == desc.format && raw.width == desc.width && raw.height == desc.height;
         if (!decoded)
             spdlog::error("Failed to decode texture {}; it stays plain white.", load.path);
-        const bool filled = decoded && fillTextureLevels(load.handle, raw);
+        const bool filled = decoded && fillTextureLevels(load.handle, raw, load.progress, maxBytes);
         if (filled)
-            return;
+            return load.progress.done;
         // A glTF texture's role is its material slot, where white would be a tilted normal or full metal: the materials
         // drop it instead, and read their defaults.
         if (load.levels)
         {
             spdlog::error("Failed to fill texture {}; its materials go without it.", load.path);
             destroyTexture(load.handle);
-            return;
+            return true;
         }
         if (decoded)
             spdlog::error("Failed to fill texture {}; it stays plain white.", load.path);
@@ -268,10 +275,11 @@ namespace rasm
         {
             const std::vector<unsigned char> white(static_cast<size_t>(desc.width) * desc.height * 4, 255);
             ctx.fillTexture(load.handle, white.data());
-            return;
+            return true;
         }
         TextureRaw blank;
         makeBlankKtxLevels(desc.format, desc.width, desc.height, desc.mipLevels, blank);
         fillTextureLevels(load.handle, blank);
+        return true;
     }
 }

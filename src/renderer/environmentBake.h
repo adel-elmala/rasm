@@ -72,6 +72,7 @@ namespace rasm
         uint32_t                cubeSize                    = 0;
         uint32_t                specularSize                = 0;
         uint64_t                bakeValue                   = 0;    // the frame fence value of the frame that baked it
+        uint64_t                uploadValue                 = 0;    // the load uploads' value its image is on the GPU at: it waits for it
     };
 
     struct Environments

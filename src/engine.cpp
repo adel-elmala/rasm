@@ -34,6 +34,8 @@ namespace rasm
     {
         // Main-thread time a frame spends finishing loads. The load that crosses it still finishes.
         constexpr std::chrono::milliseconds LOAD_BUDGET(4);
+        // The bytes of a texture filled between two checks of LOAD_BUDGET: about 0.6 ms of copying into the staging ring.
+        constexpr uint64_t TEXTURE_FILL_PART = 4ull << 20;
 
         ShaderCompiler::Target getShaderCompilerTarget(rasm::Backend backend)
         {
@@ -292,22 +294,37 @@ namespace rasm
             finishReadyLoads(true);
             return;
         }
+        // What is filled is loaded once its copies are done, so the wait for them comes before the one for the next load.
         for (;;)
         {
             const uint64_t seen = workers->completions();
             if (!finishReadyLoads(false))
                 return;
-            workers->waitForCompletion(seen);
+            if (ctx.isLoadUploadDone(loadUploadValue))
+                workers->waitForCompletion(seen);
+            else if (!ctx.waitForLoadUploads(loadUploadValue))
+            {
+                spdlog::error("waitForLoads: the load uploads did not go out; some loads stay unfinished.");
+                return;
+            }
         }
     }
 
     // Returns whether loads are still pending. Textures come last: a finished glTF adds its textures, each filled on its
-    // own (P2), so a big model's copies spread over frames too, and waitForLoads fills them in the same call.
+    // own (P2), so a big model's copies spread over frames too, and waitForLoads fills them in the same call. What this
+    // fills is used only once its copies are done (publishUploadedLoads, in a later frame): a load's uploads need no wait
+    // for the frames, on the transfer queue when there is one, and the frames never wait for them.
     bool Engine::finishReadyLoads(bool budgeted)
     {
         const auto deadline = std::chrono::steady_clock::now() + LOAD_BUDGET;
         auto overBudget = [budgeted, deadline]()
         { return budgeted && std::chrono::steady_clock::now() >= deadline; };
+
+        publishUploadedLoads();
+        ctx.beginLoadUploads();
+        std::vector<MeshHandle> meshes;
+        std::vector<EnvironmentHandle> uploadedEnvironments;
+        std::vector<PendingTextureLoad> filledTextures;
 
         for (size_t i = 0; i < pendingMeshes.size() && !overBudget();)
         {
@@ -319,6 +336,8 @@ namespace rasm
             PendingMeshLoad load = std::move(pendingMeshes[i]);
             pendingMeshes.erase(pendingMeshes.begin() + static_cast<std::ptrdiff_t>(i));
             finishMeshLoad(load);
+            if (isLive(load.handle) && registry.meshes[load.handle.index].state == MeshState::LOADING)
+                meshes.push_back(load.handle);
             // Its textures took their levels' bytes with them (loadMaterial); the rest of the result is freed now.
             const uint64_t held = load.job->ticket.bytes.exchange(0);
             workers->releaseBytes(held - std::min(held, load.movedBytes));
@@ -334,28 +353,98 @@ namespace rasm
             PendingEnvironmentLoad load = std::move(pendingEnvironments[i]);
             pendingEnvironments.erase(pendingEnvironments.begin() + static_cast<std::ptrdiff_t>(i));
             finishEnvironmentLoad(load);
+            uploadedEnvironments.push_back(load.handle);
             workers->releaseBytes(load.job->ticket.bytes.exchange(0));
         }
 
-        // At least one texture a frame, so meshes that use up the budget frame after frame do not hold textures back.
-        // An entry leaves the map before it is filled: a fill that fails destroys its texture.
+        // At least one part of a texture a frame, so meshes that use up the budget frame after frame do not hold textures
+        // back. A texture is filled in parts of TEXTURE_FILL_PART, so one big texture does not make a long frame either
+        // (P24), and the ones begun go first, so few are half done at a time. An entry leaves the map while it is filled:
+        // a fill that fails destroys its texture. One that is not done comes back with its levels; one that is comes back
+        // without them, and waits for its copies.
         bool filledOne = false;
-        for (auto it = pendingTextures.begin(); it != pendingTextures.end() && (!filledOne || !overBudget());)
+        for (const bool begun : {true, false})
         {
-            if (it->second.job && it->second.job->ticket.state.load(std::memory_order_acquire) != LoadState::DONE)
+            for (auto it = pendingTextures.begin(); it != pendingTextures.end() && (!filledOne || !overBudget());)
+            {
+                const PendingTextureLoad &entry = it->second;
+                const bool started = entry.progress.mip > 0 || entry.progress.row > 0;
+                if (entry.filled || started != begun || (entry.job && entry.job->ticket.state.load(std::memory_order_acquire) != LoadState::DONE))
+                {
+                    ++it;
+                    continue;
+                }
+                PendingTextureLoad load = std::move(it->second);
+                it = pendingTextures.erase(it);
+                // A part that copied nothing found the staging ring full: the rest waits for a later frame.
+                bool finished = false;
+                bool moved = true;
+                while (!finished && moved && (!filledOne || !overBudget()))
+                {
+                    const TextureFillProgress before = load.progress;
+                    finished = finishTextureLoad(load, budgeted ? TEXTURE_FILL_PART : UINT64_MAX);
+                    moved = load.progress.mip != before.mip || load.progress.row != before.row;
+                    filledOne = true;
+                }
+                if (!finished)
+                {
+                    filledTextures.push_back(std::move(load));
+                    continue;
+                }
+                workers->releaseBytes(load.job ? load.job->ticket.bytes.exchange(0) : load.bytes);
+                if (ctx.isAlive(load.handle))
+                    filledTextures.push_back({.handle = load.handle, .path = std::move(load.path), .filled = true});
+                else
+                    gpuScene->texturesFinished = true;
+            }
+        }
+
+        const uint64_t value = ctx.endLoadUploads();
+        loadUploadValue = value;
+        for (MeshHandle mesh : meshes)
+            uploadingMeshes.emplace_back(mesh, value);
+        for (EnvironmentHandle environment : uploadedEnvironments)
+        {
+            if (isLive(environment))
+                environments->environments[environment.index].uploadValue = value;
+        }
+        for (PendingTextureLoad &texture : filledTextures)
+        {
+            texture.uploadValue = value;
+            const TextureHandle handle = texture.handle;
+            pendingTextures.emplace(handle, std::move(texture));
+        }
+        // An environment whose image is still copied bakes later, so it is still loading too.
+        bool environmentsUploading = false;
+        for (const Environment &environment : environments->environments)
+            environmentsUploading = environmentsUploading || (environment.state == BakeState::WAITING && !ctx.isLoadUploadDone(environment.uploadValue));
+        return !pendingMeshes.empty() || !pendingEnvironments.empty() || !pendingTextures.empty() || !uploadingMeshes.empty() || environmentsUploading;
+    }
+
+    // A mesh and a texture are loaded once the GPU has their copies; an environment is baked then (recordEnvironmentBakes).
+    // The frame's submits wait for what is published here, which is done, so they never wait for copies in flight.
+    void Engine::publishUploadedLoads()
+    {
+        ctx.updateLoadUploadsDone();
+        for (auto it = pendingTextures.begin(); it != pendingTextures.end();)
+        {
+            if (!it->second.filled || !ctx.isLoadUploadDone(it->second.uploadValue))
             {
                 ++it;
                 continue;
             }
-            PendingTextureLoad load = std::move(it->second);
             it = pendingTextures.erase(it);
-            finishTextureLoad(load);
-            workers->releaseBytes(load.job ? load.job->ticket.bytes.exchange(0) : load.bytes);
-            filledOne = true;
             // syncGpuScene checks the entities that wait for textures only after one finished.
             gpuScene->texturesFinished = true;
         }
-        return !pendingMeshes.empty() || !pendingEnvironments.empty() || !pendingTextures.empty();
+        std::erase_if(uploadingMeshes, [this](const std::pair<MeshHandle, uint64_t> &mesh)
+                      {
+                          if (!ctx.isLoadUploadDone(mesh.second))
+                              return false;
+                          // A mesh destroyed meanwhile (its handle or its slot's new mesh) is left alone.
+                          if (isLive(mesh.first) && registry.meshes[mesh.first.index].state == MeshState::LOADING)
+                              registry.meshes[mesh.first.index].state = MeshState::READY;
+                          return true; });
     }
 
     LoadStats Engine::getLoadStats() const

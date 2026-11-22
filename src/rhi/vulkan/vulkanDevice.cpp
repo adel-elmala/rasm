@@ -271,7 +271,12 @@ namespace rasm::rhi
 
         VkBufferUsageFlags toVkBufferUsageFlags(BufferUsage usage)
         {
-            // Every buffer is created with the device-address bit so that its GPU address can be
+            // A staging buffer is only copied from or to. VMA counts any other usage as GPU access and then prefers video
+            // memory for a host-visible buffer, which would put a staging ring in the small BAR heap (P10).
+            if (usage == BufferUsage::TRANSFER)
+                return VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+
+            // Every other buffer is created with the device-address bit so that its GPU address can be
             // handed to shaders through push constants / other buffers regardless of its primary usage.
             // The transfer bits let any buffer be a staging source or a copy destination.
             VkBufferUsageFlags flags = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
@@ -435,8 +440,8 @@ namespace rasm::rhi
             return 1;
         }
 
-        // With a compute queue, images are shared by both families. Concurrent sharing needs no ownership
-        // transfers between the queues; some GPUs compress such images less.
+        // An image used by several queue families is shared by them (VulkanDevice::getImageFamilies). Concurrent sharing
+        // needs no ownership transfers between the queues; some GPUs compress such images less.
         // A sampled texture is filled either on the host (host image copy) or by a copy from the staging ring.
         VkImageCreateInfo imageCreateInfo(const TextureDesc &desc, uint32_t mipLevels, bool hostCopy, const uint32_t *sharedFamilies, uint32_t sharedFamilyCount)
         {
@@ -550,6 +555,7 @@ namespace rasm::rhi
             vmaDestroyAllocator(allocator);
         graphicsQueue.reset();
         computeQueue.reset();
+        transferQueue.reset();
         if (device.device != VK_NULL_HANDLE)
             vkb::destroy_device(device);
         if (surface != VK_NULL_HANDLE)
@@ -609,6 +615,7 @@ namespace rasm::rhi
             return false;
         }
         graphicsQueue = std::make_unique<VulkanQueue>(vk, queueRet.value(), queueIndexRet.value());
+        sharedFamilies[0] = uploadFamilies[0] = bufferFamilies[0] = queueIndexRet.value();
 
         const uint32_t timestampBits = device.queue_families[queueIndexRet.value()].timestampValidBits;
         timestampMask = timestampBits >= 64 ? ~0ull : (1ull << timestampBits) - 1;
@@ -623,6 +630,20 @@ namespace rasm::rhi
         // and the Hi-Z read them sample by sample.
         const VkPhysicalDeviceLimits &limits = physicalDevice.properties.limits;
         sampleCounts = limits.framebufferColorSampleCounts & limits.framebufferDepthSampleCounts & limits.sampledImageColorSampleCounts & limits.sampledImageDepthSampleCounts;
+        // Resizable BAR, or memory shared with the CPU: a host-visible type lives in the largest device-local heap.
+        const VkPhysicalDeviceMemoryProperties &memory = physicalDevice.memory_properties;
+        VkDeviceSize largestVram = 0;
+        for (uint32_t heap = 0; heap < memory.memoryHeapCount; ++heap)
+        {
+            if ((memory.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0)
+                largestVram = std::max(largestVram, memory.memoryHeaps[heap].size);
+        }
+        for (uint32_t type = 0; type < memory.memoryTypeCount; ++type)
+        {
+            const VkMemoryPropertyFlags flags = memory.memoryTypes[type].propertyFlags;
+            const VkMemoryPropertyFlags mapped = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+            wholeVramMapped = wholeVramMapped || ((flags & mapped) == mapped && memory.memoryHeaps[memory.memoryTypes[type].heapIndex].size >= largestVram);
+        }
 
         // A queue family with compute and no graphics runs beside the graphics queue. Its timestamps must match the
         // graphics queue's, since the GPU timers of both share one mask.
@@ -635,15 +656,44 @@ namespace rasm::rhi
             if (separate && device.queue_families[computeIndexRet.value()].timestampValidBits == timestampBits)
             {
                 computeQueue = std::make_unique<VulkanQueue>(vk, computeRet.value(), computeIndexRet.value());
-                sharedFamilies[0] = queueIndexRet.value();
-                sharedFamilies[1] = computeIndexRet.value();
-                sharedFamilyCount = 2;
+                sharedFamilies[sharedFamilyCount++] = computeIndexRet.value();
+                uploadFamilies[uploadFamilyCount++] = computeIndexRet.value();
+                bufferFamilies[bufferFamilyCount++] = computeIndexRet.value();
                 spdlog::info("Async compute on queue family {}.", computeIndexRet.value());
             }
             else
             {
                 spdlog::info("No separate compute queue with matching timestamps; compute passes run on the graphics queue.");
             }
+        }
+
+        // A family that only copies is the GPU's copy engine (DMA), which runs next to the graphics queue: NVIDIA and AMD
+        // GPUs have one, lavapipe, MoltenVK and most Intel GPUs do not. The uploads copy rows of a mip at any offset, so its
+        // copies must be exact to the texel (granularity 1). vk-bootstrap made one queue of every family.
+        if (desc.transferQueue)
+        {
+            constexpr VkQueueFlags COPY_ONLY = VK_QUEUE_TRANSFER_BIT | VK_QUEUE_SPARSE_BINDING_BIT | VK_QUEUE_PROTECTED_BIT;
+            for (uint32_t family = 0; family < device.queue_families.size() && !transferQueue; ++family)
+            {
+                const VkQueueFamilyProperties &properties = device.queue_families[family];
+                const VkExtent3D granularity = properties.minImageTransferGranularity;
+                if ((properties.queueFlags & VK_QUEUE_TRANSFER_BIT) == 0 || (properties.queueFlags & ~COPY_ONLY) != 0 || properties.queueCount == 0 ||
+                    granularity.width != 1 || granularity.height != 1 || granularity.depth != 1)
+                    continue;
+                VkQueue queue = VK_NULL_HANDLE;
+                vk.vkGetDeviceQueue(device.device, family, 0, &queue);
+                transferQueue = std::make_unique<VulkanQueue>(vk, queue, family);
+                transferTimestamps = timestampMask != 0 && properties.timestampValidBits == timestampBits;
+                // Buffers are shared: a pool is copied into in one range while frames read the others. Images filled from
+                // the ring are too with a compute queue, which shares them already; otherwise they stay exclusive and move
+                // to the graphics family after their copies (Texture::ownershipTransfer).
+                bufferFamilies[bufferFamilyCount++] = family;
+                if (uploadFamilyCount > 1)
+                    uploadFamilies[uploadFamilyCount++] = family;
+                spdlog::info("Load uploads on the transfer queue of family {}.", family);
+            }
+            if (!transferQueue)
+                spdlog::info("No queue family that only copies (with exact copies); load uploads go on the graphics queue.");
         }
 
         // After the queues: an image's memory types are asked with the sharing it will have.
@@ -683,11 +733,11 @@ namespace rasm::rhi
         VkBufferCreateInfo bufferInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         bufferInfo.size = desc.size;
         bufferInfo.usage = toVkBufferUsageFlags(desc.usage);
-        if (sharedFamilyCount > 1)
+        if (bufferFamilyCount > 1)
         {
             bufferInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
-            bufferInfo.queueFamilyIndexCount = sharedFamilyCount;
-            bufferInfo.pQueueFamilyIndices = sharedFamilies;
+            bufferInfo.queueFamilyIndexCount = bufferFamilyCount;
+            bufferInfo.pQueueFamilyIndices = bufferFamilies;
         }
 
         // P1: buffers that aren't hostVisible prefer device-local memory, and are mapped only when that memory is
@@ -701,6 +751,10 @@ namespace rasm::rhi
             allocCI.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
         else if (!desc.hostVisible)
             allocCI.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT;
+        // A staging buffer goes to system memory, unless all of video memory is host-visible: then the GPU's copies
+        // read video memory instead of crossing the bus, and there is no small BAR heap to use up (P10).
+        if (desc.usage == BufferUsage::TRANSFER && desc.hostVisible && !desc.hostReadable && wholeVramMapped)
+            allocCI.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
 
         auto *buffer = new VulkanBuffer();
         buffer->desc = desc;
@@ -718,7 +772,8 @@ namespace rasm::rhi
 
         VkBufferDeviceAddressInfo bufferAddressInfo = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
         bufferAddressInfo.buffer = buffer->buffer;
-        buffer->deviceAddress = vk.vkGetBufferDeviceAddress(device.device, &bufferAddressInfo);
+        if (desc.usage != BufferUsage::TRANSFER)
+            buffer->deviceAddress = vk.vkGetBufferDeviceAddress(device.device, &bufferAddressInfo);
 
         setObjectName(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(buffer->buffer), desc.name);
         return buffer;
@@ -740,12 +795,15 @@ namespace rasm::rhi
         VkResult result = VK_ERROR_UNKNOWN;
         for (bool hostCopy = usesHostCopy(desc);; hostCopy = false)
         {
-            const VkImageCreateInfo imageInfo = imageCreateInfo(desc, texture->mipLevels, hostCopy, sharedFamilies, sharedFamilyCount);
+            uint32_t familyCount = 0;
+            const uint32_t *families = getImageFamilies(desc, hostCopy, familyCount);
+            const VkImageCreateInfo imageInfo = imageCreateInfo(desc, texture->mipLevels, hostCopy, families, familyCount);
             VmaAllocationCreateInfo allocInfo = {};
             allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
             allocInfo.flags = desc.usage == TextureUsage::SAMPLED ? 0 : VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
             allocInfo.memoryTypeBits = hostCopy ? formatSupport[static_cast<uint32_t>(desc.format)].hostCopyTypes : 0;
             texture->hostCopy = hostCopy;
+            texture->ownershipTransfer = transferQueue && familyCount == 1 && desc.usage == TextureUsage::SAMPLED && !hostCopy;
             result = vmaCreateImage(allocator, &imageInfo, &allocInfo, &texture->image, &texture->allocation, nullptr);
             if (result == VK_SUCCESS || !hostCopy)
                 break;
@@ -773,7 +831,9 @@ namespace rasm::rhi
 
     MemoryRequirements VulkanDevice::getTextureMemoryRequirements(const TextureDesc &desc)
     {
-        const VkImageCreateInfo imageInfo = imageCreateInfo(desc, mipLevelCount(desc), usesHostCopy(desc), sharedFamilies, sharedFamilyCount);
+        uint32_t familyCount = 0;
+        const uint32_t *families = getImageFamilies(desc, usesHostCopy(desc), familyCount);
+        const VkImageCreateInfo imageInfo = imageCreateInfo(desc, mipLevelCount(desc), usesHostCopy(desc), families, familyCount);
         const VkDeviceImageMemoryRequirements info = {.sType = VK_STRUCTURE_TYPE_DEVICE_IMAGE_MEMORY_REQUIREMENTS, .pCreateInfo = &imageInfo};
         VkMemoryRequirements2 requirements = {.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2};
         vk.vkGetDeviceImageMemoryRequirements(device.device, &info, &requirements);
@@ -811,12 +871,15 @@ namespace rasm::rhi
 
         const uint32_t mipLevels = mipLevelCount(desc);
         const bool hostCopy = usesHostCopy(desc);
-        const VkImageCreateInfo imageInfo = imageCreateInfo(desc, mipLevels, hostCopy, sharedFamilies, sharedFamilyCount);
+        uint32_t familyCount = 0;
+        const uint32_t *families = getImageFamilies(desc, hostCopy, familyCount);
+        const VkImageCreateInfo imageInfo = imageCreateInfo(desc, mipLevels, hostCopy, families, familyCount);
 
         auto *texture = new VulkanTexture();
         texture->desc = desc;
         texture->mipLevels = mipLevels;
         texture->hostCopy = hostCopy;
+        texture->ownershipTransfer = transferQueue && familyCount == 1 && desc.usage == TextureUsage::SAMPLED && !hostCopy;
 
         auto result = vmaCreateAliasingImage2(allocator, static_cast<VulkanHeap *>(heap)->allocation, offset, &imageInfo, &texture->image);
         if (result != VK_SUCCESS)
@@ -1198,11 +1261,17 @@ namespace rasm::rhi
 
     CommandBuffer *VulkanDevice::createCommandBuffer(QueueType queueType, const std::string &name)
     {
-        const bool onComputeQueue = queueType == QueueType::COMPUTE && computeQueue != nullptr;
-        auto *queue = onComputeQueue ? computeQueue.get() : graphicsQueue.get();
+        // A queue the device does not have is the graphics queue, as in getQueue.
+        QueueType onQueue = QueueType::GRAPHICS;
+        if (queueType == QueueType::COMPUTE && computeQueue != nullptr)
+            onQueue = QueueType::COMPUTE;
+        if (queueType == QueueType::TRANSFER && transferQueue != nullptr)
+            onQueue = QueueType::TRANSFER;
+        VulkanQueue *queue = onQueue == QueueType::COMPUTE ? computeQueue.get() : onQueue == QueueType::TRANSFER ? transferQueue.get()
+                                                                                                                 : graphicsQueue.get();
 
         auto *commandBuffer = new VulkanCommandBuffer(*this);
-        if (!commandBuffer->initialize(queue->getFamilyIndex(), onComputeQueue, name))
+        if (!commandBuffer->initialize(queue->getFamilyIndex(), onQueue, name))
         {
             delete commandBuffer;
             return nullptr;
@@ -1368,12 +1437,32 @@ namespace rasm::rhi
     {
         if (queueType == QueueType::COMPUTE && computeQueue != nullptr)
             return computeQueue.get();
+        if (queueType == QueueType::TRANSFER && transferQueue != nullptr)
+            return transferQueue.get();
         return graphicsQueue.get();
     }
 
     bool VulkanDevice::hasAsyncCompute() const
     {
         return computeQueue != nullptr;
+    }
+
+    bool VulkanDevice::hasTransferQueue() const
+    {
+        return transferQueue != nullptr;
+    }
+
+    // The compute queue is taken only with the graphics queue's valid bits.
+    bool VulkanDevice::hasTimestamps(QueueType queueType) const
+    {
+        if (queueType == QueueType::TRANSFER && transferQueue != nullptr)
+            return transferTimestamps;
+        return timestampMask != 0;
+    }
+
+    uint32_t VulkanDevice::getTransferFamily() const
+    {
+        return transferQueue ? transferQueue->getFamilyIndex() : graphicsQueue->getFamilyIndex();
     }
 
     bool VulkanDevice::hasMutableSwapchainFormat() const
@@ -1499,11 +1588,26 @@ namespace rasm::rhi
 
     uint32_t VulkanDevice::getImageMemoryTypes(const TextureDesc &desc, bool hostCopy)
     {
-        const VkImageCreateInfo imageInfo = imageCreateInfo(desc, 1, hostCopy, sharedFamilies, sharedFamilyCount);
+        uint32_t familyCount = 0;
+        const uint32_t *families = getImageFamilies(desc, hostCopy, familyCount);
+        const VkImageCreateInfo imageInfo = imageCreateInfo(desc, 1, hostCopy, families, familyCount);
         const VkDeviceImageMemoryRequirements info = {.sType = VK_STRUCTURE_TYPE_DEVICE_IMAGE_MEMORY_REQUIREMENTS, .pCreateInfo = &imageInfo};
         VkMemoryRequirements2 requirements = {.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2};
         vk.vkGetDeviceImageMemoryRequirements(device.device, &info, &requirements);
         return requirements.memoryRequirements.memoryTypeBits;
+    }
+
+    // A sampled texture filled from the staging ring may be copied on the transfer queue; every other image is used by
+    // the frames' queues only.
+    const uint32_t *VulkanDevice::getImageFamilies(const TextureDesc &desc, bool hostCopy, uint32_t &count) const
+    {
+        if (desc.usage == TextureUsage::SAMPLED && !hostCopy)
+        {
+            count = uploadFamilyCount;
+            return uploadFamilies;
+        }
+        count = sharedFamilyCount;
+        return sharedFamilies;
     }
 
     bool VulkanDevice::usesHostCopy(const TextureDesc &desc) const

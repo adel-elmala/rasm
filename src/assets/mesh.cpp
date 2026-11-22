@@ -373,8 +373,9 @@ namespace rasm
                 mesh.ownedTextures.push_back(texture);
         }
 
+        // READY once the GPU has its geometry (publishUploadedLoads).
         load.movedBytes = cache.movedBytes;
-        mesh.state = MeshState::READY;
+        mesh.state = MeshState::LOADING;
         const GeometryPoolStats pool = geometryPool->stats();
         spdlog::info("Loaded mesh {} ({:.1f} ms on the main thread): {} sub-meshes, geometry pool at {}/{} vertices and {}/{} indices.",
                      load.path, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - mainThreadStart).count(), mesh.subMeshes.size(), pool.vertices,

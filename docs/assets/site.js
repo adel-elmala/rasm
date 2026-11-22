@@ -50,6 +50,7 @@ const SECTIONS = [
             { path: "guides/color-spaces.html",          title: "Color spaces: sRGB and linear",       blurb: "Where to store color, and where to do the math." },
             { path: "guides/texture-compression.html",   title: "Texture compression: blocks, KTX2 and Basis", blurb: "4×4 blocks the GPU samples, and one file that becomes BC7, ASTC or ETC2." },
             { path: "guides/asset-streaming.html",       title: "Streaming assets in the background",  blurb: "Load meshes and textures without freezing the frame." },
+            { path: "guides/transfer-queue.html",        title: "Transfer queues and ownership transfers", blurb: "Copies on the GPU's copy engine, next to the frames: use the data once its copy is done, release and acquire." },
             { path: "guides/mesh-simplification.html",   title: "Mesh simplification",                 blurb: "Building LODs by collapsing edges." },
         ],
     },

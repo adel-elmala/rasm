@@ -289,14 +289,16 @@ constexpr bool          hasStage(PipelineStage stages, PipelineStage stage);</pr
 {
     GRAPHICS,
     COMPUTE,
+    TRANSFER,
 };
 
 constexpr uint32_t QUEUE_COUNT = 2;</pre>
   <div class="body">
-    <p>The GPU queue a command buffer is made for and a submit goes to. <code>QUEUE_COUNT</code> is the number of values.</p>
+    <p>The GPU queue a command buffer is made for and a submit goes to. <code>QUEUE_COUNT</code> counts the queues a frame records on, <code>GRAPHICS</code> and <code>COMPUTE</code>.</p>
     <dl>
       <dt>GRAPHICS</dt><dd>The queue every GPU has. It draws, dispatches, copies the uploads and presents.</dd>
       <dt>COMPUTE</dt><dd>A second queue that runs compute work next to the graphics queue. It exists only with <code>EngineConfig::asyncCompute</code> on a GPU with a compute queue family without graphics (<a href="#hasAsyncCompute">hasAsyncCompute</a>). Without it, <code>COMPUTE</code> command buffers and submits use the graphics queue.</dd>
+      <dt>TRANSFER</dt><dd>The engine's queue for the loads' copies, from a family that only copies, with <code>EngineConfig::transferQueue</code> on a GPU that has one. <code>createCommandBuffer</code> and <code>submit</code> refuse it: the uploads own it. See <a href="../guides/transfer-queue.html">transfer queues</a>.</dd>
     </dl>
     <p>What a second queue is for, and what it costs: the guide <a href="../guides/async-compute.html">Async compute and multiple queues</a>.</p>
   </div>
@@ -470,15 +472,17 @@ bool endCommandBuffer(const CommandBufferHandle&amp; commandBuffer);</pre>
     UNIFORM,
     STORAGE,
     DEVICE_ADDRESS,
+    TRANSFER,
 };</pre>
   <div class="body">
-    <p>The main use, added on top of device address and copy use, which every buffer has.</p>
+    <p>The main use, added on top of device address and copy use, which every buffer but a <code>TRANSFER</code> one has.</p>
     <dl>
       <dt>INDEX</dt><dd>For <code>bindIndexBuffer</code>.</dd>
       <dt>INDIRECT</dt><dd>Draw records or counts for the indirect draws.</dd>
       <dt>UNIFORM</dt><dd>A uniform buffer.</dd>
       <dt>STORAGE</dt><dd>A storage buffer (the default). Shaders usually reach it by address anyway.</dd>
       <dt>DEVICE_ADDRESS</dt><dd>Only the address and copies.</dd>
+      <dt>TRANSFER</dt><dd>Only copies, and no device address (<code>getBufferDeviceAddress</code> is 0): a staging buffer. A host-visible one goes to system memory, or to video memory where all of it is host-visible (resizable BAR), never to a small BAR heap (<code>P10</code>).</dd>
     </dl>
   </div>
 </div>
@@ -647,7 +651,38 @@ bool fillTexture(const TextureHandle&amp; texture, const TextureLevel* levels, u
       <dt>data</dt><dd><code>width × height</code> pixels of the texture's format (4 bytes for RGBA8, 8 for <code>R16G16B16A16_SFLOAT</code>), rows top to bottom, no padding.</dd>
       <dt>levels, levelCount</dt><dd>One <a href="#TextureLevel"><code>TextureLevel</code></a> per mip, <code>levelCount</code> equal to the texture's mip count. Each must be exactly the level's size: whole 4 × 4 blocks for a block-compressed format (a level of <var>w</var> × <var>h</var> is ⌈<var>w</var>/4⌉ × ⌈<var>h</var>/4⌉ blocks of 8 or 16 bytes).</dd>
     </dl>
-    <p>The first form makes the mips in the calling thread; the engine's own loads hand over every level from a worker instead. Where the device copies the format on the host at no cost to the GPU (host image copy, see <a href="../guides/texture-uploads.html">texture uploads</a>), the data is in the texture when the call returns. Otherwise, or with <code>EngineConfig::hostImageCopy</code> false, it goes into the staging ring and a copy on the graphics queue with the next submit, which comes before any frame that samples it. Either way the CPU data may be freed once the call returns. The texture must not be in use by a frame the GPU is still running. Returns <code>false</code> with an error for a wrong level count or size, or when a copy step fails.</p>
+    <p>The first form makes the mips in the calling thread; the engine's own loads hand over every level from a worker instead. Where the device copies the format on the host at no cost to the GPU (host image copy, see <a href="../guides/texture-uploads.html">texture uploads</a>), the data is in the texture when the call returns. Otherwise, or with <code>EngineConfig::hostImageCopy</code> false, it goes into the staging ring and a copy on the graphics queue with the next submit, which comes before any frame that samples it. Either way the CPU data may be freed once the call returns. The texture must not be in use by a frame the GPU is still running, nor be filled by a load that has not finished (refused with an error). Returns <code>false</code> with an error for a wrong level count or size, or when a copy step fails.</p>
+  </div>
+</div>
+
+<div class="api" id="fillTexturePart">
+  <pre class="sig">bool fillTexturePart(const TextureHandle&amp; texture, const TextureLevel* levels, uint32_t levelCount, TextureFillProgress&amp; progress, uint64_t maxBytes);</pre>
+  <div class="body">
+    <p>One part of a fill: the rows from <code>progress</code> on, about <code>maxBytes</code> of them (at least one row), fewer where the staging ring is full, so a big texture's copy spreads over frames without a long one. It moves <code>progress</code> on, and sets <code>done</code> with the last row. The texture has all its data only then: sample it after that, and after its copies are done. <code>maxBytes</code> = <code>UINT64_MAX</code> copies everything and waits for ring space, as <a href="#fillTexture"><code>fillTexture</code></a> does. A host-copied texture is filled whole. The engine's loads fill in 4 MiB parts between <a href="#beginLoadUploads"><code>beginLoadUploads</code></a> and <code>endLoadUploads</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="TextureFillProgress">
+  <pre class="sig">struct TextureFillProgress
+{
+    uint32_t mip  = 0;
+    uint32_t row  = 0;
+    bool     done = false;
+};</pre>
+  <div class="body">
+    <p>Where a fill in parts stands: the next mip, the next row of blocks in it, and whether every row is queued. Start from <code>{}</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="beginLoadUploads">
+  <pre class="sig">void beginLoadUploads();
+uint64_t endLoadUploads();
+void updateLoadUploadsDone();
+bool isLoadUploadDone(uint64_t value) const;
+bool waitForLoadUploads(uint64_t value);
+float takeUploadGpuMs();</pre>
+  <div class="body">
+    <p>The load uploads, which <code>Engine</code> drives; an application does not. Fills between <code>beginLoadUploads</code> and <code>endLoadUploads</code> are a load's: they go on the transfer queue where there is one, else on the graphics queue, and wait for no frame, since they write new memory. <code>endLoadUploads</code> submits them at once and returns the value they are done at. <code>updateLoadUploadsDone</code> reads, without waiting, how far the copies are; from then on <code>isLoadUploadDone(value)</code> says whether that load's data may be used, and the next graphics and compute submits wait for it (it is done, so the wait costs nothing) and acquire the textures it released. <code>waitForLoadUploads</code> blocks until a submitted value is done, for <code>waitForLoads</code>. <code>takeUploadGpuMs</code> returns the GPU time of the copies done since the last call (<code>FrameStats::uploadGpuMs</code>). See <a href="../guides/transfer-queue.html#in-rasm">transfer queues</a>.</p>
   </div>
 </div>
 
@@ -1188,7 +1223,7 @@ void cleanup();</pre>
   <pre class="sig">void tagReleases(const FenceValue&amp; graphics, const FenceValue&amp; compute);
 void collectReleases();</pre>
   <div class="body">
-    <p>The two halves of deferred destruction, which <code>Engine</code> calls; an application does not. <code>endFrame</code> calls <code>tagReleases</code> after the frame's submits, dropped or not: what was destroyed since the last call then waits for the graphics and compute values the queues signaled last, and the uploads' last one. <code>beginFrame</code> calls <code>collectReleases</code> after the slot's fence wait: it reads the three fences, without waiting, and frees every entry they all reached, in order. With nothing tagged it returns at once. See <a href="../guides/resource-lifetime.html#in-rasm">deferred destruction</a>.</p>
+    <p>The two halves of deferred destruction, which <code>Engine</code> calls; an application does not. <code>endFrame</code> calls <code>tagReleases</code> after the frame's submits, dropped or not: what was destroyed since the last call then waits for the graphics and compute values the queues signaled last, and the last ones of the frames' and the loads' uploads. <code>beginFrame</code> calls <code>collectReleases</code> after the slot's fence wait: it reads the four fences, without waiting, and frees every entry they all reached, in order. With nothing tagged it returns at once. See <a href="../guides/resource-lifetime.html#in-rasm">deferred destruction</a>.</p>
   </div>
 </div>
 
@@ -1214,7 +1249,7 @@ bool isAlive(const BufferHandle&amp; buffer) const;</pre>
   <strong>Known limits</strong>
   <ul>
     <li>Buffers, textures and render targets can be destroyed. Shaders, pipelines and descriptor layouts are shared through the dedup caches, so they live as long as the device. Graph teardown and re-placing transient targets still wait for the GPU (<code>D35</code>).</li>
-    <li>There is a graphics queue and, with <code>EngineConfig::asyncCompute</code>, a compute queue. There is no transfer queue (<code>D13</code>).</li>
+    <li>There is a graphics queue, with <code>EngineConfig::asyncCompute</code> a compute queue, and with <code>EngineConfig::transferQueue</code> a transfer queue for the loads' copies. Uploads are still recorded on the main thread (<code>D13</code>).</li>
     <li>Async compute does not make the scene passes faster yet, so it is off by default (<code>P11</code>).</li>
   </ul>
   <p>How these calls reach Vulkan: the guide <a href="../guides/graphics-apis-rhi.html">Graphics APIs and the RHI</a>, for uploads <a href="../guides/gpu-memory.html">GPU memory and uploads</a>, and for the compute queue <a href="../guides/async-compute.html">Async compute and multiple queues</a>.</p>

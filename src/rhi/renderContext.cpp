@@ -309,7 +309,11 @@ namespace rasm
         rhi::Swapchain*                                                                                                         swapchain       = nullptr;
         std::unique_ptr<rhi::OffscreenSwapchain>                                                                                offscreen;          // headless: swapchain points to it
         rhi::Sampler*                                                                                                           samplers[static_cast<size_t>(SamplerType::COUNT)] = {};
-        rhi::UploadManager                                                                                                      uploads;
+        rhi::UploadManager                                                                                                      uploads;        // the frames': on the graphics queue, in order with them
+        rhi::UploadManager                                                                                                      transferUploads;    // the loads', with a transfer queue (loadUploads)
+        bool                                                                                                                    loading         = false;    // between beginLoadUploads and endLoadUploads
+        uint64_t                                                                                                                loadDone        = 0;        // the load uploads' value the CPU saw done last (updateLoadUploadsDone)
+        uint64_t                                                                                                                loadWaited[2]   = {};       // the last loadDone a graphics, a compute submit waited for
         rhi::TextureStates                                                                                                      textureStates;
         std::vector<TextureHandle>                                                                                              swapchainImages;  // also in textures, but owned by the swapchain
 
@@ -327,7 +331,7 @@ namespace rasm
         std::deque<RenderTarget>                                                                                                renderTargets;  // by handle index; a deque, so a reference survives a new target
         std::deque<RenderTargetInfo>                                                                                            renderTargetInfos;
         rhi::ReleaseQueue                                                                                                       releases;  // what destroy* freed, once the GPU is done (tagReleases, collectReleases)
-        rhi::Fence*                                                                                                             releaseFences[rhi::RELEASE_TIMELINES - 1] = {};  // the frame and compute fences of the last tagReleases
+        rhi::Fence*                                                                                                             releaseFences[2] = {};  // the frame and compute fences of the last tagReleases
         std::vector<TransientGroup>                                                                                             transientGroups;
         std::vector<HistoryClear>                                                                                               pendingClears;  // made since the last frame began
         std::vector<HistoryClear>                                                                                               recordedClears; // in a frame not yet submitted
@@ -442,6 +446,7 @@ namespace rasm
                              {
                                  textureStates.forget(rhiTexture);
                                  uploads.cancelUploads(rhiTexture);
+                                 loadUploads().cancelUploads(rhiTexture);
                                  device->destroyTexture(rhiTexture); });
         }
 
@@ -450,7 +455,24 @@ namespace rasm
             releases.release([this, buffer]()
                              {
                                  uploads.cancelUploads(buffer);
+                                 loadUploads().cancelUploads(buffer);
                                  device->destroyBuffer(buffer); });
+        }
+
+        // Without a transfer queue the loads' uploads are the frames'.
+        rhi::UploadManager& loadUploads()
+        {
+            return device->hasTransferQueue() ? transferUploads : uploads;
+        }
+
+        const rhi::UploadManager& loadUploads() const
+        {
+            return device->hasTransferQueue() ? transferUploads : uploads;
+        }
+
+        rhi::UploadManager& fillUploads()
+        {
+            return loading ? loadUploads() : uploads;
         }
 
         void retireHeap(rhi::Heap* heap)
@@ -552,12 +574,15 @@ namespace rasm
                                                    .enableSyncValidation = config.enableSyncValidation,
                                                    .enableGpuValidation = config.enableGpuValidation,
                                                    .asyncCompute = config.asyncCompute,
+                                                   .transferQueue = config.transferQueue,
                                                    .hostImageCopy = config.hostImageCopy,
                                                    .cacheDir = config.cacheDir});
         if (!impl->device)
             return false;
 
-        if (!impl->uploads.initialize(*impl->device))
+        if (!impl->uploads.initialize(*impl->device, QueueType::GRAPHICS))
+            return false;
+        if (impl->device->hasTransferQueue() && !impl->transferUploads.initialize(*impl->device, QueueType::TRANSFER))
             return false;
 
         // Without a window the frames render into textures of the device, which present nothing.
@@ -600,6 +625,7 @@ namespace rasm
         // Everything destroyed is freed first, while the objects it may refer to (a heap's textures) still exist.
         impl->releases.releaseAll();
         impl->uploads.cleanup();
+        impl->transferUploads.cleanup();
         for (auto *descriptorSet : impl->descriptorSets.objects)
             if (descriptorSet)
                 device.destroyDescriptorSet(descriptorSet);
@@ -800,6 +826,8 @@ namespace rasm
 
     CommandBufferHandle RenderContext::createCommandBuffer(const std::string &name, QueueType queue)
     {
+        if (!checkArgument(queue != QueueType::TRANSFER, __func__, "the transfer queue is the uploads' own."))
+            return {};
         auto *rhiCommandBuffer = impl->device->createCommandBuffer(queue, name);
         if (!rhiCommandBuffer)
             return {};
@@ -1317,10 +1345,11 @@ namespace rasm
         if (!rhiBuffer || !checkArgument(offset + size <= rhiBuffer->desc.size, __func__, "the range is outside the buffer."))
             return false;
 
-        // Unmapped buffers are device-local: the data reaches them with the next submit (P1).
+        // Unmapped buffers are device-local: the data reaches them with the next submit (P1), or a load's once the load
+        // uploads are done.
         if (rhiBuffer->mapped)
             return impl->device->fillBuffer(rhiBuffer, data, size, offset);
-        return impl->uploads.upload(rhiBuffer, data, size, offset);
+        return impl->fillUploads().upload(rhiBuffer, data, size, offset);
     }
 
     bool RenderContext::readBuffer(const BufferHandle &buffer, void *data, size_t size, size_t offset)
@@ -1391,9 +1420,17 @@ namespace rasm
         return fillTexture(texture, levels.data(), static_cast<uint32_t>(levels.size()));
     }
 
-    // A texture the device copies on the host has its data at once. The others are copied from the staging ring with
-    // the next submit, which comes before any frame that samples them, on the same queue (P2).
+    // A texture the device copies on the host has its data at once. The others are copied from the staging ring: an
+    // application's fill with the next submit, which comes before any frame that samples it, on the same queue (P2); a
+    // load's (between beginLoadUploads and endLoadUploads) on the transfer queue, used only once isLoadUploadDone.
     bool RenderContext::fillTexture(const TextureHandle &texture, const TextureLevel *levels, uint32_t levelCount)
+    {
+        TextureFillProgress progress;
+        return fillTexturePart(texture, levels, levelCount, progress, UINT64_MAX);
+    }
+
+    // The rows from progress on, until about maxBytes are queued or the staging ring is full; a host copy goes whole.
+    bool RenderContext::fillTexturePart(const TextureHandle &texture, const TextureLevel *levels, uint32_t levelCount, TextureFillProgress &progress, uint64_t maxBytes)
     {
         ZoneScoped;
 
@@ -1409,11 +1446,83 @@ namespace rasm
                 return false;
         }
 
-        const bool filled = rhiTexture->hostCopy ? impl->device->fillTexture(rhiTexture, levels, levelCount) : impl->uploads.uploadTexture(rhiTexture, levels, levelCount);
+        // A load's texture belongs to the transfer queue until its acquire, so the frames can't fill it in between.
+        if (!impl->loading && impl->device->hasTransferQueue() && !rhiTexture->hostCopy && impl->transferUploads.isFilling(rhiTexture))
+        {
+            spdlog::error("fillTexture: texture '{}' is still being filled by its load.", rhiTexture->desc.name);
+            return false;
+        }
+
+        bool filled = false;
+        if (rhiTexture->hostCopy)
+        {
+            filled = impl->device->fillTexture(rhiTexture, levels, levelCount);
+            progress = {.mip = levelCount, .done = true};
+        }
+        else
+        {
+            filled = impl->fillUploads().uploadTexture(rhiTexture, levels, levelCount, progress, maxBytes);
+        }
         if (!filled)
             return false;
         rhiTexture->state = TextureUsage::SAMPLED;
         return true;
+    }
+
+    // What a load fills needs no wait for the frames: it writes a new texture, or ranges of a pool that the release queue
+    // gave back after every queue was done with them. On the transfer queue the copies still wait for the values the
+    // frames' queues are known to have reached, which costs nothing and orders those writes after the frames' last uses.
+    void RenderContext::beginLoadUploads()
+    {
+        impl->loading = true;
+        if (!impl->device->hasTransferQueue())
+            return;
+        rhi::FenceWait done[2] = {};
+        for (uint32_t i = 0; i < 2; ++i)
+        {
+            if (impl->releaseFences[i])
+                done[i] = {.fence = impl->releaseFences[i], .value = impl->device->getFenceValue(impl->releaseFences[i])};
+        }
+        impl->transferUploads.waitFor(done, 2);
+    }
+
+    // The copies start now, while the frame is recorded.
+    uint64_t RenderContext::endLoadUploads()
+    {
+        impl->loading = false;
+        rhi::UploadManager &loads = impl->loadUploads();
+        loads.flush();
+        return loads.coveredValue();
+    }
+
+    void RenderContext::updateLoadUploadsDone()
+    {
+        const rhi::FenceWait loads = impl->loadUploads().lastSubmit();
+        impl->loadDone = std::max(impl->loadDone, impl->device->getFenceValue(loads.fence));
+    }
+
+    bool RenderContext::isLoadUploadDone(uint64_t value) const
+    {
+        return value <= impl->loadDone;
+    }
+
+    // For waitForLoads: the copies are flushed already, so the wait ends.
+    bool RenderContext::waitForLoadUploads(uint64_t value)
+    {
+        const rhi::FenceWait loads = impl->loadUploads().lastSubmit();
+        if (value > loads.value)
+            return false;
+        const bool waited = impl->device->waitForFence(loads.fence, value, UINT64_MAX);
+        updateLoadUploadsDone();
+        return waited;
+    }
+
+    float RenderContext::takeUploadGpuMs()
+    {
+        uint64_t nanoseconds = impl->uploads.takeGpuNanoseconds();
+        if (impl->device->hasTransferQueue())
+            nanoseconds += impl->transferUploads.takeGpuNanoseconds();
+        return static_cast<float>(static_cast<double>(nanoseconds) / 1.0e6);
     }
 
     bool RenderContext::supportsSampleCount(uint32_t samples) const
@@ -1542,7 +1651,7 @@ namespace rasm
         impl->releaseFences[0] = graphics.fence.isValid() ? lookup(impl->fences, graphics.fence, __func__) : nullptr;
         impl->releaseFences[1] = compute.fence.isValid() ? lookup(impl->fences, compute.fence, __func__) : nullptr;
         const uint64_t values[rhi::RELEASE_TIMELINES] = {impl->releaseFences[0] ? graphics.value : 0, impl->releaseFences[1] ? compute.value : 0,
-                                                         impl->uploads.lastSubmit().value};
+                                                         impl->uploads.lastSubmit().value, impl->loadUploads().lastSubmit().value};
         impl->releases.tag(values);
     }
 
@@ -1576,9 +1685,11 @@ namespace rasm
             return;
         ZoneScoped;
         const rhi::FenceWait uploads = impl->uploads.lastSubmit();
+        const rhi::FenceWait loads = impl->loadUploads().lastSubmit();
         const uint64_t completed[rhi::RELEASE_TIMELINES] = {impl->releaseFences[0] ? impl->device->getFenceValue(impl->releaseFences[0]) : UINT64_MAX,
                                                             impl->releaseFences[1] ? impl->device->getFenceValue(impl->releaseFences[1]) : UINT64_MAX,
-                                                            uploads.fence ? impl->device->getFenceValue(uploads.fence) : UINT64_MAX};
+                                                            uploads.fence ? impl->device->getFenceValue(uploads.fence) : UINT64_MAX,
+                                                            loads.fence ? impl->device->getFenceValue(loads.fence) : UINT64_MAX};
         impl->releases.collect(completed);
     }
 
@@ -1786,12 +1897,21 @@ namespace rasm
     {
         ZoneScoped;
 
-        // They run in this order on the queue, as one submission.
-        if (!checkArgument(info.commandBufferCount <= rhi::MAX_SUBMIT_COMMAND_BUFFERS, __func__, "too many command buffers."))
+        if (!checkArgument(info.queue != QueueType::TRANSFER, __func__, "the transfer queue is the uploads' own."))
             return false;
-        // A compute submit keeps one wait for the uploads.
+        // They run in this order on the queue, as one submission, after the load uploads' acquires. A compute submit
+        // keeps one wait for the uploads. The load uploads this submit may use are those the CPU saw done
+        // (updateLoadUploadsDone): a submit waits for them once per new value, which costs nothing and makes their copies
+        // visible here, and a graphics submit first acquires the textures they released. Without a signal there is no
+        // telling when the acquires' command buffer is free again, so they wait for a later submit.
         const bool computeQueue = info.queue == QueueType::COMPUTE && impl->device->hasAsyncCompute();
-        if (!checkArgument(info.waitCount + (computeQueue ? 1 : 0) <= rhi::MAX_SUBMIT_WAITS, __func__, "too many fence waits."))
+        const bool transferQueue = impl->device->hasTransferQueue();
+        const uint32_t queueSlot = computeQueue ? 1 : 0;
+        const bool waitsForLoads = transferQueue && impl->loadDone > impl->loadWaited[queueSlot];
+        const bool takesAcquires = transferQueue && !computeQueue && info.signal.fence.isValid() && impl->transferUploads.hasAcquires(impl->loadDone);
+        if (!checkArgument(info.commandBufferCount + (takesAcquires ? 1 : 0) <= rhi::MAX_SUBMIT_COMMAND_BUFFERS, __func__, "too many command buffers."))
+            return false;
+        if (!checkArgument(info.waitCount + (computeQueue ? 1 : 0) + (waitsForLoads ? 1 : 0) <= rhi::MAX_SUBMIT_WAITS, __func__, "too many fence waits."))
             return false;
         rhi::CommandBuffer *rhiCommandBuffers[rhi::MAX_SUBMIT_COMMAND_BUFFERS] = {};
         for (uint32_t i = 0; i < info.commandBufferCount; ++i)
@@ -1800,6 +1920,7 @@ namespace rasm
             if (!rhiCommandBuffers[i])
                 return false;
         }
+        uint32_t commandBufferCount = info.commandBufferCount;
 
         rhi::FenceWait waits[rhi::MAX_SUBMIT_WAITS] = {};
         uint32_t waitCount = 0;
@@ -1828,9 +1949,25 @@ namespace rasm
         if (computeQueue && uploads.value > 0)
             waits[waitCount++] = uploads;
 
+        if (waitsForLoads)
+            waits[waitCount++] = {.fence = impl->transferUploads.lastSubmit().fence, .value = impl->loadDone};
+        // The frame may sample those textures, so a submit whose acquires can't be recorded fails.
+        rhi::CommandBuffer *acquires = takesAcquires ? impl->transferUploads.recordAcquires(impl->loadDone) : nullptr;
+        if (takesAcquires && !acquires)
+        {
+            spdlog::error("Failed to record the acquires of loaded textures; the submit is dropped.");
+            return false;
+        }
+        if (acquires)
+        {
+            std::move_backward(rhiCommandBuffers, rhiCommandBuffers + commandBufferCount, rhiCommandBuffers + commandBufferCount + 1);
+            rhiCommandBuffers[0] = acquires;
+            ++commandBufferCount;
+        }
+
         rhi::SubmitDesc submitDesc = {
             .commandBuffers = rhiCommandBuffers,
-            .commandBufferCount = info.commandBufferCount,
+            .commandBufferCount = commandBufferCount,
             .waits = waits,
             .waitCount = waitCount,
             .acquireSwapchain = info.waitsForSwapchainImage && !impl->offscreen ? impl->swapchain : nullptr,
@@ -1840,16 +1977,23 @@ namespace rasm
         };
         if (!impl->device->getQueue(info.queue)->submit(submitDesc))
             return false;
+        if (waitsForLoads)
+            impl->loadWaited[queueSlot] = impl->loadDone;
+        if (acquires)
+            impl->transferUploads.acquiresSubmitted(signalFence, info.signal.value);
         // The present submit is the image's last use this frame, on the one timeline of the graphics queue.
         if (impl->offscreen && info.presentsSwapchainImage && signalFence != nullptr)
             impl->offscreen->submitted(signalFence, info.signal.value);
         if (computeQueue && signalFence != nullptr)
-            impl->uploads.waitFor({.fence = signalFence, .value = info.signal.value});
+        {
+            const rhi::FenceWait computeSubmit = {.fence = signalFence, .value = info.signal.value};
+            impl->uploads.waitFor(&computeSubmit, 1);
+        }
 
         // Only what these command buffers recorded is on the GPU now; a frame may have more submits to go.
-        impl->textureStates.submitted(rhiCommandBuffers, info.commandBufferCount);
-        std::erase_if(impl->recordedClears, [&rhiCommandBuffers, &info](const HistoryClear &clear)
-                      { return std::find(rhiCommandBuffers, rhiCommandBuffers + info.commandBufferCount, clear.commandBuffer) != rhiCommandBuffers + info.commandBufferCount; });
+        impl->textureStates.submitted(rhiCommandBuffers, commandBufferCount);
+        std::erase_if(impl->recordedClears, [&rhiCommandBuffers, commandBufferCount](const HistoryClear &clear)
+                      { return std::find(rhiCommandBuffers, rhiCommandBuffers + commandBufferCount, clear.commandBuffer) != rhiCommandBuffers + commandBufferCount; });
         return true;
     }
 

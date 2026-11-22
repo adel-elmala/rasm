@@ -43,6 +43,8 @@ namespace rasm
             {
                 std::snprintf(line, sizeof(line), "GPU       %6.2f ms\n", stats.gpuFrameMs);
                 text += line;
+                std::snprintf(line, sizeof(line), " %-8.8s %6.2f ms\n", "Uploads", stats.uploadGpuMs);
+                text += line;
                 for (uint32_t i = 0; i < stats.gpuTimerCount; ++i)
                 {
                     std::snprintf(line, sizeof(line), " %-8.8s %6.2f ms\n", stats.gpuTimers[i].name.c_str(), stats.gpuTimers[i].milliseconds);

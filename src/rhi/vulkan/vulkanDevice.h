@@ -50,6 +50,8 @@ namespace rasm::rhi
         void                        destroyQueryPool(QueryPool* pool) override;
         Queue*                      getQueue(QueueType queueType) override;
         bool                        hasAsyncCompute() const override;
+        bool                        hasTransferQueue() const override;
+        bool                        hasTimestamps(QueueType queueType) const override;
         bool                        fillBuffer(Buffer* buffer, const void* data, size_t size, size_t offset) override;
         bool                        readBuffer(Buffer* buffer, void* data, size_t size, size_t offset) override;
         void                        resetQueries(QueryPool* pool) override;
@@ -69,6 +71,7 @@ namespace rasm::rhi
         VkPhysicalDevice            getVkPhysicalDevice() const;
         VkSurfaceKHR                getSurface() const;
         VulkanQueue*                getGraphicsQueue() const;
+        uint32_t                    getTransferFamily() const;
         bool                        hasMutableSwapchainFormat() const;
         void                        setObjectName(VkObjectType type, uint64_t handle, const std::string& name);
 
@@ -84,6 +87,7 @@ namespace rasm::rhi
         void                            queryFormatSupport(bool hostImageCopy);
         bool                            usesHostCopy(const TextureDesc& desc) const;
         uint32_t                        getImageMemoryTypes(const TextureDesc& desc, bool hostCopy);
+        const uint32_t*                 getImageFamilies(const TextureDesc& desc, bool hostCopy, uint32_t& count) const;
 
         static constexpr uint32_t       FORMAT_COUNT        = static_cast<uint32_t>(Format::R16G16_SFLOAT) + 1;
 
@@ -96,11 +100,20 @@ namespace rasm::rhi
         VulkanPipelineCache             pipelineCache       = {};
         std::unique_ptr<VulkanQueue>    graphicsQueue       = {};
         std::unique_ptr<VulkanQueue>    computeQueue        = {};
+        std::unique_ptr<VulkanQueue>    transferQueue       = {};
+        bool                            transferTimestamps  = false;
+        // The families that share a resource: images of the frames, images filled from the staging ring, and buffers. One
+        // family: exclusive.
         uint32_t                        sharedFamilies[2]   = {};
-        uint32_t                        sharedFamilyCount   = 0;
+        uint32_t                        sharedFamilyCount   = 1;
+        uint32_t                        uploadFamilies[3]   = {};
+        uint32_t                        uploadFamilyCount   = 1;
+        uint32_t                        bufferFamilies[3]   = {};
+        uint32_t                        bufferFamilyCount   = 1;
         VkSurfaceKHR                    surface             = VK_NULL_HANDLE;
         bool                            debugUtilsEnabled   = false;
         bool                            swapchainMutable    = false;    // VK_KHR_swapchain_mutable_format: the swapchain has a UNORM view
+        bool                            wholeVramMapped     = false;    // resizable BAR or shared memory: all of video memory is host-visible
         uint64_t                        timestampMask       = 0;
         double                          timestampPeriod     = 0.0;
         VkDeviceSize                    maxBufferSize       = 0;

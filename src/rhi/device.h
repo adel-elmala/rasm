@@ -53,6 +53,7 @@ namespace rasm::rhi
         bool            enableSyncValidation    = false;
         bool            enableGpuValidation     = false;
         bool            asyncCompute            = false;
+        bool            transferQueue           = false;    // a queue of a family that only copies, for the load uploads
         bool            hostImageCopy           = true;     // false: every texture goes through the staging ring
         std::string     cacheDir;                           // the pipeline cache's folder; empty: none
     };
@@ -78,6 +79,7 @@ namespace rasm::rhi
         TextureUsage                        state               = TextureUsage::UNKNOWN;
         uint32_t                            mipLevels           = 1;
         bool                                hostCopy            = false;    // filled on the host; otherwise copied from the staging ring
+        bool                                ownershipTransfer   = false;    // exclusive to the graphics family: filled on the transfer queue, it is released there and acquired on the graphics queue
     };
 
     struct TextureCopy
@@ -88,6 +90,7 @@ namespace rasm::rhi
         uint32_t                            y                   = 0;        // rows [y, y + height) of the mip, in texels
         uint32_t                            height              = 0;
         bool                                discard             = false;    // the texture's first copy: its old contents may go
+        bool                                last                = false;    // the fill's last copy: the texture leaves TRANSFER_DST after it
     };
 
     struct FormatBlock
@@ -178,6 +181,8 @@ namespace rasm::rhi
         virtual void                aliasingBarrier() = 0;
         virtual void                copyBuffers(Buffer* src, const BufferCopy* copies, uint32_t copyCount) = 0;
         virtual void                copyToTextures(Buffer* src, const TextureCopy* copies, uint32_t copyCount) = 0;
+        // On the graphics queue, after a wait for the transfer queue's submit that released them (Texture::ownershipTransfer).
+        virtual void                acquireTextures(Texture* const* textures, uint32_t count) = 0;
         // Copies one layer and mip of a single-sample texture to dst at dstOffset, rows tightly packed, for the host to
         // read after the submit's fence. The texture is in state before and after; a depth texture gives its depth.
         virtual void                copyFromTexture(Texture* src, TextureUsage state, uint32_t layer, uint32_t mip, Buffer* dst, uint64_t dstOffset) = 0;
@@ -262,6 +267,9 @@ namespace rasm::rhi
         virtual void                    destroyQueryPool(QueryPool* pool) = 0;
         virtual Queue*                  getQueue(QueueType queueType) = 0;
         virtual bool                    hasAsyncCompute() const = 0;
+        virtual bool                    hasTransferQueue() const = 0;
+        // Timestamps on the queue count like the graphics queue's: same valid bits and period.
+        virtual bool                    hasTimestamps(QueueType queueType) const = 0;
         virtual bool                    fillBuffer(Buffer* buffer, const void* data, size_t size, size_t offset) = 0;
         virtual bool                    readBuffer(Buffer* buffer, void* data, size_t size, size_t offset) = 0;
         virtual void                    resetQueries(QueryPool* pool) = 0;

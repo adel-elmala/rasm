@@ -201,9 +201,10 @@ namespace rasm::rhi
             vk.vkDestroyCommandPool(device.getVkDevice(), pool, nullptr);
     }
 
-    bool VulkanCommandBuffer::initialize(uint32_t queueFamilyIndex, bool onComputeQueue, const std::string &name)
+    bool VulkanCommandBuffer::initialize(uint32_t queueFamilyIndex, QueueType onQueue, const std::string &name)
     {
-        computeQueue = onComputeQueue;
+        computeQueue = onQueue == QueueType::COMPUTE;
+        transferQueue = onQueue == QueueType::TRANSFER;
         // One pool per command buffer, reset as a whole in begin(): the buffer is re-recorded every time it is used.
         VkCommandPoolCreateInfo poolInfo = {
             .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -502,14 +503,17 @@ namespace rasm::rhi
         vk.vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
     }
 
-    // Each texture goes to TRANSFER_DST, takes its copies and goes to SHADER_READ_ONLY, the layout its bindless
-    // descriptor names. A texture whose first copy is here starts from UNDEFINED; one that an earlier batch began keeps
-    // what that batch wrote. Earlier submissions on this queue are in the first barrier's scope and later ones in the
-    // second's, as for copyBuffers.
+    // Each texture goes to TRANSFER_DST, takes its copies, and after its fill's last copy goes to SHADER_READ_ONLY, the
+    // layout its bindless descriptor names. A texture whose first copy is here starts from UNDEFINED; one that an earlier
+    // batch began is still in TRANSFER_DST and keeps what that batch wrote. Earlier submissions on this queue are in the
+    // first barrier's scope and later ones in the second's, as for copyBuffers. On the transfer queue the other queues
+    // wait for the submit's semaphore instead, and a texture of the graphics family is released to it there; the
+    // graphics queue acquires it (acquireTextures).
     void VulkanCommandBuffer::copyToTextures(Buffer *src, const TextureCopy *copies, uint32_t copyCount)
     {
         std::vector<VulkanTexture *> textures;
         std::vector<VkImageMemoryBarrier2> barriers;
+        std::vector<bool> finished;
         for (uint32_t i = 0; i < copyCount; ++i)
         {
             auto *texture = static_cast<VulkanTexture *>(copies[i].dst);
@@ -518,15 +522,18 @@ namespace rasm::rhi
             {
                 if (copies[i].discard)
                     barriers[it - textures.begin()].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                if (copies[i].last)
+                    finished[it - textures.begin()] = true;
                 continue;
             }
             textures.push_back(texture);
+            finished.push_back(copies[i].last);
             barriers.push_back({.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
                                 .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                                 .srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT,
                                 .dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT,
                                 .dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                                .oldLayout = copies[i].discard ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                .oldLayout = copies[i].discard ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                 .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                 .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                                 .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -555,15 +562,56 @@ namespace rasm::rhi
             vk.vkCmdCopyBufferToImage2(commandBuffer, &info);
         }
 
-        for (auto &barrier : barriers)
+        // A release's second scope is the acquire's on the other queue, and the semaphore signal covers the rest.
+        std::vector<VkImageMemoryBarrier2> leaving;
+        for (size_t i = 0; i < barriers.size(); ++i)
         {
+            if (!finished[i])
+                continue;
+            VkImageMemoryBarrier2 barrier = barriers[i];
             barrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
             barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            barrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+            barrier.dstStageMask = transferQueue ? VK_PIPELINE_STAGE_2_NONE : VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            barrier.dstAccessMask = transferQueue ? VK_ACCESS_2_NONE : VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
             barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
             barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            if (transferQueue && textures[i]->ownershipTransfer)
+            {
+                barrier.srcQueueFamilyIndex = device.getTransferFamily();
+                barrier.dstQueueFamilyIndex = device.getGraphicsQueue()->getFamilyIndex();
+            }
+            leaving.push_back(barrier);
         }
+        if (leaving.empty())
+            return;
+        dependencyInfo.imageMemoryBarrierCount = static_cast<uint32_t>(leaving.size());
+        dependencyInfo.pImageMemoryBarriers = leaving.data();
+        vk.vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+    }
+
+    // The acquire half of copyToTextures' release: the same layouts and families. Its first scope is the release's, which
+    // the submit's semaphore wait ordered before it; it makes the copies visible to every later read.
+    void VulkanCommandBuffer::acquireTextures(Texture *const *list, uint32_t count)
+    {
+        std::vector<VkImageMemoryBarrier2> barriers;
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            auto *texture = static_cast<VulkanTexture *>(list[i]);
+            barriers.push_back({.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
+                                .srcAccessMask = VK_ACCESS_2_NONE,
+                                .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                                .dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                                .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                .srcQueueFamilyIndex = device.getTransferFamily(),
+                                .dstQueueFamilyIndex = device.getGraphicsQueue()->getFamilyIndex(),
+                                .image = texture->image,
+                                .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = texture->mipLevels, .baseArrayLayer = 0, .layerCount = texture->desc.cube ? CUBE_FACES : 1}});
+        }
+        if (barriers.empty())
+            return;
+        const VkDependencyInfo dependencyInfo = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .imageMemoryBarrierCount = static_cast<uint32_t>(barriers.size()), .pImageMemoryBarriers = barriers.data()};
         vk.vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
     }
 

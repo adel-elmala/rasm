@@ -63,6 +63,7 @@ namespace rasm
     {
         float                       cpuFrameMs                  = 0.0f;
         float                       gpuFrameMs                  = 0.0f;
+        float                       uploadGpuMs                 = 0.0f;     // GPU time of the upload copies that finished since the last frame, on their queues
         GpuTimer                    gpuTimers[MAX_GPU_TIMERS - 1];
         uint32_t                    gpuTimerCount               = 0;
         uint32_t                    draws                       = 0;
@@ -351,6 +352,9 @@ namespace rasm
             std::shared_ptr<TextureLoadJob>     job;
             std::shared_ptr<const TextureRaw>   levels;
             uint64_t                            bytes       = 0;
+            TextureFillProgress                 progress;               // the parts filled so far (P24)
+            bool                                filled      = false;    // its copies are on their way: it is loaded once the load uploads reach uploadValue
+            uint64_t                            uploadValue = 0;
         };
 
         struct PendingEnvironmentLoad
@@ -364,8 +368,9 @@ namespace rasm
         PipelineHandle              createScenePipeline(const std::string& name, const std::string& shaderFile, const std::string& defines, const RenderTargetHandle& renderTarget, const char* vertexEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite, bool alphaToCoverage = false, bool depthTest = true);
         MaterialHandle              loadMaterial(const tinygltf::Model& model, int materialIndex, GltfImportCache& cache);
         void                        finishMeshLoad(PendingMeshLoad& load);
-        void                        finishTextureLoad(PendingTextureLoad& load);
+        bool                        finishTextureLoad(PendingTextureLoad& load, uint64_t maxBytes);
         bool                        fillTextureLevels(TextureHandle texture, const TextureRaw& raw);
+        bool                        fillTextureLevels(TextureHandle texture, const TextureRaw& raw, TextureFillProgress& progress, uint64_t maxBytes);
         void                        finishEnvironmentLoad(PendingEnvironmentLoad& load);
         bool                        createEnvironments();
         void                        recordEnvironmentBakes();
@@ -376,6 +381,7 @@ namespace rasm
         bool                        createBloomPipelines();
         void                        finishLoads(bool wait);
         bool                        finishReadyLoads(bool budgeted);
+        void                        publishUploadedLoads();
         void                        dropTextureLoad(TextureHandle texture);
         bool                        createGpuScene();
         void                        syncGpuScene();
@@ -448,6 +454,8 @@ namespace rasm
         std::vector<PendingMeshLoad>                                            pendingMeshes;
         std::unordered_map<TextureHandle, PendingTextureLoad, HandleHash>       pendingTextures;
         std::vector<PendingEnvironmentLoad>                                     pendingEnvironments;
+        std::vector<std::pair<MeshHandle, uint64_t>>                            uploadingMeshes;    // finished, READY once the load uploads reach the value
+        uint64_t                                                                loadUploadValue     = 0;    // what the last finishReadyLoads uploaded is on the GPU at it
 
         bool                        isLive(const EntityHandle& entity) const;
         bool                        isLive(const MeshHandle& mesh) const;

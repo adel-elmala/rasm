@@ -8,7 +8,7 @@ using rasm::rhi::ReleaseQueue;
 
 namespace
 {
-    // graphics, compute, uploads
+    // graphics, compute, frame uploads, load uploads
     struct Timelines
     {
         uint64_t values[rasm::rhi::RELEASE_TIMELINES] = {};
@@ -51,6 +51,23 @@ TEST_CASE("a release is freed only when every timeline reached its value")
     queue.collect(uploadsBehind.values);
     CHECK(freed == 0);
     const Timelines all{{10, 4, 7}};
+    queue.collect(all.values);
+    CHECK(freed == 1);
+}
+
+TEST_CASE("a release waits for the load uploads on the transfer queue too")
+{
+    ReleaseQueue queue;
+    int freed = 0;
+    queue.release([&freed]()
+                  { ++freed; });
+    const Timelines frame{{10, 4, 7, 3}};
+    queue.tag(frame.values);
+
+    const Timelines loadsBehind{{10, 4, 7, 2}};
+    queue.collect(loadsBehind.values);
+    CHECK(freed == 0);
+    const Timelines all{{10, 4, 7, 3}};
     queue.collect(all.values);
     CHECK(freed == 1);
 }

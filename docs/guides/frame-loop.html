@@ -97,7 +97,7 @@
 <div class="stepper">
   <div class="step">
     <h4>1. Input and finished loads</h4>
-    <svg viewBox="0 0 730 268" role="img" aria-label="pollEvents reads SDL events and updates the camera. finishLoads uploads finished background loads until 4 ms are spent; the load that crosses 4 ms still finishes, the next waits for the next frame.">
+    <svg viewBox="0 0 730 268" role="img" aria-label="pollEvents reads SDL events and updates the camera. finishLoads publishes the loads whose copies the GPU has, then fills finished background loads until 4 ms are spent, sending their copies to the transfer queue at once; the load that crosses 4 ms still finishes its step, the next waits for the next frame.">
       <!--strip 0-->
       <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><rect x="8" y="6" width="102" height="32" rx="7" class="hot"/><text x="59" y="26" class="mid small title">input · loads</text>
       <rect x="112" y="8" width="98" height="28" rx="5" class="ghost"/><text x="161" y="26" class="mid small t-faint">skip checks</text>
@@ -116,9 +116,9 @@
       <line x1="350" y1="112" x2="378" y2="112" class="arrow cpu" marker-end="url(#ah-cpu)"/>
       <rect x="380" y="56" width="340" height="112" rx="6" class="cpu"/>
       <text x="394" y="78" class="title mono">finishLoads(false)</text>
-      <text x="394" y="100" class="small">textures first, then meshes</text>
-      <text x="394" y="118" class="small">only loads whose worker is done</text>
-      <text x="394" y="136" class="small">uploads them (fillTexture, geometry pool)</text>
+      <text x="394" y="100" class="small">publishes loads whose copies are done</text>
+      <text x="394" y="118" class="small">meshes, then textures, in 4 MiB parts</text>
+      <text x="394" y="136" class="small">copies out at once on the transfer queue</text>
       <text x="394" y="154" class="small">stops once LOAD_BUDGET (4 ms) is spent</text>
 
       <text x="10" y="214" class="small">main-thread time</text>
@@ -132,7 +132,7 @@
       <text x="520" y="252" class="mid small t-hot">4 ms</text>
       <text x="120" y="252" class="mid small">0 ms</text>
     </svg>
-    <p>F1 shows the stats (<code>showStats</code>: the RASM window with the UI, else the overlay), and F2 steps <code>forcedLod</code> through the LODs and back to the automatic choice (-1). Loads that end together spread over several frames. <code>finishLoads</code> runs before anything binds the bindless set or the geometry pool, so what it writes is ready for this frame's draws. See <a href="asset-streaming.html#in-rasm">Streaming assets in the background</a>.</p>
+    <p>F1 shows the stats (<code>showStats</code>: the RASM window with the UI, else the overlay), and F2 steps <code>forcedLod</code> through the LODs and back to the automatic choice (-1). Loads that end together spread over several frames. <code>finishLoads</code> runs before anything binds the bindless set or the geometry pool. A load is drawn once its copies are done, a frame or two after its fill, so no frame waits for copies in flight. See <a href="asset-streaming.html#in-rasm">Streaming assets in the background</a> and <a href="transfer-queue.html#in-rasm">transfer queues</a>.</p>
   </div>
 
   <div class="step">
