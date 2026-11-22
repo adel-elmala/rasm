@@ -33,7 +33,7 @@ namespace rasm
     struct WorkerJob
     {
         std::function<void()>                   run;
-        uint64_t                                bytes                   = 0;    // the budget it takes when it starts
+        uint64_t                                bytes                   = 0;    // the budget it takes when it starts, added to its ticket's
         std::shared_ptr<LoadTicket>             ticket                  = {};   // cancelled before it starts: dropped, never run
     };
 
@@ -57,11 +57,11 @@ namespace rasm
         ~WorkerPool();
 
         void                                    push(WorkerJob job);
+        void                                    pushNext(WorkerJob job);
         void                                    pushChild(std::function<void()> run);
         void                                    setLoadBytes(LoadTicket& ticket, uint64_t bytes);
         void                                    finishLoad(LoadTicket& ticket);
         void                                    dropLoad(LoadTicket& ticket);
-        void                                    addBytes(uint64_t bytes);
         void                                    releaseBytes(uint64_t bytes);
         uint64_t                                completions() const;
         void                                    waitForCompletion(uint64_t seen);

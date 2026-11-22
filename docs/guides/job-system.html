@@ -530,7 +530,7 @@
 <p>The engine owns one <code>WorkerPool</code>. Every <code>loadMesh</code>, <code>loadTexture</code> and <code>loadEnvironment</code> is a load job on it; a glTF import splits into a child job per image and per sub-mesh's LODs. The main thread picks up done loads in <code>finishLoads</code> (<a href="asset-streaming.html#in-rasm">streaming assets</a>).</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 330" role="img" aria-label="loadMesh pushes a load job with a ticket and an estimate of its bytes. A worker starts it when the bytes fit the 512 MiB budget. runMeshImport parses the file and plans the images, sets the counter to the number of children, and pushes a runImageWork job per image and a buildMeshLods job per sub-mesh. Workers take children first. The child that brings the counter to zero runs completeMeshLoad, which finishes the images and sets the ticket to done. finishLoads on the main thread uses the result and gives the bytes back.">
+  <svg viewBox="0 0 760 330" role="img" aria-label="loadMesh pushes a load job with a ticket and an estimate of its bytes. A worker starts it when the bytes fit the 512 MiB budget. runMeshImport parses the file and plans the images; a next step, queued first and gated by the budget like a load, sets the counter to the number of children and pushes a runImageWork job per image and a buildMeshLods job per sub-mesh. Workers take children first. The child that brings the counter to zero runs completeMeshLoad, which finishes the images and sets the ticket to done. finishLoads on the main thread uses the result and gives the bytes back.">
     <text x="20" y="22" class="title t-cpu">main thread</text>
     <rect x="20" y="32" width="190" height="56" rx="6" class="cpu"/>
     <text x="115" y="55" class="mid mono">loadMesh(path)</text>
@@ -544,7 +544,7 @@
     <line x1="480" y1="60" x2="518" y2="60" class="arrow" marker-end="url(#ah)"/>
     <rect x="520" y="32" width="220" height="56" rx="6" class="cpu"/>
     <text x="630" y="55" class="mid mono small">runMeshImport</text>
-    <text x="630" y="74" class="mid small">parse, plan images, n = children</text>
+    <text x="630" y="74" class="mid small">parse; images: a gated next step</text>
 
     <line x1="630" y1="88" x2="630" y2="118" class="arrow cpu" marker-end="url(#ah-cpu)"/>
     <rect x="300" y="120" width="140" height="44" rx="6" class="mem"/><text x="370" y="138" class="mid mono small">runImageWork</text><text x="370" y="155" class="mid small">image 1</text>
@@ -573,10 +573,10 @@
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Workers</td><td>hardware threads minus the busy ones</td><td><code>EngineConfig::loadThreads</code>; 0 (the default) takes <code>std::thread::hardware_concurrency</code> minus one, for the main thread, at least 1. A game with threads of its own sets fewer. The pool starts first in the <code>Engine</code> constructor.</td></tr>
-  <tr><td>Queue</td><td>FIFO, children first, priority</td><td>Two FIFO queues of <code>std::function</code> jobs under one mutex: <code>pushChild</code> and <code>push</code>; children are taken first. No priority yet: it would be a sort key of the load queue.</td></tr>
-  <tr><td>Split</td><td>a child job per part</td><td><code>runMeshImport</code> pushes a <code>runImageWork</code> job per image (decode once, mips per kind of slot, or a KTX2 transcode per format) and a <code>buildMeshLods</code> job per sub-mesh.</td></tr>
+  <tr><td>Queue</td><td>FIFO, children first, priority</td><td>Two FIFO queues of <code>std::function</code> jobs under one mutex: <code>pushChild</code>, and <code>push</code> (<code>pushNext</code> puts a started load's next step at the front); children are taken first. No priority yet: it would be a sort key of the load queue.</td></tr>
+  <tr><td>Split</td><td>a child job per part</td><td><code>spawnMeshChildJobs</code> pushes a <code>runImageWork</code> job per image (decode once, mips per kind of slot, or a KTX2 transcode per format) and a <code>buildMeshLods</code> job per sub-mesh.</td></tr>
   <tr><td>Waiting</td><td>continuation, help, fibers</td><td>Continuation: <code>MeshLoadJob::remaining</code>, and the last child runs <code>completeMeshLoad</code>. The main thread's <code>waitForLoads</code> finishes what is ready, then sleeps in <code>waitForCompletion</code> until another load ends.</td></tr>
-  <tr><td>Budget</td><td>a job starts if its bytes fit, or nothing is held</td><td><code>EngineConfig::loadMemoryBudget</code>, 512 MiB. Estimates from headers; a mesh starts with its file size and corrects it after the parse (<code>setLoadBytes</code>). The main thread gives the bytes back when it uses a result; a glTF texture's levels keep their share until that texture is filled. Children are not gated.</td></tr>
+  <tr><td>Budget</td><td>a job starts if its bytes fit, or nothing is held</td><td><code>EngineConfig::loadMemoryBudget</code>, 512 MiB. Estimates from headers; a mesh starts with its file size; after the parse it holds its geometry and its images' file bytes, and its decoded images are a next step (<code>pushNext</code>, first in the load queue) that waits for the budget too, never held back by the load's own bytes. The main thread gives the bytes back when it uses a result; a glTF texture's levels keep their share until that texture is filled. Children are not gated.</td></tr>
   <tr><td>Cancel</td><td>ticket: flag and state</td><td><code>LoadTicket</code>: <code>cancelled</code>, <code>state</code> (<code>RUNNING</code>, <code>DONE</code>, <code>DROPPED</code>), <code>bytes</code>. <code>destroyMesh</code>, <code>destroyTexture</code> and <code>destroyEnvironment</code> call <code>dropLoad</code> and erase the pending entry at once.</td></tr>
   <tr><td>Shutdown</td><td>cancel, stop, wake, join</td><td><code>~Engine</code> drops every pending load, then <code>WorkerPool::shutdown</code> empties the queues and joins the threads, before anything else is destroyed.</td></tr>
   <tr><td>Same result</td><td>each job its own slot</td><td>The plan makes every <code>GltfImageTarget</code>'s empty <code>TextureRaw</code> before the jobs start, already in <code>GLTFRaw::ktxImages</code> or <code>imageLevels</code>; a LOD job writes only its own sub-mesh. The images and examples are the same as with one thread.</td></tr>
@@ -588,13 +588,13 @@
 <p><samp>python tools/load_bench.py</samp>: Release, headless, RTX 3060, i7-13700KF (24 hardware threads, so 23 workers), the median of three runs, before and after the pool.</p>
 
 <div class="stats">
-  <div><b>535 → 107 ms</b><span>Flight Helmet KTX2, whole load</span><small>15 images transcoded on several workers</small></div>
-  <div><b>931 → 189 ms</b><span>Flight Helmet PNG</span><small>decode and mips of each image in its own job</small></div>
-  <div><b>1052 → 196 ms</b><span>Sponza</span><small>69 JPEG and PNG images</small></div>
-  <div><b>3519 → 2965 MiB</b><span>300 images asked in one frame</span><small>peak private memory; at most 512 MiB decoded at once</small></div>
+  <div><b>535 → 110 ms</b><span>Flight Helmet KTX2, whole load</span><small>15 images transcoded on several workers</small></div>
+  <div><b>931 → 191 ms</b><span>Flight Helmet PNG</span><small>decode and mips of each image in its own job</small></div>
+  <div><b>1052 → 200 ms</b><span>Sponza</span><small>69 JPEG and PNG images</small></div>
+  <div><b>3519 → 2964 MiB</b><span>300 images asked in one frame</span><small>peak private memory; at most 512 MiB decoded at once</small></div>
 </div>
 
-<p>The main thread does the same work, so the longest frame while a model loads stays about the same (5 to 9 ms); Sponza's is sometimes up to 16 ms, because 23 busy workers and the driver leave the main thread less of the CPU (<code>P25</code>). The burst (<samp>17_streaming --burst</samp>) ends in 425 ms against 501, and its longest frame is 27.0 ms against 37.2. On Windows the old <samp>std::async</samp> used the system's thread pool, so it had 44 threads at most, not 300; libc++ on macOS starts one thread per call.</p>
+<p>The main thread does the same work, so the longest frame while a model loads stays about the same (5 to 9 ms); Sponza's is sometimes up to 16 ms, because 23 busy workers and the driver leave the main thread less of the CPU (<code>P25</code>). The burst (<samp>17_streaming --burst</samp>) ends in 453 ms against 501, and its longest frame is 22.2 ms against 37.2. On Windows the old <samp>std::async</samp> used the system's thread pool, so it had 44 threads at most, not 300; libc++ on macOS starts one thread per call.</p>
 
 <h3>Where it lives in code</h3>
 
@@ -622,6 +622,7 @@
     <li>Every byte a load takes from the budget goes back once: the main thread gives back what it used or dropped while <code>DONE</code>; the job gives back what it held when it ends <code>DROPPED</code>.</li>
     <li>Each job writes only its own output, made before the jobs start; the finish step reads in a fixed order.</li>
     <li>A running job checks its ticket between steps, and every child still counts down when it skips its work.</li>
+    <li>The basis transcoder's first use runs alone (<code>decodeKtx</code>): libktx sets up its tables then, with no lock.</li>
   </ul>
 </div>
 

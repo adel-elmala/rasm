@@ -324,3 +324,69 @@ TEST_CASE("the destructor stops a pool that still has work")
     }
     CHECK(ran <= 100);
 }
+
+TEST_CASE("a load's next step goes before queued loads, adds to its bytes, and is not held back by them")
+{
+    WorkerPool pool(1, 100, "test");
+    Order order;
+    Gate gate;
+    auto ticket = std::make_shared<LoadTicket>();
+    pool.push({.run = gate.job()});
+    pool.push({.run = [&pool, &order, ticket]()
+               {
+                   order.add(1);
+                   // The first step holds 80 of 100; the next one needs 50 more, which only its own bytes stand against.
+                   pool.setLoadBytes(*ticket, 80);
+                   pool.pushNext({.run = [&pool, &order, ticket]()
+                                  {
+                                      order.add(2);
+                                      pool.finishLoad(*ticket);
+                                  },
+                                  .bytes = 50,
+                                  .ticket = ticket});
+               },
+               .ticket = ticket});
+    pool.push({.run = [&order]()
+               { order.add(3); }});
+    gate.open();
+    REQUIRE(waitUntil([&]()
+                      { return ticket->state == LoadState::DONE; }));
+    CHECK(ticket->bytes == 130);
+    CHECK(pool.stats().peakBytes == 130);
+    // The other load waits until the first gives its bytes back.
+    settle();
+    CHECK(order.get() == std::vector<int>{1, 2});
+    pool.dropLoad(*ticket);
+    REQUIRE(waitUntil([&]()
+                      { return order.get().size() == 3; }));
+    CHECK(order.get() == std::vector<int>{1, 2, 3});
+}
+
+TEST_CASE("a load dropped while its next step waits gives back what its first step held")
+{
+    WorkerPool pool(1, 100, "test");
+    Gate gate;
+    std::atomic<bool> nextRan = false;
+    auto ticket = std::make_shared<LoadTicket>();
+    pool.push({.run = [&pool, &nextRan, ticket, f = gate.future]()
+               {
+                   pool.setLoadBytes(*ticket, 40);
+                   pool.pushNext({.run = [&nextRan]()
+                                  { nextRan = true; },
+                                  .bytes = 10,
+                                  .ticket = ticket});
+                   // Keeps the only worker busy, so the next step stays queued.
+                   f.wait();
+               },
+               .ticket = ticket});
+    REQUIRE(waitUntil([&]()
+                      { return pool.stats().queued == 1 && pool.stats().running == 1; }));
+    REQUIRE(waitUntil([&]()
+                      { return pool.stats().bytes == 40; }));
+    pool.dropLoad(*ticket);
+    gate.open();
+    REQUIRE(waitUntil([&]()
+                      { return pool.stats().bytes == 0 && pool.stats().queued == 0; }));
+    settle();
+    CHECK_FALSE(nextRan);
+}

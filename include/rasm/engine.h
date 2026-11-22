@@ -339,6 +339,7 @@ namespace rasm
             MeshHandle                          handle;
             std::string                         path;
             std::shared_ptr<MeshLoadJob>        job;
+            uint64_t                            movedBytes  = 0;    // of its budget bytes, those its textures took (finishMeshLoad)
         };
 
         // A load decodes on a worker (job); a glTF texture arrives decoded with its mesh (levels, which hold bytes of

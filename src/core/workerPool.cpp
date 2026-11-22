@@ -33,6 +33,18 @@ namespace rasm
         wake.notify_one();
     }
 
+    // A started load's next step: first in the load queue, so it goes before loads that have not started, but it
+    // waits for the budget like them. Its bytes add to what its ticket already holds.
+    void WorkerPool::pushNext(WorkerJob job)
+    {
+        {
+            std::lock_guard lock(mutex);
+            if (!stopping)
+                loads.push_front(std::move(job));
+        }
+        wake.notify_one();
+    }
+
     void WorkerPool::pushChild(std::function<void()> run)
     {
         {
@@ -78,13 +90,6 @@ namespace rasm
             releaseBytes(ticket.bytes.exchange(0));
         // A dropped load at the head of the queue may hold back the ones behind it.
         wake.notify_all();
-    }
-
-    void WorkerPool::addBytes(uint64_t added)
-    {
-        std::lock_guard lock(mutex);
-        bytes += added;
-        peakBytes = std::max(peakBytes, bytes);
     }
 
     void WorkerPool::releaseBytes(uint64_t released)
@@ -163,18 +168,23 @@ namespace rasm
                         children.pop_front();
                         break;
                     }
+                    // A dropped load's job never runs, and what its earlier steps held goes back now.
                     while (!loads.empty() && loads.front().ticket && loads.front().ticket->cancelled)
                     {
+                        bytes -= std::min(bytes, loads.front().ticket->bytes.exchange(0));
                         dropped.push_back(std::move(loads.front()));
                         loads.pop_front();
                     }
-                    if (!loads.empty() && (bytes == 0 || bytes + loads.front().bytes <= budget))
+                    // The bytes a load's earlier steps hold do not hold back its next step, or a load bigger than the
+                    // budget would wait for itself.
+                    const uint64_t own = !loads.empty() && loads.front().ticket ? loads.front().ticket->bytes.load() : 0;
+                    if (!loads.empty() && (bytes == own || bytes + loads.front().bytes <= budget))
                     {
                         WorkerJob &job = loads.front();
                         bytes += job.bytes;
                         peakBytes = std::max(peakBytes, bytes);
                         if (job.ticket)
-                            job.ticket->bytes = job.bytes;
+                            job.ticket->bytes += job.bytes;
                         run = std::move(job.run);
                         loads.pop_front();
                         break;

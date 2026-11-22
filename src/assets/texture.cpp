@@ -14,9 +14,11 @@
 #include "stb_image.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <unordered_set>
 #include <vector>
 
@@ -136,8 +138,10 @@ namespace rasm
         registry.textureCacheKeys.resize(std::max<size_t>(registry.textureCacheKeys.size(), textureHandle.index + 1));
         registry.textureCacheKeys[textureHandle.index] = cacheKey;
         // The header gives the size of every level, so the budget knows what the decode will hold before it starts: the
-        // levels, and an image's decoded pixels while the job makes its mips.
-        uint64_t levelBytes = extension == "ktx2" ? 0 : static_cast<uint64_t>(desc.width) * desc.height * 4;
+        // levels, and while the job runs an image's decoded pixels or a KTX2 file's bytes.
+        std::error_code error;
+        const uint64_t fileBytes = std::filesystem::file_size(pathFromUtf8(path), error);
+        uint64_t levelBytes = extension == "ktx2" ? (error ? 0 : fileBytes) : static_cast<uint64_t>(desc.width) * desc.height * 4;
         for (uint32_t level = 0; level < desc.mipLevels; ++level)
             levelBytes += rhi::getTextureLevelSize(desc.format, std::max(1u, desc.width >> level), std::max(1u, desc.height >> level));
         auto job = std::make_shared<TextureLoadJob>();

@@ -74,25 +74,11 @@ namespace rasm
                 completeMeshLoad(*job, pool);
         }
 
-        // The import job: it reads the file and plans the images, then each image and each sub-mesh's LODs become a
-        // child job. It waits for none of them; the last one to end finishes the load, so no worker is ever held.
-        void runMeshImport(const std::shared_ptr<MeshLoadJob> &job, WorkerPool *pool, const std::string &path, bool lods, uint64_t textureFormats)
+        // Each image and each sub-mesh's LODs become a child job. None is waited for: the last one to end finishes the
+        // load, so no worker is ever held.
+        void spawnMeshChildJobs(const std::shared_ptr<MeshLoadJob> &job, WorkerPool *pool, uint32_t lodCount)
         {
-            ZoneScoped;
-
-            if (job->ticket.cancelled)
-            {
-                pool->finishLoad(job->ticket);
-                return;
-            }
-            job->raw = parseMeshFile(path, textureFormats, job->images);
-            uint64_t imageBytes = 0;
-            for (const GltfImageWork &work : job->images)
-                imageBytes += work.bytes;
-            pool->setLoadBytes(job->ticket, getRawBytes(job->raw) + imageBytes);
-
             const auto imageCount = static_cast<uint32_t>(job->images.size());
-            const auto lodCount = lods ? static_cast<uint32_t>(job->raw.subGltfRaws.size()) : 0u;
             if (imageCount + lodCount == 0 || job->ticket.cancelled)
             {
                 completeMeshLoad(*job, pool);
@@ -111,6 +97,40 @@ namespace rasm
                                     if (!job->ticket.cancelled)
                                         buildMeshLods(job->raw.subGltfRaws[i].objRaw);
                                     endMeshChildJob(job, pool); });
+        }
+
+        // The import job reads the file and plans the images. Until it is parsed, the file's size stands for the load
+        // (a .gltf's buffers and images are counted once read). Then it holds its geometry and its images' file bytes,
+        // and the decoded images are a next step that waits for the budget like any load.
+        void runMeshImport(const std::shared_ptr<MeshLoadJob> &job, WorkerPool *pool, const std::string &path, bool lods, uint64_t textureFormats)
+        {
+            ZoneScoped;
+
+            if (job->ticket.cancelled)
+            {
+                pool->finishLoad(job->ticket);
+                return;
+            }
+            job->raw = parseMeshFile(path, textureFormats, job->images);
+            uint64_t imageBytes = 0;
+            uint64_t fileBytes = 0;
+            for (const GltfImageWork &work : job->images)
+            {
+                imageBytes += work.bytes;
+                fileBytes += work.fileBytes;
+            }
+            pool->setLoadBytes(job->ticket, getRawBytes(job->raw) + fileBytes);
+
+            const auto lodCount = lods ? static_cast<uint32_t>(job->raw.subGltfRaws.size()) : 0u;
+            if (imageBytes == 0 || job->ticket.cancelled)
+            {
+                spawnMeshChildJobs(job, pool, lodCount);
+                return;
+            }
+            pool->pushNext({.run = [job, pool, lodCount]()
+                            { spawnMeshChildJobs(job, pool, lodCount); },
+                            .bytes = imageBytes,
+                            .ticket = std::shared_ptr<LoadTicket>(job, &job->ticket)});
         }
     }
 
@@ -299,6 +319,7 @@ namespace rasm
         GltfImportCache cache{.raw = &raw};
         auto fail = [&](const char *what)
         {
+            load.movedBytes = cache.movedBytes;
             spdlog::error("Failed to upload the {} of mesh {}", what, load.path);
             for (const MeshGeometry &geometry : geometries)
                 geometryPool->free(geometry);
@@ -352,6 +373,7 @@ namespace rasm
                 mesh.ownedTextures.push_back(texture);
         }
 
+        load.movedBytes = cache.movedBytes;
         mesh.state = MeshState::READY;
         const GeometryPoolStats pool = geometryPool->stats();
         spdlog::info("Loaded mesh {} ({:.1f} ms on the main thread): {} sub-meshes, geometry pool at {}/{} vertices and {}/{} indices.",

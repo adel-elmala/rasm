@@ -657,8 +657,11 @@ constexpr uint32_t MAX_MORPH_TARGETS = 256;</pre>
 {
     std::unordered_map&lt;int, MaterialHandle&gt;      materials;
     std::unordered_map&lt;uint64_t, TextureHandle&gt; imageTextures;
+    const GLTFRaw*                               raw         = nullptr;
+    std::unordered_set&lt;const TextureRaw*&gt;      countedLevels;
+    uint64_t                                     movedBytes  = 0;
 };</pre>
-  <div class="body"><p>Used while one glTF file is imported, so primitives that share a material, and materials that share an image, create it only once.</p></div>
+  <div class="body"><p>Used while one glTF file is imported, so primitives that share a material, and materials that share an image, create it only once. <code>raw</code> is the import's result; <code>countedLevels</code> and <code>movedBytes</code> count the decoded levels whose share of <code>EngineConfig::loadMemoryBudget</code> moved from the mesh's load to its textures (<a href="../guides/job-system.html#in-rasm">job systems</a>).</p></div>
 </div>
 
 <h2 id="animation"><span class="n">5</span>Animation</h2>

@@ -25,6 +25,7 @@ namespace rasm
         bool                            ktx         = false;
         std::string                     name;
         uint64_t                        bytes       = 0;        // the levels it makes, from the image's header
+        uint64_t                        fileBytes   = 0;        // the image's bytes in the file, kept until the model's jobs end
         std::vector<GltfImageTarget>    targets;
     };
 

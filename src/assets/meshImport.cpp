@@ -27,6 +27,7 @@
 #include <fstream>
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -413,14 +414,14 @@ namespace rasm
             return image.uri.empty() ? "glTF image " + std::to_string(source) : image.uri;
         }
 
-        GltfImageWork &findImageWork(std::vector<GltfImageWork> &images, int source, bool ktx, const std::string &name)
+        GltfImageWork &findImageWork(std::vector<GltfImageWork> &images, int source, bool ktx, const std::string &name, uint64_t fileBytes)
         {
             for (GltfImageWork &work : images)
             {
                 if (work.source == source && work.ktx == ktx)
                     return work;
             }
-            images.push_back({.source = source, .ktx = ktx, .name = name});
+            images.push_back({.source = source, .ktx = ktx, .name = name, .fileBytes = fileBytes});
             return images.back();
         }
 
@@ -484,7 +485,7 @@ namespace rasm
                     {
                         warnAboutKtxFormat(name, info, format);
                         auto levels = std::make_shared<TextureRaw>();
-                        GltfImageWork &work = findImageWork(images, source, true, name);
+                        GltfImageWork &work = findImageWork(images, source, true, name, image.image.size());
                         work.targets.push_back({.format = format, .levels = levels});
                         work.bytes += getLevelBytes(format, info.width, info.height, getKtxMipCount(info, format));
                         raw.ktxImages[imageKey] = std::move(levels);
@@ -497,8 +498,9 @@ namespace rasm
         // Each PNG or JPEG image a material reads gets its mips in its job, so the main thread only copies them (P2): once
         // per kind of slot that reads it, sRGB-aware with alpha weighting for color, as it is for data, and renormalized
         // for normal maps. An image that a KHR_texture_basisu transcode replaces in that slot is left out. Only the
-        // header is read here.
-        void planImageLevels(const tinygltf::Model &model, GLTFRaw &raw, std::vector<GltfImageWork> &images)
+        // header is read here. With onlySlots, only those KHR_texture_basisu slots (getKtxSlotKey) are planned: the
+        // fallbacks of failed transcodes, whose other slots were checked, and logged, the first time.
+        void planImageLevels(const tinygltf::Model &model, GLTFRaw &raw, std::vector<GltfImageWork> &images, const std::unordered_set<uint64_t> *onlySlots)
         {
             for (const tinygltf::Material &material : model.materials)
             {
@@ -510,6 +512,8 @@ namespace rasm
                         continue;
                     const int basisuSource = getBasisuSource(model, uses[i].texture);
                     if (basisuSource >= 0 && raw.ktxFormats.contains(getKtxSlotKey(basisuSource, uses[i].slot)))
+                        continue;
+                    if (onlySlots && (basisuSource < 0 || !onlySlots->contains(getKtxSlotKey(basisuSource, uses[i].slot))))
                         continue;
                     const int source = model.textures[uses[i].texture].source;
                     if (source < 0 || source >= static_cast<int>(model.images.size()))
@@ -545,7 +549,7 @@ namespace rasm
                     const auto h = static_cast<uint32_t>(height);
                     const Format format = uses[i].slot == KtxSlot::COLOR ? Format::R8G8B8A8_SRGB : Format::R8G8B8A8_UNORM;
                     auto levels = std::make_shared<TextureRaw>();
-                    GltfImageWork &work = findImageWork(images, source, false, name);
+                    GltfImageWork &work = findImageWork(images, source, false, name, image.image.size());
                     work.targets.push_back({.format = format, .normals = uses[i].slot == KtxSlot::NORMAL, .levels = levels});
                     // The decoded pixels live in the job while it makes the levels.
                     work.bytes += getLevelBytes(format, w, h, rhi::getFullMipCount(w, h)) + (firstUse ? static_cast<uint64_t>(w) * h * 4 : 0);
@@ -619,7 +623,7 @@ namespace rasm
             // Every accessor has been read. Materials need only the decoded images, so the raw buffers go now (P6).
             model->buffers.clear();
             planKtxImages(*model, supportedTextureFormats, raw, images);
-            planImageLevels(*model, raw, images);
+            planImageLevels(*model, raw, images, nullptr);
             raw.model = std::move(model);
             raw.loaded = true;
             return raw;
@@ -757,24 +761,24 @@ namespace rasm
         if (!raw.model)
             return;
         tinygltf::Model &model = *raw.model;
-        bool ktxFailed = false;
+        std::unordered_set<uint64_t> failedSlots;
         for (auto it = raw.ktxFormats.begin(); it != raw.ktxFormats.end();)
         {
             const auto levels = raw.ktxImages.find(getKtxImageKey(static_cast<int>(it->first >> 3), it->second));
             if (levels == raw.ktxImages.end() || levels->second->levelSizes.empty())
             {
+                failedSlots.insert(it->first);
                 it = raw.ktxFormats.erase(it);
-                ktxFailed = true;
             }
             else
                 ++it;
         }
         std::erase_if(raw.ktxImages, [](const std::pair<const uint64_t, std::shared_ptr<const TextureRaw>> &entry)
                       { return entry.second->levelSizes.empty(); });
-        if (ktxFailed)
+        if (!failedSlots.empty())
         {
             std::vector<GltfImageWork> fallbacks;
-            planImageLevels(model, raw, fallbacks);
+            planImageLevels(model, raw, fallbacks, &failedSlots);
             for (GltfImageWork &work : fallbacks)
                 runImageWork(model, work);
         }

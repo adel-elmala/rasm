@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace tinygltf { class Model; }
@@ -146,6 +147,8 @@ namespace rasm
         std::unordered_map<int, MaterialHandle>                 materials;
         std::unordered_map<uint64_t, TextureHandle>             imageTextures;
         const GLTFRaw*                                          raw             = nullptr;
+        std::unordered_set<const TextureRaw*>                   countedLevels;              // levels whose load budget bytes moved to a texture
+        uint64_t                                                movedBytes      = 0;
     };
 
 }

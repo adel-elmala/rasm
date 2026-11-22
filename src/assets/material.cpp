@@ -332,9 +332,10 @@ namespace rasm
                                               .mipLevels = static_cast<uint32_t>(levels->levelSizes.size())});
                 if (!texture.isValid())
                     return {};
-                // Its levels now hold their share of the load budget, until the texture is filled.
-                const uint64_t bytes = levels->levels.size();
-                workers->addBytes(bytes);
+                // Its levels take their share of the load's budget bytes with them, until the texture is filled; levels
+                // two textures share are counted once.
+                const uint64_t bytes = cache.countedLevels.insert(levels.get()).second ? levels->levels.size() : 0;
+                cache.movedBytes += bytes;
                 pendingTextures.emplace(texture, PendingTextureLoad{.handle = texture, .path = name, .levels = std::move(levels), .bytes = bytes});
                 addBindlessTexture(bindlessDescriptorSet, texture, sampler);
                 cache.imageTextures[cacheKey] = texture;

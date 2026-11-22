@@ -319,8 +319,9 @@ namespace rasm
             PendingMeshLoad load = std::move(pendingMeshes[i]);
             pendingMeshes.erase(pendingMeshes.begin() + static_cast<std::ptrdiff_t>(i));
             finishMeshLoad(load);
-            // Its textures took their own bytes (loadMaterial); the rest of the result is freed now.
-            workers->releaseBytes(load.job->ticket.bytes.exchange(0));
+            // Its textures took their levels' bytes with them (loadMaterial); the rest of the result is freed now.
+            const uint64_t held = load.job->ticket.bytes.exchange(0);
+            workers->releaseBytes(held - std::min(held, load.movedBytes));
         }
 
         for (size_t i = 0; i < pendingEnvironments.size() && !overBudget();)

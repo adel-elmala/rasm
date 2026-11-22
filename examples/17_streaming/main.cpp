@@ -28,7 +28,7 @@
 //   and loaded again.
 // - Every 120 frames it prints getPoolStats; at the end the peaks, which a long run (--frames 6000) shows are flat.
 //
-// --burst <folder> asks for every image (loadTexture) and model (loadMesh) in the folder in the first frame, like a
+// --burst <folder> asks for every image (loadTexture: .png, .jpg, .ktx2) in the folder in the first frame, like a
 // map engine that needs a screen of tiles at once, and quits once all are in. After the first frame it destroys every
 // fourth texture, like tiles the camera left before they loaded: their loads are dropped. It prints how long that took, the
 // longest frame meanwhile, the load workers and the most decoded memory waiting at once (getLoadStats), which the
@@ -62,6 +62,15 @@ namespace
         rasm::EntityHandle houses[HOUSES];
         rasm::EntityHandle fox;
         rasm::LightHandle light;
+    };
+
+    struct Burst
+    {
+        std::vector<rasm::TextureHandle> textures;
+        std::chrono::steady_clock::time_point start;
+        double longestFrameMs = 0.0;
+        uint32_t frames = 0;
+        uint32_t dropped = 0;
     };
 
     uint32_t hash(uint32_t value)
@@ -248,16 +257,6 @@ namespace
                     static_cast<unsigned long long>(stats.instances), static_cast<unsigned long long>(stats.animationPoolBytes), stats.releasesWaiting);
     }
 
-    struct Burst
-    {
-        std::vector<rasm::TextureHandle> textures;
-        std::vector<rasm::MeshHandle> meshes;
-        std::chrono::steady_clock::time_point start;
-        double longestFrameMs = 0.0;
-        uint32_t frames = 0;
-        uint32_t dropped = 0;
-    };
-
     bool startBurst(rasm::Engine &engine, const std::string &folder, Burst &burst)
     {
         std::error_code error;
@@ -274,27 +273,21 @@ namespace
             const std::string extension = file.extension().string();
             if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".ktx2")
                 burst.textures.push_back(engine.loadTexture(file.string()));
-            else if (extension == ".gltf" || extension == ".glb" || extension == ".obj")
-                burst.meshes.push_back(engine.loadMesh(file.string()));
         }
-        if (burst.textures.empty() && burst.meshes.empty())
+        if (burst.textures.empty())
         {
-            std::fprintf(stderr, "error: --burst %s: no image or model in the folder.\n", folder.c_str());
+            std::fprintf(stderr, "error: --burst %s: no image in the folder.\n", folder.c_str());
             return false;
         }
         return true;
     }
 
+    // A texture whose decode fails counts as loaded too (it stays white), so the burst always ends.
     bool burstLoaded(const rasm::Engine &engine, const Burst &burst)
     {
         for (rasm::TextureHandle texture : burst.textures)
         {
             if (texture.isValid() && !engine.isLoaded(texture))
-                return false;
-        }
-        for (rasm::MeshHandle mesh : burst.meshes)
-        {
-            if (mesh.isValid() && !engine.isLoaded(mesh))
                 return false;
         }
         return true;
@@ -436,8 +429,8 @@ int main(int argc, char **argv)
         if (burstLoaded(engine, burst))
         {
             const rasm::LoadStats loads = engine.getLoadStats();
-            std::printf("burst: %zu textures (%u dropped) and %zu meshes loaded in %.0f ms over %u frames, longest frame %.1f ms; %u load workers, at most %.1f MiB decoded at once\n",
-                        burst.textures.size() - burst.dropped, burst.dropped, burst.meshes.size(), std::chrono::duration<double, std::milli>(frameEnd - burst.start).count(), burst.frames,
+            std::printf("burst: %zu textures (%u dropped) loaded in %.0f ms over %u frames, longest frame %.1f ms; %u load workers, at most %.1f MiB decoded at once\n",
+                        burst.textures.size() - burst.dropped, burst.dropped, std::chrono::duration<double, std::milli>(frameEnd - burst.start).count(), burst.frames,
                         burst.longestFrameMs, loads.workers, static_cast<double>(loads.peakDecodedBytes) / (1024.0 * 1024.0));
             std::fflush(stdout);
             return 0;
