@@ -881,7 +881,7 @@
   <tr><td>submits</td><td><code>submitBatches</code>, at the end of <code>endFrame</code></td><td>the GPU starts the frame once it is recorded, and every wait is on a submit already made</td></tr>
   <tr><td>upload flush</td><td>inside <code>RenderContext::submit</code></td><td>the copies must run before the frame that reads them</td></tr>
   <tr><td><code>tagReleases</code></td><td><code>endFrame</code>, after <code>submitBatches</code>, also for a dropped frame</td><td>what was destroyed since the last frame waits for the values the queues and the uploads signaled last (<a href="resource-lifetime.html">deferred destruction</a>)</td></tr>
-  <tr><td><code>collectReleases</code></td><td><code>beginFrame</code>, after the fence wait</td><td>frees the destroyed objects and bindless slots whose values the fences reached, by reading the fences, never waiting; nothing to do when nothing was destroyed</td></tr>
+  <tr><td><code>collectReleases</code></td><td><code>beginFrame</code>: at its start (after a <code>tagReleases</code>, so skipped frames still free), and after the fence wait</td><td>frees the destroyed objects and bindless slots whose values the fences reached, by reading the fences, never waiting; nothing to do when nothing was destroyed</td></tr>
 </table>
 </div>
 

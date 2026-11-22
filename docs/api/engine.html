@@ -1090,7 +1090,7 @@ const uint64_t address = engine.getRenderContext().getBufferDeviceAddress(partic
     <ul>
       <li>Every material that uses the texture loses it: that texture slot of the material samples nothing from the next frame on (the material's factor alone, as with no texture). An entity that waited for it to load is drawn.</li>
       <li>A load that has not finished is dropped when its decode ends. <code>loadTexture</code> of the same path then loads it again.</li>
-      <li>Swapchain images and render target attachments are not yours to destroy.</li>
+      <li>Swapchain images and render target textures are refused: they belong to the swapchain and to their render target.</li>
     </ul>
     <pre><code>// A tile's material gets a new texture; the old one goes once no frame in flight samples it.
 rasm::Material values = engine.getMaterial(tile.material);

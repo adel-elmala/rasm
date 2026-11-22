@@ -65,9 +65,12 @@ namespace rasm
         }
         const std::string path = resolveAssetPath(assetPath);
         const auto cacheKey = path + "#" + std::to_string(static_cast<int>(format));
-        if (registry.loadedTextures.find(cacheKey) != registry.loadedTextures.end())
+        // A texture destroyed through RenderContext directly leaves its entry; it is loaded again then.
+        if (auto it = registry.loadedTextures.find(cacheKey); it != registry.loadedTextures.end())
         {
-            return registry.loadedTextures[cacheKey];
+            if (ctx.isAlive(it->second))
+                return it->second;
+            registry.loadedTextures.erase(it);
         }
 
         // find if the texture extension is supported, if not return invalid handle

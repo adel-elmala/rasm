@@ -428,6 +428,10 @@ namespace rasm
 
         pollEvents(camera);
         finishLoads(false);
+        // No frame is being recorded, so what was destroyed since the last frame waits only for work already submitted.
+        // Here, and not after the fence wait only, so frees go on while frames are skipped (a minimized window).
+        ctx.tagReleases({.fence = frameFence, .value = frameFenceValue}, {.fence = computeFence, .value = computeFenceValue});
+        ctx.collectReleases();
 
         // Nothing can be presented to a minimized or zero-sized window (B5).
         if (mainWindow.minimized || mainWindow.pixelWidth == 0 || mainWindow.pixelHeight == 0)

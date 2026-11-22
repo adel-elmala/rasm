@@ -694,7 +694,7 @@ bool fillTexture(const TextureHandle&amp; texture, const TextureLevel* levels, u
 <div class="api" id="destroyTexture">
   <pre class="sig">void destroyTexture(const TextureHandle&amp; texture);</pre>
   <div class="body">
-    <p>The handle is invalid at once. The texture and its bindless slot are freed once the GPU has finished every frame that may sample them; then a new texture can take the slot. Materials keep the slot number, so use <a href="engine.html#destroyTexture"><code>Engine::destroyTexture</code></a> for a texture a material may use: it removes it from the materials first.</p>
+    <p>The handle is invalid at once. The texture and its bindless slot are freed once the GPU has finished every frame that may sample them; then a new texture can take the slot. A render target's texture is refused: destroy the render target. Materials keep the slot number, so use <a href="engine.html#destroyTexture"><code>Engine::destroyTexture</code></a> for a texture a material may use: it removes it from the materials first.</p>
     <p><span class="tag">errors</span> Swapchain images are refused: <code>Swapchain images belong to the swapchain and can't be destroyed.</code></p>
   </div>
 </div>
@@ -715,7 +715,7 @@ bool fillTexture(const TextureHandle&amp; texture, const TextureLevel* levels, u
   <div class="body">
     <p>Writes <code>texture</code> with <code>sampler</code> into a slot of the bindless set and returns the slot, which shaders use as the array index. The descriptor promises the sampled layout, so the texture must be in it when a shader reads it. A texture holds one slot until it is destroyed; <a href="#getBindlessTextureIndex">getBindlessTextureIndex</a> gives it. <a href="materials.html#addBindlessTexture">Engine::addBindlessTexture</a> calls this.</p>
     <dl>
-      <dt>slot</dt><dd><code>MAX_BINDLESS_TEXTURES</code> (the default): the texture's own slot when it has one (rewritten with the new sampler), else a freed slot, else the next one never used. A smaller value takes that slot: the texture that held it loses it, and the texture gives back the slot it had. Only name a slot no frame in flight samples.</dd>
+      <dt>slot</dt><dd><code>MAX_BINDLESS_TEXTURES</code> (the default): the texture's own slot when it has one, unchanged (a frame in flight may sample it; another sampler logs an error: make a second texture), else a freed slot, else the next one never used. A smaller value takes that slot: the texture that held it loses it, and the texture gives back the slot it had. A slot that waits for the GPU after a destroy is refused. Only name a slot no frame in flight samples.</dd>
     </dl>
     <p><span class="tag">errors</span> When every slot is held or still waits for the GPU, it logs how many wait and returns <code>UINT32_MAX</code>, as does a slot above <code>MAX_BINDLESS_TEXTURES</code> or an unknown set or texture.</p>
   </div>

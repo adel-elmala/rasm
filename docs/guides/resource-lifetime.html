@@ -251,7 +251,7 @@
   <div><dt>Garbage or a lost device a frame after a destroy</dt><dd>The memory was freed while a frame in flight read it. Free through the queue, never at the call.</dd></div>
   <div><dt>The wrong texture flickers on old objects for one or two frames</dt><dd>A slot or a range was reused before the frames that knew the old meaning were done. Its release must wait too, not only the memory.</dd></div>
   <div><dt>A free that never happens</dt><dd>It waits for a value nothing will signal: taken before the submit, or for a submit that failed. Tag at the end of the frame with the values the counters really signaled last.</dd></div>
-  <div><dt>Memory grows while the window is minimized</dt><dd>No frame runs, so nothing is collected. The entries are freed at the next frame; a program that must free while hidden waits for the device to be idle.</dd></div>
+  <div><dt>Memory grows while the window is minimized</dt><dd>No frame runs, so a queue that is tagged and collected only inside a frame never moves. Between frames nothing is being recorded, so a free may take the values signaled last at once: tag and collect also where a skipped frame still passes.</dd></div>
   <div><dt>A copy writes into freed memory</dt><dd>An upload sent after the frame still writes the object. Its counter is one of the values to wait for.</dd></div>
   <div><dt>The frame stalls at a destroy</dt><dd>A wait for the device to be idle at each destroy. Read counters, never wait on them, to decide what to free.</dd></div>
 </dl>
@@ -261,7 +261,7 @@
 <p><code>RenderContext::destroyTexture</code>, <code>destroyBuffer</code> and <code>destroyRenderTargets</code> (and <code>Engine::destroyTexture</code>, <code>Engine::destroyBuffer</code>, <code>Engine::destroyRenderTarget</code> for applications) release the handle at once and give the free to a <code>rhi::ReleaseQueue</code>. <code>Engine::endFrame</code> tags the queue after <code>submitBatches</code>, and <code>Engine::beginFrame</code> collects it after the fence wait of the frame slot. Nothing waits on the CPU.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 300" role="img" aria-label="destroyTexture releases the handle in the texture pool and pushes a free onto the release queue, untagged. endFrame, after submitBatches, calls tagReleases with frameFenceValue, computeFenceValue and the uploads' last submit. beginFrame, after its fence waits, calls collectReleases, which reads the three fences and runs every free whose values they reached: textureStates.forget, cancelUploads, destroyTexture, and the bindless slot goes back to freeBindlessSlots.">
+  <svg viewBox="0 0 760 300" role="img" aria-label="destroyTexture releases the handle in the texture pool and pushes a free onto the release queue, untagged. endFrame, after submitBatches, calls tagReleases with frameFenceValue, computeFenceValue and the uploads' last submit. beginFrame, after its fence waits, calls collectReleases at its start and again after the fence wait, which reads the three fences and runs every free whose values they reached: textureStates.forget, cancelUploads, destroyTexture, and the bindless slot goes back to freeBindlessSlots.">
     <rect x="20" y="20" width="220" height="70" rx="6" class="cpu"/>
     <text x="130" y="42" class="mid mono">destroyTexture(T)</text>
     <text x="130" y="62" class="mid small">pool: release, generation + 1</text>
@@ -282,7 +282,7 @@
     <text x="600" y="182" class="mid small">lastSubmit (a dropped frame too)</text>
     <line x1="460" y1="163" x2="322" y2="163" class="arrow" marker-end="url(#ah)"/>
     <rect x="20" y="130" width="300" height="66" rx="6" class="cpu"/>
-    <text x="170" y="150" class="mid mono">beginFrame: after waitForFence</text>
+    <text x="170" y="150" class="mid mono">beginFrame: start, after wait</text>
     <text x="170" y="168" class="mid mono">collectReleases</text>
     <text x="170" y="186" class="mid small">reads the 3 fences, never waits</text>
     <line x1="170" y1="196" x2="170" y2="228" class="arrow ok" marker-end="url(#ah-ok)"/>
@@ -301,7 +301,7 @@
   <tr><td>Handle</td><td>dies at the call</td><td>The same: the <code>HandlePool</code> of the object's table bumps the generation, so a lookup with the old handle logs an error and fails (<a href="generational-handles.html#in-rasm">generational handles</a>).</td></tr>
   <tr><td>Counters</td><td>one per queue, and the uploads'</td><td><code>RELEASE_TIMELINES</code> = 3: <code>frameFence</code>, <code>computeFence</code> (only with async compute) and the upload manager's fence.</td></tr>
   <tr><td>Tag</td><td>at the end of the frame</td><td><code>tagReleases</code> in <code>endFrame</code>, right after <code>submitBatches</code>, also when the frame was dropped.</td></tr>
-  <tr><td>Collect</td><td>at the start of a frame, by reading the counters</td><td><code>collectReleases</code> in <code>beginFrame</code>, after the slot's fence wait. With nothing tagged it returns at once.</td></tr>
+  <tr><td>Collect</td><td>at the start of a frame, by reading the counters</td><td><code>beginFrame</code> tags and collects first thing, before it may skip the frame (a minimized window), and collects again after the slot's fence wait. With nothing tagged it returns at once.</td></tr>
   <tr><td>Free</td><td>a free function per entry</td><td>A <code>std::function</code> per entry, in order. <code>RenderContext::cleanup</code> waits for the device and runs them all (<code>releaseAll</code>).</td></tr>
   <tr><td>Bindless slots</td><td>wait like memory</td><td>The same. A texture holds one slot; its destroy gives it back through the queue, and <code>updateBindlessDescriptorSet</code> takes freed slots first. <a href="bindless.html#in-rasm">Bindless resources</a> has the details.</td></tr>
   <tr><td>Materials that use a destroyed texture</td><td>must stop using its slot</td><td><code>Engine::destroyTexture</code> removes the texture from every material that has it and rewrites their rows, so the slot samples nothing before it is reused.</td></tr>

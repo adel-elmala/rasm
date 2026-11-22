@@ -391,7 +391,7 @@ ctx.pushConstants(commandBuffer, overlayPipeline, rasm::ShaderType::VERTEX_FRAGM
       <dt>slot</dt><dd><code>MAX_BINDLESS_TEXTURES</code> (the default): the texture's own slot if it has one, else a free slot. A number below it: that slot, replacing what was there; the texture that held it loses it.</dd>
       <dt>returns</dt><dd>The slot, or <code>UINT32_MAX</code> on error ("Failed to add bindless texture." is logged): all 1024 slots held or waiting for the GPU, a bad slot or sampler, or an unknown or destroyed texture.</dd>
     </dl>
-    <p>A texture holds one slot: a second call without a slot rewrites the same one, with the new sampler. The slot is freed with the texture (<a href="engine.html#destroyTexture"><code>destroyTexture</code></a>), once no frame in flight samples it, and then reused.</p>
+    <p>A texture holds one slot: a second call without a slot returns it unchanged, since a frame in flight may sample it (a different sampler logs an error; make a second texture for it). The slot is freed with the texture (<a href="engine.html#destroyTexture"><code>destroyTexture</code></a>), once no frame in flight samples it, and then reused.</p>
   </div>
 </div>
 

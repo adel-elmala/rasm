@@ -50,6 +50,7 @@ namespace rasm
             HandlePool handles;
             std::vector<rhi::Texture *> objects; // by handle index; null when free
             std::vector<uint32_t> slots;         // its bindless slot, or UINT32_MAX
+            std::vector<uint8_t> attachments;    // 1 for a render target's texture, which only the target destroys
         };
 
         struct ShaderTable
@@ -342,6 +343,8 @@ namespace rasm
         uint32_t                                                                                                                nextBindlessTextureIndex = 0;
         std::vector<uint32_t>                                                                                                   freeBindlessSlots;
         TextureHandle                                                                                                           slotTextures[MAX_BINDLESS_TEXTURES] = {};
+        SamplerType                                                                                                             slotSamplers[MAX_BINDLESS_TEXTURES] = {};
+        bool                                                                                                                    slotWaiting[MAX_BINDLESS_TEXTURES] = {};  // released, the GPU may still sample it
         // Binding 1 slots of storage render targets, from RESERVED_STORAGE_IMAGES up. A destroyed target gives its back.
         uint32_t                                                                                                                nextStorageSlot = RESERVED_STORAGE_IMAGES;
         std::vector<uint32_t>                                                                                                   freeStorageSlots;
@@ -369,8 +372,10 @@ namespace rasm
             const HandleSlot slot = textures.handles.allocate();
             textures.objects.resize(textures.handles.size(), nullptr);
             textures.slots.resize(textures.handles.size(), UINT32_MAX);
+            textures.attachments.resize(textures.handles.size(), 0);
             textures.objects[slot.index] = texture;
             textures.slots[slot.index] = UINT32_MAX;
+            textures.attachments[slot.index] = 0;
             return {slot.index, slot.generation};
         }
 
@@ -406,7 +411,11 @@ namespace rasm
         void releaseBindlessSlot(uint32_t slot)
         {
             slotTextures[slot] = {};
-            releases.release([this, slot]() { freeBindlessSlots.push_back(slot); });
+            slotWaiting[slot] = true;
+            releases.release([this, slot]()
+                             {
+                                 slotWaiting[slot] = false;
+                                 freeBindlessSlots.push_back(slot); });
         }
 
         // The texture keeps no slot, so its destroy frees none: a new texture takes the slot (createAttachments).
@@ -912,12 +921,23 @@ namespace rasm
             renderTarget = {};
             impl->renderTargetInfos[renderTargets[i].index] = {};
             impl->renderTargetHandles.release(renderTargets[i].index, renderTargets[i].generation);
+            // Its index may go to a new target at once, so no group may name it any more.
+            for (auto &group : impl->transientGroups)
+            {
+                for (size_t t = group.targets.size(); t-- > 0;)
+                {
+                    if (!(group.targets[t] == renderTargets[i]))
+                        continue;
+                    group.targets.erase(group.targets.begin() + static_cast<std::ptrdiff_t>(t));
+                    group.firstPasses.erase(group.firstPasses.begin() + static_cast<std::ptrdiff_t>(t));
+                    group.lastPasses.erase(group.lastPasses.begin() + static_cast<std::ptrdiff_t>(t));
+                }
+            }
         }
 
         std::erase_if(impl->transientGroups, [this](const TransientGroup &group)
                       {
-                          const bool empty = std::none_of(group.targets.begin(), group.targets.end(), [this](const RenderTargetHandle &target)
-                                                          { return impl->isRenderTarget(target); });
+                          const bool empty = group.targets.empty();
                           if (empty)
                               for (auto *heap : group.heaps)
                                   impl->retireHeap(heap);
@@ -1101,12 +1121,14 @@ namespace rasm
 
         auto makeTexture = [this, heaps, offsets](const TextureDesc &textureDesc, uint32_t attachment) -> TextureHandle
         {
+            TextureHandle handle;
             if (!heaps)
-                return createTexture(textureDesc);
-            auto *texture = impl->device->createPlacedTexture(textureDesc, heaps[attachment], offsets[attachment]);
-            if (!texture)
-                return {};
-            return impl->addTexture(texture);
+                handle = createTexture(textureDesc);
+            else if (auto *texture = impl->device->createPlacedTexture(textureDesc, heaps[attachment], offsets[attachment]))
+                handle = impl->addTexture(texture);
+            if (handle.isValid())
+                impl->textures.attachments[handle.index] = 1;
+            return handle;
         };
 
         for (uint32_t i = 0; i < copies; ++i)
@@ -1177,7 +1199,8 @@ namespace rasm
             { return std::find(std::begin(clear.colors), std::end(clear.colors), texture) != std::end(clear.colors); };
             std::erase_if(impl->pendingClears, clears);
             std::erase_if(impl->recordedClears, clears);
-            destroyTexture(texture);
+            if (impl->textures.handles.isAlive(texture.index, texture.generation))
+                impl->retireTexture(texture);
         };
         for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
@@ -1228,6 +1251,8 @@ namespace rasm
         }
 
         if (!lookup(impl->textures, texture, __func__))
+            return;
+        if (!checkArgument(impl->textures.attachments[texture.index] == 0, __func__, "the texture is a render target's; destroy the render target (destroyRenderTarget) instead."))
             return;
         impl->retireTexture(texture);
     }
@@ -1445,10 +1470,20 @@ namespace rasm
             return UINT32_MAX;
 
         uint32_t &textureSlot = impl->textures.slots[texture.index];
+        // A frame in flight may sample the slot, so its descriptor stays as it is.
+        if (slot == MAX_BINDLESS_TEXTURES && textureSlot != UINT32_MAX)
+        {
+            if (impl->slotSamplers[textureSlot] != sampler)
+                spdlog::error("updateBindlessDescriptorSet: texture '{}' already has slot {} with another sampler; a texture holds one slot. Make a second texture to sample it another way.",
+                              rhiTexture->desc.name, textureSlot);
+            return textureSlot;
+        }
+        if (!checkArgument(slot == MAX_BINDLESS_TEXTURES || !impl->slotWaiting[slot], __func__, "the slot was freed, and frames in flight may still sample its old texture."))
+            return UINT32_MAX;
         uint32_t targetSlot = slot;
         if (slot == MAX_BINDLESS_TEXTURES)
         {
-            targetSlot = textureSlot != UINT32_MAX ? textureSlot : impl->allocateBindlessSlot();
+            targetSlot = impl->allocateBindlessSlot();
             if (targetSlot == UINT32_MAX)
             {
                 spdlog::error("All {} bindless texture slots are in use ({} more wait for the GPU to finish with them). Destroy textures that are no longer needed.",
@@ -1475,6 +1510,7 @@ namespace rasm
         impl->device->updateBindlessTexture(descriptorSet, targetSlot, rhiTexture, impl->samplers[static_cast<size_t>(sampler)]);
         textureSlot = targetSlot;
         impl->slotTextures[targetSlot] = texture;
+        impl->slotSamplers[targetSlot] = sampler;
         return targetSlot;
     }
 

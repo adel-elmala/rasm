@@ -91,9 +91,12 @@ namespace rasm
         MeshHandle handle;
         if (auto it = registry.loadedMeshes.find(path); it != registry.loadedMeshes.end())
         {
-            if (!isLive(it->second) || registry.meshes[it->second.index].state != MeshState::FAILED)
+            if (!isLive(it->second))
+                registry.loadedMeshes.erase(it);
+            else if (registry.meshes[it->second.index].state != MeshState::FAILED)
                 return it->second;
-            handle = it->second;
+            else
+                handle = it->second;
         }
 
         // find if the model extension is supported, if not return invalid handle
