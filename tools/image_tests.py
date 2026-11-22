@@ -119,11 +119,17 @@ def main():
     parser.add_argument("--build", action="store_true", help="build rasm_image_tests first")
     parser.add_argument("--update", action="store_true", help="write the rendered images as the new goldens")
     parser.add_argument("--scenes", help="only these tests, comma-separated (rasm_image_tests --list names them)")
+    parser.add_argument("--fetch-only", action="store_true", help="fetch lavapipe and Sponza, print the driver's manifest path, run nothing")
     args = parser.parse_args()
 
     if not args.lavapipe:
         sys.exit("The goldens are lavapipe's, so the tests run only on it. Pass --lavapipe: it downloads (once) and runs a "
                  f"third-party Mesa build (mesa-dist-win {MESA_VERSION}, lavapipe, SHA-256 pinned).")
+
+    if args.fetch_only:
+        fetch_sponza()
+        print(fetch_lavapipe())
+        return 0
 
     if args.build:
         subprocess.run(["cmake", "--build", "--preset", args.preset, "--target", "rasm_image_tests"], cwd=ROOT, check=True)

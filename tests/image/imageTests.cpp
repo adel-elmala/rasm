@@ -631,6 +631,7 @@ namespace
                 continue;
             ++run;
             failed += runTest(engine, assets, camera, options, test, built, rendered) ? 0 : 1;
+            std::fflush(stdout);
         }
         return true;
     }

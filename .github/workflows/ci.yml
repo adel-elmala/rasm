@@ -163,89 +163,21 @@ jobs:
         if: ${{ runner.os == 'Windows' && !cancelled() && steps.build-release.outcome == 'success' }}
         timeout-minutes: 40
         env:
-          MESA_URL: https://github.com/pal1000/mesa-dist-win/releases/download/26.3.0/mesa3d-26.3.0-release-msvc.7z
-          MESA_SHA256: c505fcc77e8f63a09d7ddac086591d2f542c0698d37fc9e3094685a34d0d9991
           LP_NATIVE_VECTOR_WIDTH: 256
         run: |
-          mesa="$HOME/mesa"
-          json=$(find "$mesa/x" -iname 'lvp_icd.x86_64.json' | head -n 1)
-          echo "ICD: $json"; cat "$json"
-          export VK_DRIVER_FILES=$(cygpath -w "$json")
-          vi=$(find "$(cygpath -u "$VULKAN_SDK")" -iname 'vulkaninfo*.exe' | head -n 1)
-          echo "vulkaninfo: $vi"
-          echo "Layers: $(find "$(cygpath -u "$VULKAN_SDK")" -iname 'VkLayer_khronos_validation.json' | head -n 1)"
-          echo "PROBE nproc=$(nproc)"; powershell -NoProfile -Command "(Get-CimInstance Win32_Processor).Name"
-          "$vi" --summary
-          "$vi" --json -o lvp.json > /dev/null || true
-          python - lvp.json <<'EOF'
-          import json, sys
-          d = json.load(open(sys.argv[1]))
-          found = {}
-          def walk(o, path):
-              if isinstance(o, dict):
-                  for k, v in o.items():
-                      if k in WANT and not isinstance(v, (dict, list)):
-                          found.setdefault(k, v)
-                      if k in WANT and isinstance(v, list):
-                          found.setdefault(k, v)
-                      walk(v, path + [k])
-              elif isinstance(o, list):
-                  for v in o:
-                      walk(v, path)
-          WANT = ["apiVersion", "deviceName", "driverInfo", "hostImageCopy", "bufferDeviceAddress", "descriptorIndexing",
-                  "timelineSemaphore", "dynamicRendering", "synchronization2", "drawIndirectCount", "storagePushConstant8",
-                  "shaderInt8", "shaderInt64", "multiDrawIndirect", "drawIndirectFirstInstance", "samplerAnisotropy",
-                  "shaderDrawParameters", "scalarBlockLayout", "hostQueryReset", "runtimeDescriptorArray",
-                  "descriptorBindingPartiallyBound", "descriptorBindingVariableDescriptorCount",
-                  "descriptorBindingSampledImageUpdateAfterBind", "descriptorBindingStorageImageUpdateAfterBind",
-                  "shaderSampledImageArrayNonUniformIndexing", "textureCompressionBC", "textureCompressionETC2",
-                  "textureCompressionASTC_LDR", "maxDescriptorSetUpdateAfterBindSampledImages",
-                  "maxPerStageDescriptorUpdateAfterBindSampledImages", "maxDescriptorSetUpdateAfterBindStorageImages",
-                  "maxPerStageDescriptorUpdateAfterBindStorageImages", "framebufferColorSampleCounts",
-                  "framebufferDepthSampleCounts", "sampledImageColorSampleCounts", "sampledImageDepthSampleCounts",
-                  "maxPushConstantsSize", "maxImageDimension2D", "maxBufferSize", "timestampPeriod", "maxComputeSharedMemorySize",
-                  "alphaToOne", "independentBlend", "sampleRateShading", "depthClamp", "fillModeNonSolid", "wideLines"]
-          walk(d, [])
-          for k in WANT:
-              print("PROBE %-50s %s" % (k, found.get(k, "MISSING")))
-          exts = set()
-          def walk_ext(o):
-              if isinstance(o, dict):
-                  for k, v in o.items():
-                      if k == "extensions" and isinstance(v, dict):
-                          exts.update(v.keys())
-                      walk_ext(v)
-          walk_ext(d)
-          for e in ["VK_EXT_memory_budget", "VK_EXT_host_image_copy", "VK_KHR_swapchain"]:
-              print("PROBE ext %-46s %s" % (e, e in exts))
-          fmts = {}
-          def walk_fmt(o):
-              if isinstance(o, dict):
-                  for k, v in o.items():
-                      if k == "formats" and isinstance(v, dict):
-                          fmts.update(v)
-                      walk_fmt(v)
-          walk_fmt(d)
-          for f in ["R8G8B8A8_SRGB", "R8G8B8A8_UNORM", "R16G16B16A16_SFLOAT", "R32G32B32A32_SFLOAT", "R16G16_SFLOAT",
-                    "B10G11R11_UFLOAT_PACK32", "BC7_SRGB_BLOCK", "BC7_UNORM_BLOCK", "BC5_UNORM_BLOCK", "BC4_UNORM_BLOCK",
-                    "ETC2_R8G8B8A8_SRGB_BLOCK", "ASTC_4x4_SRGB_BLOCK", "D32_SFLOAT", "R32_SFLOAT", "R8_UNORM"]:
-              p = fmts.get("VK_FORMAT_" + f)
-              s = json.dumps(p) if p else ""
-              print("PROBE fmt %-30s present=%s hostTransfer=%s sampled=%s filterLinear=%s" % (f, p is not None,
-                    "HOST_IMAGE_TRANSFER" in s, "SAMPLED_IMAGE_BIT" in s, "FILTER_LINEAR" in s))
-          EOF
-          exe=build/x64-release/examples/16_headless.exe
-          run() { local s=$(date +%s) rc=0; "$exe" --out "$1" > "$1.log" 2>&1 || rc=$?; echo "PROBE run $1 rc=$rc seconds=$(( $(date +%s) - s )) LP_NUM_THREADS=${LP_NUM_THREADS:-default}"; grep -iE "error|warn|valid|GPU|device|wrote|HDR" "$1.log" | head -n 40 || true; }
           mkdir -p probe
-          run probe/a.png
-          LP_NUM_THREADS=1 run probe/t1.png
-          cmp -s probe/a.png probe/t1.png && echo "PROBE same a t1" || echo "PROBE DIFFERENT a t1"
-          img=build/x64-release/tests/rasm_image_tests.exe
-          images() { local s=$(date +%s); "$img" "$@" > "probe/$name.log" 2>&1 || true; echo "PROBE images $name seconds=$(( $(date +%s) - s )) LP_NUM_THREADS=${LP_NUM_THREADS:-default} validation=$(grep -cE '^\[(ERROR|WARNING): Validation' "probe/$name.log") errors=$(grep -cE '\[(error|warning)\]' "probe/$name.log")"; grep -E "^(test |[a-z_0-9]+ +(update|FAIL|pass) )|tests passed|not render|Sponza" "probe/$name.log" || true; }
-          name=g1 images --update --golden-dir probe/g1
-          name=g2 images --golden-dir probe/g1 --out-dir probe/cmp2
-          name=g3 LP_NUM_THREADS=1 images --golden-dir probe/g1 --out-dir probe/cmp3
-          grep -hE "\[(error|warning)\]|Validation" probe/g1.log | sort | uniq -c | sort -rn | head -n 20 || true
+          python tools/image_tests.py --lavapipe --fetch-only
+          cdb="/c/Program Files (x86)/Windows Kits/10/Debuggers/x64/cdb.exe"
+          echo "PROBE cdb: $(test -f "$cdb" && echo yes || echo no)"
+          for t in $(build/x64-release/tests/rasm_image_tests.exe --list); do
+            s=$(date +%s); rc=0
+            build/x64-release/tests/rasm_image_tests.exe --update --golden-dir probe/g1 --scenes $t > probe/$t.log 2>&1 || rc=$?
+            echo "PROBE scene $t rc=$rc seconds=$(( $(date +%s) - s )) $(grep -E "^$t " probe/$t.log || true)"
+          done
+          if [ -f "$cdb" ]; then
+            "$cdb" -g -G -lines -y "build/x64-debug/tests;build/x64-debug/src" -c ".lines -e; .ecxr; kn 60; !teb; q" build/x64-debug/tests/rasm_image_tests.exe --update --golden-dir probe/dbg --scenes alpha_modes > probe/cdb.log 2>&1 || true
+            grep -vE "\] \[info\]|^\s+(name|driver version):" probe/cdb.log | tail -n 120
+          fi
 
       - name: Upload the probe images
         if: ${{ runner.os == 'Windows' && !cancelled() }}

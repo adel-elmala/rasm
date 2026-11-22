@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Image Tests: Golden Images · RASM</title>
+<meta name="description" content="Testing a renderer by comparing each frame with a stored golden image: why exact matches break, a threshold per channel plus a share of pixels, perceptual metrics like FLIP, a software rasterizer for the same pixels on every machine, and the rule for updating goldens.">
+<meta name="rasm-sources" content="tests/image/imageTests.cpp tests/CMakeLists.txt tools/image_tests.py CMakePresets.json .github/workflows/ci.yml include/rasm/readback.h src/renderer/readback.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/image-tests.js"></script>
+</head>
+<body data-root="../" data-page="guides/image-tests.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Culling and the frame</p>
+<h1>Image tests: golden images</h1>
+<p class="lead">A unit test checks a number. A renderer's result is a picture, and most of its bugs show only there: a shadow in the wrong place, a black material, a missing mesh. An <b>image test</b> renders a fixed scene, reads the frame back, and compares it with a stored image that a person once checked: the <b>golden image</b>. This page is about the compare: when two pictures count as "the same", and how to keep that answer honest.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>Render a fixed scene headless, read the frame back, compare it with the golden. On a failure, save the new image and a <b>difference image</b> that shows where it changed.</li>
+    <li>Exact equality is too strict: the same code gives slightly different pixels on another GPU, driver or CPU. A test needs a <b>tolerance</b>.</li>
+    <li>A simple, strong rule: a pixel differs when a channel is off by more than <b>T</b>; the test fails when more than <b>F</b> of the pixels differ. Set T and F from the noise you measure, not by guess.</li>
+    <li>Perceptual metrics such as <b>FLIP</b> say how visible a difference is. They answer "would a person notice?", which is a different question from "did the code change?".</li>
+    <li>Goldens belong to <b>one driver</b>. A software rasterizer gives the same pixels on every machine and needs no GPU, so continuous integration can run it.</li>
+    <li>A golden changes only on purpose: the change that moves it says why, with the image before and after.</li>
+  </ul>
+</div>
+
+<h2 id="loop"><span class="n">1</span>One image test</h2>
+
+<p>The test is the same four steps for every scene. Only the last step needs a decision: same or not.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="A scene renders into an image, which is read back to the CPU. It is compared with the golden image from disk. If they match, the test passes. If not, the test fails and writes the new image and a difference image, where the changed pixels are red.">
+    <rect x="20" y="40" width="120" height="80" rx="6" class="paper"/>
+    <circle cx="80" cy="76" r="20" class="solid"/>
+    <rect x="30" y="98" width="100" height="10" class="surface"/>
+    <text x="80" y="140" class="mid small">fixed scene, fixed time</text>
+    <line x1="140" y1="80" x2="186" y2="80" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="163" y="70" class="mid small t-gpu">render</text>
+    <rect x="190" y="40" width="120" height="80" rx="6" class="gpu"/>
+    <circle cx="250" cy="76" r="20" class="solid"/>
+    <text x="250" y="140" class="mid small">the frame, on the GPU</text>
+    <line x1="310" y1="80" x2="356" y2="80" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="333" y="70" class="mid small t-mem">read back</text>
+    <rect x="360" y="40" width="120" height="80" rx="6" class="cpu"/>
+    <circle cx="420" cy="76" r="20" class="solid"/>
+    <text x="420" y="140" class="mid small">actual, on the CPU</text>
+    <rect x="360" y="170" width="120" height="60" rx="6" class="mem"/>
+    <circle cx="420" cy="198" r="15" class="solid"/>
+    <text x="420" y="246" class="mid small">golden, from disk</text>
+    <line x1="480" y1="80" x2="530" y2="120" class="arrow" marker-end="url(#ah)"/>
+    <line x1="480" y1="200" x2="530" y2="146" class="arrow" marker-end="url(#ah)"/>
+    <circle cx="560" cy="132" r="28" class="zone"/>
+    <text x="560" y="137" class="mid title">same?</text>
+    <line x1="588" y1="118" x2="640" y2="74" class="arrow ok" marker-end="url(#ah-ok)"/>
+    <text x="680" y="70" class="mid t-ok title">pass</text>
+    <line x1="588" y1="146" x2="640" y2="176" class="arrow bad" marker-end="url(#ah-bad)"/>
+    <text x="700" y="172" class="mid t-bad title">fail:</text>
+    <text x="700" y="192" class="mid small">write actual.png</text>
+    <text x="700" y="208" class="mid small">and diff.png</text>
+  </svg>
+  <figcaption>A failed test leaves three pictures for a person: the golden, the new image and the difference. Most failures are understood in one look at the difference.</figcaption>
+</figure>
+
+<p>Everything before the compare must give the same frame on every run: all loads done before the first frame, a fixed frame count, animation at fixed times, no on-screen statistics. <a href="headless-readback.html#same-pixels">Headless rendering and readback</a> explains why each of these matters.</p>
+
+<h2 id="noise"><span class="n">2</span>Why exact equality fails</h2>
+
+<p>Rendering is floating-point math, done in parallel, by code you do not own: the driver compiles your shaders, and the hardware rounds. The same scene, with the same code, can come out a little different:</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two GPUs render the same edge of a triangle. A few pixels on the edge get slightly different values.">
+      <rect x="20" y="20" width="90" height="70" rx="4" class="paper"/><path d="M25,85 L105,25 L105,85 z" class="solid"/>
+      <rect x="130" y="20" width="90" height="70" rx="4" class="paper"/><path d="M135,85 L215,25 L215,85 z" class="solid"/>
+      <rect x="160" y="58" width="8" height="8" class="hot"/><rect x="186" y="40" width="8" height="8" class="hot"/>
+      <text x="65" y="110" class="mid small">GPU A</text><text x="175" y="110" class="mid small">GPU B: 2 pixels</text>
+    </svg>
+    <h4>Another GPU or driver</h4>
+    <p>Each compiles the shaders its own way and rounds differently: <code class="lang-text">a·b + c</code> fused or not, faster sin and exp, another texture filter.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The same sum added in two orders gives two slightly different results.">
+      <text x="120" y="40" class="mid mono small">(a + b) + c = 1.0000001</text>
+      <text x="120" y="64" class="mid mono small">a + (b + c) = 0.9999999</text>
+      <text x="120" y="100" class="mid small">float addition is not associative</text>
+    </svg>
+    <h4>Another order</h4>
+    <p>A parallel sum, blending or a reduction that runs in another order rounds differently. A wider SIMD unit or more threads changes the order.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A pixel center lies exactly on the shared edge of two triangles. Which triangle covers it depends on a tie-breaking rule.">
+      <path d="M30,100 L120,20 L120,100 z" class="gpu o-50"/>
+      <path d="M120,20 L210,100 L120,100 z" class="cpu o-50"/>
+      <circle cx="120" cy="70" r="5" class="hot"/>
+      <text x="120" y="120" class="mid small">a tie on a shared edge</text>
+    </svg>
+    <h4>Ties</h4>
+    <p>A sample exactly on an edge or a depth exactly equal to another: tiny changes in math flip which side wins, and one pixel jumps by a lot.</p>
+  </div>
+</div>
+
+<p>So a good test has two parts: the <b>noise</b> it accepts, measured, and the <b>bugs</b> it must catch. A test that fails on noise teaches people to ignore it. A test so loose that it passes a real bug is worse than none.</p>
+
+<h2 id="metric"><span class="n">3</span>A threshold and a share of pixels</h2>
+
+<p>The rule this page uses has two numbers. The first, <var>T</var>, asks "is this pixel different?". The second, <var>F</var>, asks "are enough pixels different to fail?".</p>
+
+<div class="formula">
+  <p class="eq">diff(p) = max over r, g, b, a of | actual(p) − golden(p) |</p>
+  <p class="eq">p differs  ⇔  diff(p) &gt; T</p>
+  <p class="eq">fail  ⇔  (pixels that differ) / (all pixels) &gt; F</p>
+  <dl>
+    <dt>T</dt><dd>the largest change of one 8-bit channel that is still noise, in steps of 1/255</dd>
+    <dt>F</dt><dd>the largest share of pixels allowed over T: the rare ties and edge pixels</dd>
+  </dl>
+</div>
+
+<p>T alone fails on a single tie pixel. F alone ignores how big a change is. Together they let through many tiny changes, or a few big ones, but not many big ones. Try it on a small image: three versions of a new render, one with noise only and two with a bug.</p>
+
+<figure class="lab" data-lab="image-threshold" data-title="Find a T and an F that pass noise and fail bugs">
+  <figcaption>Start with "same code, another run" and lower T to 0: noise fails the test. Then pick each bug and raise T or F until it passes: that is how loose is too loose. The defaults pass the noise and fail both bugs.</figcaption>
+</figure>
+
+<p>Set both numbers from a measurement: run the same code twice (and on two machines, if the test runs on more than one), compare, and read the largest difference and the share over each T. Choose T a little above the noise, and F a little above the share of outliers. Write the numbers down next to the test, so the next person knows why they are what they are.</p>
+
+<div class="callout warn">
+  <strong>Never raise T or F to make a red test green</strong>
+  <p>If a test fails on noise, first find where the noise comes from: a timer, a thread count, a random seed. A tolerance hides a problem only until a real bug hides behind it.</p>
+</div>
+
+<h2 id="metrics"><span class="n">4</span>Other ways to compare</h2>
+
+<p>There are many metrics. They differ in the question they answer:</p>
+
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two rows of bytes; one byte differs, so the test fails.">
+      <text x="120" y="44" class="mid mono">12 40 77 200 13</text>
+      <text x="120" y="70" class="mid mono">12 40 <tspan class="t-bad">78</tspan> 200 13</text>
+      <text x="120" y="104" class="mid small t-bad">one step: fail</text>
+    </svg>
+    <h4>Exact match (hash)</h4>
+    <p>Cheapest and strictest. Works when the whole chain is the same and nothing is parallel in an unknown order. Breaks on the first rounding change.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A bar shows one number, the mean squared error, for a whole image.">
+      <rect x="30" y="50" width="180" height="20" class="paper"/><rect x="30" y="50" width="40" height="20" class="mem"/>
+      <text x="120" y="96" class="mid small">one number for the whole image</text>
+    </svg>
+    <h4>RMSE, PSNR</h4>
+    <p>The mean of the squared differences. One wrong object in a corner hides in the mean of a large, correct image.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An image is split in small windows; each window gets a score for brightness, contrast and structure.">
+      <rect x="40" y="20" width="160" height="80" class="paper"/>
+      <path d="M40,20H200M40,60H200M40,100H200M40,20V100M80,20V100M120,20V100M160,20V100M200,20V100" class="grid"/>
+      <rect x="120" y="60" width="40" height="40" class="hot o-50"/>
+      <text x="120" y="118" class="mid small">a score per window</text>
+    </svg>
+    <h4>SSIM</h4>
+    <p>Compares local brightness, contrast and structure in small windows. Good for compression and filtering; hard to turn into a pass or fail you can explain.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A heat map over the image: bright where a person would see a difference, dark where they would not.">
+      <rect x="40" y="20" width="160" height="80" class="paper"/>
+      <circle cx="90" cy="60" r="22" class="hot o-75"/><circle cx="150" cy="50" r="10" class="hot o-25"/>
+      <text x="120" y="118" class="mid small">how visible, per pixel</text>
+    </svg>
+    <h4>FLIP</h4>
+    <p>NVIDIA's metric models how a person sees two images flipped back and forth: color, edges, viewing distance. It gives a map of how visible each change is.</p>
+  </div>
+</div>
+
+<p>FLIP answers "how much would a person notice?". That is the right question when two different renderers must agree, or when you tune a denoiser. A regression test asks "did my change move these pixels?". A change that nobody would notice, like a shadow one pixel off, is still a change the author should know about. So a regression test wants the strict, simple rule, with a tolerance only for noise. FLIP stays useful to judge a failure: is the difference big, or only real?</p>
+
+<h2 id="per-driver"><span class="n">5</span>Goldens belong to one driver</h2>
+
+<p>Section 2's noise is small on one machine and large across machines: two GPU vendors can differ on thousands of pixels and still both be right. A golden is therefore stored <b>per driver</b>, and the tests run on that driver.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="The same scene rendered by a software rasterizer, GPU A and GPU B. The software result matches its own golden on every machine. Compared with each other, the GPU images differ from it on edges and in shading.">
+    <rect x="20" y="30" width="200" height="110" rx="6" class="cpu"/>
+    <circle cx="120" cy="76" r="28" class="solid"/><rect x="40" y="112" width="160" height="12" class="surface"/>
+    <text x="120" y="22" class="mid title">software rasterizer</text>
+    <text x="120" y="162" class="mid small">same pixels on any CPU</text>
+    <text x="120" y="180" class="mid small t-ok">matches its golden: max diff 0 or 1</text>
+    <rect x="280" y="30" width="200" height="110" rx="6" class="gpu"/>
+    <circle cx="380" cy="76" r="28" class="solid"/><rect x="300" y="112" width="160" height="12" class="surface"/>
+    <rect x="352" y="48" width="8" height="8" class="hot"/><rect x="404" y="86" width="8" height="8" class="hot"/>
+    <text x="380" y="22" class="mid title">GPU A</text>
+    <text x="380" y="162" class="mid small">its own rounding</text>
+    <text x="380" y="180" class="mid small t-bad">vs. software golden: edges differ</text>
+    <rect x="540" y="30" width="200" height="110" rx="6" class="gpu"/>
+    <circle cx="640" cy="76" r="28" class="solid"/><rect x="560" y="112" width="160" height="12" class="surface"/>
+    <rect x="618" y="58" width="8" height="8" class="hot"/><rect x="650" y="98" width="8" height="8" class="hot"/><rect x="600" y="112" width="8" height="8" class="hot"/>
+    <text x="640" y="22" class="mid title">GPU B</text>
+    <text x="640" y="162" class="mid small">another compiler, filter</text>
+    <text x="640" y="180" class="mid small t-bad">vs. software golden: edges differ</text>
+  </svg>
+  <figcaption>A golden is a contract with one driver at one version. Change the driver version, and the goldens are rendered again on purpose, in a change of their own.</figcaption>
+</figure>
+
+<p>A <b>software rasterizer</b> is a Vulkan driver that runs on the CPU: Mesa's <b>lavapipe</b> is one, and SwiftShader and WARP (for Direct3D) are others. It is slow, but it gives the same result on any CPU with the same build and settings, and continuous integration machines have no GPU anyway. Two of its settings change pixels, so a test pins them:</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Eight lanes of a SIMD register next to four lanes: the same loop runs in a different grouping.">
+      <g class="gpu"><rect x="20" y="30" width="24" height="24"/><rect x="46" y="30" width="24" height="24"/><rect x="72" y="30" width="24" height="24"/><rect x="98" y="30" width="24" height="24"/><rect x="124" y="30" width="24" height="24"/><rect x="150" y="30" width="24" height="24"/><rect x="176" y="30" width="24" height="24"/><rect x="202" y="30" width="24" height="24"/></g>
+      <g class="cpu"><rect x="20" y="70" width="24" height="24"/><rect x="46" y="70" width="24" height="24"/><rect x="72" y="70" width="24" height="24"/><rect x="98" y="70" width="24" height="24"/></g>
+      <text x="120" y="118" class="mid small">256-bit and 128-bit vectors</text>
+    </svg>
+    <h4>Vector width</h4>
+    <p>The shader compiler inside the driver picks its SIMD width from the CPU. Pin it, so a CPU with wider vectors compiles the same code.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The image is split in tiles; four threads each take some tiles.">
+      <rect x="40" y="20" width="160" height="80" class="paper"/>
+      <rect x="40" y="20" width="40" height="40" class="cpu o-50"/><rect x="80" y="20" width="40" height="40" class="gpu o-50"/><rect x="120" y="20" width="40" height="40" class="mem o-50"/><rect x="160" y="20" width="40" height="40" class="shader o-50"/>
+      <path d="M40,20H200M40,60H200M40,100H200M40,20V100M80,20V100M120,20V100M160,20V100M200,20V100" class="grid"/>
+      <text x="120" y="118" class="mid small">tiles over threads</text>
+    </svg>
+    <h4>Thread count</h4>
+    <p>Tiles are spread over threads. When each pixel is computed by one thread, the count changes only the speed; measure that it does, or pin it.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A version tag and a checksum next to a downloaded file.">
+      <rect x="40" y="30" width="100" height="60" rx="4" class="mem"/>
+      <text x="90" y="65" class="mid mono small">driver.7z</text>
+      <text x="150" y="52" class="small mono">v 26.3.0</text>
+      <text x="150" y="72" class="small mono">sha256 c505…</text>
+      <text x="120" y="112" class="mid small">a fixed build, checked</text>
+    </svg>
+    <h4>The build itself</h4>
+    <p>A new driver version changes its code, so the test fetches one exact build and checks its hash before it runs it.</p>
+  </div>
+</div>
+
+<p>Real GPUs are still worth testing: they are what users run. Compare those against a baseline taken on the same machine just before the change, which answers "did my change move pixels here?" without any stored file.</p>
+
+<h2 id="update"><span class="n">6</span>Changing a golden</h2>
+
+<p>Goldens must change sometimes: a better shadow filter is a different picture. The danger is the change nobody looked at. So the rule is about people, not code:</p>
+
+<ol class="flow">
+  <li class="cpu"><b>Test fails</b><span>after a change that should move pixels</span></li>
+  <li class="cpu"><b>Look at diff.png</b><span>only the expected places are red?</span></li>
+  <li class="mem"><b>Render new goldens</b><span>only the tests that changed</span></li>
+  <li class="gpu"><b>Say why in the change</b><span>with before and after</span></li>
+</ol>
+
+<div class="callout rule">
+  <strong>The review rule</strong>
+  <p>A change that changes a golden says why in its description, and shows the old and new image side by side. A reviewer who sees a golden change without that asks for it. Never update every golden at once to make the tests pass.</p>
+</div>
+
+<h2 id="pitfalls"><span class="n">7</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>The test fails on one run and passes on the next</dt><dd>Something depends on time: a load that is not awaited, the wall clock, a thread race. Fix the cause; a larger tolerance only hides it.</dd></div>
+  <div><dt>Every test fails on a developer's machine</dt><dd>It ran on the local GPU, not on the driver of the goldens. Check which device the log names.</dd></div>
+  <div><dt>A golden shows a bug</dt><dd>It was captured without being looked at. Look at every golden before you store it: it must be a correct picture, or the test guards the bug.</dd></div>
+  <div><dt>The repository grows with each update</dt><dd>Keep goldens small (a few hundred pixels wide) and few. A small image still shows a wrong shadow or a black material.</dd></div>
+  <div><dt>An asset can't be stored with the tests</dt><dd>Its license may not allow it. Fetch it at test time from a fixed version and check its hash, like the driver.</dd></div>
+  <div><dt>Two tests in one process disagree with two processes</dt><dd>State leaks from one test to the next. Render one scene twice in one process and require a difference of 0.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">8</span>In RASM</h2>
+
+<p>@@IN_RASM@@</p>
+
+</main>
+</div>
+</body>
+</html>

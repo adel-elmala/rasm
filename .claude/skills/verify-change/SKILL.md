@@ -32,6 +32,7 @@ python $V run           # AFTER: same checks + pixel diff against the baseline
 | `--gpu-av` | GPU-assisted validation: out-of-bounds bindless indices and buffer device address reads in shaders. Slow. |
 | `--args "--debug-view normals"` | Extra arguments for every example, after `--fixed-step --wait-for-loads` (an example ignores the ones it does not know). Compare such a run against a baseline taken with the same arguments. |
 | `--keep-captures` | Keep the `.gfxr` captures (≈100 MB each) for `frame-debug`. |
+| `--images` | Also run the golden-image tests (`tools/image_tests.py --lavapipe`, `run` only). **It downloads (once) and runs a third-party Mesa build, lavapipe**, so pass it only when the user asked for it. The goldens are lavapipe's; this machine's GPU is checked by the baseline diff above, not by them. |
 
 `diff <a.png> <b.png> [--out d.png]` compares any two PNGs.
 
@@ -63,7 +64,9 @@ Look at the diff and the new screenshot with Read.
 - **DIFF is not automatically bad.** For a refactor it is a bug. For a visual change, look at the screenshot and the diff and judge it. Tell the user what changed and where (bbox), then run `baseline` again once they accept it.
 - **Any new error or warning means not done.** If a warning was already in the baseline, say so instead of hiding it.
 - Unexpected DIFF or FAIL with no obvious cause: use the `frame-debug` skill (`--keep-captures` gives you the capture).
-- Baselines depend on the machine, GPU and driver. They are local and never committed.
+- Baselines depend on the machine, GPU and driver. They are local and never committed. The golden images in
+  `tests/golden/lavapipe/` are the committed ones: they belong to lavapipe, and CI checks them on every PR
+  (`docs/guides/image-tests.html`).
 - Messages about `vkCmdPipelineBarrier()` (the original, not `...2`) come from GFXR's frame snapshot, not RASM, which only uses `vkCmdPipelineBarrier2`. The script counts them as "ignored". If a message looks like it came from the capture layer, run the exe once without the layer before blaming RASM (`timeout 10 <exe>` with the same `VK_LAYER_VALIDATE_*` variables).
 
 ## Determinism

@@ -138,6 +138,22 @@ To see the test output, or to run a subset, run the executable directly, for exa
 
 Pass `-DRASM_BUILD_TESTS=OFF` to leave them out.
 
+## Image tests
+
+`rasm_image_tests` renders 15 scenes headless at 512 × 288 and compares each frame with a golden image in `tests/golden/lavapipe/` ([Image tests](guides/image-tests.html)). The goldens come from lavapipe, Mesa's CPU Vulkan driver, so the tests run on that driver, not on your GPU. `tools/image_tests.py` runs them (Windows):
+
+```
+python tools/image_tests.py --lavapipe                          # run every test, print a table
+python tools/image_tests.py --lavapipe --scenes sponza,taa      # only these
+python tools/image_tests.py --lavapipe --update --scenes taa    # render new goldens for these
+```
+
+**`--lavapipe` downloads (once) and runs a third-party Mesa build**: lavapipe from [mesa-dist-win](https://github.com/pal1000/mesa-dist-win) 26.3.0, checked by its SHA-256, into `build/test-assets/`. Nothing is downloaded or run without that flag. Extracting it needs 7-Zip (`7z`) on the `PATH`. The script also fetches Sponza from a pinned commit of KhronosGroup/glTF-Sample-Assets (SHA-256 checked, into `build/test-assets/`): its license, the CRYENGINE Limited License, does not allow it in this repository. It runs `build/x64-release/tests/rasm_image_tests.exe` (`--preset`, `--build`), points the Vulkan loader at lavapipe with `VK_DRIVER_FILES`, and fails when the log names another device or has a validation or engine error. A failed test leaves `actual.png`, `expected.png` and `diff.png` (red: over the threshold) in `build/x64-release/image-tests/<test>/`.
+
+The default `ctest` presets leave the tests out (label `image`); `ctest --preset x64-release -L image` runs them on whatever driver the loader picks. An elevated process's loader ignores `VK_DRIVER_FILES`, so run the script from a normal prompt.
+
+A change that changes a golden says why in its pull request, with the image before and after. `verify-change` runs the tests with `--images`, only when asked.
+
 ## Dear ImGui
 
 `RASM_IMGUI` (on by default) builds RASM with [Dear ImGui](https://github.com/ocornut/imgui) for `EngineConfig::ui`: the RASM window on F1 and the application's own windows (`Engine::setUiCallback`). The option adds the `imgui` feature of `vcpkg.json` to `VCPKG_MANIFEST_FEATURES` before `project()`, so vcpkg installs the `imgui` port with its `sdl3-binding` feature (SDL3 input; RASM draws ImGui itself through its RHI, so no `vulkan-binding`). `-DRASM_IMGUI=OFF` installs nothing, compiles no UI code and links no ImGui; `EngineConfig::ui` then logs a warning, and `examples/15_debug_ui` is not built. Change the option in a new build folder or delete `CMakeCache.txt`, so vcpkg installs again.
@@ -205,7 +221,7 @@ Both fields need `enableValidation` and installed validation layers; without the
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on every pull request and every push to `main`. It has one job per OS: Windows builds `x64-debug` then `x64-release`, macOS builds `macOS` then `macOS-release`, examples included, and each preset runs `ctest`. The runners have no GPU, so CI does not run the examples. It still installs the Vulkan runtime on Windows, because `rasm_tests.exe` loads `vulkan-1.dll`.
+`.github/workflows/ci.yml` runs on every pull request and every push to `main`. It has one job per OS: Windows builds `x64-debug` then `x64-release`, macOS builds `macOS` then `macOS-release`, examples included, and each preset runs `ctest`. The runners have no GPU, so CI does not run the examples. It still installs the Vulkan runtime on Windows, because `rasm_tests.exe` loads `vulkan-1.dll`. After the Release tests, the Windows job runs the [image tests](#image-tests) on lavapipe (@@CI_TIME@@): it caches `build/test-assets/`, registers lavapipe and the validation layer in the registry (the runner's processes are elevated, and the loader of an elevated process ignores `VK_DRIVER_FILES` and `VK_LAYER_PATH`), runs `tools/image_tests.py --lavapipe`, and uploads `build/x64-release/image-tests/` as the `image-test-failures` artifact when a test fails.
 
 vcpkg.json has no `builtin-baseline`, so the vcpkg commit picks the dependency versions. CI pins it in `VCPKG_COMMIT`. When you update your local vcpkg, put its commit (`git -C $VCPKG_ROOT rev-parse HEAD`) there too, so CI builds the same versions you do. Built packages are cached per OS and vcpkg commit. A run restores the newest cache and saves a new one only when it built packages, for example after a runner toolchain update. A new vcpkg commit makes the next run build all dependencies again.
 
