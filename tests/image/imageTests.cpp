@@ -338,10 +338,7 @@ namespace
         content.center = glm::vec3(0.3f, 1.6f, 0.0f);
         return transforms.isValid() && colors.isValid() && lantern.isValid() && addSunsetLight(engine, assets, content, 1.0f, glm::vec3(0.45f, -0.75f, -0.5f), 3.0f);
     }
-}
 
-namespace
-{
     // clang-format off
     // Group 0 holds 6 meshes with the cube, group 1 5 and group 2 4.
     const ImageTest TESTS[] = {
@@ -368,6 +365,13 @@ namespace
         for (int i = 1; i < argc; ++i)
         {
             const bool hasValue = i + 1 < argc;
+            const bool takesValue = std::strcmp(argv[i], "--golden-dir") == 0 || std::strcmp(argv[i], "--out-dir") == 0 ||
+                                    std::strcmp(argv[i], "--sponza") == 0 || std::strcmp(argv[i], "--scenes") == 0;
+            if (takesValue && !hasValue)
+            {
+                std::printf("%s needs a value.\n", argv[i]);
+                return false;
+            }
             if (std::strcmp(argv[i], "--update") == 0)
                 options.update = true;
             else if (std::strcmp(argv[i], "--list") == 0)
@@ -577,7 +581,15 @@ namespace
                 rendered.push_back({test.sameAs, expected});
         }
         else
-            rasm::readPng(joinPath(options.goldenDir, std::string(test.name) + ".png"), expected);
+        {
+            const std::string golden = joinPath(options.goldenDir, std::string(test.name) + ".png");
+            if (std::filesystem::exists(golden) && !rasm::readPng(golden, expected))
+            {
+                std::printf("%-14s %-6s %10s %8s %8.1f  (the golden does not decode: %s)\n", test.name, "FAIL", "-", "-", seconds, golden.c_str());
+                writeFailure(options, test, actual, nullptr, nullptr);
+                return false;
+            }
+        }
         if (expected.pixels.empty())
         {
             std::printf("%-14s %-6s %10s %8s %8.1f  (no golden: --update writes one)\n", test.name, "FAIL", "-", "-", seconds);
@@ -651,14 +663,17 @@ int main(int argc, char **argv)
 
     uint32_t groups = 0;
     for (const ImageTest &test : TESTS)
-        if (isSelected(options, test.name))
-            groups = std::max(groups, test.group + 1);
+        groups = std::max(groups, test.group + 1);
     uint32_t run = 0;
     uint32_t failed = 0;
     std::printf("%-14s %-6s %10s %8s %8s\n", "test", "result", "differing", "max diff", "seconds");
     for (uint32_t group = 0; group < groups; ++group)
-        if (!runGroup(group, options, run, failed))
+    {
+        const bool used = std::any_of(std::begin(TESTS), std::end(TESTS), [&](const ImageTest &test)
+                                      { return test.group == group && isSelected(options, test.name) && !(options.update && test.sameAs); });
+        if (used && !runGroup(group, options, run, failed))
             return 2;
+    }
     std::printf("%u of %u tests passed.%s\n", run - failed, run, failed > 0 ? (" Failures are in " + options.outDir + ".").c_str() : "");
     return failed > 0 ? 1 : 0;
 }

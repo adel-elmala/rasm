@@ -150,7 +150,7 @@ python tools/image_tests.py --lavapipe --update --scenes taa    # render new gol
 
 **`--lavapipe` downloads (once) and runs a third-party Mesa build**: lavapipe from [mesa-dist-win](https://github.com/pal1000/mesa-dist-win) 26.3.0, checked by its SHA-256, into `build/test-assets/`. Nothing is downloaded or run without that flag. Extracting it needs 7-Zip (`7z`) on the `PATH`. The script also fetches Sponza from a pinned commit of KhronosGroup/glTF-Sample-Assets (SHA-256 checked, into `build/test-assets/`): its license, the CRYENGINE Limited License, does not allow it in this repository. It runs `build/x64-release/tests/rasm_image_tests.exe` (`--preset`, `--build`), points the Vulkan loader at lavapipe with `VK_DRIVER_FILES`, and fails when the log names another device or has a validation or engine error. A failed test leaves `actual.png`, `expected.png` and `diff.png` (red: over the threshold) in `build/x64-release/image-tests/<test>/`.
 
-The default `ctest` presets leave the tests out (label `image`); `ctest --preset x64-release -L image` runs them on whatever driver the loader picks. An elevated process's loader ignores `VK_DRIVER_FILES`, so run the script from a normal prompt.
+The `ctest` presets leave the tests out (label `image`); `ctest --test-dir build/x64-release -L image` runs them on whatever driver the loader picks. An elevated process's loader ignores `VK_DRIVER_FILES`, so run the script from a normal prompt.
 
 A change that changes a golden says why in its pull request, with the image before and after. `verify-change` runs the tests with `--images`, only when asked.
 

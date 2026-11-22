@@ -102,10 +102,12 @@ def fetch_lavapipe():
     fetch_checked(MESA_URL, archive, MESA_SHA256)
     icds = list(folder.glob("x/**/lvp_icd.x86_64.json"))
     if not icds:
-        extract = folder / "x"
-        shutil.rmtree(extract, ignore_errors=True)
-        extract.mkdir(parents=True)
-        extract_7z(archive, extract)
+        partial = folder / "x.part"
+        shutil.rmtree(partial, ignore_errors=True)
+        partial.mkdir(parents=True)
+        extract_7z(archive, partial)
+        shutil.rmtree(folder / "x", ignore_errors=True)
+        partial.rename(folder / "x")
         icds = list(folder.glob("x/**/lvp_icd.x86_64.json"))
     if not icds:
         sys.exit(f"No lvp_icd.x86_64.json in {archive}.")
@@ -137,17 +139,18 @@ def main():
     if not exe.exists():
         sys.exit(f"{exe} is not built: run with --build, or cmake --build --preset {args.preset} --target rasm_image_tests.")
 
-    selected = set(args.scenes.split(",")) if args.scenes else None
+    scenes = ",".join(name.strip() for name in args.scenes.split(",") if name.strip()) if args.scenes else ""
+    selected = set(scenes.split(",")) if scenes else None
+    icd = fetch_lavapipe()
     command = [str(exe)]
     if not selected or "sponza" in selected:
         command += ["--sponza", str(fetch_sponza())]
-    icd = fetch_lavapipe()
     env = dict(os.environ, VK_DRIVER_FILES=str(icd), **LAVAPIPE_ENV)
     env.pop("VK_ICD_FILENAMES", None)
     if args.update:
         command.append("--update")
     if args.scenes:
-        command += ["--scenes", args.scenes]
+        command += ["--scenes", scenes]
 
     result = subprocess.run(command, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
     log = result.stdout
@@ -163,6 +166,10 @@ def main():
         print(f"  {line}")
     print(f"full log: build/{args.preset}/image-tests.log")
 
+    if not devices and result.returncode != 0:
+        print("rasm_image_tests stopped before it made a device:")
+        print("\n".join(log.splitlines()[-10:]))
+        return result.returncode
     if not devices or any("llvmpipe" not in device for device in devices):
         print("The tests did not run on lavapipe (llvmpipe): the Vulkan loader did not take VK_DRIVER_FILES. An elevated "
               "process ignores it; run unelevated, or register the driver as CI does (.github/workflows/ci.yml).")

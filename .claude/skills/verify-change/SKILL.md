@@ -32,7 +32,7 @@ python $V run           # AFTER: same checks + pixel diff against the baseline
 | `--gpu-av` | GPU-assisted validation: out-of-bounds bindless indices and buffer device address reads in shaders. Slow. |
 | `--args "--debug-view normals"` | Extra arguments for every example, after `--fixed-step --wait-for-loads` (an example ignores the ones it does not know). Compare such a run against a baseline taken with the same arguments. |
 | `--keep-captures` | Keep the `.gfxr` captures (≈100 MB each) for `frame-debug`. |
-| `--images` | Also run the golden-image tests (`tools/image_tests.py --lavapipe`, `run` only). **It downloads (once) and runs a third-party Mesa build, lavapipe**, so pass it only when the user asked for it. The goldens are lavapipe's; this machine's GPU is checked by the baseline diff above, not by them. |
+| `--images` | Also run the golden-image tests (`tools/image_tests.py --lavapipe --preset x64-release --build`, `run` only, whatever `--preset` is). **It downloads (once) and runs a third-party Mesa build, lavapipe**, so pass it only when the user asked for it. The goldens are lavapipe's; this machine's GPU is checked by the baseline diff above, not by them. |
 
 `diff <a.png> <b.png> [--out d.png]` compares any two PNGs.
 

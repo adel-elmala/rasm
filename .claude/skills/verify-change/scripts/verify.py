@@ -336,10 +336,11 @@ def cmd_check(args, make_baseline):
             print("   " + l)
         failed |= not ok
 
-    # The golden-image tests run on lavapipe, a third-party Mesa build, so only when asked (--images).
+    # The golden-image tests run on lavapipe, a third-party Mesa build, so only when asked (--images). They use the
+    # x64-release build like CI, whatever --preset is, since a Debug build may round some CPU-side math differently.
     if images and not make_baseline:
         script = os.path.join(REPO, "tools", "image_tests.py")
-        result = subprocess.run([sys.executable, script, "--lavapipe", "--preset", preset], cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+        result = subprocess.run([sys.executable, script, "--lavapipe", "--preset", "x64-release", "--build"], cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
         print("images  %s" % ("OK" if result.returncode == 0 else "FAILED"))
         for l in result.stdout.splitlines():
             print("   " + l)
