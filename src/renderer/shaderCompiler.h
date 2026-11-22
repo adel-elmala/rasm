@@ -1,12 +1,14 @@
 // clang-format off
 #pragma once
 
+#include "core/cacheFile.h"
 #include "rasm/types.h"
 
 #include <slang.h>
 #include <slang-com-ptr.h>
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -36,6 +38,22 @@ namespace rasm
         uint32_t                columns         = 1;    // a vector's scalars, a matrix's columns; a matrix is stored column by column
     };
 
+    struct StructMember
+    {
+        std::string             name;
+        uint32_t                offset          = 0;
+        std::string             structName;
+    };
+
+    struct StructLayout
+    {
+        uint32_t                    size        = 0;
+        std::vector<StructMember>   members;
+        std::vector<StructField>    fields;
+    };
+
+    using StructLayouts = std::unordered_map<std::string, StructLayout>;
+
     class ShaderCompiler
     {
     public:
@@ -53,28 +71,39 @@ namespace rasm
             std::vector<uint8_t> code;
         };
 
+        struct Stats
+        {
+            uint32_t            cacheHits       = 0;
+            uint32_t            compiles        = 0;
+            double              compileSeconds  = 0.0;
+        };
+
                         ShaderCompiler() = default;
                         ~ShaderCompiler() = default;
 
-        bool            initialize(Target target, const std::string& shaderDir);
+        bool            initialize(Target target, const std::string& shaderDir, const std::string& cacheDir);
         void            shutdown();
 
         CompiledShader  compile(const std::string& sourcePath, const std::string& outputPath, const std::string& entryPointName);
         CompiledShader  compileFromString(const std::string& sourceCode, const std::string& outputPath, const std::string& entryPointName);
-        // From now on, each program compiled keeps the layouts of the structs its push constants reach.
-        void            keepStructLayouts();
         // The layout of a struct some compiled program reached, or nullptr.
         const std::vector<StructField>* findStructLayout(const std::string& name) const;
+        const Stats&    getStats() const;
 
     private:
         slang::TargetDesc getTargetDesc(Target target);
+        bool            compileWithSlang(const std::string& sourceCode, const std::string& outputPath, const std::string& entryPointName, CompiledShader& shader,
+                                         std::string& pushConstants, StructLayouts& layouts, bool& cacheable);
 
     private:
         Slang::ComPtr<slang::IGlobalSession>    globalSession;
         Slang::ComPtr<slang::ISession>          activeSession;
         std::string                             buildPath = "./build/shaders/";
-        bool                                    keepLayouts = false;
-        std::unordered_map<std::string, std::vector<StructField>>   structLayouts;
+        std::filesystem::path                   libDir;
+        std::filesystem::path                   cacheFolder;
+        CacheKey                                baseKey;
+        StructLayouts                           structLayouts;
+        Stats                                   stats;
     };
 
 }

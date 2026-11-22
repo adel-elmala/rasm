@@ -173,6 +173,7 @@ namespace rasm
         Backend      preferredBackend        = Backend::VULKAN;
         std::string  assetRoot               = {};
         std::string  shaderDir               = {};
+        std::string  cacheDir                = "cache";  // compiled shaders and the pipeline cache, beside the executable (an absolute path as is); "": no disk caches
         uint32_t     geometryPoolVertices    = 1u << 21; // 64 B each: 128 MiB
         uint32_t     geometryPoolColors      = 1u << 20; // 4 B each: 4 MiB
         uint32_t     geometryPoolSkins       = 1u << 20; // a skinned vertex's joints and weights, 16 B each: 16 MiB

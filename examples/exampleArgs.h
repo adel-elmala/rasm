@@ -16,12 +16,14 @@
 //   --headless         no window and no input (PlatformType::HEADLESS): render --frames frames, write the last to --out, exit
 //   --frames N         frames a headless run renders (60)
 //   --out <file.png>   where a headless run writes its last frame (frame.png in the working directory)
+//   --no-cache         no disk caches (EngineConfig::cacheDir = ""): every shader is compiled and every pipeline built
 // main returns exampleExit(args): a headless run that did not write its frame fails.
 struct ExampleArgs
 {
     bool                    fixedStep       = false;
     bool                    waitForLoads    = false;
     bool                    headless        = false;
+    bool                    noCache         = false;
     uint32_t                frames          = 60;
     const char*             out             = "frame.png";
     uint32_t                frame           = 0;        // frames exampleRunning let start
@@ -37,6 +39,7 @@ inline ExampleArgs parseExampleArgs(int argc, char** argv)
         args.fixedStep      = args.fixedStep    || std::strcmp(argv[i], "--fixed-step") == 0;
         args.waitForLoads   = args.waitForLoads || std::strcmp(argv[i], "--wait-for-loads") == 0;
         args.headless       = args.headless     || std::strcmp(argv[i], "--headless") == 0;
+        args.noCache        = args.noCache      || std::strcmp(argv[i], "--no-cache") == 0;
         if (i + 1 < argc && std::strcmp(argv[i], "--frames") == 0)
             args.frames     = static_cast<uint32_t>(std::max(1, std::atoi(argv[++i])));
         else if (i + 1 < argc && std::strcmp(argv[i], "--out") == 0)
@@ -51,6 +54,8 @@ inline void applyExampleArgs(const ExampleArgs& args, rasm::EngineConfig& config
         config.platform         = rasm::PlatformType::HEADLESS;
     if (args.fixedStep)
         config.fixedDeltaTime   = 1.0f / 60.0f;
+    if (args.noCache)
+        config.cacheDir         = "";
 }
 
 // The frame loop's condition, in place of Engine::running. Headless, it asks for a copy of the last frame before that

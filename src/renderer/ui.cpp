@@ -151,9 +151,8 @@ namespace rasm
     {
         IMGUI_CHECKVERSION();
         ui = std::make_unique<Ui>();
-        // The Buffers section's state, and the GPU tables section's struct layouts from the shaders compiled from now on.
+        // The Buffers section's state.
         inspector = std::make_unique<Inspector>();
-        shaderCompiler->keepStructLayouts();
         ui->context = ImGui::CreateContext();
         ImGuiIO &io = ImGui::GetIO();
         // No imgui.ini in the working directory (principle 5), and nothing that carries over between runs.
@@ -316,7 +315,7 @@ namespace rasm
         {
             const gfx::UiPushConstants pushConstants{.vertices = draw.vertices, .texture = draw.texture, .displaySize = ui->displaySize};
             ctx.setScissor(commandBuffer, draw.scissor.x, draw.scissor.y, draw.scissor.width, draw.scissor.height);
-            ctx.pushConstants(commandBuffer, ui->pipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
+            ctx.pushConstants(commandBuffer, ui->pipeline, &pushConstants, sizeof(pushConstants), 0);
             ctx.drawIndexed(commandBuffer, draw.indexCount, 1, 0, draw.firstIndex, 0);
         }
         ctx.setScissor(commandBuffer, 0, 0, swapchain.width, swapchain.height);

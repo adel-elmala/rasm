@@ -616,7 +616,8 @@ namespace
         return pass;
     }
 
-    // One engine for every test, so the pipelines are compiled once. Counts the tests that ran and failed.
+    // One engine for every test, so the pipelines are compiled once, from source: no disk caches, so every run takes the
+    // same path. Counts the tests that ran and failed.
     bool runTests(const Options &options, uint32_t &run, uint32_t &failed)
     {
         const rasm::EngineConfig config = {
@@ -627,7 +628,8 @@ namespace
             .enableValidation = true,
             .preferredBackend = rasm::Backend::VULKAN,
             .assetRoot = RASM_IMAGE_TESTS_ASSET_ROOT,
-            .shaderDir = RASM_IMAGE_TESTS_SHADER_DIR};
+            .shaderDir = RASM_IMAGE_TESTS_SHADER_DIR,
+            .cacheDir = ""};
         rasm::Engine engine(config);
         if (!engine.running())
             return false;

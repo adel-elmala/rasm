@@ -384,14 +384,15 @@ namespace rasm::rhi
             }
         }
 
-        // The bindless set and a PUSH_CONSTANTS_SIZE range visible to the pipeline's stages.
-        VkPipelineLayout createPipelineLayout(const VolkDeviceTable &vk, VkDevice device, VkShaderStageFlags stages, DescriptorSetLayout *layout)
+        // The set and a PUSH_CONSTANTS_SIZE range that every stage of every pipeline sees, so graphics and compute
+        // pipelines share one layout (P8).
+        VkPipelineLayout createPipelineLayout(const VolkDeviceTable &vk, VkDevice device, VkDescriptorSetLayout setLayout)
         {
             VkPushConstantRange pushConstantRange{
-                .stageFlags = stages,
+                .stageFlags = PUSH_CONSTANT_STAGES,
                 .size = PUSH_CONSTANTS_SIZE};
 
-            VkDescriptorSetLayout setLayouts[] = {static_cast<VulkanDescriptorSetLayout *>(layout)->layout};
+            VkDescriptorSetLayout setLayouts[] = {setLayout};
 
             VkPipelineLayoutCreateInfo pipelineLayoutInfo = {
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -549,6 +550,8 @@ namespace rasm::rhi
     {
         waitIdle();
 
+        if (device.device != VK_NULL_HANDLE)
+            pipelineCache.save(vk, device.device);
         if (allocator != nullptr)
             vmaDestroyAllocator(allocator);
         graphicsQueue.reset();
@@ -601,6 +604,7 @@ namespace rasm::rhi
         // second device has its own table.
         volkLoadDeviceTable(&vk, device.device);
         queryFormatSupport(desc.hostImageCopy);
+        pipelineCache.load(vk, device.device, physicalDevice.properties, desc.cacheDir);
 
         auto queueRet = device.get_queue(vkb::QueueType::graphics);
         auto queueIndexRet = device.get_queue_index(vkb::QueueType::graphics);
@@ -892,9 +896,7 @@ namespace rasm::rhi
 
     Pipeline *VulkanDevice::createGraphicsPipeline(const PipelineDesc &desc, Shader *vertexShader, Shader *fragmentShader, DescriptorSetLayout *layout)
     {
-        VkPipelineLayout pipelineLayout = createPipelineLayout(vk, device.device, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, layout);
-        if (pipelineLayout == VK_NULL_HANDLE)
-            return nullptr;
+        const VkPipelineLayout pipelineLayout = static_cast<VulkanDescriptorSetLayout *>(layout)->pipelineLayout;
 
         // With vertex pulling the shader fetches vertices itself, so use an empty vertex input state.
         // This is core Vulkan and avoids VK_EXT_vertex_input_dynamic_state, which MoltenVK doesn't support.
@@ -1016,11 +1018,10 @@ namespace rasm::rhi
             .layout = pipelineLayout};
 
         VkPipeline vkPipeline;
-        auto result = vk.vkCreateGraphicsPipelines(device.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &vkPipeline);
+        auto result = vk.vkCreateGraphicsPipelines(device.device, pipelineCache.get(), 1, &pipelineInfo, nullptr, &vkPipeline);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to create graphics pipeline. Error: {}", toVkResultString(result));
-            vk.vkDestroyPipelineLayout(device.device, pipelineLayout, nullptr);
             return nullptr;
         }
 
@@ -1036,9 +1037,7 @@ namespace rasm::rhi
 
     Pipeline *VulkanDevice::createComputePipeline(const PipelineDesc &desc, Shader *computeShader, DescriptorSetLayout *layout)
     {
-        VkPipelineLayout pipelineLayout = createPipelineLayout(vk, device.device, VK_SHADER_STAGE_COMPUTE_BIT, layout);
-        if (pipelineLayout == VK_NULL_HANDLE)
-            return nullptr;
+        const VkPipelineLayout pipelineLayout = static_cast<VulkanDescriptorSetLayout *>(layout)->pipelineLayout;
 
         VkComputePipelineCreateInfo pipelineInfo = {
             .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
@@ -1051,11 +1050,10 @@ namespace rasm::rhi
             .layout = pipelineLayout};
 
         VkPipeline vkPipeline;
-        auto result = vk.vkCreateComputePipelines(device.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &vkPipeline);
+        auto result = vk.vkCreateComputePipelines(device.device, pipelineCache.get(), 1, &pipelineInfo, nullptr, &vkPipeline);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to create compute pipeline. Error: {}", toVkResultString(result));
-            vk.vkDestroyPipelineLayout(device.device, pipelineLayout, nullptr);
             return nullptr;
         }
 
@@ -1118,8 +1116,16 @@ namespace rasm::rhi
             delete layout;
             return nullptr;
         }
+        layout->pipelineLayout = createPipelineLayout(vk, device.device, layout->layout);
+        if (layout->pipelineLayout == VK_NULL_HANDLE)
+        {
+            vk.vkDestroyDescriptorSetLayout(device.device, layout->layout, nullptr);
+            delete layout;
+            return nullptr;
+        }
 
         setObjectName(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, reinterpret_cast<uint64_t>(layout->layout), desc.name);
+        setObjectName(VK_OBJECT_TYPE_PIPELINE_LAYOUT, reinterpret_cast<uint64_t>(layout->pipelineLayout), desc.name);
         return layout;
     }
 
@@ -1311,13 +1317,13 @@ namespace rasm::rhi
     {
         auto *vkPipeline = static_cast<VulkanPipeline *>(pipeline);
         vk.vkDestroyPipeline(device.device, vkPipeline->pipeline, nullptr);
-        vk.vkDestroyPipelineLayout(device.device, vkPipeline->layout, nullptr);
         delete vkPipeline;
     }
 
     void VulkanDevice::destroyDescriptorSetLayout(DescriptorSetLayout *layout)
     {
         auto *vkLayout = static_cast<VulkanDescriptorSetLayout *>(layout);
+        vk.vkDestroyPipelineLayout(device.device, vkLayout->pipelineLayout, nullptr);
         vk.vkDestroyDescriptorSetLayout(device.device, vkLayout->layout, nullptr);
         delete vkLayout;
     }

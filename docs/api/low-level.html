@@ -136,12 +136,11 @@
 
 <div class="api" id="pushConstants">
   <pre class="sig">void pushConstants(const CommandBufferHandle&amp; commandBuffer,
-                   const PipelineHandle&amp; pipeline, ShaderType stage,
+                   const PipelineHandle&amp; pipeline,
                    const void* data, uint32_t size, uint32_t offset = 0);</pre>
   <div class="body">
-    <p>Copies up to 16 bytes into the push constants, which the next draws or dispatches read.</p>
+    <p>Copies up to 16 bytes into the push constants, which the next draws or dispatches read. Every pipeline, graphics or compute, has the same pipeline layout, with one push-constant range that every stage sees, so a push needs no stage (<a href="../guides/bindless.html#in-rasm">Bindless resources</a>).</p>
     <dl>
-      <dt>stage</dt><dd><code>ShaderType::COMPUTE</code> for a compute pipeline, <code>ShaderType::VERTEX_FRAGMENT</code> for a graphics pipeline. Anything else is refused.</dd>
       <dt>size, offset</dt><dd>Bytes. <code>offset + size</code> must be at most <code>PUSH_CONSTANTS_SIZE</code> (16); a bigger push logs an error and is dropped. A typical layout is one 8-byte buffer address and two 4-byte values.</dd>
     </dl>
   </div>

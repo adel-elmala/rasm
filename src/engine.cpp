@@ -74,6 +74,10 @@ namespace rasm
             spdlog::error("Window dimensions must be positive.");
             return;
         }
+        // After the check, so an engine that stops here makes no folder.
+        this->config.cacheDir = resolveCacheDir(config.cacheDir);
+        if (!this->config.cacheDir.empty())
+            spdlog::info("Shader and pipeline caches in {}", this->config.cacheDir);
 
         const bool headless = config.platform == PlatformType::HEADLESS;
         platform = headless ? createHeadlessPlatform() : createSdlPlatform();
@@ -119,7 +123,7 @@ namespace rasm
         }
 
         auto shaderTarget = getShaderCompilerTarget(config.preferredBackend);
-        if (!shaderCompiler->initialize(shaderTarget, this->config.shaderDir))
+        if (!shaderCompiler->initialize(shaderTarget, this->config.shaderDir, this->config.cacheDir))
         {
             spdlog::error("Failed to initialize shader compiler.");
             return;
@@ -197,6 +201,7 @@ namespace rasm
 
         // Its graph frees what it made through the context.
         renderer.reset();
+        shaderCompiler->shutdown();
 #if defined(RASM_IMGUI)
         destroyUi();
 #endif

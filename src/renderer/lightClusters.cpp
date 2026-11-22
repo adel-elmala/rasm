@@ -276,15 +276,15 @@ namespace rasm
         const uint32_t timer = beginGpuTimer(commandBuffer, "Light Clusters");
         const gfx::PushConstants pushConstants{.scene = sceneDataAddress};
         ctx.bindPipeline(commandBuffer, gpuLights->lightsPipeline);
-        ctx.pushConstants(commandBuffer, gpuLights->lightsPipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
+        ctx.pushConstants(commandBuffer, gpuLights->lightsPipeline, &pushConstants, sizeof(pushConstants), 0);
         ctx.dispatch(commandBuffer, 1);
         ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::COMPUTE);
         ctx.bindPipeline(commandBuffer, gpuLights->tilesPipeline);
-        ctx.pushConstants(commandBuffer, gpuLights->tilesPipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
+        ctx.pushConstants(commandBuffer, gpuLights->tilesPipeline, &pushConstants, sizeof(pushConstants), 0);
         ctx.dispatch(commandBuffer, CLUSTER_TILES_X * CLUSTER_TILES_Y);
         ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::COMPUTE);
         ctx.bindPipeline(commandBuffer, gpuLights->clustersPipeline);
-        ctx.pushConstants(commandBuffer, gpuLights->clustersPipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
+        ctx.pushConstants(commandBuffer, gpuLights->clustersPipeline, &pushConstants, sizeof(pushConstants), 0);
         ctx.dispatch(commandBuffer, CLUSTER_COUNT / CLUSTER_GROUP_SIZE);
         endGpuTimer(commandBuffer, timer);
     }

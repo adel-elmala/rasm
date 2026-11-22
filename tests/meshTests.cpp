@@ -56,7 +56,7 @@ TEST_CASE("an OBJ can name normals and texture coordinates it never defines")
 TEST_CASE("an engine gives a mesh handle to every file it loads, with no cap on the count")
 {
     const ObjFolder folder(MESH_FILES);
-    rasm::Engine engine(rasm::EngineConfig{});
+    rasm::Engine engine(rasm::EngineConfig{.cacheDir = ""});
     std::vector<rasm::MeshHandle> handles;
     for (const std::string &path : folder.paths)
     {
@@ -72,7 +72,7 @@ TEST_CASE("an engine gives a mesh handle to every file it loads, with no cap on 
 TEST_CASE("a mesh that does not fit the geometry pool gets no handle and uses no index")
 {
     const ObjFolder folder(1);
-    rasm::Engine engine(rasm::EngineConfig{});
+    rasm::Engine engine(rasm::EngineConfig{.cacheDir = ""});
     // Without a GPU the geometry pool has no room at all.
     const std::vector<rasm::Vertex> vertices(3, rasm::Vertex{});
     CHECK_FALSE(engine.createMesh(vertices, {0, 1, 2}).isValid());

@@ -46,7 +46,7 @@ namespace
     // the CPU-side camera API usable.
     rasm::EngineConfig headlessConfig()
     {
-        return rasm::EngineConfig{};
+        return rasm::EngineConfig{.cacheDir = ""};
     }
 }
 

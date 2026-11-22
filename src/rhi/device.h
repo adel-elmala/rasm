@@ -54,6 +54,7 @@ namespace rasm::rhi
         bool            enableGpuValidation     = false;
         bool            asyncCompute            = false;
         bool            hostImageCopy           = true;     // false: every texture goes through the staging ring
+        std::string     cacheDir;                           // the pipeline cache's folder; empty: none
     };
 
     struct Buffer
@@ -167,7 +168,7 @@ namespace rasm::rhi
         virtual void                bindPipeline(Pipeline* pipeline) = 0;
         virtual void                bindIndexBuffer(Buffer* buffer, uint64_t offset, Format indexType) = 0;
         virtual void                bindDescriptorSet(Pipeline* pipeline, DescriptorSet* descriptorSet, uint32_t setIndex) = 0;
-        virtual void                pushConstants(Pipeline* pipeline, ShaderType stages, const void* data, uint32_t size, uint32_t offset) = 0;
+        virtual void                pushConstants(Pipeline* pipeline, const void* data, uint32_t size, uint32_t offset) = 0;
         virtual void                draw(uint32_t vertexCount, uint32_t instanceCount) = 0;
         virtual void                drawIndexed(uint32_t indexCount, uint32_t instanceCount, uint32_t vertexOffset, uint32_t firstIndex, uint32_t firstInstance) = 0;
         virtual void                drawIndexedIndirect(Buffer* buffer, uint64_t offset, uint32_t drawCount, uint32_t stride) = 0;

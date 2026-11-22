@@ -3,6 +3,7 @@
 
 #include "rhi/device.h"
 #include "rhi/vulkan/vulkanTypes.h"
+#include "rhi/vulkan/vulkanPipelineCache.h"
 #include "rhi/vulkan/vulkanQueue.h"
 
 #include "VkBootstrap.h"
@@ -90,6 +91,7 @@ namespace rasm::rhi
         vkb::PhysicalDevice             physicalDevice      = {};
         vkb::Device                     device              = {};
         VolkDeviceTable                 vk                  = {};
+        VulkanPipelineCache             pipelineCache       = {};
         std::unique_ptr<VulkanQueue>    graphicsQueue       = {};
         std::unique_ptr<VulkanQueue>    computeQueue        = {};
         uint32_t                        sharedFamilies[2]   = {};

@@ -1587,11 +1587,11 @@ namespace rasm
         const auto commandBuffer = frameResources[frameCount].commandBuffer;
         const gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, static_cast<uint32_t>(frameCount), viewIndex), .argument = phase};
         ctx.bindPipeline(commandBuffer, gpuScene->cullCountPipeline);
-        ctx.pushConstants(commandBuffer, gpuScene->cullCountPipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
+        ctx.pushConstants(commandBuffer, gpuScene->cullCountPipeline, &pushConstants, sizeof(pushConstants), 0);
         ctx.dispatch(commandBuffer, view.groupCount);
         ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::COMPUTE);
         ctx.bindPipeline(commandBuffer, gpuScene->cullWritePipeline);
-        ctx.pushConstants(commandBuffer, gpuScene->cullWritePipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
+        ctx.pushConstants(commandBuffer, gpuScene->cullWritePipeline, &pushConstants, sizeof(pushConstants), 0);
         ctx.dispatch(commandBuffer, view.groupCount);
 
         // The phase that keeps the blend run's draws: the late one, or the only one in a frame without a Hi-Z.
@@ -1629,7 +1629,7 @@ namespace rasm
             const PipelineHandle pipeline = gpuScene->sortPipelines[static_cast<uint32_t>(dispatches[i].step)];
             pushConstants.argument = dispatches[i].argument;
             ctx.bindPipeline(commandBuffer, pipeline);
-            ctx.pushConstants(commandBuffer, pipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
+            ctx.pushConstants(commandBuffer, pipeline, &pushConstants, sizeof(pushConstants), 0);
             ctx.dispatch(commandBuffer, dispatches[i].groups);
         }
         endGpuTimer(commandBuffer, timer);
@@ -1655,7 +1655,7 @@ namespace rasm
             levelWidth = (levelWidth + 1) / 2;
             levelHeight = (levelHeight + 1) / 2;
             pushConstants.argument = level;
-            ctx.pushConstants(commandBuffer, gpuScene->hizPipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
+            ctx.pushConstants(commandBuffer, gpuScene->hizPipeline, &pushConstants, sizeof(pushConstants), 0);
             ctx.dispatch(commandBuffer, (levelWidth + HIZ_GROUP_SIZE - 1) / HIZ_GROUP_SIZE, (levelHeight + HIZ_GROUP_SIZE - 1) / HIZ_GROUP_SIZE);
         }
     }
@@ -1702,7 +1702,7 @@ namespace rasm
             if (view.mirrored && cullMode != CullMode::NONE)
                 cullMode = cullMode == CullMode::BACK ? CullMode::FRONT : CullMode::BACK;
             ctx.setCullMode(commandBuffer, cullMode);
-            ctx.pushConstants(commandBuffer, pipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
+            ctx.pushConstants(commandBuffer, pipeline, &pushConstants, sizeof(pushConstants), 0);
             if (view.culled)
                 ctx.drawIndexedIndirectCount(commandBuffer, view.visibleDraws[frame], run.first * sizeof(gfx::DrawInfo), view.visibleDraws[frame],
                                              drawCountsOffset + i * sizeof(uint32_t), run.count, sizeof(gfx::DrawInfo));
@@ -1732,7 +1732,7 @@ namespace rasm
         ctx.bindDescriptorSet(commandBuffer, blendPipeline, bindlessDescriptorSet, 0);
         ctx.bindIndexBuffer(commandBuffer, geometryPool->indexBuffer(), 0, Format::U32_UINT);
         ctx.setCullMode(commandBuffer, CullMode::NONE);
-        ctx.pushConstants(commandBuffer, blendPipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
+        ctx.pushConstants(commandBuffer, blendPipeline, &pushConstants, sizeof(pushConstants), 0);
         if (view.culled)
             ctx.drawIndexedIndirectCount(commandBuffer, view.visibleDraws[frame], run.first * sizeof(gfx::DrawInfo), view.visibleDraws[frame],
                                          getDrawCountsOffset(view.visibleCapacity[frame]) + view.blendRun * sizeof(uint32_t), run.count, sizeof(gfx::DrawInfo));
@@ -1762,7 +1762,7 @@ namespace rasm
         const gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, static_cast<uint32_t>(frameCount), viewIndex)};
         ctx.bindPipeline(commandBuffer, skyPipeline);
         ctx.bindDescriptorSet(commandBuffer, skyPipeline, bindlessDescriptorSet, 0);
-        ctx.pushConstants(commandBuffer, skyPipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
+        ctx.pushConstants(commandBuffer, skyPipeline, &pushConstants, sizeof(pushConstants), 0);
         ctx.setCullMode(commandBuffer, CullMode::NONE);
         ctx.draw(commandBuffer, 3);
     }
@@ -1782,7 +1782,7 @@ namespace rasm
         ctx.bindPipeline(commandBuffer, ghostPipeline);
         ctx.bindDescriptorSet(commandBuffer, ghostPipeline, bindlessDescriptorSet, 0);
         ctx.setCullMode(commandBuffer, CullMode::BACK);
-        ctx.pushConstants(commandBuffer, ghostPipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
+        ctx.pushConstants(commandBuffer, ghostPipeline, &pushConstants, sizeof(pushConstants), 0);
         ctx.draw(commandBuffer, GHOST_BOX_VERTICES, static_cast<uint32_t>(gpuScene->drawLists[view.scene.index].draws.size()));
         ctx.setCullMode(commandBuffer, CullMode::NONE);
     }

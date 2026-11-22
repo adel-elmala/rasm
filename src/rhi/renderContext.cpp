@@ -552,7 +552,8 @@ namespace rasm
                                                    .enableSyncValidation = config.enableSyncValidation,
                                                    .enableGpuValidation = config.enableGpuValidation,
                                                    .asyncCompute = config.asyncCompute,
-                                                   .hostImageCopy = config.hostImageCopy});
+                                                   .hostImageCopy = config.hostImageCopy,
+                                                   .cacheDir = config.cacheDir});
         if (!impl->device)
             return false;
 
@@ -605,9 +606,6 @@ namespace rasm
         for (auto *pool : impl->descriptorPools.objects)
             if (pool)
                 device.destroyDescriptorPool(pool);
-        for (auto *layout : impl->descriptorSetLayouts.objects)
-            if (layout)
-                device.destroyDescriptorSetLayout(layout);
         for (auto *rhiCommandBuffer : impl->commandBuffers.objects)
             if (rhiCommandBuffer)
                 device.destroyCommandBuffer(rhiCommandBuffer);
@@ -634,6 +632,10 @@ namespace rasm
         for (auto *shader : impl->shaders.objects)
             if (shader)
                 device.destroyShader(shader);
+        // After the pipelines: the pipeline layout they share is the set layout's.
+        for (auto *layout : impl->descriptorSetLayouts.objects)
+            if (layout)
+                device.destroyDescriptorSetLayout(layout);
         for (auto *sampler : impl->samplers)
             if (sampler)
                 device.destroySampler(sampler);
@@ -1939,7 +1941,7 @@ namespace rasm
             rhiCommandBuffer->bindDescriptorSet(rhiPipeline, rhiDescriptorSet, setIndex);
     }
 
-    void RenderContext::pushConstants(const CommandBufferHandle &commandBuffer, const PipelineHandle &pipeline, ShaderType stage, const void *data, uint32_t size, uint32_t offset)
+    void RenderContext::pushConstants(const CommandBufferHandle &commandBuffer, const PipelineHandle &pipeline, const void *data, uint32_t size, uint32_t offset)
     {
         // Every pipeline's push-constant range is PUSH_CONSTANTS_SIZE bytes (C12).
         if (offset + size > PUSH_CONSTANTS_SIZE)
@@ -1953,11 +1955,7 @@ namespace rasm
         if (!rhiCommandBuffer || !rhiPipeline)
             return;
 
-        // The stages must be exactly the ones of the pipeline's push-constant range.
-        const ShaderType layoutStage = rhiPipeline->desc.computeShader.isValid() ? ShaderType::COMPUTE : ShaderType::VERTEX_FRAGMENT;
-        if (!checkArgument(stage == layoutStage, __func__, "the stage must be COMPUTE for a compute pipeline and VERTEX_FRAGMENT for a graphics pipeline."))
-            return;
-        rhiCommandBuffer->pushConstants(rhiPipeline, stage, data, size, offset);
+        rhiCommandBuffer->pushConstants(rhiPipeline, data, size, offset);
     }
 
     void RenderContext::draw(const CommandBufferHandle &commandBuffer, uint32_t vertexCount, uint32_t instanceCount)

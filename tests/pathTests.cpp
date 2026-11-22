@@ -1,5 +1,6 @@
 #include "rasm/engine.h"
 #include "assets/meshImport.h"
+#include "platform/paths.h"
 
 #include "doctest/doctest.h"
 
@@ -215,4 +216,40 @@ TEST_CASE("a path that is not valid UTF-8 does not throw")
     config.shaderDir = "caf\xE9";
 
     CHECK_NOTHROW(rasm::Engine(config).resolveAssetPath("caf\xE9.obj"));
+}
+
+TEST_CASE("the cache folder is beside the executable, an absolute one as it is, and none for an empty path")
+{
+    CHECK(rasm::resolveCacheDir("").empty());
+
+    const fs::path beside = fs::path(RASM_TEST_EXECUTABLE_DIR) / "rasm_cache_test";
+    fs::remove_all(beside);
+    CHECK(isSamePath(rasm::resolveCacheDir("rasm_cache_test"), beside));
+    CHECK(fs::is_directory(beside));
+    fs::remove_all(beside);
+
+    ScopedTempDir temp;
+    CHECK(isSamePath(rasm::resolveCacheDir(toUtf8(temp.dir / "cache")), temp.dir / "cache"));
+}
+
+TEST_CASE("a cache folder that cannot be made falls back to the user's cache folder, unless it is absolute")
+{
+    ScopedTempDir temp;
+    // A file where a folder of the path should be: the folder cannot be made.
+    std::ofstream(temp.dir / "file") << "x";
+    CHECK(rasm::resolveCacheDir(toUtf8(temp.dir / "file" / "cache")).empty());
+
+    const fs::path blocker = fs::path(RASM_TEST_EXECUTABLE_DIR) / "rasm_cache_blocker";
+    std::ofstream(blocker) << "x";
+    const std::string fallback = rasm::resolveCacheDir("rasm_cache_blocker/cache");
+    std::error_code error;
+    fs::remove(blocker, error);
+    REQUIRE_FALSE(fallback.empty());
+    const fs::path folder = rasm::pathFromUtf8(fallback);
+    CHECK(folder.filename() == "rasm_tests");
+    CHECK(folder.parent_path().filename() == "rasm");
+    CHECK(fs::is_directory(folder));
+    fs::remove_all(folder, error);
+    // Only if no other application keeps its caches there.
+    fs::remove(folder.parent_path(), error);
 }

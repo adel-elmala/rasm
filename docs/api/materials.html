@@ -372,8 +372,7 @@ const rasm::TextureHandle texture = engine.getRenderTargetTexture(rtHandle);
 uint32_t textureIndex = engine.getBindlessTextureIndex(texture);
 ctx.bindDescriptorSet(commandBuffer, overlayPipeline,
                       engine.getBindlessDescriptorSet(), 0);
-ctx.pushConstants(commandBuffer, overlayPipeline, rasm::ShaderType::VERTEX_FRAGMENT,
-                  &amp;textureIndex, sizeof(textureIndex), 0);</code></pre>
+ctx.pushConstants(commandBuffer, overlayPipeline, &amp;textureIndex, sizeof(textureIndex), 0);</code></pre>
 
 <div class="table-wrap">
 <table>
