@@ -28,6 +28,7 @@ python $V run           # AFTER: same checks + pixel diff against the baseline
 | `--sync` | Synchronization validation: barriers, hazards. Use it for any barrier, layout, pass-order or render-graph change. |
 | `--best-practices` | Best Practices warnings. Noisy, so compare the counts against a baseline run with the same flag. |
 | `--gpu-av` | GPU-assisted validation: out-of-bounds bindless indices and buffer device address reads in shaders. Slow. |
+| `--args "--debug-view normals"` | Extra arguments for every example, after `--fixed-step` (an example ignores the ones it does not know). Compare such a run against a baseline taken with the same arguments. |
 | `--keep-captures` | Keep the `.gfxr` captures (≈100 MB each) for `frame-debug`. |
 
 `diff <a.png> <b.png> [--out d.png]` compares any two PNGs.

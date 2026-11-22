@@ -127,10 +127,20 @@ TEST_CASE("every pipeline field takes part in equality")
     CHECK_FALSE(base == blend);
     CHECK(rasm::PipelineDescHash{}(base) != rasm::PipelineDescHash{}(blend));
 
+    auto additive = base;
+    additive.blendMode = rasm::BlendMode::ADDITIVE;
+    CHECK_FALSE(blend == additive);
+    CHECK(rasm::PipelineDescHash{}(blend) != rasm::PipelineDescHash{}(additive));
+
     auto depthWrite = base;
     depthWrite.depthWrite = false;
     CHECK_FALSE(base == depthWrite);
     CHECK(rasm::PipelineDescHash{}(base) != rasm::PipelineDescHash{}(depthWrite));
+
+    auto depthTest = base;
+    depthTest.depthTest = false;
+    CHECK_FALSE(base == depthTest);
+    CHECK(rasm::PipelineDescHash{}(base) != rasm::PipelineDescHash{}(depthTest));
 
     auto name = base;
     name.name = "other";

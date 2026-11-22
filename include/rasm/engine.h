@@ -171,6 +171,8 @@ namespace rasm
         // The ImTextureID that shows a sampled texture with ImGui::Image, or 0 while the texture loads. A loaded texture
         // without a bindless slot gets one.
         uint64_t                    getUiTexture(const TextureHandle& texture);
+        void                        setDebugView(DebugView view);
+        void                        setCullingFrozen(bool frozen);
         bool                        running() const;
         bool                        recreateSwapchain();
         void                        setRenderTarget(const RenderTargetHandle& renderTarget, uint32_t face = 0);
@@ -247,6 +249,8 @@ namespace rasm
         std::unique_ptr<Ui>                                         ui                                      = {};
         std::unique_ptr<Renderer>                                   renderer                                = {};
         PipelineHandle                                              toneMapPipeline                         = {};
+        PipelineHandle                                              debugDisplayPipeline                    = {};
+        PipelineHandle                                              debugHeatPipeline                       = {};
         PipelineHandle                                              msaaResolvePipeline                     = {};
         PipelineHandle                                              taaPipeline                             = {};
         PipelineHandle                                              bloomFirstDownPipeline                  = {};
@@ -271,6 +275,8 @@ namespace rasm
         bool                                                        swapchainRendered                       = false; // a pass rendered to the swapchain this frame
         bool                                                        graphDumpRequested                      = false; // F3: the next graph that runs logs its dump
         std::string                                                 graphDump                               = {};    // the last one, for the RASM window
+        DebugView                                                   debugView                               = DebugView::NONE;
+        bool                                                        cullingFrozen                           = false;
 
     private:
         static constexpr Format     DEPTH_FORMAT    = Format::D32_SFLOAT;
@@ -296,8 +302,8 @@ namespace rasm
             std::future<EnvironmentRaw>     result;
         };
 
-        PipelineHandle              createGraphicsPipeline(const std::string& name, const std::string& shaderSource, const Format* colorFormats, Format depthFormat, const char* vertexEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite, uint32_t samples = 1, bool alphaToCoverage = false);
-        PipelineHandle              createScenePipeline(const std::string& name, const std::string& shaderFile, const std::string& defines, const RenderTargetHandle& renderTarget, const char* vertexEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite, bool alphaToCoverage = false);
+        PipelineHandle              createGraphicsPipeline(const std::string& name, const std::string& shaderSource, const Format* colorFormats, Format depthFormat, const char* vertexEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite, uint32_t samples = 1, bool alphaToCoverage = false, bool depthTest = true);
+        PipelineHandle              createScenePipeline(const std::string& name, const std::string& shaderFile, const std::string& defines, const RenderTargetHandle& renderTarget, const char* vertexEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite, bool alphaToCoverage = false, bool depthTest = true);
         MaterialHandle              loadMaterial(const tinygltf::Model& model, int materialIndex, GltfImportCache& cache);
         void                        finishMeshLoad(PendingMeshLoad& load);
         void                        finishTextureLoad(PendingTextureLoad& load);
@@ -354,8 +360,10 @@ namespace rasm
         void                        recordSceneCulling(uint32_t view, uint32_t phase);
         void                        recordHiz(uint32_t view);
         void                        recordBlendSort(uint32_t view);
-        void                        drawSceneView(uint32_t view);
+        void                        drawSceneView(uint32_t view, uint32_t phase);
         void                        drawTransparent(uint32_t view);
+        void                        drawCullingGhosts(uint32_t view);
+        void                        drawFrozenFrustums();
         void                        createFrameStats();
         void                        updateFrameStats();
         bool                        createStatsOverlay();

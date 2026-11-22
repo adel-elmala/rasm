@@ -148,6 +148,7 @@ namespace rasm
         Format                      depthStencilAttachmentFormat                  = Format::UNKNOWN;
         BlendMode                   blendMode                                     = BlendMode::NONE;
         bool                        depthWrite                                    = true;
+        bool                        depthTest                                     = true;
         uint32_t                    samples                                       = 1;     // of the attachments it draws into
         bool                        alphaToCoverage                               = false; // color 0's alpha decides which samples are covered
 

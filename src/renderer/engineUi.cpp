@@ -1,7 +1,9 @@
 #include "rasm/engine.h"
 #include "renderer/frameStats.h"
+#include "renderer/gpuScene.h"
 #include "renderer/ui.h"
 
+#include "glm/glm.hpp"
 #include "imgui.h"
 
 #include <cfloat>
@@ -14,6 +16,19 @@ namespace rasm
     {
         // Slow enough for the numbers to be read, like the stats overlay's.
         constexpr std::chrono::milliseconds STATS_REFRESH(250);
+
+        constexpr const char *DEBUG_VIEW_NAMES[] = {"None", "Normals", "UVs", "Overdraw", "LODs", "Culling", "Light count"};
+        // The display colors of the views' keys: DEBUG_LOD_COLORS and the culling colors in debugViews.slang and
+        // debugGhosts.slang (the ghosts' a few layers deep), HEAT_COLORS in toneMap.slang.
+        constexpr float LOD_COLORS[MAX_MESH_LODS][3] = {{0.20f, 0.80f, 0.25f}, {0.65f, 0.85f, 0.15f}, {0.95f, 0.85f, 0.15f}, {1.00f, 0.55f, 0.10f}, {0.95f, 0.20f, 0.15f}, {0.90f, 0.25f, 0.70f}, {0.55f, 0.30f, 0.95f}, {0.20f, 0.45f, 1.00f}};
+        constexpr const char *LOD_LABELS[MAX_MESH_LODS] = {"0", "1", "2", "3", "4", "5", "6", "7"};
+        constexpr float CULLING_COLORS[4][3] = {{0.20f, 0.80f, 0.25f}, {0.95f, 0.85f, 0.15f}, {0.60f, 0.04f, 0.04f}, {0.04f, 0.12f, 0.60f}};
+        constexpr const char *CULLING_LABELS[4] = {"early", "late", "occluded", "outside"};
+        constexpr float HEAT_COLORS[7][3] = {{0.05f, 0.05f, 0.35f}, {0.10f, 0.30f, 0.95f}, {0.05f, 0.80f, 0.90f}, {0.15f, 0.85f, 0.20f}, {0.98f, 0.88f, 0.10f}, {0.95f, 0.15f, 0.10f}, {1.00f, 1.00f, 1.00f}};
+        constexpr const char *HEAT_LABELS[7] = {"1", "2", "4", "8", "16", "32", "64"};
+        // The frozen frustum's far side is drawn at this NDC depth, 10000 times the near plane's distance: the
+        // reversed-Z far plane is at infinity.
+        constexpr float FROZEN_FAR_DEPTH = 1e-4f;
     }
 
     namespace
@@ -59,6 +74,51 @@ namespace rasm
                 ImGui::Text("Dropped    %s (full clusters)", formatCount(stats.lightsDropped).c_str());
             ImGui::Text("VRAM       %llu / %llu MiB", static_cast<unsigned long long>(stats.memory.vramUsage >> 20), static_cast<unsigned long long>(stats.memory.vramBudget >> 20));
         }
+
+        void drawKey(const float (*colors)[3], const char *const *labels, uint32_t count)
+        {
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                if (i > 0)
+                    ImGui::SameLine();
+                ImGui::ColorButton(labels[i], ImVec4(colors[i][0], colors[i][1], colors[i][2], 1.0f), ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop);
+                ImGui::SameLine(0.0f, 2.0f);
+                ImGui::TextUnformatted(labels[i]);
+            }
+        }
+
+        void drawDebugViewKey(DebugView view)
+        {
+            if (view == DebugView::NORMALS)
+                ImGui::TextDisabled("world x, y, z as red, green, blue");
+            if (view == DebugView::UVS)
+                ImGui::TextDisabled("UV 0 as red, green; 8 squares a unit");
+            if (view == DebugView::OVERDRAW || view == DebugView::LIGHT_COUNT)
+                drawKey(HEAT_COLORS, HEAT_LABELS, 7);
+            if (view == DebugView::LODS)
+                drawKey(LOD_COLORS, LOD_LABELS, MAX_MESH_LODS);
+            if (view == DebugView::CULLING)
+                drawKey(CULLING_COLORS, CULLING_LABELS, 4);
+        }
+
+        // The part of a line in front of the camera, in clip space; false when none of it is.
+        bool clipToFront(glm::vec4 &a, glm::vec4 &b)
+        {
+            constexpr float MIN_W = 1e-4f;
+            if (a.w < MIN_W && b.w < MIN_W)
+                return false;
+            if (a.w < MIN_W)
+                a = glm::mix(a, b, (MIN_W - a.w) / (b.w - a.w));
+            if (b.w < MIN_W)
+                b = glm::mix(b, a, (MIN_W - b.w) / (a.w - b.w));
+            return true;
+        }
+
+        ImVec2 toScreen(const glm::vec4 &clip, const ImVec2 &size)
+        {
+            // Clip space is Y-up, the screen Y-down.
+            return ImVec2((clip.x / clip.w * 0.5f + 0.5f) * size.x, (0.5f - clip.y / clip.w * 0.5f) * size.y);
+        }
     }
 
     // The RASM window, F1: the frame stats, the forced LOD (F2) and the render graph's dump (F3).
@@ -98,6 +158,24 @@ namespace rasm
                 ImGui::EndCombo();
             }
         }
+        if (ImGui::CollapsingHeader("Debug views", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            DebugView view = debugView;
+            if (ImGui::BeginCombo("View", DEBUG_VIEW_NAMES[static_cast<uint32_t>(view)]))
+            {
+                for (uint32_t i = 0; i < std::size(DEBUG_VIEW_NAMES); ++i)
+                {
+                    if (ImGui::Selectable(DEBUG_VIEW_NAMES[i], static_cast<uint32_t>(view) == i))
+                        view = static_cast<DebugView>(i);
+                }
+                ImGui::EndCombo();
+            }
+            setDebugView(view);
+            drawDebugViewKey(view);
+            bool frozen = cullingFrozen;
+            if (ImGui::Checkbox("Freeze culling", &frozen))
+                setCullingFrozen(frozen);
+        }
         if (ImGui::CollapsingHeader("Render graph"))
         {
             if (ImGui::Button("Dump (F3)"))
@@ -112,5 +190,38 @@ namespace rasm
             }
         }
         ImGui::End();
+    }
+
+    // A frozen view's frustum as lines on the UI's background, seen from the view's camera: the near rectangle, the
+    // side edges and a far rectangle at FROZEN_FAR_DEPTH.
+    void Engine::drawFrozenFrustums()
+    {
+        if (!cullingFrozen)
+            return;
+        ImDrawList *drawList = ImGui::GetBackgroundDrawList();
+        const ImVec2 size = ImGui::GetIO().DisplaySize;
+        const float thickness = 2.0f * ImGui::GetStyle().FontScaleDpi;
+        for (const SceneView &view : gpuScene->views)
+        {
+            if (view.graphs == 0 || view.depthOnly || !view.frozen)
+                continue;
+            const RenderTarget &target = ctx.getRenderTarget(view.renderTarget);
+            const glm::mat4 camera = getProjectionMatrix(view.camera, static_cast<float>(target.width) / static_cast<float>(target.height)) * getViewMatrix(view.camera);
+            const glm::mat4 toWorld = glm::inverse(view.frozenViewProjection);
+            glm::vec4 corners[8];
+            for (uint32_t i = 0; i < 8; ++i)
+            {
+                const glm::vec4 world = toWorld * glm::vec4((i & 1) != 0 ? 1.0f : -1.0f, (i & 2) != 0 ? 1.0f : -1.0f, i < 4 ? 1.0f : FROZEN_FAR_DEPTH, 1.0f);
+                corners[i] = camera * glm::vec4(glm::vec3(world) / world.w, 1.0f);
+            }
+            const uint32_t edges[12][2] = {{0, 1}, {1, 3}, {3, 2}, {2, 0}, {4, 5}, {5, 7}, {7, 6}, {6, 4}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+            for (const auto &edge : edges)
+            {
+                glm::vec4 a = corners[edge[0]];
+                glm::vec4 b = corners[edge[1]];
+                if (clipToFront(a, b))
+                    drawList->AddLine(toScreen(a, size), toScreen(b, size), IM_COL32(255, 140, 40, 255), thickness);
+            }
+        }
     }
 }

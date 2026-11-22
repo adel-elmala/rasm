@@ -28,6 +28,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -96,6 +97,19 @@ namespace
             addCharacter(engine, scene, "crowd " + std::to_string(i), mesh, makeTransform(position, scale, 0.0f), clip, 0.37f * static_cast<float>(i));
         }
     }
+
+    // --debug-view's names, in the order of rasm::DebugView.
+    rasm::DebugView parseDebugView(const char *name)
+    {
+        const char *names[] = {"none", "normals", "uvs", "overdraw", "lods", "culling", "light-count"};
+        for (uint32_t i = 0; i < std::size(names); ++i)
+        {
+            if (std::strcmp(name, names[i]) == 0)
+                return static_cast<rasm::DebugView>(i);
+        }
+        std::printf("Unknown debug view '%s'.\n", name);
+        return rasm::DebugView::NONE;
+    }
 }
 
 int main(int argc, char **argv)
@@ -138,6 +152,13 @@ int main(int argc, char **argv)
     rasm::Engine engine(config);
     if (!engine.running())
         return 1;
+
+    // --debug-view <name> shows the scene's debug view, as the RASM window's View does.
+    for (int i = 1; i + 1 < argc; ++i)
+    {
+        if (std::strcmp(argv[i], "--debug-view") == 0)
+            engine.setDebugView(parseDebugView(argv[i + 1]));
+    }
 
     rasm::SceneHandle scene = engine.createScene();
     const rasm::MeshHandle manMesh = engine.loadGLTF("models/gltf/CesiumMan/CesiumMan.glb");

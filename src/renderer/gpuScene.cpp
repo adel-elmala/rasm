@@ -32,6 +32,7 @@ namespace rasm
         constexpr uint32_t HIZ_GROUP_SIZE = 8;   // numthreads of hiz.slang, in x and y
         constexpr uint32_t CULL_EARLY = 0;       // the cull phases of cull.slang
         constexpr uint32_t CULL_LATE = 1;
+        constexpr uint32_t GHOST_BOX_VERTICES = 36; // a box's 12 triangles, debugGhosts.slang
 
         // A view's visible draw buffer holds the packed draws, then culling's scratch (a slot per draw and a count per
         // group, at most one group per CULL_GROUP_SIZE draws plus one per run), then the visible draws per run, which
@@ -66,6 +67,11 @@ namespace rasm
         const char *getMotionDefine(RenderContext &ctx, const SceneView &view)
         {
             return ctx.getRenderTarget(view.renderTarget).colorCount == 2 ? "#define RASM_MOTION_VECTORS 1\n" : "";
+        }
+
+        const DebugPipelines &getDebugPipelines(const ShadedPipelines &shaded, DebugView debugView)
+        {
+            return debugView == DebugView::OVERDRAW ? shaded.overdraw : shaded.debug;
         }
 
         // A shaded view's motion and jitter. The previous view-projection is the frame before's without jitter (this
@@ -311,6 +317,7 @@ namespace rasm
     static_assert(2 * (static_cast<uint32_t>(CullMode::BACK) + 1) + 1 == gfx::MAX_DRAW_RUNS, "a draw list has a run per cull mode for OPAQUE and MASK, and one for BLEND");
     static_assert(static_cast<uint32_t>(gfx::TextureTransformSlot::EMISSIVE) + 1 == gfx::TEXTURE_TRANSFORMS, "every texture transform slot has a row");
     static_assert(static_cast<uint32_t>(BlendSortStep::WRITE) + 1 == BLEND_SORT_STEPS, "every sort step has a pipeline");
+    static_assert(static_cast<uint32_t>(DebugView::LIGHT_COUNT) == 6, "shaders/lib/debugViews.slang numbers the debug views the same");
 
     bool Engine::createGpuScene()
     {
@@ -917,23 +924,36 @@ namespace rasm
                     recordLightClusters(view, getSceneDataAddress(ctx, *gpuScene, static_cast<uint32_t>(frameCount), view));
             });
         // The sky goes behind what the view's last draw pass of the frame drew: the late pass, unless this frame has
-        // none (no Hi-Z).
+        // none (no Hi-Z, or frozen culling).
         graph.addPass(
             occlusion ? drawName + " 1" : drawName,
             drawScenePass,
-            [this, view, occlusion](RenderContext &)
+            [this, view](RenderContext &)
             {
-                drawSceneView(view);
-                if (!occlusion || gpuScene->views[view].hizLevelCount == 0)
+                drawSceneView(view, CULL_EARLY);
+                if (!gpuScene->views[view].late)
                     drawSky(view);
             });
         // See-through draws go over everything the draw passes and the sky left, so a shaded view ends with them. The
-        // pass is there even while the scene has no blend run, since the graph is fixed and the scene is not.
+        // pass is there even while the scene has no blend run, since the graph is fixed and the scene is not. The
+        // culling view's ghosts come last, and read the visibility the late pass left.
         auto addTransparentPass = [&]()
         {
-            if (!depthOnly)
-                graph.addPass("Transparent", drawScenePass, [this, view](RenderContext &)
-                              { drawTransparent(view); });
+            if (depthOnly)
+                return;
+            graph.addPass(
+                "Transparent",
+                [&](PassBuilder &builder)
+                {
+                    drawScenePass(builder);
+                    if (occlusion)
+                        builder.read(sceneView.visibility);
+                },
+                [this, view](RenderContext &)
+                {
+                    drawTransparent(view);
+                    drawCullingGhosts(view);
+                });
         };
         if (!occlusion)
         {
@@ -960,7 +980,7 @@ namespace rasm
             },
             [this, view](RenderContext &)
             {
-                if (gpuScene->views[view].hizLevelCount > 0)
+                if (gpuScene->views[view].late)
                     recordSceneCulling(view, CULL_LATE);
             });
         graph.addPass(
@@ -968,9 +988,9 @@ namespace rasm
             drawScenePass,
             [this, view](RenderContext &)
             {
-                if (gpuScene->views[view].hizLevelCount == 0)
+                if (!gpuScene->views[view].late)
                     return;
-                drawSceneView(view);
+                drawSceneView(view, CULL_LATE);
                 drawSky(view);
             });
         addTransparentPass();
@@ -1110,6 +1130,8 @@ namespace rasm
         view.blendRun = gfx::MAX_DRAW_RUNS;
         view.groupCount = 0;
         view.hizLevelCount = 0;
+        view.late = false;
+        view.debugView = DebugView::NONE;
 
         const auto &drawList = gpuScene->drawLists[view.scene.index];
         const auto frame = static_cast<uint32_t>(frameCount);
@@ -1179,6 +1201,31 @@ namespace rasm
                 spdlog::error("Failed to create the depth-only MASK pipeline; cut-out and see-through materials cast no shadow.");
         }
         view.drawMask = view.depthOnly ? gpuScene->depthMaskPipeline.isValid() : shaded.maskPipeline.isValid();
+        // A debug view's pipelines are made the first time it is chosen, like MASK and BLEND: rasm.slang compiled with
+        // RASM_DEBUG_VIEW, with its MASK cut-outs discarded rather than covered. OVERDRAW's add up their fragments, so
+        // they have pipelines of their own, and the culling view also draws its ghosts.
+        if (!view.depthOnly && debugView != DebugView::NONE)
+        {
+            DebugPipelines &debug = debugView == DebugView::OVERDRAW ? shaded.overdraw : shaded.debug;
+            const BlendMode blendMode = debugView == DebugView::OVERDRAW ? BlendMode::ADDITIVE : BlendMode::NONE;
+            const std::string defines = getMotionDefine(ctx, view) + std::string("#define RASM_DEBUG_VIEW 1\n");
+            if (!debug.pipeline.isValid())
+                debug.pipeline = createScenePipeline("rasmDebug", "passes/rasm.slang", defines, view.renderTarget, "vertMain", "fragMain", blendMode, true);
+            if (hasMask && !debug.maskPipeline.isValid())
+                debug.maskPipeline = createScenePipeline("rasmDebugMask", "passes/rasm.slang", defines + "#define RASM_ALPHA_MASK 1\n", view.renderTarget, "vertMain", "fragMain", blendMode, true);
+            if (hasBlend && !debug.blendPipeline.isValid())
+                debug.blendPipeline = createScenePipeline("rasmDebugBlend", "passes/rasm.slang", defines + "#define RASM_ALPHA_BLEND 1\n", view.renderTarget, "vertMain", "fragMain", blendMode, false);
+            if (debugView == DebugView::CULLING && !shaded.ghostPipeline.isValid())
+                shaded.ghostPipeline = createScenePipeline("debugGhosts", "passes/debugGhosts.slang", getMotionDefine(ctx, view), view.renderTarget, "vertMain", "fragMain", BlendMode::ADDITIVE, false, false, false);
+            // Without its pipeline the view draws its shading, which the debug display then shows as it is.
+            if (debug.pipeline.isValid())
+            {
+                view.debugView = debugView;
+                view.drawMask = debug.maskPipeline.isValid();
+            }
+            else
+                spdlog::error("Failed to create the debug view pipeline; the scene is drawn shaded.");
+        }
         // Without the culling pipelines the scene is still drawn, only unculled, so a culling shader error does not blank it.
         if (!gpuScene->cullCountPipeline.isValid() || !gpuScene->cullWritePipeline.isValid())
         {
@@ -1196,7 +1243,8 @@ namespace rasm
             if (drawList.runs[i].alphaMode == AlphaMode::BLEND)
                 view.blendRun = i;
         }
-        view.drawBlend = view.blendRun < gfx::MAX_DRAW_RUNS && shaded.blendPipeline.isValid();
+        const PipelineHandle &blendPipeline = view.debugView != DebugView::NONE ? getDebugPipelines(shaded, view.debugView).blendPipeline : shaded.blendPipeline;
+        view.drawBlend = view.blendRun < gfx::MAX_DRAW_RUNS && blendPipeline.isValid();
         bool sortPipelines = true;
         for (const PipelineHandle &pipeline : gpuScene->sortPipelines)
             sortPipelines = sortPipelines && pipeline.isValid();
@@ -1274,6 +1322,14 @@ namespace rasm
             if (hizCapacity >= texelCount)
                 view.hizLevelCount = levelCount;
         }
+        // Frozen culling (setCullingFrozen) keeps the frustum and the LOD camera of the frame it froze in, and the
+        // visibility that frame's late pass left, so only the early pass runs. That pass then also culls the blend run,
+        // which no late pass takes, and its draws go unsorted. A depth-only view is not frozen: the shadow maps
+        // follow the camera.
+        const bool frozen = cullingFrozen && !view.depthOnly;
+        view.late = view.hizLevelCount > 0 && !frozen;
+        if (frozen && view.hizLevelCount > 0)
+            view.sortBlend = false;
 
         const auto &sceneRef = registry.scenes[view.scene.index];
         const auto &cameraRef = registry.cameras[view.camera.index];
@@ -1362,7 +1418,7 @@ namespace rasm
             sceneData.runFirst[i] = drawList.runs[i].first;
         // Culling keeps the blend run for the late phase only, and the Transparent pass draws it. A depth-only view
         // draws it like any other run, so it has no blend run.
-        sceneData.blendRun = view.blendRun;
+        sceneData.blendRun = view.late || view.hizLevelCount == 0 ? view.blendRun : gfx::MAX_DRAW_RUNS;
         sceneData.hizLevelCount = view.hizLevelCount;
         sceneData.depthTexture = depthSlot;
         sceneData.depthSamples = renderTargetData.samples;
@@ -1400,6 +1456,21 @@ namespace rasm
             const glm::mat4 lodViewProjection = cameraProjection * cameraView;
             sceneData.lodDepthPlane = glm::vec4(lodViewProjection[0][3], lodViewProjection[1][3], lodViewProjection[2][3], lodViewProjection[3][3]);
         }
+        if (frozen && !view.frozen)
+        {
+            std::copy(sceneData.frustumPlanes, sceneData.frustumPlanes + 6, view.frozenPlanes);
+            view.frozenLodPixelsPerUnit = sceneData.lodPixelsPerUnit;
+            view.frozenLodDepthPlane = sceneData.lodDepthPlane;
+            view.frozenViewProjection = cameraProjection * cameraView;
+        }
+        view.frozen = frozen;
+        if (frozen)
+        {
+            std::copy(view.frozenPlanes, view.frozenPlanes + 6, sceneData.frustumPlanes);
+            sceneData.lodPixelsPerUnit = view.frozenLodPixelsPerUnit;
+            sceneData.lodDepthPlane = view.frozenLodDepthPlane;
+        }
+        sceneData.debugView = static_cast<uint32_t>(view.debugView);
         ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), viewIndex * sizeof(gfx::SceneData));
 
         // cull.slang's groups each lie inside one run.
@@ -1489,7 +1560,7 @@ namespace rasm
     void Engine::recordHiz(uint32_t viewIndex)
     {
         const SceneView &view = gpuScene->views[viewIndex];
-        if (view.hizLevelCount == 0)
+        if (!view.late)
             return;
 
         const auto commandBuffer = frameResources[frameCount].commandBuffer;
@@ -1511,8 +1582,8 @@ namespace rasm
     }
 
     // Culling packs a run's visible draws at the start of its range and counts them, so each run is one indirect
-    // draw with a count; an unculled view draws its whole list.
-    void Engine::drawSceneView(uint32_t viewIndex)
+    // draw with a count; an unculled view draws its whole list. The phase is the culling view's early or late color.
+    void Engine::drawSceneView(uint32_t viewIndex, uint32_t phase)
     {
         const SceneView &view = gpuScene->views[viewIndex];
         if (!view.ready)
@@ -1528,7 +1599,8 @@ namespace rasm
         // and a shaded view leaves BLEND to the Transparent pass.
         PipelineHandle bound = {};
         const ShadedPipelines &shaded = getShadedPipelines(*gpuScene, ctx, view);
-        gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, static_cast<uint32_t>(frameCount), viewIndex)};
+        const DebugPipelines &debug = getDebugPipelines(shaded, view.debugView);
+        gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, static_cast<uint32_t>(frameCount), viewIndex), .argument = phase};
         for (uint32_t i = 0; i < drawList.runs.size(); ++i)
         {
             const DrawRun &run = drawList.runs[i];
@@ -1537,6 +1609,8 @@ namespace rasm
             PipelineHandle pipeline = view.depthOnly ? gpuScene->depthPipeline : shaded.pipeline;
             if (run.alphaMode != AlphaMode::NONE)
                 pipeline = view.depthOnly ? gpuScene->depthMaskPipeline : shaded.maskPipeline;
+            if (view.debugView != DebugView::NONE)
+                pipeline = run.alphaMode != AlphaMode::NONE ? debug.maskPipeline : debug.pipeline;
             if (pipeline != bound)
             {
                 ctx.bindPipeline(commandBuffer, pipeline);
@@ -1571,8 +1645,10 @@ namespace rasm
         const auto frame = static_cast<uint32_t>(frameCount);
         const DrawRun &run = gpuScene->drawLists[view.scene.index].runs[view.blendRun];
         const auto commandBuffer = frameResources[frame].commandBuffer;
-        const gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, frame, viewIndex), .firstDraw = run.first};
-        const PipelineHandle blendPipeline = getShadedPipelines(*gpuScene, ctx, view).blendPipeline;
+        // The late pass culls the blend run, or the only one when there is none.
+        const gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, frame, viewIndex), .firstDraw = run.first, .argument = view.late ? CULL_LATE : CULL_EARLY};
+        const ShadedPipelines &shaded = getShadedPipelines(*gpuScene, ctx, view);
+        const PipelineHandle blendPipeline = view.debugView != DebugView::NONE ? getDebugPipelines(shaded, view.debugView).blendPipeline : shaded.blendPipeline;
         ctx.bindPipeline(commandBuffer, blendPipeline);
         ctx.bindDescriptorSet(commandBuffer, blendPipeline, bindlessDescriptorSet, 0);
         ctx.bindIndexBuffer(commandBuffer, geometryPool->indexBuffer(), 0, Format::U32_UINT);
@@ -1589,8 +1665,9 @@ namespace rasm
     // depth (0, reversed-Z), so the sky costs only the pixels it shows.
     void Engine::drawSky(uint32_t viewIndex)
     {
+        // A debug view shows the target's clear color behind the scene, so a count starts at 0.
         const SceneView &view = gpuScene->views[viewIndex];
-        if (!view.sky)
+        if (!view.sky || view.debugView != DebugView::NONE)
             return;
         PipelineHandle &skyPipeline = getShadedPipelines(*gpuScene, ctx, view).skyPipeline;
         if (!skyPipeline.isValid())
@@ -1609,5 +1686,40 @@ namespace rasm
         ctx.pushConstants(commandBuffer, skyPipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
         ctx.setCullMode(commandBuffer, CullMode::NONE);
         ctx.draw(commandBuffer, 3);
+    }
+
+    // The culling view's ghosts (debugGhosts.slang): a box around every draw's bounding sphere, one instance per draw of
+    // the scene's list, added over what the view drew. Its vertex shader drops the draws that culling kept.
+    void Engine::drawCullingGhosts(uint32_t viewIndex)
+    {
+        const SceneView &view = gpuScene->views[viewIndex];
+        const PipelineHandle ghostPipeline = getShadedPipelines(*gpuScene, ctx, view).ghostPipeline;
+        if (!view.ready || !view.culled || view.debugView != DebugView::CULLING || !ghostPipeline.isValid())
+            return;
+
+        const auto frame = static_cast<uint32_t>(frameCount);
+        const auto commandBuffer = frameResources[frame].commandBuffer;
+        const gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, frame, viewIndex)};
+        ctx.bindPipeline(commandBuffer, ghostPipeline);
+        ctx.bindDescriptorSet(commandBuffer, ghostPipeline, bindlessDescriptorSet, 0);
+        ctx.setCullMode(commandBuffer, CullMode::BACK);
+        ctx.pushConstants(commandBuffer, ghostPipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
+        ctx.draw(commandBuffer, GHOST_BOX_VERTICES, static_cast<uint32_t>(gpuScene->drawLists[view.scene.index].draws.size()));
+        ctx.setCullMode(commandBuffer, CullMode::NONE);
+    }
+
+    // A new view starts TAA over, so its first frame does not blend with the frames of the view before.
+    void Engine::setDebugView(DebugView view)
+    {
+        if (view == debugView)
+            return;
+        debugView = view;
+        for (Camera &camera : registry.cameras)
+            ++camera.historyResets;
+    }
+
+    void Engine::setCullingFrozen(bool frozen)
+    {
+        cullingFrozen = frozen;
     }
 }

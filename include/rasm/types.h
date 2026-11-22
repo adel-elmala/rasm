@@ -92,6 +92,7 @@ namespace rasm
     {
         NONE,
         PREMULTIPLIED_ALPHA,
+        ADDITIVE,
     };
 
     // Result of acquire, present and swapchain recreation.
@@ -112,6 +113,17 @@ namespace rasm
         MSAA_4X,
         MSAA_8X,
         TAA,
+    };
+
+    enum class DebugView
+    {
+        NONE,
+        NORMALS,
+        UVS,
+        OVERDRAW,
+        LODS,
+        CULLING,
+        LIGHT_COUNT,
     };
 
     struct EngineConfig

@@ -245,6 +245,7 @@ namespace rasm
 
         newUiPlatformFrame();
         ImGui::NewFrame();
+        drawFrozenFrustums();
         if (config.showStats)
             drawEngineWindow();
         if (ui->callback)

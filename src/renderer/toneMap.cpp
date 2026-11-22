@@ -54,6 +54,24 @@ namespace rasm
                         return;
                     }
                 }
+                // A debug view shows the target's values as they are, or its counts as a heat color, made the first
+                // time a view is chosen.
+                PipelineHandle pipeline = toneMapPipeline;
+                if (debugView != DebugView::NONE)
+                {
+                    const bool heat = debugView == DebugView::OVERDRAW || debugView == DebugView::LIGHT_COUNT;
+                    PipelineHandle &debugPipeline = heat ? debugHeatPipeline : debugDisplayPipeline;
+                    if (!debugPipeline.isValid())
+                    {
+                        const Format colorFormats[MAX_COLOR_ATTACHMENTS] = {ctx.getSwapchainImageFormat()};
+                        debugPipeline = createGraphicsPipeline(heat ? "toneMapDebugHeat" : "toneMapDebug", readFile(pathFromUtf8(config.shaderDir) / "passes/toneMap.slang"), colorFormats,
+                                                               Format::UNKNOWN, "vertMain", heat ? "fragDebugHeat" : "fragDebug", BlendMode::NONE, true);
+                        if (!debugPipeline.isValid())
+                            spdlog::error("Failed to create the debug display pipeline; the debug view is tone mapped.");
+                    }
+                    if (debugPipeline.isValid())
+                        pipeline = debugPipeline;
+                }
                 const auto commandBuffer = frameResources[frameCount].commandBuffer;
                 const Camera &cameraData = registry.cameras[camera.index];
                 // The bloom passes ran this frame (addBloomPasses), so the target holds this frame's bloom.
@@ -62,9 +80,9 @@ namespace rasm
                                                               .exposure = cameraData.exposure,
                                                               .bloom = bloomed ? getBindlessTextureIndex(getRenderTargetTexture(bloom)) : INVALID_TEXTURE_INDEX,
                                                               .bloomStrength = cameraData.bloomStrength};
-                ctx.bindPipeline(commandBuffer, toneMapPipeline);
-                ctx.bindDescriptorSet(commandBuffer, toneMapPipeline, bindlessDescriptorSet, 0);
-                ctx.pushConstants(commandBuffer, toneMapPipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
+                ctx.bindPipeline(commandBuffer, pipeline);
+                ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet, 0);
+                ctx.pushConstants(commandBuffer, pipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
                 ctx.draw(commandBuffer, 3);
             });
         return true;

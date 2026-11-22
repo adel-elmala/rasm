@@ -303,7 +303,7 @@ namespace rasm
     // count. defines are preprocessor lines put before the source, for the variants of one shader; #line keeps the
     // diagnostics' line numbers those of the file.
     PipelineHandle Engine::createScenePipeline(const std::string &name, const std::string &shaderFile, const std::string &defines, const RenderTargetHandle &renderTarget,
-                                               const char *vertexEntryPoint, const char *fragmentEntryPoint, BlendMode blendMode, bool depthWrite, bool alphaToCoverage)
+                                               const char *vertexEntryPoint, const char *fragmentEntryPoint, BlendMode blendMode, bool depthWrite, bool alphaToCoverage, bool depthTest)
     {
         const auto &rt = ctx.getRenderTarget(renderTarget);
         if (rt.depthFormat == Format::UNKNOWN)
@@ -313,11 +313,11 @@ namespace rasm
         }
         const std::string file = readFile(pathFromUtf8(config.shaderDir) / shaderFile);
         const std::string source = defines.empty() ? file : defines + "#line 1\n" + file;
-        return createGraphicsPipeline(name, source, rt.colorFormats, rt.depthFormat, vertexEntryPoint, fragmentEntryPoint, blendMode, depthWrite, rt.samples, alphaToCoverage);
+        return createGraphicsPipeline(name, source, rt.colorFormats, rt.depthFormat, vertexEntryPoint, fragmentEntryPoint, blendMode, depthWrite, rt.samples, alphaToCoverage, depthTest);
     }
 
     PipelineHandle Engine::createGraphicsPipeline(const std::string &name, const std::string &shaderSource, const Format *colorFormats, Format depthFormat, const char *vertEntryPoint,
-                                                  const char *fragEntryPoint, BlendMode blendMode, bool depthWrite, uint32_t samples, bool alphaToCoverage)
+                                                  const char *fragEntryPoint, BlendMode blendMode, bool depthWrite, uint32_t samples, bool alphaToCoverage, bool depthTest)
     {
         ZoneScoped;
 
@@ -338,6 +338,7 @@ namespace rasm
                              .depthStencilAttachmentFormat = depthFormat,
                              .blendMode = blendMode,
                              .depthWrite = depthWrite,
+                             .depthTest = depthTest,
                              .samples = samples,
                              .alphaToCoverage = alphaToCoverage};
         std::copy(colorFormats, colorFormats + MAX_COLOR_ATTACHMENTS, std::begin(desc.colorAttachmentFormats));

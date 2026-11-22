@@ -835,7 +835,7 @@ namespace rasm::rhi
         VkPipelineDepthStencilStateCreateInfo depthStencilInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
             // A pipeline without depth (a swapchain pass) has no depth to test.
-            .depthTestEnable = desc.depthStencilAttachmentFormat != Format::UNKNOWN ? VK_TRUE : VK_FALSE,
+            .depthTestEnable = desc.depthStencilAttachmentFormat != Format::UNKNOWN && desc.depthTest ? VK_TRUE : VK_FALSE,
             .depthWriteEnable = desc.depthStencilAttachmentFormat != Format::UNKNOWN && desc.depthWrite ? VK_TRUE : VK_FALSE,
             .depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL, // reversed-Z: nearer is larger; pairs with the 0 clear in VulkanCommandBuffer::beginRendering
             .depthBoundsTestEnable = VK_FALSE,
@@ -858,15 +858,16 @@ namespace rasm::rhi
         };
 
         // Premultiplied alpha: the shader already multiplied its color by alpha, so the source counts once and the
-        // target keeps (1 - alpha) of its own, for color and alpha alike.
-        const bool blend = desc.blendMode == BlendMode::PREMULTIPLIED_ALPHA;
+        // target keeps (1 - alpha) of its own, for color and alpha alike. Additive keeps all of the target's.
+        const bool blend = desc.blendMode != BlendMode::NONE;
+        const VkBlendFactor destination = desc.blendMode == BlendMode::ADDITIVE ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
         VkPipelineColorBlendAttachmentState colorBlendAttachment = {
             .blendEnable = blend ? VK_TRUE : VK_FALSE,
             .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
-            .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            .dstColorBlendFactor = destination,
             .colorBlendOp = VK_BLEND_OP_ADD,
             .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-            .dstAlphaBlendFactor = blend ? VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA : VK_BLEND_FACTOR_ZERO,
+            .dstAlphaBlendFactor = blend ? destination : VK_BLEND_FACTOR_ZERO,
             .alphaBlendOp = VK_BLEND_OP_ADD,
             .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
         };
