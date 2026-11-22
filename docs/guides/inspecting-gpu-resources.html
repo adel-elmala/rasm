@@ -382,6 +382,8 @@
 </table>
 </div>
 
+<p>A target is found by its name, so two targets with one name (the cascades of two shadowed suns) show the first one (<code>D32</code>).</p>
+
 <h3>Where RASM follows the textbook, and where it differs</h3>
 
 <div class="table-wrap">
@@ -400,7 +402,7 @@
 
 <div class="stats" id="cost-numbers">
   <div><b>0 ms</b><span>with nothing picked: the same passes and timers as without the UI</span><small>every GPU timer of 09 against main, Release</small></div>
-  <div><b>INSPECT_COST</b><span>one copy at 1920 × 1080</span><small>the Inspect pass's timer in 09, Release, RTX 3060</small></div>
+  <div><b>0.14–0.35 ms</b><span>one copy of a 1920 × 1080 source</span><small>the Inspect pass's timer in 09, Release, RTX 3060: depth 0.14, Hi-Z 0.16, a bloom level 0.16, a 4× MSAA sample 0.15, HDR color 0.35</small></div>
   <div><b>8 MiB</b><span>the picture target, made on the first pick</span><small>1024² × 8 B, one for both frame slots: the graph orders each frame's write after the last frame's read</small></div>
 </div>
 
