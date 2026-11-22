@@ -1,6 +1,7 @@
 // clang-format off
 #pragma once
 
+#include "rasm/types.h"
 #include "rasm/render/resource.h"
 
 #include <cstdint>
@@ -12,5 +13,7 @@ namespace rasm::rhi
 
     bool            buildMipChain(const unsigned char* rgba, uint32_t width, uint32_t height, bool srgb, uint32_t levelCount,
                                   std::vector<unsigned char>& storage, TextureLevel* levels);
+    bool            buildTextureLevels(const unsigned char* rgba, uint32_t width, uint32_t height, Format format, bool normals,
+                                       uint32_t levelCount, TextureRaw& raw);
 }
 // clang-format on

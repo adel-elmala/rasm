@@ -73,15 +73,17 @@ namespace rasm::rhi
         void                        setObjectName(VkObjectType type, uint64_t handle, const std::string& name);
 
     private:
-        // Per Format value: the device samples it with linear filtering, and copies it on the host.
+        // Per Format value: the device samples it with linear filtering, and the memory types a sampled image of it may
+        // use when it is copied on the host (0: it is filled from the staging ring).
         struct FormatSupport
         {
             bool                        sampled             = false;
-            bool                        hostCopy            = false;
+            uint32_t                    hostCopyTypes       = 0;
         };
 
         void                            queryFormatSupport(bool hostImageCopy);
         bool                            usesHostCopy(const TextureDesc& desc) const;
+        uint32_t                        getImageMemoryTypes(const TextureDesc& desc, bool hostCopy);
 
         static constexpr uint32_t       FORMAT_COUNT        = static_cast<uint32_t>(Format::R16G16_SFLOAT) + 1;
 

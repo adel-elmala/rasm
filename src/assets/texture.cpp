@@ -3,6 +3,7 @@
 #include "assets/ktxImage.h"
 #include "platform/paths.h"
 #include "renderer/gpuScene.h"
+#include "rhi/mipChain.h"
 
 #include "spdlog/spdlog.h"
 #include "tracy/Tracy.hpp"
@@ -22,8 +23,9 @@ namespace rasm
     {
         const std::unordered_set<std::string> supportedTextureExtensions = {"png", "jpg", "jpeg", "ktx2"};
 
-        // Runs on a worker thread: it must not touch the engine.
-        TextureRaw decodeTexture(const std::string &path)
+        // Runs on a worker thread: it must not touch the engine. The mips are made here too, so the main thread only
+        // copies the levels (P2).
+        TextureRaw decodeTexture(const std::string &path, Format format, uint32_t levelCount)
         {
             ZoneScoped;
 
@@ -31,7 +33,11 @@ namespace rasm
             unsigned char *data = stbi_load(path.c_str(), &width, &height, &nChannels, 4);
             if (!data)
                 return {};
-            return {.width = static_cast<uint32_t>(width), .height = static_cast<uint32_t>(height), .data = data};
+            TextureRaw raw;
+            if (!rhi::buildTextureLevels(data, static_cast<uint32_t>(width), static_cast<uint32_t>(height), format, false, levelCount, raw))
+                spdlog::error("Failed to make the mips of {}.", path);
+            stbi_image_free(data);
+            return raw;
         }
 
         // Runs on a worker thread: reads the file and transcodes it, or takes its levels, in the format the main thread
@@ -113,6 +119,7 @@ namespace rasm
             }
             desc.width = static_cast<uint32_t>(width);
             desc.height = static_cast<uint32_t>(height);
+            desc.mipLevels = rhi::getFullMipCount(desc.width, desc.height);
         }
 
         auto textureHandle = ctx.createTexture(desc);
@@ -125,8 +132,8 @@ namespace rasm
         registry.loadedTextures[cacheKey] = textureHandle;
         registry.textureCacheKeys.resize(std::max<size_t>(registry.textureCacheKeys.size(), textureHandle.index + 1));
         registry.textureCacheKeys[textureHandle.index] = cacheKey;
-        auto result = extension == "ktx2" ? std::async(std::launch::async, decodeKtxFile, path, desc.format) : std::async(std::launch::async, decodeTexture, path);
-        pendingTextures.emplace(textureHandle, PendingTextureLoad{textureHandle, path, std::move(result)});
+        auto result = extension == "ktx2" ? std::async(std::launch::async, decodeKtxFile, path, desc.format) : std::async(std::launch::async, decodeTexture, path, desc.format, desc.mipLevels);
+        pendingTextures.emplace(textureHandle, PendingTextureLoad{textureHandle, path, std::move(result), nullptr});
         return textureHandle;
     }
 
@@ -190,44 +197,39 @@ namespace rasm
         return ctx.fillTexture(texture, levels.data(), static_cast<uint32_t>(levels.size()));
     }
 
+    // The levels arrive whole, mips included, so this only copies them: on the host, or into the staging ring. They are
+    // freed when the load is erased (P6).
     void Engine::finishTextureLoad(PendingTextureLoad &load)
     {
         ZoneScoped;
 
-        TextureRaw raw = load.result.get();
+        const TextureRaw decodedRaw = load.levels ? TextureRaw{} : load.result.get();
+        const TextureRaw &raw = load.levels ? *load.levels : decodedRaw;
 
         // The app destroyed the texture while it decoded, so there is nothing to fill.
         if (!ctx.isAlive(load.handle))
-        {
-            stbi_image_free(raw.data);
             return;
-        }
         const TextureDesc desc = ctx.getTextureDesc(load.handle);
 
         // A material may already sample the texture, so a failed decode or upload leaves it plain (white, or a flat
-        // normal for a two-channel format) instead of undefined: an image makes its mips from white pixels, a KTX2
-        // texture gets every level of constant blocks.
-        const bool ktx = desc.mipLevels > 0;
-        const bool decoded = ktx ? !raw.levelSizes.empty() && raw.format == desc.format && raw.width == desc.width && raw.height == desc.height
-                                 : raw.data && raw.width == desc.width && raw.height == desc.height;
+        // normal for a two-channel format) instead of undefined: an image makes its mips from white pixels, a block
+        // format gets every level of constant blocks.
+        const bool decoded = !raw.levelSizes.empty() && raw.format == desc.format && raw.width == desc.width && raw.height == desc.height;
         if (!decoded)
             spdlog::error("Failed to decode texture {}; it stays plain white.", load.path);
-        const bool filled = decoded && (ktx ? fillTextureLevels(load.handle, raw) : ctx.fillTexture(load.handle, raw.data));
+        const bool filled = decoded && fillTextureLevels(load.handle, raw);
         if (decoded && !filled)
             spdlog::error("Failed to fill texture {}; it stays plain white.", load.path);
-        if (!filled && ktx)
+        if (filled)
+            return;
+        if (desc.format == Format::R8G8B8A8_SRGB || desc.format == Format::R8G8B8A8_UNORM)
         {
-            TextureRaw blank;
-            makeBlankKtxLevels(desc.format, desc.width, desc.height, desc.mipLevels, blank);
-            fillTextureLevels(load.handle, blank);
-        }
-        else if (!filled)
-        {
-            std::vector<unsigned char> white(static_cast<size_t>(desc.width) * desc.height * 4, 255);
+            const std::vector<unsigned char> white(static_cast<size_t>(desc.width) * desc.height * 4, 255);
             ctx.fillTexture(load.handle, white.data());
+            return;
         }
-
-        // fillTexture copies the pixels (on the host, or into the staging ring), so they are not needed once it returns (P6).
-        stbi_image_free(raw.data);
+        TextureRaw blank;
+        makeBlankKtxLevels(desc.format, desc.width, desc.height, desc.mipLevels, blank);
+        fillTextureLevels(load.handle, blank);
     }
 }

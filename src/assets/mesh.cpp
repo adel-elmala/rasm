@@ -162,9 +162,17 @@ namespace rasm
         return loadMesh(path);
     }
 
+    // A glTF's textures are filled after its mesh is ready, a few per frame (P2), so it counts as loaded once they are.
     bool Engine::isLoaded(MeshHandle mesh) const
     {
-        return isLive(mesh) && registry.meshes[mesh.index].state == MeshState::READY;
+        if (!isLive(mesh) || registry.meshes[mesh.index].state != MeshState::READY)
+            return false;
+        for (const TextureHandle &texture : registry.meshes[mesh.index].ownedTextures)
+        {
+            if (pendingTextures.contains(texture))
+                return false;
+        }
+        return true;
     }
 
     void Engine::finishMeshLoad(PendingMeshLoad &load)

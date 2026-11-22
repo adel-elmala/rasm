@@ -278,99 +278,60 @@ namespace rasm
             mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 2] = static_cast<float>(material->pbrMetallicRoughness.baseColorFactor[2]);
             mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 3] = static_cast<float>(material->pbrMetallicRoughness.baseColorFactor[3]);
 
-            // Color textures are sRGB; material data is linear (glTF 2.0).
-            // Expand to RGBA8 to avoid unsupported RGB Vulkan formats and mismatched upload sizes.
+            // Color textures are sRGB; material data is linear (glTF 2.0). The worker made every level (a KTX2 transcode,
+            // or an image's mips), so a texture is created here and filled by finishLoads under its budget (P2).
             auto uploadTexture = [&](int textureIndex, KtxSlot slot) -> TextureHandle
             {
                 if (textureIndex < 0 || textureIndex >= static_cast<int>(model.textures.size()))
                     return {};
                 const SamplerType sampler = toSamplerType(model, model.textures[textureIndex].sampler);
-                const bool srgb = slot == KtxSlot::COLOR;
-
                 // KHR_texture_basisu first, transcoded on the worker for this kind of slot. Without it, or when its
                 // image failed, the texture's own source (a PNG or JPEG fallback) is used.
                 const int basisuSource = getBasisuSource(model, textureIndex);
-                const TextureRaw *ktx = nullptr;
+                std::shared_ptr<const TextureRaw> levels;
+                bool ktx = false;
+                int source = model.textures[textureIndex].source;
                 if (basisuSource >= 0 && cache.raw)
                 {
                     const auto format = cache.raw->ktxFormats.find(getKtxSlotKey(basisuSource, slot));
                     const auto image = format != cache.raw->ktxFormats.end() ? cache.raw->ktxImages.find(getKtxImageKey(basisuSource, format->second)) : cache.raw->ktxImages.end();
-                    ktx = image != cache.raw->ktxImages.end() ? &image->second : nullptr;
+                    if (image != cache.raw->ktxImages.end())
+                    {
+                        levels = image->second;
+                        source = basisuSource;
+                        ktx = true;
+                    }
                 }
-                const int source = ktx ? basisuSource : model.textures[textureIndex].source;
                 if (source < 0 || source >= static_cast<int>(model.images.size()))
                     return {};
+                // The worker logged why an image has no levels.
+                if (!levels && cache.raw)
+                {
+                    const auto image = cache.raw->imageLevels.find(getImageLevelsKey(source, slot));
+                    levels = image != cache.raw->imageLevels.end() ? image->second : nullptr;
+                }
+                if (!levels)
+                    return {};
 
-                // Upload each (image, format, sampler) once per model. A texture handle has one bindless slot, so the
-                // rare image used with two samplers is uploaded twice.
-                const Format format = ktx ? ktx->format : srgb ? Format::R8G8B8A8_SRGB
-                                                               : Format::R8G8B8A8_UNORM;
-                const uint64_t cacheKey = (static_cast<uint64_t>(source) << 16) | (static_cast<uint64_t>(sampler) << 8) | static_cast<uint64_t>(format);
+                // Upload each (image, levels, sampler) once per model. A texture handle has one bindless slot, so the
+                // rare image used with two samplers is uploaded twice; a normal map's renormalized levels are their own
+                // texture too.
+                const uint64_t cacheKey = (static_cast<uint64_t>(source) << 16) | (static_cast<uint64_t>(sampler) << 8) |
+                                          (static_cast<uint64_t>(!ktx && slot == KtxSlot::NORMAL) << 7) | static_cast<uint64_t>(levels->format);
                 if (auto it = cache.imageTextures.find(cacheKey); it != cache.imageTextures.end())
                     return it->second;
 
                 const auto &image = model.images[source];
                 const std::string name = image.uri.empty() ? "glTF image " + std::to_string(source) : image.uri;
-                if (ktx)
-                {
-                    const TextureRaw &raw = *ktx;
-                    auto texture = createTexture({.name = name,
-                                                  .width = raw.width,
-                                                  .height = raw.height,
-                                                  .format = raw.format,
-                                                  .usage = TextureUsage::SAMPLED,
-                                                  .mipLevels = static_cast<uint32_t>(raw.levelSizes.size())});
-                    if (!texture.isValid())
-                        return {};
-                    if (!fillTextureLevels(texture, raw))
-                    {
-                        ctx.destroyTexture(texture);
-                        return {};
-                    }
-                    addBindlessTexture(bindlessDescriptorSet, texture, sampler);
-                    cache.imageTextures[cacheKey] = texture;
-                    return texture;
-                }
-
-                if (image.bits != 8 || image.component < 1 || image.component > 4 ||
-                    image.width <= 0 || image.height <= 0)
-                {
-                    spdlog::error("Unsupported glTF image '{}' (expected 8-bit components).", image.uri);
-                    return {};
-                }
-                size_t pixels = static_cast<size_t>(image.width) * image.height;
-                if (image.image.size() < pixels * image.component)
-                    return {};
-                // tinygltf decodes images to RGBA on the worker thread, so the copy below is only for
-                // an image that kept fewer channels.
-                const unsigned char *rgbaData = image.image.data();
-                std::vector<unsigned char> rgba;
-                if (image.component != 4)
-                {
-                    rgba.assign(pixels * 4, 255);
-                    for (size_t i = 0; i < pixels; ++i)
-                    {
-                        const auto *src = image.image.data() + i * image.component;
-                        rgba[i * 4] = src[0];
-                        rgba[i * 4 + 1] = image.component >= 3 ? src[1] : src[0];
-                        rgba[i * 4 + 2] = image.component >= 3 ? src[2] : src[0];
-                        if (image.component == 2)
-                            rgba[i * 4 + 3] = src[1];
-                    }
-                    rgbaData = rgba.data();
-                }
                 auto texture = createTexture({.name = name,
-                                              .width = static_cast<uint32_t>(image.width),
-                                              .height = static_cast<uint32_t>(image.height),
-                                              .format = format,
-                                              .usage = TextureUsage::SAMPLED});
+                                              .width = levels->width,
+                                              .height = levels->height,
+                                              .format = levels->format,
+                                              .usage = TextureUsage::SAMPLED,
+                                              .mipLevels = static_cast<uint32_t>(levels->levelSizes.size())});
                 if (!texture.isValid())
                     return {};
-                if (!ctx.fillTexture(texture, rgbaData))
-                {
-                    ctx.destroyTexture(texture);
-                    return {};
-                }
+                pendingTextures.emplace(texture, PendingTextureLoad{texture, name, {}, std::move(levels)});
                 addBindlessTexture(bindlessDescriptorSet, texture, sampler);
                 cache.imageTextures[cacheKey] = texture;
                 return texture;

@@ -336,11 +336,14 @@ namespace rasm
             std::future<GLTFRaw>        result;
         };
 
+        // A load decodes on a worker (result); a glTF texture arrives decoded with its mesh (levels). Either is filled
+        // by finishLoads under its budget.
         struct PendingTextureLoad
         {
-            TextureHandle               handle;
-            std::string                 path;
-            std::future<TextureRaw>     result;
+            TextureHandle                       handle;
+            std::string                         path;
+            std::future<TextureRaw>             result;
+            std::shared_ptr<const TextureRaw>   levels;
         };
 
         struct PendingEnvironmentLoad

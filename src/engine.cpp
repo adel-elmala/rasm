@@ -18,8 +18,6 @@
 #include "spdlog/spdlog.h"
 #include "tracy/Tracy.hpp"
 
-#include "stb_image.h"
-
 #include "glm/glm.hpp"
 
 #include <algorithm>
@@ -195,10 +193,6 @@ namespace rasm
 
     Engine::~Engine()
     {
-        // Mesh results free themselves; decoded pixels are a plain stbi pointer.
-        for (auto &[handle, load] : pendingTextures)
-            stbi_image_free(load.result.get().data);
-
         // Its graph frees what it made through the context.
         renderer.reset();
         shaderCompiler->shutdown();
@@ -269,25 +263,14 @@ namespace rasm
 
     // Runs at the start of a frame, before anything binds the bindless set or the geometry pool, so
     // what it writes is in place for this frame's draws and its uploads go out with this frame's submit.
-    // Without wait it stops at LOAD_BUDGET, so loads that finish together spread over several frames.
+    // Without wait it stops at LOAD_BUDGET, so loads that finish together spread over several frames. Textures come
+    // last: a finished glTF adds its textures, each filled on its own (P2), so a big model's copies spread over frames
+    // too, and waitForLoads fills them in the same call.
     void Engine::finishLoads(bool wait)
     {
         const auto deadline = std::chrono::steady_clock::now() + LOAD_BUDGET;
         auto overBudget = [wait, deadline]()
         { return !wait && std::chrono::steady_clock::now() >= deadline; };
-
-        for (auto it = pendingTextures.begin(); it != pendingTextures.end() && !overBudget();)
-        {
-            if (!wait && it->second.result.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
-            {
-                ++it;
-                continue;
-            }
-            finishTextureLoad(it->second);
-            it = pendingTextures.erase(it);
-            // syncGpuScene checks the entities that wait for textures only after one finished.
-            gpuScene->texturesFinished = true;
-        }
 
         for (size_t i = 0; i < pendingMeshes.size() && !overBudget();)
         {
@@ -309,6 +292,19 @@ namespace rasm
             }
             finishEnvironmentLoad(pendingEnvironments[i]);
             pendingEnvironments.erase(pendingEnvironments.begin() + i);
+        }
+
+        for (auto it = pendingTextures.begin(); it != pendingTextures.end() && !overBudget();)
+        {
+            if (!wait && !it->second.levels && it->second.result.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+            {
+                ++it;
+                continue;
+            }
+            finishTextureLoad(it->second);
+            it = pendingTextures.erase(it);
+            // syncGpuScene checks the entities that wait for textures only after one finished.
+            gpuScene->texturesFinished = true;
         }
     }
 

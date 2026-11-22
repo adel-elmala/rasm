@@ -5,6 +5,7 @@
 #include "assets/morphImport.h"
 #include "assets/ktxImage.h"
 #include "platform/paths.h"
+#include "rhi/mipChain.h"
 
 #include "spdlog/spdlog.h"
 #include "tracy/Tracy.hpp"
@@ -459,7 +460,7 @@ namespace rasm
                             spdlog::error("Failed to decode KTX2 image {}: {}", name, error);
                             continue;
                         }
-                        raw.ktxImages[imageKey] = std::move(texture);
+                        raw.ktxImages[imageKey] = std::make_shared<const TextureRaw>(std::move(texture));
                     }
                     raw.ktxFormats[slotKey] = format;
                 }
@@ -468,6 +469,77 @@ namespace rasm
             for (tinygltf::Image &image : model.images)
             {
                 if (image.as_is)
+                    std::vector<unsigned char>().swap(image.image);
+            }
+        }
+
+        // Each PNG or JPEG image a material reads gets its mips here, on the worker, so the main thread only copies them
+        // (P2): once per kind of slot that reads it, sRGB-aware with alpha weighting for color, as it is for data, and
+        // renormalized for normal maps. An image that a KHR_texture_basisu transcode replaces in that slot is left out.
+        // Then the decoded pixels go, like the KTX2 file bytes.
+        void buildImageLevels(tinygltf::Model &model, GLTFRaw &raw)
+        {
+            ZoneScoped;
+
+            for (const tinygltf::Material &material : model.materials)
+            {
+                TextureUse uses[5];
+                const uint32_t useCount = getTextureUses(material, uses);
+                for (uint32_t i = 0; i < useCount; ++i)
+                {
+                    if (uses[i].texture < 0 || uses[i].texture >= static_cast<int>(model.textures.size()))
+                        continue;
+                    const int basisuSource = getBasisuSource(model, uses[i].texture);
+                    if (basisuSource >= 0 && raw.ktxFormats.contains(getKtxSlotKey(basisuSource, uses[i].slot)))
+                        continue;
+                    const int source = model.textures[uses[i].texture].source;
+                    if (source < 0 || source >= static_cast<int>(model.images.size()) || model.images[source].as_is)
+                        continue;
+                    const uint64_t key = getImageLevelsKey(source, uses[i].slot);
+                    if (raw.imageLevels.contains(key))
+                        continue;
+
+                    const tinygltf::Image &image = model.images[source];
+                    const std::string name = image.uri.empty() ? "glTF image " + std::to_string(source) : image.uri;
+                    const size_t pixels = static_cast<size_t>(std::max(image.width, 0)) * static_cast<size_t>(std::max(image.height, 0));
+                    if (image.bits != 8 || image.component < 1 || image.component > 4 || pixels == 0 || image.image.size() < pixels * image.component)
+                    {
+                        spdlog::error("Unsupported glTF image '{}' (expected 8-bit components).", name);
+                        continue;
+                    }
+                    // tinygltf decodes to RGBA, so the copy is only for an image that kept fewer channels.
+                    const unsigned char *rgba = image.image.data();
+                    std::vector<unsigned char> expanded;
+                    if (image.component != 4)
+                    {
+                        expanded.assign(pixels * 4, 255);
+                        for (size_t p = 0; p < pixels; ++p)
+                        {
+                            const unsigned char *src = image.image.data() + p * image.component;
+                            expanded[p * 4] = src[0];
+                            expanded[p * 4 + 1] = image.component >= 3 ? src[1] : src[0];
+                            expanded[p * 4 + 2] = image.component >= 3 ? src[2] : src[0];
+                            if (image.component == 2)
+                                expanded[p * 4 + 3] = src[1];
+                        }
+                        rgba = expanded.data();
+                    }
+                    const auto width = static_cast<uint32_t>(image.width);
+                    const auto height = static_cast<uint32_t>(image.height);
+                    const Format format = uses[i].slot == KtxSlot::COLOR ? Format::R8G8B8A8_SRGB : Format::R8G8B8A8_UNORM;
+                    auto levels = std::make_shared<TextureRaw>();
+                    if (!rhi::buildTextureLevels(rgba, width, height, format, uses[i].slot == KtxSlot::NORMAL, rhi::getFullMipCount(width, height), *levels))
+                    {
+                        spdlog::error("Failed to make the mips of glTF image '{}'.", name);
+                        continue;
+                    }
+                    raw.imageLevels[key] = std::move(levels);
+                }
+            }
+
+            for (tinygltf::Image &image : model.images)
+            {
+                if (!image.as_is)
                     std::vector<unsigned char>().swap(image.image);
             }
         }
@@ -537,6 +609,7 @@ namespace rasm
             // Every accessor has been read. Materials need only the decoded images, so the raw buffers go now (P6).
             model->buffers.clear();
             transcodeKtxImages(*model, supportedTextureFormats, raw);
+            buildImageLevels(*model, raw);
             raw.model = std::move(model);
             raw.loaded = true;
             return raw;
@@ -615,6 +688,12 @@ namespace rasm
     uint64_t getKtxImageKey(int image, Format format)
     {
         return (static_cast<uint64_t>(image) << 8) | static_cast<uint64_t>(format);
+    }
+
+    // Occlusion and metallic-roughness read the same plain levels.
+    uint64_t getImageLevelsKey(int image, KtxSlot slot)
+    {
+        return getKtxSlotKey(image, slot == KtxSlot::OCCLUSION ? KtxSlot::DATA : slot);
     }
 
     int getBasisuSource(const tinygltf::Model &model, int textureIndex)

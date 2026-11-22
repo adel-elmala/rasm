@@ -14,5 +14,6 @@ namespace rasm::rhi
     VkImageAspectFlags  toVkAspectMask(Format format);
     const char*         toVkResultString(VkResult result);
     bool                hasStencil(Format format);
+    uint32_t            getHostCopyMemoryTypes(const VkPhysicalDeviceMemoryProperties& memory, uint32_t hostTransferTypes, uint32_t copyTypes);
 }
 // clang-format on

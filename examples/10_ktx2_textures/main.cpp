@@ -5,6 +5,7 @@
 
 #include "exampleArgs.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -17,7 +18,9 @@
 // ASTC or ETC2 on mobile ones, RGBA8 where there is none. The stats overlay (F1) shows the video memory in use.
 //
 // --model <path> loads another glTF in place of the helmet, relative to the asset root, for instance the helmet's
-// PNG variant. --measure prints the load time and the video memory the model takes, then quits.
+// PNG variant. --measure prints the load time, the frames it took and the longest of them, and the video memory the
+// model takes (allocated, and in whole memory blocks), then quits. --staging fills every texture from the staging ring
+// (EngineConfig::hostImageCopy false), as on a GPU without host image copy.
 
 namespace
 {
@@ -34,12 +37,15 @@ int main(int argc, char **argv)
     ExampleArgs args = parseExampleArgs(argc, argv);
     std::string modelPath = "models/gltf/FlightHelmet/FlightHelmet.gltf";
     bool measure = false;
+    bool staging = false;
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "--model") == 0 && i + 1 < argc)
             modelPath = argv[++i];
         if (std::strcmp(argv[i], "--measure") == 0)
             measure = true;
+        if (std::strcmp(argv[i], "--staging") == 0)
+            staging = true;
     }
 
     rasm::EngineConfig config = {
@@ -51,6 +57,7 @@ int main(int argc, char **argv)
         .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
         .shaderDir = RASM_EXAMPLE_SHADER_DIR,
         .showStats = true,
+        .hostImageCopy = !staging,
         .ui = true};
 
     applyExampleArgs(args, config);
@@ -92,7 +99,7 @@ int main(int argc, char **argv)
     engine.waitForLoads();
     for (uint32_t frame = 0; frame < 4 && exampleRunning(engine, args); ++frame)
         engine.render(scene, camera);
-    const uint64_t vramBefore = engine.getFrameStats().memory.vramUsage;
+    const rasm::VRAMStats vramBefore = engine.getFrameStats().memory;
 
     const auto loadStart = std::chrono::steady_clock::now();
     const rasm::MeshHandle helmet = engine.loadGLTF(modelPath);
@@ -102,6 +109,8 @@ int main(int argc, char **argv)
 
     // The frame stats are two frames old, so the memory is read a few frames after the load finished.
     double loadMs = 0.0;
+    double longestFrameMs = 0.0;
+    uint32_t loadFrames = 0;
     bool loaded = false;
     uint32_t loadedFrame = 0;
     bool reported = false;
@@ -111,25 +120,34 @@ int main(int argc, char **argv)
 
     for (uint32_t frame = 0; exampleRunning(engine, args); ++frame)
     {
+        const auto frameStart = std::chrono::steady_clock::now();
         engine.render(scene, camera);
+        const auto frameEnd = std::chrono::steady_clock::now();
         if (reported)
             continue;
+        if (!loaded)
+        {
+            longestFrameMs = std::max(longestFrameMs, std::chrono::duration<double, std::milli>(frameEnd - frameStart).count());
+            ++loadFrames;
+        }
         if (!loaded && engine.isLoaded(helmet))
         {
-            loadMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - loadStart).count();
+            loadMs = std::chrono::duration<double, std::milli>(frameEnd - loadStart).count();
             loaded = true;
             loadedFrame = frame;
         }
         // A model that fails to load never becomes loaded; the engine logs why.
-        if (measure && !loaded && frame == 3000)
+        if (measure && !loaded && frameEnd - loadStart > std::chrono::seconds(60))
         {
             std::printf("%s did not load.\n", modelPath.c_str());
             return 1;
         }
         if (!loaded || frame < loadedFrame + 4)
             continue;
-        const double vramAfter = static_cast<double>(engine.getFrameStats().memory.vramUsage);
-        std::printf("%s: loaded in %.0f ms, %.1f MiB of video memory\n", modelPath.c_str(), loadMs, (vramAfter - static_cast<double>(vramBefore)) / MIB);
+        const rasm::VRAMStats vramAfter = engine.getFrameStats().memory;
+        std::printf("%s: loaded in %.0f ms over %u frames, longest frame %.1f ms, %.1f MiB of video memory allocated (%.1f MiB in blocks)\n", modelPath.c_str(), loadMs, loadFrames,
+                    longestFrameMs, (static_cast<double>(vramAfter.vramAllocated) - static_cast<double>(vramBefore.vramAllocated)) / MIB,
+                    (static_cast<double>(vramAfter.vramUsage) - static_cast<double>(vramBefore.vramUsage)) / MIB);
         std::fflush(stdout);
         reported = true;
         if (measure)
