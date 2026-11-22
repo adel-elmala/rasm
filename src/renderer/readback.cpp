@@ -4,6 +4,7 @@
 
 #include "glm/gtc/packing.hpp"
 #include "spdlog/spdlog.h"
+#include "stb_image.h"
 #include "stb_image_write.h"
 
 #include <algorithm>
@@ -175,6 +176,32 @@ namespace rasm
             spdlog::error("writePng: failed to write '{}'.", path);
             return false;
         }
+        return true;
+    }
+
+    bool readPng(const std::string &path, ReadbackImage &image)
+    {
+        std::FILE *file = openFileForReading(path);
+        if (!file)
+        {
+            spdlog::error("readPng: can't open '{}'.", path);
+            return false;
+        }
+        int width = 0;
+        int height = 0;
+        int channels = 0;
+        stbi_uc *pixels = stbi_load_from_file(file, &width, &height, &channels, 4);
+        std::fclose(file);
+        if (!pixels)
+        {
+            spdlog::error("readPng: '{}' is not an image stb_image reads ({}).", path, stbi_failure_reason());
+            return false;
+        }
+        image.width = static_cast<uint32_t>(width);
+        image.height = static_cast<uint32_t>(height);
+        image.format = ReadbackFormat::RGBA8_SRGB;
+        image.pixels.assign(pixels, pixels + static_cast<size_t>(width) * height * 4);
+        stbi_image_free(pixels);
         return true;
     }
 

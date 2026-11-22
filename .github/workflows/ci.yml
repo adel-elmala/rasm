@@ -136,6 +136,29 @@ jobs:
           path: ~/mesa
           key: mesa-26.3.0-c505fcc77e8f63a09d7ddac086591d2f542c0698d37fc9e3094685a34d0d9991
 
+      # The runner's processes are elevated, and an elevated process's Vulkan loader ignores VK_DRIVER_FILES and
+      # VK_LAYER_PATH, so the driver and the validation layer are registered instead.
+      - name: Register lavapipe and the validation layer
+        if: ${{ runner.os == 'Windows' && !cancelled() && steps.build-release.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $mesa = Join-Path $HOME 'mesa'
+          if (-not (Test-Path "$mesa/mesa.7z")) {
+            New-Item -ItemType Directory -Force $mesa | Out-Null
+            Invoke-WebRequest -Uri 'https://github.com/pal1000/mesa-dist-win/releases/download/26.3.0/mesa3d-26.3.0-release-msvc.7z' -OutFile "$mesa/mesa.7z"
+          }
+          $hash = (Get-FileHash "$mesa/mesa.7z" -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne 'c505fcc77e8f63a09d7ddac086591d2f542c0698d37fc9e3094685a34d0d9991') { throw "mesa.7z SHA-256 is $hash" }
+          if (Test-Path "$mesa/x") { Remove-Item -Recurse -Force "$mesa/x" }
+          7z x -y "-o$mesa/x" "$mesa/mesa.7z" | Out-Null
+          $icd = (Get-ChildItem -Recurse "$mesa/x" -Filter 'lvp_icd.x86_64.json' | Select-Object -First 1).FullName
+          $layer = (Get-ChildItem -Recurse $env:VULKAN_SDK -Filter 'VkLayer_khronos_validation.json' | Select-Object -First 1).FullName
+          New-Item -Path 'HKLM:\SOFTWARE\Khronos\Vulkan\Drivers' -Force | Out-Null
+          New-ItemProperty -Path 'HKLM:\SOFTWARE\Khronos\Vulkan\Drivers' -Name $icd -Value 0 -PropertyType DWord -Force | Out-Null
+          New-Item -Path 'HKLM:\SOFTWARE\Khronos\Vulkan\ExplicitLayers' -Force | Out-Null
+          New-ItemProperty -Path 'HKLM:\SOFTWARE\Khronos\Vulkan\ExplicitLayers' -Name $layer -Value 0 -PropertyType DWord -Force | Out-Null
+          Write-Output "Registered $icd and $layer"
+
       - name: Probe lavapipe
         if: ${{ runner.os == 'Windows' && !cancelled() && steps.build-release.outcome == 'success' }}
         timeout-minutes: 40
@@ -145,13 +168,6 @@ jobs:
           LP_NATIVE_VECTOR_WIDTH: 256
         run: |
           mesa="$HOME/mesa"
-          if [ ! -f "$mesa/mesa.7z" ]; then
-            mkdir -p "$mesa"
-            curl -sSfL -o "$mesa/mesa.7z" "$MESA_URL"
-          fi
-          echo "$MESA_SHA256  $mesa/mesa.7z" | sha256sum -c -
-          rm -rf "$mesa/x"
-          7z x -y -o"$mesa/x" "$mesa/mesa.7z" > /dev/null
           json=$(find "$mesa/x" -iname 'lvp_icd.x86_64.json' | head -n 1)
           echo "ICD: $json"; cat "$json"
           export VK_DRIVER_FILES=$(cygpath -w "$json")
@@ -222,11 +238,14 @@ jobs:
           run() { local s=$(date +%s) rc=0; "$exe" --out "$1" > "$1.log" 2>&1 || rc=$?; echo "PROBE run $1 rc=$rc seconds=$(( $(date +%s) - s )) LP_NUM_THREADS=${LP_NUM_THREADS:-default}"; grep -iE "error|warn|valid|GPU|device|wrote|HDR" "$1.log" | head -n 40 || true; }
           mkdir -p probe
           run probe/a.png
-          run probe/b.png
           LP_NUM_THREADS=1 run probe/t1.png
-          LP_NUM_THREADS=2 run probe/t2.png
-          for f in b t1 t2; do cmp -s probe/a.png probe/$f.png && echo "PROBE same a $f" || echo "PROBE DIFFERENT a $f"; done
-          sha256sum probe/*.png
+          cmp -s probe/a.png probe/t1.png && echo "PROBE same a t1" || echo "PROBE DIFFERENT a t1"
+          img=build/x64-release/tests/rasm_image_tests.exe
+          images() { local s=$(date +%s); "$img" "$@" > "probe/$name.log" 2>&1 || true; echo "PROBE images $name seconds=$(( $(date +%s) - s )) LP_NUM_THREADS=${LP_NUM_THREADS:-default} validation=$(grep -cE '^\[(ERROR|WARNING): Validation' "probe/$name.log") errors=$(grep -cE '\[(error|warning)\]' "probe/$name.log")"; grep -E "^(test |[a-z_0-9]+ +(update|FAIL|pass) )|tests passed|not render|Sponza" "probe/$name.log" || true; }
+          name=g1 images --update --golden-dir probe/g1
+          name=g2 images --golden-dir probe/g1 --out-dir probe/cmp2
+          name=g3 LP_NUM_THREADS=1 images --golden-dir probe/g1 --out-dir probe/cmp3
+          grep -hE "\[(error|warning)\]|Validation" probe/g1.log | sort | uniq -c | sort -rn | head -n 20 || true
 
       - name: Upload the probe images
         if: ${{ runner.os == 'Windows' && !cancelled() }}

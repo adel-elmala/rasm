@@ -174,6 +174,11 @@
             },
             "execution": {
                 "timeout": 300
+            },
+            "filter": {
+                "exclude": {
+                    "label": "image"
+                }
             }
         },
         {
