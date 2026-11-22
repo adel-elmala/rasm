@@ -77,6 +77,8 @@ namespace rasm
     uint64_t                            growUiCapacity(uint64_t size, uint64_t minimum);
     // Moves the releases whose fence value the graphics fence has reached (completedValue) from releases into done.
     void                                takeUiReleases(std::vector<UiRelease>& releases, uint64_t completedValue, std::vector<UiRelease>& done);
+    // The heat colors of a count (lib/heat.slang) as a row of swatches, in the current ImGui window.
+    void                                drawHeatKey();
 
 }
 // clang-format on

@@ -37,6 +37,8 @@ namespace rasm
     struct FrameStatsCollector;
     struct StatsOverlay;
     struct Ui;
+    struct Inspector;
+    struct InspectEntry;
     namespace gfx { struct SceneData; }
 
     constexpr uint32_t MAX_MATERIALS        = 256;
@@ -173,6 +175,10 @@ namespace rasm
         uint64_t                    getUiTexture(const TextureHandle& texture);
         void                        setDebugView(DebugView view);
         void                        setCullingFrozen(bool frozen);
+        // What the RASM window's Buffers section shows, as picking it there does (EngineConfig::ui). The pass that
+        // copies it runs only while that section is open.
+        void                        setInspection(const Inspection& inspection);
+        const Inspection&           getInspection() const;
         bool                        running() const;
         bool                        recreateSwapchain();
         void                        setRenderTarget(const RenderTargetHandle& renderTarget, uint32_t face = 0);
@@ -277,6 +283,8 @@ namespace rasm
         std::string                                                 graphDump                               = {};    // the last one, for the RASM window
         DebugView                                                   debugView                               = DebugView::NONE;
         bool                                                        cullingFrozen                           = false;
+        Inspection                                                  inspection                              = {};
+        std::unique_ptr<Inspector>                                  inspector                               = {};
 
     private:
         static constexpr Format     DEPTH_FORMAT    = Format::D32_SFLOAT;
@@ -376,6 +384,10 @@ namespace rasm
         void                        drawUi();
         void                        drawUiFallback();
         void                        drawEngineWindow();
+        void                        updateInspectPass(RenderGraph& graph);
+        void                        recordInspect(const InspectEntry& entry);
+        void                        drawBuffersSection();
+        void                        drawTablesSection();
 
         std::vector<PendingMeshLoad>                                            pendingMeshes;
         std::unordered_map<TextureHandle, PendingTextureLoad, HandleHash>       pendingTextures;

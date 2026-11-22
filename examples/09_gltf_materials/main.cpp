@@ -30,6 +30,9 @@
 // --glass <count> sets the number of cubes. --no-bloom leaves the bloom out, --bloom-strength <s> sets its share (0.04
 // by default). --render-size <width> <height> draws the scene at that size instead of the window's, which the tone map
 // scales to the window. --gpu-times prints the mean GPU time of each timed pass over frames 300 to 600, then quits.
+// --inspect <target> <color|depth|hiz|clusters> <n> opens the RASM window on that resource in its Buffers section, as
+// picking it there does: n is the color, the cube face, the Hi-Z level or the cluster slice (24: the screen tiles).
+// --inspect-rows opens it on the lantern's rows in the GPU tables section.
 
 namespace
 {
@@ -86,6 +89,32 @@ namespace
         return rasm::Transform{position, glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(scale)};
     }
 
+    // --inspect's kinds, in the order of rasm::InspectKind.
+    bool parseInspection(int argc, char **argv, rasm::Inspection &inspection)
+    {
+        const char *kinds[] = {"color", "depth", "hiz", "clusters"};
+        for (int i = 1; i + 3 < argc; ++i)
+        {
+            if (std::strcmp(argv[i], "--inspect") != 0)
+                continue;
+            inspection.target = argv[i + 1];
+            for (uint32_t k = 0; k < std::size(kinds); ++k)
+            {
+                if (std::strcmp(argv[i + 2], kinds[k]) == 0)
+                    inspection.kind = static_cast<rasm::InspectKind>(k);
+            }
+            const auto n = static_cast<uint32_t>(std::strtoul(argv[i + 3], nullptr, 10));
+            if (inspection.kind == rasm::InspectKind::COLOR)
+                inspection.attachment = n;
+            else if (inspection.kind == rasm::InspectKind::DEPTH)
+                inspection.face = n;
+            else
+                inspection.level = n;
+            return true;
+        }
+        return false;
+    }
+
     // --debug-view's names, in the order of rasm::DebugView.
     rasm::DebugView parseDebugView(const char *name)
     {
@@ -110,8 +139,12 @@ int main(int argc, char **argv)
     uint32_t renderHeight = 0;
     uint32_t samples = 1;
     bool taa = false;
+    bool inspectRows = false;
+    rasm::Inspection inspection;
+    const bool inspect = parseInspection(argc, argv, inspection);
     for (int i = 1; i < argc; ++i)
     {
+        inspectRows = inspectRows || std::strcmp(argv[i], "--inspect-rows") == 0;
         if (std::strcmp(argv[i], "--aa") == 0 && i + 1 < argc)
         {
             const char *mode = argv[++i];
@@ -146,6 +179,7 @@ int main(int argc, char **argv)
         .preferredBackend = rasm::Backend::VULKAN,
         .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
         .shaderDir = RASM_EXAMPLE_SHADER_DIR,
+        .showStats = inspect || inspectRows,
         .ui = true};
 
     rasm::Engine engine(config);
@@ -185,6 +219,10 @@ int main(int argc, char **argv)
     engine.addEntityToScene(scene, engine.createEntity("emissive strength", emissiveStrength, {}, makeTransform(glm::vec3(1.4f, 3.2f, -6.0f), 0.3f)));
     const rasm::EntityHandle lanternEntity = engine.createEntity("lantern", lantern, {}, makeTransform(glm::vec3(-7.0f, 0.0f, -5.0f), 0.12f));
     engine.addEntityToScene(scene, lanternEntity);
+    if (inspectRows)
+        inspection.entity = lanternEntity;
+    if (inspect || inspectRows)
+        engine.setInspection(inspection);
 
     // The glass block, a layer of GLASS_X x GLASS_Y cubes per row in depth, in a few tints and opacities.
     rasm::MaterialHandle glass[GLASS_TINTS];

@@ -25,6 +25,9 @@
 //   --bench        at 1920x1080, without validation (it would change the timings) and without the moon's shadow (its
 //                  passes would take the GPU timers the scene needs, D21): prints the GPU time of each pass, averaged
 //                  over 240 frames, and exits
+//   --inspect <target> <color|depth|hiz|clusters> <n>
+//                  opens the RASM window on that resource in its Buffers section, as picking it there does: n is the
+//                  color, the cube face, the Hi-Z level or the cluster slice (24: the screen tiles)
 //
 // The lights cover about the same share of the ground for any N: their range shrinks as there are more of them.
 
@@ -42,6 +45,8 @@ namespace
         bool ortho = false;
         bool orbit = false;
         bool bench = false;
+        bool inspect = false;
+        rasm::Inspection inspection;
     };
 
     struct MovingLight
@@ -83,6 +88,27 @@ namespace
                 options.orbit = true;
             else if (std::strcmp(argv[i], "--bench") == 0)
                 options.bench = true;
+            else if (std::strcmp(argv[i], "--inspect") == 0 && i + 3 < argc)
+            {
+                // The kinds in the order of rasm::InspectKind.
+                const char *kinds[] = {"color", "depth", "hiz", "clusters"};
+                rasm::Inspection &inspection = options.inspection;
+                inspection.target = argv[++i];
+                const char *kind = argv[++i];
+                for (uint32_t k = 0; k < std::size(kinds); ++k)
+                {
+                    if (std::strcmp(kind, kinds[k]) == 0)
+                        inspection.kind = static_cast<rasm::InspectKind>(k);
+                }
+                const auto n = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
+                if (inspection.kind == rasm::InspectKind::COLOR)
+                    inspection.attachment = n;
+                else if (inspection.kind == rasm::InspectKind::DEPTH)
+                    inspection.face = n;
+                else
+                    inspection.level = n;
+                options.inspect = true;
+            }
         }
         return options;
     }
@@ -206,12 +232,15 @@ int main(int argc, char **argv)
         .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
         .shaderDir = RASM_EXAMPLE_SHADER_DIR,
         .maxLights = std::max(options.lights + 1, 1u << 14), // and the moon
+        .showStats = options.inspect,
         .clusteredLighting = !options.allLights,
         .ui = true};
 
     rasm::Engine engine(config);
     if (!engine.running())
         return 1;
+    if (options.inspect)
+        engine.setInspection(options.inspection);
 
     // --debug-view <name> shows the scene's debug view, as the RASM window's View does.
     for (int i = 1; i + 1 < argc; ++i)

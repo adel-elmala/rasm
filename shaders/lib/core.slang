@@ -214,6 +214,9 @@ struct PushConstants
     uint32_t   argument;
 };
 
+// A pass with push constants of its own (passes/inspect.slang) defines RASM_OWN_PUSH_CONSTANTS before it includes
+// this file, and goes without the functions that read pc.
+#if !defined(RASM_OWN_PUSH_CONSTANTS)
 [[vk::push_constant]]
 ConstantBuffer<PushConstants> pc;
 
@@ -228,6 +231,7 @@ uint getDrawIndex()
     };
     return drawIndex + pc.firstDraw;
 }
+#endif
 
 bool hasTexture(uint textureIndex)
 {
@@ -254,6 +258,7 @@ float2 getMotion(float4 currentClip, float4 previousClip)
 
 // A material texture at the view's mip bias: TAA's jitter blends the frames into a sharper image than one frame, so it
 // reads one mip sharper (SceneData::textureLodBias).
+#if !defined(RASM_OWN_PUSH_CONSTANTS)
 float4 sampleMaterial(Sampler2D texture, float2 uv)
 {
     return texture.SampleBias(uv, pc.scene->textureLodBias);
@@ -267,6 +272,7 @@ float4 sampleBaseColor(Sampler2D gTextures[], MetallicRoughnessMaterial material
         color *= sampleMaterial(gTextures[material.baseColorTextureIndex], uv);
     return color;
 }
+#endif
 
 // Pick the interpolated UV set a material texture asked for (glTF TEXCOORD_n). Sets we do not
 // carry yet fall back to TEXCOORD_0, mirroring the CPU-side fallback in loadMaterial.
@@ -364,6 +370,7 @@ float4 getVertexColor(SceneData *scene, uint geometryIndex, uint vertexIndex)
     return float4(decodeSrgb(color.r), decodeSrgb(color.g), decodeSrgb(color.b), color.a);
 }
 
+#if !defined(RASM_OWN_PUSH_CONSTANTS)
 // The base color's alpha, all the alpha modes test: factor * texture * COLOR_0.
 float getBaseAlpha(Sampler2D gTextures[], MaterialData *material, float2 uv0, float2 uv1, float2 uv2, float vertexAlpha)
 {
@@ -376,4 +383,5 @@ float getBaseAlpha(Sampler2D gTextures[], MaterialData *material, float2 uv0, fl
     }
     return alpha;
 }
+#endif
 // clang-format on

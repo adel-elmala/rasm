@@ -1,4 +1,6 @@
 // clang-format off
+#include "heat.slang"
+
 // The tone-map pass: one full-screen triangle that maps the HDR scene color to display range with AgX, after mixing
 // in the bloom and multiplying by the camera's exposure. The sRGB swapchain does the final encoding.
 
@@ -80,24 +82,12 @@ float4 fragMain(VSOutput input) : SV_TARGET
 
 // A debug view's display (Engine::setDebugView), without exposure, bloom or curve. fragDebug shows the values as
 // they are: they are display values, so it decodes them for the sRGB attachment. fragDebugHeat shows a count
-// (DebugView::OVERDRAW, LIGHT_COUNT) as a heat color, one step per doubling: 1 dark blue, 2 blue, 4 cyan, 8 green,
-// 16 yellow, 32 red, 64 and more white; 0 is black.
-static const float3 HEAT_COLORS[7] = {float3(0.05, 0.05, 0.35), float3(0.10, 0.30, 0.95), float3(0.05, 0.80, 0.90), float3(0.15, 0.85, 0.20),
-                                      float3(0.98, 0.88, 0.10), float3(0.95, 0.15, 0.10), float3(1.0, 1.0, 1.0)};
+// (DebugView::OVERDRAW, LIGHT_COUNT) as a heat color (lib/heat.slang).
 
 float3 decodeSrgb(float3 value)
 {
     float3 v = saturate(value);
     return select(v <= 0.04045, v / 12.92, pow((v + 0.055) / 1.055, 2.4));
-}
-
-float3 getHeatColor(float count)
-{
-    if (count < 1.0)
-        return float3(0.0);
-    float t     = min(log2(count), 6.0);
-    uint step   = min(uint(t), 5u);
-    return lerp(HEAT_COLORS[step], HEAT_COLORS[step + 1], t - float(step));
 }
 
 [shader("fragment")]
