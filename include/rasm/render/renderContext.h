@@ -79,6 +79,8 @@ namespace rasm
         bool                                beginCommandBuffer(const CommandBufferHandle& commandBuffer);
         bool                                endCommandBuffer(const CommandBufferHandle& commandBuffer);
         bool                                transitionImageLayout(const CommandBufferHandle& commandBuffer, TextureHandle texture, TextureUsage newUsage, bool discard = false);
+        // Copies one layer and mip of a readable texture into the start of buffer, rows tightly packed, for readBuffer after the fence.
+        bool                                copyTextureToBuffer(const CommandBufferHandle& commandBuffer, const TextureHandle& texture, uint32_t layer, uint32_t mip, const BufferHandle& buffer);
         bool                                fillBuffer(const BufferHandle& buffer, const void* data, size_t size, size_t offset = 0);
         bool                                readBuffer(const BufferHandle& buffer, void* data, size_t size, size_t offset = 0);
         void                                resetQueries(const QueryPoolHandle& pool);

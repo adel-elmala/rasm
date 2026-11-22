@@ -3,6 +3,7 @@
 #include "rhi/device.h"
 #include "rhi/memoryAliasing.h"
 #include "rhi/mipChain.h"
+#include "rhi/offscreenSwapchain.h"
 #include "rhi/textureStates.h"
 #include "rhi/uploadManager.h"
 
@@ -109,7 +110,8 @@ namespace rasm
                     .height = size.y,
                     .format = desc.colorFormats[index],
                     .usage = desc.storage ? TextureUsage::SAMPLED_STORAGE : TextureUsage::SAMPLED_COLOR_ATTACHMENT,
-                    .samples = desc.samples};
+                    .samples = desc.samples,
+                    .readable = desc.readable};
         }
 
         // Everything but the textures, which createAttachments makes, and the storage slots, which
@@ -138,7 +140,8 @@ namespace rasm
                     .format = desc.depthFormat,
                     .usage = sampled ? TextureUsage::SAMPLED_DEPTH_ATTACHMENT : TextureUsage::DEPTH_STENCIL_ATTACHMENT,
                     .cube = desc.cube,
-                    .samples = desc.samples};
+                    .samples = desc.samples,
+                    .readable = desc.readable};
         }
 
         // The target's textures at its current size: its colors, then its depth, which a storage target does not have.
@@ -290,6 +293,7 @@ namespace rasm
     {
         std::unique_ptr<rhi::Device>                                                                                            device;
         rhi::Swapchain*                                                                                                         swapchain       = nullptr;
+        std::unique_ptr<rhi::OffscreenSwapchain>                                                                                offscreen;          // headless: swapchain points to it
         rhi::Sampler*                                                                                                           samplers[static_cast<size_t>(SamplerType::COUNT)] = {};
         rhi::UploadManager                                                                                                      uploads;
         rhi::TextureStates                                                                                                      textureStates;
@@ -411,8 +415,9 @@ namespace rasm
         const auto config = engine->getConfig();
         const auto &window = engine->getMainWindow();
 
+        const bool headless = config.platform == PlatformType::HEADLESS;
         impl->device = rhi::createDevice(backend, {.appName = config.appName,
-                                                   .window = &window,
+                                                   .window = headless ? nullptr : &window,
                                                    .enableValidation = config.enableValidation,
                                                    .enableSyncValidation = config.enableSyncValidation,
                                                    .enableGpuValidation = config.enableGpuValidation,
@@ -424,7 +429,17 @@ namespace rasm
         if (!impl->uploads.initialize(*impl->device))
             return false;
 
-        impl->swapchain = impl->device->createSwapchain({.width = window.pixelWidth, .height = window.pixelHeight});
+        // Without a window the frames render into textures of the device, which present nothing.
+        if (headless)
+        {
+            impl->offscreen = std::make_unique<rhi::OffscreenSwapchain>(*impl->device);
+            if (impl->offscreen->initialize({.width = window.pixelWidth, .height = window.pixelHeight}))
+                impl->swapchain = impl->offscreen.get();
+        }
+        else
+        {
+            impl->swapchain = impl->device->createSwapchain({.width = window.pixelWidth, .height = window.pixelHeight});
+        }
         if (!impl->swapchain)
         {
             spdlog::error("Failed to create the swapchain.");
@@ -479,7 +494,9 @@ namespace rasm
         for (auto *sampler : impl->samplers)
             if (sampler)
                 device.destroySampler(sampler);
-        if (impl->swapchain)
+        if (impl->offscreen)
+            impl->offscreen.reset();
+        else if (impl->swapchain)
             device.destroySwapchain(impl->swapchain);
 
         impl = std::make_unique<Impl>();
@@ -687,6 +704,7 @@ namespace rasm
     RenderTargetHandle RenderContext::createTransientRenderTarget(const RenderTargetDesc &desc)
     {
         if (!checkArgument(!desc.history, __func__, "a history render target lives across frames, so it can't be transient.") ||
+            !checkArgument(!desc.readable, __func__, "a readable render target is read after the frame, so it can't share memory as a transient one does.") ||
             !checkRenderTargetDesc(desc, impl->device->supportedSampleCounts(), __func__))
             return {};
 
@@ -1359,6 +1377,32 @@ namespace rasm
         return impl->textureStates.transition(*rhiCommandBuffer, rhiTexture, newUsage, discard);
     }
 
+    // The texture keeps its state: it goes to TRANSFER_SRC and back inside the copy.
+    bool RenderContext::copyTextureToBuffer(const CommandBufferHandle &commandBuffer, const TextureHandle &texture, uint32_t layer, uint32_t mip, const BufferHandle &buffer)
+    {
+        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        auto *rhiTexture = lookup(impl->textures, texture, __func__);
+        auto *rhiBuffer = lookup(impl->buffers, buffer, __func__);
+        if (!rhiCommandBuffer || !rhiTexture || !rhiBuffer || !checkArgument(!impl->insidePass, __func__, "copies must be recorded outside a render pass.") ||
+            !checkArgument(rhiTexture->desc.readable, __func__, "the texture is not readable (TextureDesc::readable, RenderTargetDesc::readable).") ||
+            !checkArgument(rhiTexture->desc.samples == 1, __func__, "a multisampled texture can't be copied; copy its resolve.") ||
+            !checkArgument(layer < (rhiTexture->desc.cube ? CUBE_FACES : 1) && mip < rhiTexture->mipLevels, __func__, "the layer or mip is past the texture's."))
+            return false;
+        const TextureUsage state = rhiTexture->state;
+        if (!checkArgument(state != TextureUsage::UNKNOWN && state != TextureUsage::PRESENT_SRC, __func__, "the texture holds nothing to copy yet."))
+            return false;
+        // A depth/stencil texture gives only its depth, 4 bytes a texel.
+        const TextureDesc &desc = rhiTexture->desc;
+        const uint32_t width = std::max(1u, desc.width >> mip);
+        const uint32_t height = std::max(1u, desc.height >> mip);
+        const bool depthStencil = desc.format == Format::D32_SFLOAT_S8_UINT || desc.format == Format::D24_UNORM_S8_UINT;
+        const uint64_t bytes = depthStencil ? uint64_t{4} * width * height : rhi::getTextureLevelSize(desc.format, width, height);
+        if (!checkArgument(bytes > 0 && rhiBuffer->desc.size >= bytes, __func__, "the buffer is smaller than the copy."))
+            return false;
+        rhiCommandBuffer->copyFromTexture(rhiTexture, state, layer, mip, rhiBuffer, 0);
+        return true;
+    }
+
     bool RenderContext::beginRendering(const CommandBufferHandle &commandBuffer, const TextureHandle *colorAttachments, uint32_t colorCount, TextureHandle depthAttachment, const glm::vec4 &clearColor, const AttachmentOps &ops, uint32_t face)
     {
         // A depth-only pass (a shadow map) has no colors.
@@ -1503,13 +1547,16 @@ namespace rasm
             .commandBufferCount = info.commandBufferCount,
             .waits = waits,
             .waitCount = waitCount,
-            .acquireSwapchain = info.waitsForSwapchainImage ? impl->swapchain : nullptr,
-            .presentSwapchain = info.presentsSwapchainImage ? impl->swapchain : nullptr,
+            .acquireSwapchain = info.waitsForSwapchainImage && !impl->offscreen ? impl->swapchain : nullptr,
+            .presentSwapchain = info.presentsSwapchainImage && !impl->offscreen ? impl->swapchain : nullptr,
             .signalFence = signalFence,
             .signalValue = info.signal.value,
         };
         if (!impl->device->getQueue(info.queue)->submit(submitDesc))
             return false;
+        // The present submit is the image's last use this frame, on the one timeline of the graphics queue.
+        if (impl->offscreen && info.presentsSwapchainImage && signalFence != nullptr)
+            impl->offscreen->submitted(signalFence, info.signal.value);
         if (computeQueue && signalFence != nullptr)
             impl->uploads.waitFor({.fence = signalFence, .value = info.signal.value});
 

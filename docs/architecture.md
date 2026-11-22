@@ -11,7 +11,7 @@ flowchart TD
     App["Application (examples/)"] --> Engine["rasm::Engine<br/>(include/rasm/engine.h)"]
     Engine --> Registry["Registry<br/>entities, meshes, materials,<br/>cameras, lights, scenes"]
     Engine --> Assets["Asset loading<br/>meshImport.cpp (tinygltf, tinyobj)<br/>mesh.cpp, material.cpp<br/>texture.cpp (stb_image)<br/>ktxImage.cpp (libktx)"]
-    Engine --> Platform["Window + input<br/>window.cpp (SDL3)"]
+    Engine --> Platform["Platform: window + input<br/>sdlPlatform.cpp (SDL3) or headlessPlatform.cpp"]
     Engine --> SC["ShaderCompiler<br/>(Slang API → SPIR-V)"]
     Engine --> RG["RenderGraph<br/>(pass ordering only)"]
     Engine --> RC["RenderContext<br/>(handle → rhi object tables)"]
@@ -26,10 +26,10 @@ flowchart TD
 | Public API | `include/rasm/` (`rasm.h`, `engine.h`, …) and `include/rasm/render/` (`renderGraph.h`, `renderContext.h`, `resource.h`) | Single facade class `Engine`; everything is created through it and referenced by handles. The low-level API (render graph, `RenderContext`, the resource descriptors) lives in `render/`. |
 | Engine | `src/engine.cpp` | Construction, frame loop (`beginFrame`/`render`/`endFrame`), swapchain recreation, finishing background loads within the frame's budget. |
 | Core utilities | `src/core/` | Handle manager, file reading. |
-| Platform | `src/platform/window.cpp` | SDL3 window, event polling and camera input. |
+| Platform | `src/platform/` | `Platform` (`platform.h`): the window and its events, as `PlatformEvents` the engine applies. `sdlPlatform.cpp` opens an SDL3 window and reads its events and the Vulkan surface hook (`createWindowSurface`); `headlessPlatform.cpp` has no window and no events (`EngineConfig::platform`). |
 | Assets | `src/assets/` | glTF/OBJ import on the worker thread (`meshImport.h/.cpp`, also used by tests), LOD building with meshoptimizer (`meshLod.h/.cpp`), meshes and the geometry pool (`mesh.cpp`), textures (`texture.cpp`), KTX2 reading and Basis transcoding with libktx (`ktxImage.h/.cpp`), materials and glTF material/texture import (`material.cpp`). |
 | Scene | `src/scene/` | Scenes, entities, cameras, lights, transforms. |
-| Renderer | `src/renderer/` | The GPU-driven scene path (`gpuScene.cpp`: GPU scene tables, `syncGpuScene`, the scene passes of `addScenePasses`; `renderer.cpp`: `Renderer`, the graph behind `Engine::render`; `gpuTable.cpp`: per-slot tables with dirty-range uploads; `geometryPool.cpp`: the geometry pool and its table; `lightClusters.cpp`: the light table, the scenes' light lists and each shaded view's light clusters), the tone-map pass (`toneMap.cpp`: `Engine::addToneMapPass`), the bloom passes (`bloom.cpp`: `Engine::addBloomPasses`), the MSAA resolve (`msaaResolve.cpp`: `Engine::addMsaaResolvePass`), TAA (`taa.cpp`: `Engine::addTaaPass`), the frame stats and GPU timers (`frameStats.cpp`) and their overlay (`statsOverlay.cpp`), render graph, Slang shader compiler, GPU struct definitions (`uberMaterialTypes.h`). |
+| Renderer | `src/renderer/` | Readbacks (`readback.cpp`: `Engine::readFrame`, `readTexture`, `takeReadback`, `writePng`; §3), the GPU-driven scene path (`gpuScene.cpp`: GPU scene tables, `syncGpuScene`, the scene passes of `addScenePasses`; `renderer.cpp`: `Renderer`, the graph behind `Engine::render`; `gpuTable.cpp`: per-slot tables with dirty-range uploads; `geometryPool.cpp`: the geometry pool and its table; `lightClusters.cpp`: the light table, the scenes' light lists and each shaded view's light clusters), the tone-map pass (`toneMap.cpp`: `Engine::addToneMapPass`), the bloom passes (`bloom.cpp`: `Engine::addBloomPasses`), the MSAA resolve (`msaaResolve.cpp`: `Engine::addMsaaResolvePass`), TAA (`taa.cpp`: `Engine::addTaaPass`), the frame stats and GPU timers (`frameStats.cpp`) and their overlay (`statsOverlay.cpp`), render graph, Slang shader compiler, GPU struct definitions (`uberMaterialTypes.h`). |
 | Render context | `src/rhi/renderContext.cpp` | Backend-neutral API over handles; owns the handle → `rhi::` object tables, the creation-dedup caches and render targets. |
 | RHI | `src/rhi/device.h` | The backend-neutral GPU interface: `Device`, `CommandBuffer`, `Queue`, `Swapchain` and the resource objects (§12). |
 | Vulkan backend | `src/rhi/vulkan/` | `VulkanDevice` (instance, device, VMA, resource creation), `VulkanCommandBuffer` (recording, barriers), `VulkanSwapchain` (surface swapchain and its semaphores), `VulkanQueue` (submission), one `.h`/`.cpp` pair each. `vulkanTypes.h`: the Vulkan objects behind each `rhi::` struct. |
@@ -54,14 +54,14 @@ There are two kinds of handle owner:
 ## 3. Engine lifetime and the frame loop
 
 ### Construction (`Engine::Engine`, `src/engine.cpp`)
-1. Create the SDL3 window (`createWindow`).
+1. Create the platform for `EngineConfig::platform` (`createSdlPlatform` or `createHeadlessPlatform`) and the main window through it (`createWindow`). A headless window has no handle, and its pixel size is `windowWidth` × `windowHeight`; a headless engine turns `EngineConfig::ui` off with a warning, since the UI's input comes from the window.
 2. `RenderContext::initialize` calls `rhi::createDevice` for `EngineConfig::preferredBackend`. For Vulkan, `VulkanDevice::initialize`:
    - creates the instance. `EngineConfig::enableValidation` turns on the Khronos validation layer; with it, `enableSyncValidation` and `enableGpuValidation` (copied into `DeviceDesc`) add the `validate_sync` and `gpuav_enable` layer settings through `VK_EXT_layer_settings`. Without validation (or without the layers installed) those two are ignored with a warning,
-   - creates the surface from the main window (`createWindowSurface` in `src/platform/`, which wraps `SDL_Vulkan_CreateSurface`),
+   - creates the surface from the main window (`createWindowSurface` in `src/platform/sdlPlatform.cpp`, which wraps `SDL_Vulkan_CreateSurface`). A headless engine passes no window: the instance is made with `set_headless`, there is no surface, and the device needs no `VK_KHR_swapchain`,
    - selects a physical device with the required features (below),
    - creates the device, the graphics queue and the VMA allocator. With `EngineConfig::asyncCompute` (copied into `DeviceDesc`) it also takes a compute queue from a queue family without graphics, if the GPU has one whose timestamps have as many valid bits as the graphics queue's. Then every buffer and image is created `VK_SHARING_MODE_CONCURRENT` for both families, so either queue can use any resource without ownership transfers.
 
-   It then creates the swapchain (`B8G8R8A8_SRGB`), registers its images as texture handles, and creates the shared sampler set.
+   It then creates the swapchain (`B8G8R8A8_SRGB`, with `TRANSFER_SRC` usage when the surface's `supportedUsageFlags` has it, so `readFrame` can copy it), registers its images as texture handles, and creates the shared sampler set. A headless engine gets an `OffscreenSwapchain` instead (`src/rhi/offscreenSwapchain.cpp`, backend-neutral, on `rhi::Device` textures): `MAX_FRAMES_IN_FLIGHT` readable `R8G8B8A8_SRGB` color attachments, handed out in turn. Its `acquireNextImage` waits for the frame fence value of the last submit that drew into the image (`submitted`, called by `RenderContext::submit` for the present submit), `present` does nothing, and submits get no acquire or present swapchain.
 3. Create the frame fence (a timeline), the compute fence when there is a compute queue, and, for each of the `MAX_FRAMES_IN_FLIGHT = 2` slots, a command buffer and a depth texture (`D32_SFLOAT`, `SAMPLED_DEPTH_ATTACHMENT`, so occlusion culling can read it).
 4. Initialize the Slang session (SPIR-V 1.4, scalar layout, column-major matrices, search path `lib/` under `EngineConfig::shaderDir`). A missing folder fails here, so a wrong path stops startup instead of failing every frame.
 5. Create the geometry pool (`GeometryPool::create`, `src/renderer/geometryPool.cpp`): one device-local vertex buffer of `EngineConfig::geometryPoolVertices` `Vertex`es (STORAGE, read through its device address), one index buffer of `EngineConfig::geometryPoolIndices` `uint32_t`s, a color pool of `EngineConfig::geometryPoolColors` packed vertex colors for the meshes that have them, a skin pool of `EngineConfig::geometryPoolSkins` `SkinVertex`es (joints and weights) for the skinned meshes, a morph pool of `EngineConfig::geometryPoolMorphs` `MorphDelta`s (morph target deltas) for the morphed meshes, and the geometry table of `EngineConfig::geometryPoolSubMeshes` rows. Every mesh lives in these buffers (§6). Their size is fixed for the engine's lifetime, so an app that draws little can make them smaller and one with big scenes larger. `createGpuScene` then creates the instance and material tables and the scene data buffers (§4), `createGpuLights` the light table of `EngineConfig::maxLights` + 1 rows (§4, lights; 0 or `UINT32_MAX` stops startup with an error, and so does a table larger than the device's `maxBufferSize`, which `VulkanDevice::createBuffer` checks for every buffer), and `createStatsOverlay` the timestamp query pools and the overlay's text buffers (§3, frame stats). With `EngineConfig::ui` (and `RASM_IMGUI`), `createUi` makes the ImGui context and the UI pipeline after them (§3, the UI).
@@ -75,7 +75,7 @@ There are two kinds of handle owner:
 - 1.2: descriptor indexing (runtime arrays, partially bound, update-after-bind for sampled and storage images, variable count, non-uniform sampled image indexing), `drawIndirectCount`, `bufferDeviceAddress`, `scalarBlockLayout`, `hostQueryReset`, `timelineSemaphore`, `shaderInt8`, `storagePushConstant8`.
 - 1.3: `dynamicRendering`, `synchronization2`.
 - 1.4: `hostImageCopy`.
-- Extensions: `VK_KHR_swapchain`, `VK_EXT_memory_budget`.
+- Extensions: `VK_EXT_memory_budget`, and `VK_KHR_swapchain` with a window.
 - Optional, each on when the GPU has it: `textureCompressionBC`, `textureCompressionASTC_LDR`, `textureCompressionETC2` (1.0), for block-compressed textures (§5). The log says which are on.
 
 ### Per frame (`Engine::render`)
@@ -111,7 +111,7 @@ sequenceDiagram
             E->>C: endPass: endRendering (a render target's color → SAMPLED)
         end
     end
-    E->>C: endFrame: an empty "Clear" pass if no pass drew the swapchain, a "UI" pass if the UI has draws and no UI pass ran, the stats overlay pass (without the UI), swapchain image → PRESENT_SRC, COMPUTE → HOST barrier (cull stats; without a compute queue), close the batches
+    E->>C: endFrame: an empty "Clear" pass if no pass drew the swapchain, a "UI" pass if the UI has draws and no UI pass ran, the stats overlay pass (without the UI), the readbacks asked for since the last frame (`recordReadbacks`), swapchain image → PRESENT_SRC (not headless), COMPUTE → HOST barrier (cull stats; without a compute queue), close the batches
     E->>C: submitBatches: end every batch (the last compute one after a COMPUTE → HOST barrier), then one submit per batch in the order they were closed, each signals its queue's fence; the first graphics one waits for the acquired image, the last presents; a failed one or a dropped frame → discardRecording
     E->>E: finishEnvironmentBakes: a bake whose textures stayed SAMPLED went out (READY), one in a dropped frame waits again
     E->>C: present (SUBOPTIMAL / OUT_OF_DATE → recreate next frame)
@@ -129,12 +129,29 @@ Notes:
   compute : [Cull 1]                 [Hi-Z, Cull 2]
   graphics:      ↘ [Scene 1] ──────────↗        ↘ [Scene 2, Transparent, Tone Map, overlay] → present
   ```
-- Every frame presents, and present needs the image in `PRESENT_SRC_KHR`. A frame that only draws to render targets gets an empty swapchain pass in `endFrame`, so it presents the clear color. There is no offscreen-only frame yet (`D7`).
+- Every frame presents, and present needs the image in `PRESENT_SRC_KHR`. A frame that only draws to render targets gets an empty swapchain pass in `endFrame`, so it presents the clear color. A headless frame "presents" its offscreen image: it stays a color attachment, and the next acquire of it drops what it holds.
 - Acquire, present and `recreateSwapchain` return `SwapchainStatus` (`OK`, `SUBOPTIMAL`, `OUT_OF_DATE`, `FAILURE`). `SUBOPTIMAL` from acquire still renders the frame, because the image was acquired and its semaphore will be signaled. `Engine::swapchainOutOfDate` schedules recreation.
 - Swapchain-sized resources (render targets with `swapchainScale`, viewport, camera aspect) use the swapchain extent in pixels (`Swapchain::width`/`height`). `Window::width`/`height` are logical and are only used for mouse input.
 - The swapchain always uses `VK_PRESENT_MODE_FIFO_KHR`, so the frame rate is capped at the display's refresh rate (see `B21` in the code review).
 - `beginPass(name)` and `endPass` put a GPU timer around each graphics pass, the graph puts one around each compute pass, and the frame's graphics work gets one, from the first graphics batch to the last (frame stats, below).
 - `endFrame` emits the Tracy frame mark, so skipped frames add none. Zones cover the frame functions, the backend-neutral `RenderContext` calls that block or submit, and whole upload loops. `fillBuffer` has no zone of its own because it runs per primitive per frame. See the [build guide](build_guide.md#profiling-with-tracy) for connecting a profiler.
+
+### Readbacks
+
+`Engine::readFrame(ReadbackFormat)` and `readTexture(texture, format, layer, mip)` copy an image back to the CPU without stalling the frame (`src/renderer/readback.cpp`, state in `Readbacks`). The concept: `docs/guides/headless-readback.html`.
+
+```
+frame F    readFrame()            → PendingReadback (handle, texture or the frame's swapchain image, format)
+           endFrame: recordReadbacks → a hostReadable buffer, RenderContext::copyTextureToBuffer into the last graphics batch
+           submitBatches            → finishReadbackSubmit: fenceValue = the frame's graphics value (a dropped frame records it again next frame)
+frame F+2  beginFrame waits slot F  → isReadbackReady(h) is true
+           takeReadback(h, image)   → readBuffer, convertReadback, destroy the buffer
+```
+
+- Only a readable texture can be copied: `TextureDesc::readable` adds `TRANSFER_SRC` usage, and `RenderTargetDesc::readable` gives every color and the depth of a target that usage. A graph makes a readable target in memory of its own, like a history target (`RenderGraph::createRenderTarget`), and `createTransientRenderTarget` refuses one, since a later pass could reuse the memory before the copy at the end of the frame. The offscreen swapchain's images are always readable; a window's are when its surface allows it. Multisampled textures are refused (read the resolve).
+- `rhi::CommandBuffer::copyFromTexture` moves the layer and mip to `TRANSFER_SRC_OPTIMAL` and back to its tracked state around `vkCmdCopyImageToBuffer2`, so the texture states do not change, then makes the bytes visible to the host (`COPY` → `HOST` buffer barrier). With a compute queue the copy waits for all of the frame's compute work first, and the compute batches of later frames wait for the frame that made it (`readbackComputeWait`), since no graph sees the copy's use of the texture.
+- `convertReadback` turns the tightly packed texels into a `ReadbackImage` on the CPU, when the image is taken: 8-bit sources keep their bytes as `RGBA8_SRGB` (BGRA swizzled), float sources are clamped and sRGB-encoded for it; `RGBA32_FLOAT` decodes sRGB and widens halves; a depth reads only as `RGBA32_FLOAT`. Formats: RGBA8 and BGRA8 (UNORM, sRGB), `R16G16B16A16_SFLOAT`, `R16G16_SFLOAT`, `R32G32B32A32_SFLOAT`, `R32G32_SFLOAT`, `D32_SFLOAT`. `writePng` writes an `RGBA8_SRGB` image through `stbi_write_png_to_func` to a UTF-8 path.
+- `takeReadback` blocks on the frame fence when the copy is recorded but not done, and returns false without blocking when no frame has recorded it yet.
 
 ### Frame stats and the overlay
 
@@ -583,7 +600,7 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 ## 8. Camera and input
 
 - `Camera` holds a `CameraProjection` (a union of perspective and orthographic), a `CameraController` (trackball or free-fly, plus `easingSpeed`), the rendered `transform`, a `targetTransform`, and an `exposure` that the tone-map pass multiplies the scene color by (§11; `setCameraExposure`, `getCameraExposure`).
-- `pollEvents` converts SDL events into a `CameraInput`: mouse drag in NDC normalized by the smaller window dimension, wheel delta, WASD state and frame delta-time. It feeds that input to `updateCamera`, which updates the target with the active controller and then eases the rendered transform toward it with exponential smoothing. Within float precision of the target (1e-6, relative for the position) it snaps to it, so a camera at rest does not move by rounding noise that depends on `deltaTime` (`B24`). The trackball eases along the orbit sphere.
+- `pollEvents` measures `deltaTime`, asks the platform for its `PlatformEvents` (quit, F1–F3, the camera input) and applies them; a headless platform has none. The SDL platform converts SDL events into a `CameraInput`: mouse drag in NDC normalized by the smaller window dimension, wheel delta, WASD state and frame delta-time. It feeds that input to `updateCamera`, which updates the target with the active controller and then eases the rendered transform toward it with exponential smoothing. Within float precision of the target (1e-6, relative for the position) it snaps to it, so a camera at rest does not move by rounding noise that depends on `deltaTime` (`B24`). The trackball eases along the orbit sphere.
 - Window resize updates every camera's aspect ratio and marks the swapchain for recreation. Escape or closing the window sets `isRunning = false`.
 - `prepareSceneView` fits the camera's projection to the view's target with `getProjectionMatrix(camera, aspect)` and leaves the camera unchanged, so a render target of any shape renders undistorted. A perspective camera keeps its vertical field of view, and an orthographic one keeps its width.
 - View matrix = `conjugate(rotation)` × `translate(−position)`. The projection is reversed-Z: the near plane maps to depth 1 and the far plane to 0. A perspective `farZ` of 0 or infinity (0 is what an omitted `farZ` gives) means an infinite far plane, depth = `nearZ / distance`. Otherwise a perspective camera needs `0 < nearZ < farZ`, and an orthographic one needs a finite `farZ` greater than `nearZ` (it has no infinite form). `createCamera` returns an invalid handle and `setCameraProjection` keeps the old projection when these fail, with an error. `toProjectionMatrix` in `camera.cpp` gets the finite matrices from `glm::perspective`/`glm::ortho` (Vulkan [0, 1] range, `GLM_FORCE_DEPTH_ZERO_TO_ONE`, see `B2`) with near and far swapped, and writes the infinite one by hand.

@@ -177,6 +177,9 @@ namespace rasm::rhi
         virtual void                aliasingBarrier() = 0;
         virtual void                copyBuffers(Buffer* src, const BufferCopy* copies, uint32_t copyCount) = 0;
         virtual void                copyToTextures(Buffer* src, const TextureCopy* copies, uint32_t copyCount) = 0;
+        // Copies one layer and mip of a single-sample texture to dst at dstOffset, rows tightly packed, for the host to
+        // read after the submit's fence. The texture is in state before and after; a depth texture gives its depth.
+        virtual void                copyFromTexture(Texture* src, TextureUsage state, uint32_t layer, uint32_t mip, Buffer* dst, uint64_t dstOffset) = 0;
         virtual void                writeTimestamp(QueryPool* pool, uint32_t index) = 0;
     };
 

@@ -164,7 +164,7 @@
     <rect x="36" y="148" width="120" height="22" rx="4" class="box"/><text x="44" y="164" class="mono">src/core/</text>
     <text x="164" y="163" class="small">handle manager, file reading</text>
     <rect x="36" y="174" width="120" height="22" rx="4" class="box"/><text x="44" y="190" class="mono">src/platform/</text>
-    <text x="164" y="189" class="small">SDL3 window and input, paths</text>
+    <text x="164" y="189" class="small">window and input (SDL3 or headless)</text>
     <rect x="36" y="200" width="120" height="22" rx="4" class="box"/><text x="44" y="216" class="mono">src/assets/</text>
     <text x="164" y="215" class="small">mesh, texture, material loading</text>
     <rect x="36" y="226" width="120" height="22" rx="4" class="box"/><text x="44" y="242" class="mono">src/scene/</text>
@@ -206,7 +206,7 @@
   <tr><td><code>include/rasm/</code></td><td>the public API: <code>Engine</code>, handles, plain types</td><td><code>rasm.h</code>, <code>engine.h</code>, <code>handle.h</code>, <code>types.h</code></td></tr>
   <tr><td><code>include/rasm/render/</code></td><td>the low-level public API</td><td><code>renderContext.h</code>, <code>renderGraph.h</code>, <code>resource.h</code></td></tr>
   <tr><td><code>src/core/</code></td><td>handle manager, file reading</td><td><code>handle.cpp</code>, <code>utils.cpp</code></td></tr>
-  <tr><td><code>src/platform/</code></td><td>SDL3 window and input, paths, the Vulkan surface hook</td><td><code>window.cpp</code>, <code>paths.cpp</code>, <code>windowSurface.h</code></td></tr>
+  <tr><td><code>src/platform/</code></td><td>The window and its input (SDL3, or none when headless), paths, the Vulkan surface hook</td><td><code>platform.h</code>, <code>sdlPlatform.cpp</code>, <code>headlessPlatform.cpp</code>, <code>paths.cpp</code>, <code>windowSurface.h</code></td></tr>
   <tr><td><code>src/assets/</code></td><td>mesh, texture and material loading, glTF and OBJ import, mesh LODs</td><td><code>mesh.cpp</code>, <code>meshImport.cpp</code>, <code>meshLod.cpp</code>, <code>texture.cpp</code>, <code>material.cpp</code></td></tr>
   <tr><td><code>src/scene/</code></td><td>scenes, entities, cameras, lights, transforms</td><td><code>scene.cpp</code>, <code>entity.cpp</code>, <code>camera.cpp</code></td></tr>
   <tr><td><code>src/renderer/</code></td><td>GPU scene tables, the scene passes, the tone-map pass, the graph behind <code>render</code>, frame stats, overlay, render graph, shader compiler, GPU structs</td><td><code>gpuScene.cpp</code>, <code>renderer.cpp</code>, <code>gpuTable.cpp</code>, <code>geometryPool.cpp</code>, <code>shaderCompiler.cpp</code></td></tr>

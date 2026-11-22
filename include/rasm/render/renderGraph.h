@@ -152,7 +152,7 @@ namespace rasm
         std::unordered_map<BufferHandle, Access, HandleHash>        bufferAccess;
         std::unordered_map<TextureHandle, Access, HandleHash>       textureAccess;
         std::vector<RenderTargetHandle>                             transientTargets;
-        std::vector<RenderTargetHandle>                             historyTargets;     // made by the graph with history: they live as long as it
+        std::vector<RenderTargetHandle>                             historyTargets;     // made by the graph with history or readable: they live as long as it
         std::vector<uint32_t>                                       transientFirstPasses;
         std::vector<uint32_t>                                       transientLastPasses;
         uint64_t                                                    transientUses[QUEUE_COUNT] = {}; // per queue, the batch value of this frame's last pass that used a transient target

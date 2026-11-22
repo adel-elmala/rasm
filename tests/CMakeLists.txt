@@ -23,6 +23,7 @@ add_executable(rasm_tests
             "meshTests.cpp"
             "morphTargetsTests.cpp"
             "pathTests.cpp"
+            "readbackTests.cpp"
             "renderGraphTests.cpp"
             "resourceDescTests.cpp"
             "shadowCascadesTests.cpp"

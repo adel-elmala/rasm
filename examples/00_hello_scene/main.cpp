@@ -3,8 +3,11 @@
 
 #include "rasm/rasm.h"
 
-int main()
+#include "exampleArgs.h"
+
+int main(int argc, char **argv)
 {
+    const ExampleArgs args = parseExampleArgs(argc, argv);
     // 1. Create engine instance
     rasm::EngineConfig config = {
         .appName = "example_0",
@@ -96,6 +99,9 @@ int main()
     engine.addLightToScene(scene, light);
     engine.addLightToScene(scene, fillLight);
     engine.addLightToScene(scene, pointLight);
+
+    if (args.waitForLoads)
+        engine.waitForLoads();
 
     // 8. Main loop
     while (engine.running())

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GPU Timing · RASM</title>
 <meta name="description" content="How to measure a frame: CPU time and GPU time, timestamp queries, reading results frames later without stalling, per-pass timers, GPU counters written with atomics and read back, 64-bit counts from 32-bit atomics, smoothing, memory numbers, and how RASM does it.">
-<meta name="rasm-sources" content="src/renderer/frameStats.cpp src/renderer/frameStats.h include/rasm/engine.h src/engine.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/renderGraph.cpp shaders/passes/cull.slang src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/platform/window.cpp include/rasm/render/resource.h">
+<meta name="rasm-sources" content="src/renderer/frameStats.cpp src/renderer/frameStats.h include/rasm/engine.h src/engine.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/renderGraph.cpp shaders/passes/cull.slang src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/platform/sdlPlatform.cpp src/platform/platform.h include/rasm/render/resource.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -880,7 +880,7 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
   <tr><td>Frame and pass timers</td><td><code>Engine::beginFrame</code>, <code>Engine::endFrame</code>, <code>Engine::beginPass</code>, <code>Engine::endPass</code> in <code>src/engine.cpp</code>; <code>RenderGraph::execute</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
   <tr><td>Query pool, timestamps, VRAM</td><td><code>VulkanDevice::createTimestampQueryPool</code>, <code>VulkanDevice::getTimestamps</code>, <code>VulkanDevice::queryVRAMStats</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code>; <code>VulkanCommandBuffer::writeTimestamp</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
   <tr><td>Counters and draw totals</td><td><code>DrawTotals</code>, <code>cullStats</code>, <code>CULL_STATS_WORDS</code> in <code>src/renderer/gpuScene.h</code>; <code>countMain</code>, <code>addCount64</code> in <code>shaders/passes/cull.slang</code></td></tr>
-  <tr><td><code>deltaTime</code>, <kbd>F1</kbd></td><td><code>Engine::pollEvents</code> in <code>src/platform/window.cpp</code></td></tr>
+  <tr><td><code>deltaTime</code>, <kbd>F1</kbd></td><td><code>Engine::pollEvents</code> in <code>src/engine.cpp</code>, the SDL events in <code>src/platform/sdlPlatform.cpp</code></td></tr>
 </table>
 </div>
 

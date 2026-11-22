@@ -21,6 +21,8 @@
 
 #include "rasm/rasm.h"
 
+#include "exampleArgs.h"
+
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -90,15 +92,13 @@ namespace
 
 int main(int argc, char **argv)
 {
-    bool fixedStep = false;
+    const ExampleArgs args = parseExampleArgs(argc, argv);
     bool taa = false;
     bool bench = false;
     uint32_t crowd = 0;
     uint32_t crowdChains = 0;
     for (int i = 1; i < argc; ++i)
     {
-        if (std::strcmp(argv[i], "--fixed-step") == 0)
-            fixedStep = true;
         if (std::strcmp(argv[i], "--aa") == 0 && i + 1 < argc)
             taa = std::strcmp(argv[++i], "taa") == 0;
         if (std::strcmp(argv[i], "--crowd") == 0 && i + 1 < argc)
@@ -186,12 +186,16 @@ int main(int argc, char **argv)
 
     std::vector<std::string> timerNames;
     std::vector<double> timerSums;
+
+    if (args.waitForLoads)
+        engine.waitForLoads();
+
     double seconds = 0.0;
     auto lastTime = std::chrono::steady_clock::now();
     for (uint32_t frame = 0; engine.running(); ++frame)
     {
         const auto now = std::chrono::steady_clock::now();
-        seconds += fixedStep ? FIXED_STEP_SECONDS : std::chrono::duration<double>(now - lastTime).count();
+        seconds += args.fixedStep ? FIXED_STEP_SECONDS : std::chrono::duration<double>(now - lastTime).count();
         lastTime = now;
         engine.setAnimationTime(seconds);
         graph.execute(camera);

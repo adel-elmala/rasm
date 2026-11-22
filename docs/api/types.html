@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Types, Handles and Limits · RASM</title>
 <meta name="description" content="Handle and every handle alias, the enums and plain structs of types.h, Window, VRAMStats, and every compile-time limit with its value and header.">
-<meta name="rasm-sources" content="include/rasm/handle.h include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h include/rasm/engine.h include/rasm/entity.h include/rasm/light.h include/rasm/material.h include/rasm/mesh.h include/rasm/scene.h src/core/handle.cpp src/platform/window.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanUtils.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/assets/texture.cpp src/assets/material.cpp src/assets/mesh.cpp src/scene/camera.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/scene.cpp src/renderer/gpuScene.cpp src/renderer/frameStats.cpp src/engine.cpp">
+<meta name="rasm-sources" content="include/rasm/handle.h include/rasm/types.h include/rasm/readback.h include/rasm/window.h include/rasm/render/resource.h include/rasm/engine.h include/rasm/entity.h include/rasm/light.h include/rasm/material.h include/rasm/mesh.h include/rasm/scene.h src/core/handle.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/rhi/device.cpp src/rhi/vulkan/vulkanUtils.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/assets/texture.cpp src/assets/material.cpp src/assets/mesh.cpp src/scene/camera.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/scene.cpp src/renderer/gpuScene.cpp src/renderer/frameStats.cpp src/engine.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -122,6 +122,7 @@ struct Handle
   <tr><td><code>FenceHandle</code></td><td>a timeline fence: <a href="low-level.html#createFence">createFence</a></td></tr>
   <tr><td><code>QueryPoolHandle</code></td><td>timestamp queries: <a href="low-level.html#createTimestampQueryPool">createTimestampQueryPool</a></td></tr>
   <tr><td><code>EnvironmentHandle</code></td><td>an environment, an HDR sky photo that lights scenes: <a href="scene.html#loadEnvironment">loadEnvironment</a></td></tr>
+  <tr><td><code>ReadbackHandle</code></td><td>a copy of an image to the CPU, done a few frames later: <a href="engine.html#readFrame">readFrame</a>, <a href="engine.html#readTexture">readTexture</a></td></tr>
   <tr><td><code>DescriptorSetLayoutHandle</code></td><td>a descriptor set layout: <a href="low-level.html#createBindlessDescriptorSetLayout">createBindlessDescriptorSetLayout</a></td></tr>
   <tr><td><code>DescriptorPoolHandle</code></td><td>a descriptor pool: <a href="low-level.html#createDescriptorPool">createDescriptorPool</a></td></tr>
   <tr><td><code>DescriptorSetHandle</code></td><td>a descriptor set: <a href="low-level.html#allocateDescriptorSet">allocateDescriptorSet</a>; the engine's one from <a href="low-level.html#getBindlessDescriptorSet">getBindlessDescriptorSet</a></td></tr>
@@ -131,7 +132,7 @@ struct Handle
 </table>
 </div>
 
-<p>Each alias is <code>Handle&lt;XTag&gt;</code> with its own tag: <code>MeshTag</code>, <code>BufferTag</code>, <code>TextureTag</code>, <code>MaterialTag</code>, <code>PipelineTag</code>, <code>CommandBufferTag</code>, <code>FenceTag</code>, <code>SwapchainTag</code>, <code>ShaderTag</code>, <code>SceneTag</code>, <code>EntityTag</code>, <code>CameraTag</code>, <code>WindowTag</code>, <code>ResourceTag</code>, <code>RenderTargetTag</code>, <code>LightTag</code>, <code>DescriptorSetLayoutTag</code>, <code>DescriptorPoolTag</code>, <code>DescriptorSetTag</code>, <code>QueryPoolTag</code>, <code>EnvironmentTag</code>. The tags are only declared, never defined.</p>
+<p>Each alias is <code>Handle&lt;XTag&gt;</code> with its own tag: <code>MeshTag</code>, <code>BufferTag</code>, <code>TextureTag</code>, <code>MaterialTag</code>, <code>PipelineTag</code>, <code>CommandBufferTag</code>, <code>FenceTag</code>, <code>SwapchainTag</code>, <code>ShaderTag</code>, <code>SceneTag</code>, <code>EntityTag</code>, <code>CameraTag</code>, <code>WindowTag</code>, <code>ResourceTag</code>, <code>RenderTargetTag</code>, <code>LightTag</code>, <code>DescriptorSetLayoutTag</code>, <code>DescriptorPoolTag</code>, <code>DescriptorSetTag</code>, <code>QueryPoolTag</code>, <code>EnvironmentTag</code>, <code>ReadbackTag</code>. The tags are only declared, never defined.</p>
 
 <div class="api" id="HandleManager">
   <pre class="sig">class HandleManager
@@ -156,6 +157,7 @@ public:
     LightHandle               getNextLightHandle();
     SceneHandle               getNextSceneHandle();
     EnvironmentHandle         getNextEnvironmentHandle();
+    ReadbackHandle            getNextReadbackHandle();
 
 private:
     HandleCounters nextHandle = {};
@@ -306,6 +308,7 @@ private:
   <pre class="sig">struct EngineConfig
 {
     std::string  appName               = {};
+    PlatformType platform              = PlatformType::SDL;
     int          windowWidth           = 0;
     int          windowHeight          = 0;
     bool         enableValidation      = false;
@@ -339,6 +342,17 @@ private:
 };</pre>
   <div class="body">
     <p>The engine's settings, given to its constructor. Every field is explained on the <a href="engine.html#EngineConfig">Engine page</a>.</p>
+  </div>
+</div>
+
+<div class="api" id="PlatformType">
+  <pre class="sig">enum class PlatformType
+{
+    SDL,
+    HEADLESS,
+};</pre>
+  <div class="body">
+    <p>Who owns the window and the input (<code>EngineConfig::platform</code>). <code>SDL</code>: the engine opens an SDL3 window and reads its events. <code>HEADLESS</code>: no window, no events and no SDL; each frame renders into an offscreen swapchain of <code>windowWidth</code> × <code>windowHeight</code> pixels, which <a href="engine.html#readFrame"><code>readFrame</code></a> copies back. See <a href="engine.html#headless">Engine: headless</a> and <a href="../guides/headless-readback.html">Headless rendering and readback</a>.</p>
   </div>
 </div>
 
@@ -521,7 +535,7 @@ struct RenderTarget
     glm::vec2    lastMousePos = glm::vec2(0.0f);
 };</pre>
   <div class="body">
-    <p>The state of the engine's one window, read with <a href="engine.html#getMainWindow">getMainWindow</a>. <code>pollEvents</code> keeps it up to date.</p>
+    <p>The state of the engine's one window, read with <a href="engine.html#getMainWindow">getMainWindow</a>. <code>pollEvents</code> keeps it up to date. A headless engine's window has no handle, and its pixel size is the offscreen swapchain's.</p>
     <dl>
       <dt>handle</dt><dd>Valid when the window exists.</dd>
       <dt>width, height</dt><dd>Logical size, the units of mouse coordinates.</dd>
@@ -563,6 +577,44 @@ struct RenderTarget
 };</pre>
   <div class="body">
     <p>The last viewport set with <a href="low-level.html#setViewport">setViewport</a>, from <a href="low-level.html#getViewport">getViewport</a>. Pixels, with <code>x</code>, <code>y</code> at the top-left corner.</p>
+  </div>
+</div>
+
+<div class="api" id="ReadbackFormat">
+  <pre class="sig">enum class ReadbackFormat
+{
+    RGBA8_SRGB,
+    RGBA32_FLOAT,
+};</pre>
+  <div class="body">
+    <p>What <a href="engine.html#takeReadback"><code>takeReadback</code></a> converts the copied texels to (<code>rasm/readback.h</code>).</p>
+    <dl>
+      <dt>RGBA8_SRGB</dt><dd>4 bytes per pixel, sRGB-encoded: 8-bit sources keep their bytes (BGRA is swizzled), float sources are clamped to 0..1 and encoded. Ready for <a href="#writePng"><code>writePng</code></a>.</dd>
+      <dt>RGBA32_FLOAT</dt><dd>16 bytes per pixel, linear: sRGB sources are decoded, half floats widened. The only format a depth reads as: the depth in red, then 0, 0, 1.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="ReadbackImage">
+  <pre class="sig">struct ReadbackImage
+{
+    uint32_t                    width       = 0;
+    uint32_t                    height      = 0;
+    ReadbackFormat              format      = ReadbackFormat::RGBA8_SRGB;
+    std::vector&lt;uint8_t&gt;        pixels;
+};</pre>
+  <div class="body">
+    <p>An image copied back by <a href="engine.html#takeReadback"><code>takeReadback</code></a>: <code>width</code> × <code>height</code> pixels in <code>format</code>, rows from top to bottom, with no padding between them.</p>
+  </div>
+</div>
+
+<div class="api" id="writePng">
+  <pre class="sig">bool writePng(const std::string&amp; path, const ReadbackImage&amp; image);</pre>
+  <div class="body">
+    <p>Writes an <code>RGBA8_SRGB</code> image as a PNG file at a UTF-8 path. Returns false (with an error in the log) for an <code>RGBA32_FLOAT</code> image or when the file can't be written.</p>
+    <pre><code>rasm::ReadbackImage image;
+if (engine.takeReadback(copy, image))
+    rasm::writePng("screenshot.png", image);</code></pre>
   </div>
 </div>
 

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Camera Controllers · RASM</title>
 <meta name="description" content="How mouse and keys become a camera pose: fly (FPS) cameras, orbit cameras (turntable and arcball), pitch clamping, frame-time scaling, and frame-rate independent exponential easing. Then how RASM does it.">
-<meta name="rasm-sources" content="include/rasm/camera.h include/rasm/window.h src/scene/camera.cpp src/platform/window.cpp src/engine.cpp tests/cameraTests.cpp">
+<meta name="rasm-sources" content="include/rasm/camera.h include/rasm/window.h src/scene/camera.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/engine.cpp tests/cameraTests.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -849,7 +849,7 @@ so                         t = 1 − e^(−k · dt)</code></pre>
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>Types</td><td><code>CameraInput</code>, <code>CameraController</code>, <code>Camera</code> in <code>include/rasm/camera.h</code></td></tr>
-  <tr><td>Input to <code>CameraInput</code></td><td><code>Engine::pollEvents</code>, <code>toNDC</code> in <code>src/platform/window.cpp</code></td></tr>
+  <tr><td>Input to <code>CameraInput</code></td><td><code>Engine::pollEvents</code> in <code>src/engine.cpp</code>, <code>toNDC</code> in <code>src/platform/sdlPlatform.cpp</code></td></tr>
   <tr><td>Called each frame</td><td><code>Engine::beginFrame</code> in <code>src/engine.cpp</code></td></tr>
   <tr><td>Controllers</td><td><code>updateFreeFlyCamera</code>, <code>updateTrackballCamera</code>, <code>projectOnSphere</code> in <code>src/scene/camera.cpp</code></td></tr>
   <tr><td>Easing</td><td><code>easeCamera</code>, <code>Engine::updateCamera</code> in <code>src/scene/camera.cpp</code></td></tr>

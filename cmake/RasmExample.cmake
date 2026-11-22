@@ -5,6 +5,8 @@ include(RasmRuntimeDlls)
 function(rasm_add_example name)
     add_executable(${name} "${CMAKE_CURRENT_SOURCE_DIR}/${name}/main.cpp")
     target_link_libraries(${name} PRIVATE rasm::rasm)
+    # exampleArgs.h, the run-control flags every example takes.
+    target_include_directories(${name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     target_compile_definitions(${name} PRIVATE RASM_EXAMPLE_ASSET_ROOT="${PROJECT_SOURCE_DIR}/assets"
                                                RASM_EXAMPLE_SHADER_DIR="${PROJECT_SOURCE_DIR}/shaders")
     rasm_copy_runtime_dlls(${name})

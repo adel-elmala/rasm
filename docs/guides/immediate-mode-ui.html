@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Immediate-mode UI · RASM</title>
 <meta name="description" content="How an immediate-mode UI like Dear ImGui works: the UI is code that runs every frame, widgets append triangles to draw lists, draw commands carry a clip rectangle and a texture, one atlas holds the font, and the renderer turns it all into indexed draws with scissors. Input capture, sRGB blending of UI colors, and how RASM draws Dear ImGui through its own RHI.">
-<meta name="rasm-sources" content="src/renderer/ui.cpp src/renderer/ui.h src/renderer/engineUi.cpp src/platform/uiPlatform.cpp src/platform/uiPlatform.h shaders/passes/ui.slang src/platform/window.cpp src/engine.cpp include/rasm/engine.h include/rasm/types.h src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp examples/15_debug_ui/main.cpp src/renderer/inspector.cpp">
+<meta name="rasm-sources" content="src/renderer/ui.cpp src/renderer/ui.h src/renderer/engineUi.cpp src/platform/uiPlatform.cpp src/platform/uiPlatform.h shaders/passes/ui.slang src/platform/sdlPlatform.cpp src/platform/platform.h src/engine.cpp include/rasm/engine.h include/rasm/types.h src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp examples/15_debug_ui/main.cpp src/renderer/inspector.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>

@@ -206,26 +206,63 @@ def message_key(text):
     return m.group(0) if m else text[:120]
 
 
+# Examples that render without a window: they present nothing for GFXR to count, so they render the frames
+# themselves and write the screenshot through Engine::readFrame (--frames N --out file.png).
+HEADLESS_EXAMPLES = ("16_headless",)
+# Every example gets these (exampleArgs.h): a fixed time step, and every load in place before frame 1 (C16).
+RUN_ARGS = ["--fixed-step", "--wait-for-loads"]
+
+
+def layer_path_env():
+    """The SDK's layers for the loader, where they are not installed system-wide (macOS, Linux)."""
+    env = dict(os.environ)
+    sdk = os.environ.get("VULKAN_SDK")
+    if os.name != "nt" and sdk and os.path.isdir(os.path.join(sdk, "share", "vulkan", "explicit_layer.d")):
+        env["VK_ADD_LAYER_PATH"] = os.path.join(sdk, "share", "vulkan", "explicit_layer.d")
+    return env
+
+
+def run_headless_example(name, exe, frame, out_dir, extra_args):
+    shots = os.path.join(out_dir, "screens")
+    os.makedirs(shots, exist_ok=True)
+    shot = os.path.join(shots, name + ".png")
+    if os.path.exists(shot):
+        os.remove(shot)
+    try:
+        proc = subprocess.run([exe] + RUN_ARGS + ["--frames", str(frame), "--out", shot] + extra_args, cwd=os.path.dirname(exe),
+                              env=layer_path_env(), capture_output=True, text=True, errors="replace", timeout=300)
+        log, code = proc.stdout + proc.stderr, proc.returncode
+    except subprocess.TimeoutExpired as e:
+        log, code = ((e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")), "timeout"
+    os.makedirs(os.path.join(out_dir, "logs"), exist_ok=True)
+    with open(os.path.join(out_dir, "logs", name + ".log"), "w", encoding="utf-8") as f:
+        f.write(log)
+    messages, ignored = parse_messages(log)
+    result = {"exit": code, "messages": messages, "ignored": ignored, "screenshot": shot if os.path.isfile(shot) else None}
+    if code != 0 or not result["screenshot"]:
+        result["error"] = "app exited (code %s) without its screenshot" % code
+    return result
+
+
 def run_example(name, preset, frame, out_dir, keep, extra_args):
     exe = os.path.join(REPO, "build", preset, "examples", name + (".exe" if os.name == "nt" else ""))
     if not os.path.isfile(exe):
         return {"error": "not built: %s" % exe}
+    if name in HEADLESS_EXAMPLES:
+        return run_headless_example(name, exe, frame, out_dir, extra_args)
     cap_dir = os.path.join(out_dir, "captures")
     os.makedirs(cap_dir, exist_ok=True)
     base = os.path.join(cap_dir, name + ".gfxr")
     for old in glob.glob(os.path.join(cap_dir, name + "_frame_*.gfxr")):
         os.remove(old)
-    env = dict(os.environ)
+    env = layer_path_env()
     env.update({"VK_INSTANCE_LAYERS": "VK_LAYER_LUNARG_gfxreconstruct", "GFXRECON_CAPTURE_FRAMES": str(frame),
                 "GFXRECON_CAPTURE_FILE": base, "GFXRECON_CAPTURE_FILE_TIMESTAMP": "false", "GFXRECON_QUIT_AFTER_CAPTURE_FRAMES": "true"})
     # GFXR's default page-guard tracking of mapped memory relies on access violations, which ASan treats as crashes.
     if "asan" in preset:
         env["GFXRECON_MEMORY_TRACKING_MODE"] = "unassisted"
-    sdk = os.environ.get("VULKAN_SDK")
-    if os.name != "nt" and sdk and os.path.isdir(os.path.join(sdk, "share", "vulkan", "explicit_layer.d")):
-        env["VK_ADD_LAYER_PATH"] = os.path.join(sdk, "share", "vulkan", "explicit_layer.d")
     try:
-        proc = subprocess.run([exe, "--fixed-step"] + extra_args, cwd=os.path.dirname(exe), env=env, capture_output=True, text=True, errors="replace", timeout=180)
+        proc = subprocess.run([exe] + RUN_ARGS + extra_args, cwd=os.path.dirname(exe), env=env, capture_output=True, text=True, errors="replace", timeout=180)
         log, code = proc.stdout + proc.stderr, proc.returncode
     except subprocess.TimeoutExpired as e:
         log, code = ((e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")), "timeout"

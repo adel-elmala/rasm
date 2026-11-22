@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Headless Rendering and Readback · RASM</title>
+<meta name="description" content="Rendering without a window into images of your own, and copying pixels back from the GPU to the CPU: the staging copy, waiting on the right fence so nothing stalls, converting formats, getting the same pixels on every run, and how RASM does it.">
+<meta name="rasm-sources" content="src/platform/platform.h src/platform/headlessPlatform.cpp src/platform/sdlPlatform.cpp src/rhi/offscreenSwapchain.h src/rhi/offscreenSwapchain.cpp src/rhi/device.h src/rhi/vulkan/vulkanCommandBuffer.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/renderContext.cpp src/renderer/readback.h src/renderer/readback.cpp src/renderer/renderGraph.cpp src/engine.cpp include/rasm/readback.h include/rasm/engine.h include/rasm/types.h include/rasm/render/resource.h examples/16_headless/main.cpp examples/exampleArgs.h tests/readbackTests.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/headless-readback.js"></script>
+</head>
+<body data-root="../" data-page="guides/headless-readback.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Foundations</p>
+<h1>Headless rendering and readback</h1>
+<p class="lead">Not every frame is for a screen. A test compares a frame with a stored image, a tool makes thumbnails, a server renders a map tile. Such a program renders <b>headless</b>, with no window, and then <b>reads the pixels back</b> from the GPU to the CPU. This page explains both: what takes the place of the window, how a copy reaches the CPU without stopping the GPU, how to turn the GPU's formats into plain pixels, and how to get the same pixels on every run. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>Headless: no window, no surface, no swapchain. The frame renders into <b>images the program owns</b>, which play the swapchain's role.</li>
+    <li>The GPU's images live in its own memory, in a layout only it knows. A <b>copy</b> moves them, row by row, into a buffer the CPU can read.</li>
+    <li>The copy is done only when the GPU has finished that frame. Wait on that frame's <b>fence</b>, a few frames later, and the CPU never stalls.</li>
+    <li>The bytes come in the image's format: BGRA order, sRGB numbers, half floats, depth. <b>Convert</b> them to what a PNG or an HDR file needs.</li>
+    <li>For a test, the same frame must give the same pixels on every run: <b>wait for all loads</b>, use a <b>fixed time</b>, and keep the GPU work in a fixed order.</li>
+  </ul>
+</div>
+
+<h2 id="why"><span class="n">1</span>Why render without a window</h2>
+
+<p>A window is one place a frame can go. Many programs want the pixels themselves:</p>
+
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A rendered image next to a stored reference image, with an equals sign between them and a check mark.">
+      <rect x="20" y="25" width="80" height="60" rx="4" class="paper"/>
+      <circle cx="60" cy="55" r="18" class="solid"/>
+      <rect x="140" y="25" width="80" height="60" rx="4" class="paper"/>
+      <circle cx="180" cy="55" r="18" class="solid"/>
+      <text x="120" y="61" class="mid big">=</text>
+      <text x="60" y="104" class="mid small">this run</text>
+      <text x="180" y="104" class="mid small">golden image</text>
+    </svg>
+    <h4>Image tests</h4>
+    <p>A test renders a scene and compares it with an approved image. A shader change that breaks the picture fails the test.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A grid of six small images: thumbnails made from models.">
+      <rect x="30"  y="20" width="50" height="38" rx="3" class="paper"/><circle cx="55" cy="39" r="10" class="solid"/>
+      <rect x="95"  y="20" width="50" height="38" rx="3" class="paper"/><rect x="110" y="29" width="20" height="20" class="solid"/>
+      <rect x="160" y="20" width="50" height="38" rx="3" class="paper"/><path d="M175,50 L185,28 L195,50 Z" class="solid"/>
+      <rect x="30"  y="68" width="50" height="38" rx="3" class="paper"/><rect x="42" y="80" width="26" height="14" class="solid"/>
+      <rect x="95"  y="68" width="50" height="38" rx="3" class="paper"/><circle cx="120" cy="87" r="12" class="solid"/>
+      <rect x="160" y="68" width="50" height="38" rx="3" class="paper"/><path d="M170,98 L185,76 L200,98 Z" class="solid"/>
+    </svg>
+    <h4>Thumbnails and screenshots</h4>
+    <p>An asset browser renders each model once into a small image and saves it. A game saves the frame on a key press.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A server box with no screen sends image tiles over a network line.">
+      <rect x="30" y="30" width="60" height="70" rx="4" class="box"/>
+      <line x1="40" y1="48" x2="80" y2="48" class="arrow"/>
+      <line x1="40" y1="60" x2="80" y2="60" class="arrow"/>
+      <line x1="40" y1="72" x2="80" y2="72" class="arrow"/>
+      <line x1="92" y1="65" x2="146" y2="65" class="arrow mem flowing" marker-end="url(#ah-mem)"/>
+      <rect x="150" y="40" width="24" height="24" class="mem"/><rect x="176" y="40" width="24" height="24" class="mem"/>
+      <rect x="150" y="66" width="24" height="24" class="mem"/><rect x="176" y="66" width="24" height="24" class="mem"/>
+      <text x="60" y="116" class="mid small">no screen</text>
+      <text x="175" y="110" class="mid small">map tiles</text>
+    </svg>
+    <h4>Servers and CI machines</h4>
+    <p>A build machine or a tile server has no display at all. A window can't even be opened there.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A film strip of frames, each rendered at a fixed time step, written to files.">
+      <rect x="20" y="40" width="200" height="50" rx="3" class="box"/>
+      <rect x="30"  y="48" width="38" height="34" class="paper"/>
+      <rect x="78"  y="48" width="38" height="34" class="paper"/>
+      <rect x="126" y="48" width="38" height="34" class="paper"/>
+      <rect x="174" y="48" width="38" height="34" class="paper"/>
+      <text x="49" y="70" class="mid small">0</text><text x="97" y="70" class="mid small">1</text><text x="145" y="70" class="mid small">2</text><text x="193" y="70" class="mid small">3</text>
+      <text x="120" y="110" class="mid small">1/60 s per frame, not real time</text>
+    </svg>
+    <h4>Offline video</h4>
+    <p>Frames for a video are rendered as slowly as they need to be, each at its exact time, and written to files.</p>
+  </div>
+</div>
+
+<h2 id="offscreen"><span class="n">2</span>What takes the place of the window</h2>
+
+<p>With a window, the frame's last pass draws into a swapchain image, and present hands it to the screen (<a href="swapchain.html">The swapchain</a>). Without one, there is no surface, so there can be no swapchain. The program makes its own images instead, and the last pass draws into them:</p>
+
+<div class="split">
+  <div>
+    <svg viewBox="0 0 320 140" role="img" aria-label="With a window: the passes draw into a swapchain image, present sends it to the screen, and the presentation engine owns the images.">
+      <rect x="10" y="50" width="80" height="40" rx="5" class="gpu"/><text x="50" y="74" class="mid small">passes</text>
+      <line x1="90" y1="70" x2="116" y2="70" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <rect x="118" y="40" width="80" height="60" rx="4" class="mem"/><text x="158" y="66" class="mid small">swapchain</text><text x="158" y="82" class="mid small">image</text>
+      <line x1="198" y1="70" x2="246" y2="70" class="arrow" marker-end="url(#ah)"/>
+      <text x="222" y="60" class="mid small">present</text>
+      <rect x="250" y="40" width="60" height="60" rx="4" class="paper"/><text x="280" y="74" class="mid small">screen</text>
+      <text x="160" y="124" class="mid small">the system owns the images</text>
+    </svg>
+    <h4>Window</h4>
+    <p>Surface, swapchain, acquire and present. The system decides which image comes next.</p>
+  </div>
+  <div>
+    <svg viewBox="0 0 320 140" role="img" aria-label="Headless: the passes draw into one of the program's own images, taken in turn, and a copy sends it to the CPU.">
+      <rect x="10" y="50" width="80" height="40" rx="5" class="gpu"/><text x="50" y="74" class="mid small">passes</text>
+      <line x1="90" y1="70" x2="116" y2="70" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <rect x="118" y="30" width="80" height="36" rx="4" class="mem"/><text x="158" y="53" class="mid small">image 0</text>
+      <rect x="118" y="74" width="80" height="36" rx="4" class="mem o-50"/><text x="158" y="97" class="mid small">image 1</text>
+      <line x1="198" y1="48" x2="246" y2="48" class="arrow mem" marker-end="url(#ah-mem)"/>
+      <text x="222" y="40" class="mid small">copy</text>
+      <rect x="250" y="30" width="60" height="36" rx="4" class="cpu"/><text x="280" y="53" class="mid small">CPU</text>
+      <text x="160" y="128" class="mid small">the program owns the images</text>
+    </svg>
+    <h4>Headless</h4>
+    <p>No surface, no swapchain extension. The program takes its images in turn, and "present" does nothing.</p>
+  </div>
+</div>
+
+<p>Keep the same shape as a swapchain: a few images, one per frame in flight, handed out in turn. Then the rest of the renderer does not change: the tone map still writes "the output image", and only the end of the frame differs. An image is handed out again only once the GPU has finished the last frame that drew into it, as the presentation engine would do.</p>
+
+<div class="callout">
+  <strong>Headless is a first step to "bring your own window"</strong>
+  <p>Once the renderer no longer assumes a window, the window becomes one choice among several: a window the engine opens, a window the application owns, or none. The engine only needs to know where the frame goes and where the input comes from.</p>
+</div>
+
+<h2 id="copy"><span class="n">3</span>The copy to the CPU</h2>
+
+<p>A rendered image sits in GPU memory, and the GPU stores it in its own <b>tiled</b> order: small blocks of pixels together, often compressed. The CPU can't read that. A <b>copy command</b> rewrites the image into a buffer as plain rows, in memory the CPU can map:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="Left: a 4 by 4 image stored by the GPU in 2 by 2 tiles, numbered in tile order. A copy command writes it into a buffer as four rows of four pixels, row after row. The CPU maps the buffer and reads row 0 at byte 0 and row 1 at byte 16, with 4 bytes per pixel.">
+    <text x="20" y="22" class="title t-gpu">image, in GPU memory</text>
+    <text x="20" y="40" class="small">tiled: 2 × 2 blocks together</text>
+    <g>
+      <rect x="40" y="56" width="36" height="36" class="gpu"/><rect x="76" y="56" width="36" height="36" class="gpu"/>
+      <rect x="40" y="92" width="36" height="36" class="gpu"/><rect x="76" y="92" width="36" height="36" class="gpu"/>
+      <rect x="112" y="56" width="36" height="36" class="gpu o-50"/><rect x="148" y="56" width="36" height="36" class="gpu o-50"/>
+      <rect x="112" y="92" width="36" height="36" class="gpu o-50"/><rect x="148" y="92" width="36" height="36" class="gpu o-50"/>
+      <rect x="40" y="128" width="36" height="36" class="gpu o-50"/><rect x="76" y="128" width="36" height="36" class="gpu o-50"/>
+      <rect x="40" y="164" width="36" height="36" class="gpu o-50"/><rect x="76" y="164" width="36" height="36" class="gpu o-50"/>
+      <rect x="112" y="128" width="36" height="36" class="gpu"/><rect x="148" y="128" width="36" height="36" class="gpu"/>
+      <rect x="112" y="164" width="36" height="36" class="gpu"/><rect x="148" y="164" width="36" height="36" class="gpu"/>
+      <text x="58" y="79" class="mid small">0</text><text x="94" y="79" class="mid small">1</text><text x="58" y="115" class="mid small">2</text><text x="94" y="115" class="mid small">3</text>
+      <text x="130" y="79" class="mid small">4</text><text x="166" y="79" class="mid small">5</text><text x="130" y="115" class="mid small">6</text><text x="166" y="115" class="mid small">7</text>
+      <text x="58" y="151" class="mid small">8</text><text x="94" y="151" class="mid small">9</text><text x="58" y="187" class="mid small">10</text><text x="94" y="187" class="mid small">11</text>
+      <text x="130" y="151" class="mid small">12</text><text x="166" y="151" class="mid small">13</text><text x="130" y="187" class="mid small">14</text><text x="166" y="187" class="mid small">15</text>
+    </g>
+    <line x1="200" y1="128" x2="300" y2="128" class="arrow mem flowing" marker-end="url(#ah-mem)"/>
+    <text x="250" y="118" class="mid small">copy</text>
+    <text x="250" y="146" class="mid small">image → buffer</text>
+
+    <text x="310" y="22" class="title t-mem">buffer the CPU can read</text>
+    <text x="310" y="40" class="small">rows, one after another</text>
+    <rect x="310" y="56" width="400" height="32" class="mem"/>
+    <text x="320" y="77" class="small mono">row 0: px 0 1 4 5</text>
+    <rect x="310" y="92" width="400" height="32" class="mem o-75"/>
+    <text x="320" y="113" class="small mono">row 1: px 2 3 6 7</text>
+    <rect x="310" y="128" width="400" height="32" class="mem o-50"/>
+    <text x="320" y="149" class="small mono">row 2: px 8 9 12 13</text>
+    <rect x="310" y="164" width="400" height="32" class="mem o-25"/>
+    <text x="320" y="185" class="small mono">row 3: px 10 11 14 15</text>
+    <text x="704" y="77" class="end small">byte 0</text>
+    <text x="704" y="113" class="end small">byte 16</text>
+    <text x="704" y="149" class="end small">byte 32</text>
+    <text x="704" y="185" class="end small">byte 48</text>
+    <text x="310" y="218" class="small">row pitch = width × bytes per pixel = 4 × 4 = 16 bytes (some APIs pad it, D3D12 to 256)</text>
+  </svg>
+  <figcaption>The copy also undoes compression and tiling. The CPU then reads the buffer like any array: pixel (x, y) starts at byte y · pitch + x · bytes per pixel.</figcaption>
+</figure>
+
+<ol class="flow">
+  <li class="gpu"><b>1. Barrier</b><span>The image waits for its last writer, and moves to the copy-source layout.</span></li>
+  <li class="mem"><b>2. Copy</b><span>Image → buffer, one layer and one mip at a time.</span></li>
+  <li class="gpu"><b>3. Barrier</b><span>The image goes back to its layout; the buffer's bytes are made visible to the host.</span></li>
+  <li class="cpu"><b>4. Read</b><span>After the fence: map the buffer and read the rows.</span></li>
+</ol>
+
+<p>The image must allow the copy: it is created with <b>copy-source usage</b>. That flag is not free on every GPU: some drivers keep less compression for an image that may be copied, so engines ask for it only on the images they will read.</p>
+
+<h2 id="when"><span class="n">4</span>When are the pixels there?</h2>
+
+<p>The copy is only recorded in the frame's commands. It runs when the GPU reaches it, which is after the CPU has moved on (<a href="frames-in-flight.html">Frames in flight</a>). The simple way, to wait for the GPU to be idle right after the submit, works but stops the whole pipeline. The better way is to wait for the fence of the frame that made the copy, later:</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Wait for idle at once: the CPU records frame F, then waits while the GPU runs it, then reads. The GPU is idle while the CPU records the next frame.">
+      <text x="10" y="40" class="small t-cpu">CPU</text>
+      <text x="10" y="92" class="small t-gpu">GPU</text>
+      <rect x="40" y="26" width="70" height="22" rx="3" class="cpu"/><text x="75" y="41" class="mid small">F</text>
+      <rect x="110" y="26" width="90" height="22" rx="3" class="bad"/><text x="155" y="41" class="mid small">waits</text>
+      <rect x="200" y="26" width="70" height="22" rx="3" class="cpu"/><text x="235" y="41" class="mid small">F+1</text>
+      <rect x="110" y="78" width="90" height="22" rx="3" class="gpu"/><text x="155" y="93" class="mid small">F</text>
+      <rect x="200" y="78" width="70" height="22" rx="3" class="ghost"/><text x="235" y="93" class="mid small t-faint">idle</text>
+      <text x="160" y="128" class="mid small t-bad">nothing overlaps</text>
+    </svg>
+    <h4>Wait at once</h4>
+    <p>The CPU waits for frame F, then the GPU waits for the CPU. Fine for one screenshot, bad for every frame.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Wait for the frame's fence later: the CPU records frames F and F+1 while the GPU runs F. At the start of F+2 the CPU waits for F's fence anyway, for the frame slot, and reads the copy without extra waiting.">
+      <text x="10" y="40" class="small t-cpu">CPU</text>
+      <text x="10" y="92" class="small t-gpu">GPU</text>
+      <rect x="40" y="26" width="70" height="22" rx="3" class="cpu"/><text x="75" y="41" class="mid small">F</text>
+      <rect x="110" y="26" width="70" height="22" rx="3" class="cpu"/><text x="145" y="41" class="mid small">F+1</text>
+      <rect x="200" y="26" width="80" height="22" rx="3" class="cpu"/><text x="240" y="41" class="mid small">F+2: read</text>
+      <rect x="110" y="78" width="90" height="22" rx="3" class="gpu"/><text x="155" y="93" class="mid small">F + copy</text>
+      <rect x="200" y="78" width="80" height="22" rx="3" class="gpu o-50"/><text x="240" y="93" class="mid small">F+1</text>
+      <line x1="200" y1="100" x2="200" y2="52" class="arrow ok dashed" marker-end="url(#ah-ok)"/>
+      <text x="160" y="128" class="mid small t-ok">F's fence: the copy is done</text>
+    </svg>
+    <h4>Wait on F's fence, later</h4>
+    <p>With <var>N</var> frames in flight the CPU waits for frame F at the start of frame F + <var>N</var> anyway. Reading the copy then costs nothing.</p>
+  </div>
+</div>
+
+<p>So a readback is a small state machine: <b>asked</b>, then <b>recorded</b> into a frame, then <b>done</b> when that frame's fence value is reached, then <b>taken</b>. The program polls "is it done?" each frame and keeps rendering. Try it: the lab computes the same rule as the frame loop, with the CPU waiting for its frame slot at the start of each frame.</p>
+
+<figure class="lab" data-lab="readback-timeline" data-title="Take a readback without a stall">
+  <figcaption>The copy rides in frame 2 (amber). Move "take in frame" to the frame where the program reads it, and look for the red wait on the CPU row. Then change the frames in flight and the GPU time.</figcaption>
+</figure>
+
+<h2 id="formats"><span class="n">5</span>Converting the pixels</h2>
+
+<p>The buffer holds the image's own format. A PNG wants 8-bit RGBA in sRGB; an HDR file or a test of light values wants linear floats. Each source needs its own small rule:</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Four bytes B G R A are reordered to R G B A.">
+      <rect x="30" y="24" width="40" height="30" class="cpu"/><text x="50" y="44" class="mid">B</text>
+      <rect x="74" y="24" width="40" height="30" class="gpu"/><text x="94" y="44" class="mid">G</text>
+      <rect x="118" y="24" width="40" height="30" class="bad"/><text x="138" y="44" class="mid">R</text>
+      <rect x="162" y="24" width="40" height="30" class="box"/><text x="182" y="44" class="mid">A</text>
+      <rect x="30" y="84" width="40" height="30" class="bad"/><text x="50" y="104" class="mid">R</text>
+      <rect x="74" y="84" width="40" height="30" class="gpu"/><text x="94" y="104" class="mid">G</text>
+      <rect x="118" y="84" width="40" height="30" class="cpu"/><text x="138" y="104" class="mid">B</text>
+      <rect x="162" y="84" width="40" height="30" class="box"/><text x="182" y="104" class="mid">A</text>
+      <line x1="50" y1="56" x2="134" y2="82" class="arrow" marker-end="url(#ah)"/>
+      <line x1="138" y1="56" x2="54" y2="82" class="arrow" marker-end="url(#ah)"/>
+    </svg>
+    <h4>Byte order</h4>
+    <p>Window images are often BGRA. Swap red and blue; the bytes stay exact.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A curve from linear values to sRGB numbers: linear 0.5 becomes sRGB 188 of 255.">
+      <path d="M30,110 H210 M30,110 V20" class="arrow"/>
+      <path d="M30,110 C50,60 90,40 210,20" class="arrow hot"/>
+      <line x1="120" y1="110" x2="120" y2="36" class="arrow dashed"/>
+      <line x1="30" y1="36" x2="120" y2="36" class="arrow dashed"/>
+      <text x="120" y="124" class="mid small">linear 0.5</text>
+      <text x="36" y="32" class="small">sRGB 188</text>
+    </svg>
+    <h4>sRGB curve</h4>
+    <p>Linear light gets the sRGB curve for a PNG; an sRGB image is decoded for floats (<a href="color-spaces.html">Color spaces</a>).</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A 16-bit half float with sign, 5 exponent bits and 10 mantissa bits widens to a 32-bit float.">
+      <rect x="30" y="26" width="12" height="28" class="bad"/><rect x="42" y="26" width="50" height="28" class="gpu"/><rect x="92" y="26" width="90" height="28" class="cpu"/>
+      <text x="206" y="45" class="mid small">16 bit</text>
+      <rect x="30" y="80" width="12" height="28" class="bad"/><rect x="42" y="80" width="64" height="28" class="gpu"/><rect x="106" y="80" width="104" height="28" class="cpu o-50"/>
+      <text x="120" y="124" class="mid small">32 bit, the same value</text>
+      <line x1="110" y1="56" x2="110" y2="78" class="arrow" marker-end="url(#ah)"/>
+    </svg>
+    <h4>Half floats</h4>
+    <p>HDR images hold 16-bit floats. Widen them to 32 bits; values above 1 stay, for HDR.</p>
+  </div>
+</div>
+
+<p>Two more rules. A depth image gives one float per pixel, so it reads as floats only. And an HDR value has no 8-bit form of its own: turning 25.0 into a byte means clamping it to 1 (or tone mapping it first), so a screenshot reads the tone-mapped frame, not the HDR target.</p>
+
+<div class="formula">
+  <p class="eq">sRGB(c) = 12.92 · c, when c ≤ 0.0031308</p>
+  <p class="eq">sRGB(c) = 1.055 · c<sup>1/2.4</sup> − 0.055, otherwise</p>
+  <dl>
+    <dt>c</dt><dd>a linear value, clamped to 0..1</dd>
+    <dt>sRGB(c)</dt><dd>the stored number, times 255 and rounded for 8 bits</dd>
+  </dl>
+</div>
+
+<h2 id="same-pixels"><span class="n">6</span>The same pixels on every run</h2>
+
+<p>An image test compares frame <var>N</var> of one run with frame <var>N</var> of another. Everything that decides what frame <var>N</var> shows must then be the same, not only the scene:</p>
+
+<div class="vgrid">
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two runs at frame 60. In the first run a model has finished loading and shows; in the second it is still loading and missing.">
+      <rect x="20" y="24" width="90" height="64" rx="4" class="paper"/><rect x="45" y="44" width="40" height="30" class="solid"/>
+      <rect x="130" y="24" width="90" height="64" rx="4" class="paper"/><rect x="155" y="44" width="40" height="30" class="solid o-25"/>
+      <text x="65" y="106" class="mid small">run 1, frame 60</text>
+      <text x="175" y="106" class="mid small t-bad">run 2: still loading</text>
+    </svg>
+    <h4>Background loads</h4>
+    <p>A file that loads in the background shows from the frame its load ends, which depends on the clock. Wait for every load before frame 1.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A clock: with the wall clock, frame 60 is at a different time in each run; with a fixed step of 1/60 second it is always at 1 second.">
+      <circle cx="55" cy="62" r="34" class="paper"/><line x1="55" y1="62" x2="55" y2="36" class="arrow"/><line x1="55" y1="62" x2="75" y2="72" class="arrow"/>
+      <text x="104" y="48" class="small">frame 60 is at</text>
+      <text x="104" y="70" class="small mono t-bad">0.93 s, 1.07 s</text>
+      <text x="104" y="92" class="small mono t-ok">1.00 s, fixed</text>
+    </svg>
+    <h4>Time</h4>
+    <p>Animation and anything else driven by the wall clock moves by a different amount each run. Step time by a fixed amount per frame.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two threads add to one list; in one run A comes before B, in the other B before A, and two transparent layers blend in a different order.">
+      <rect x="30" y="30" width="40" height="26" class="gpu"/><text x="50" y="48" class="mid">A</text>
+      <rect x="74" y="30" width="40" height="26" class="cpu"/><text x="94" y="48" class="mid">B</text>
+      <rect x="130" y="30" width="40" height="26" class="cpu"/><text x="150" y="48" class="mid">B</text>
+      <rect x="174" y="30" width="40" height="26" class="gpu"/><text x="194" y="48" class="mid">A</text>
+      <text x="72" y="80" class="mid small">run 1</text><text x="172" y="80" class="mid small">run 2</text>
+      <text x="120" y="108" class="mid small">blend order changes the color</text>
+    </svg>
+    <h4>Order on the GPU</h4>
+    <p>Threads that append with atomics land in any order. Where order changes pixels (blending, ties), use a fixed order: prefix sums, a stable sort.</p>
+  </div>
+</div>
+
+<p>History counts too. Temporal effects (<a href="taa.html">TAA</a>, occlusion culling from the last frame) make frame <var>N</var> depend on the frames before it, so a test renders the same number of frames, with the same inputs, every run. And the GPU and its driver are part of the result: two GPUs round some math differently, so stored images belong to one driver, and tests compare with a small tolerance.</p>
+
+<h2 id="pitfalls"><span class="n">7</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>The frame rate drops while screenshots are taken</dt><dd>The program waits for the copy in the frame that asked for it. Poll the fence and take the pixels a few frames later.</dd></div>
+  <div><dt>The image is all black or random</dt><dd>The copy ran before the frame's passes wrote the image, or the bytes were read before the fence. The copy goes after the last pass, and the read after the fence.</dd></div>
+  <div><dt>Red and blue are swapped</dt><dd>The image is BGRA and was written to a file as RGBA.</dd></div>
+  <div><dt>The PNG is too dark or washed out</dt><dd>The sRGB curve is applied twice, or not at all: an sRGB image's bytes are already encoded, a linear image's are not.</dd></div>
+  <div><dt>Rows are shifted or slanted</dt><dd>The row pitch is wider than width × bytes per pixel (padding), and the reader assumed none.</dd></div>
+  <div><dt>The copy of a temporary target shows another image</dt><dd>Its memory was shared with a later target (<a href="memory-aliasing.html">Memory aliasing</a>), which overwrote it before the copy at the end of the frame. A target that is read back needs memory of its own.</dd></div>
+  <div><dt>A multisampled image can't be copied</dt><dd>Copy commands take one sample per pixel. Read the resolved image.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">8</span>In RASM</h2>
+
+<p>RASM chooses the platform in <code>EngineConfig::platform</code>. <code>PlatformType::SDL</code> opens a window; <code>PlatformType::HEADLESS</code> opens none, starts no SDL and creates a Vulkan device without a surface. The frames then render into an <code>OffscreenSwapchain</code>: two readable <code>R8G8B8A8_SRGB</code> images on the device, which the rest of the engine sees as the swapchain. A readback is asked for with <code>Engine::readFrame</code> or <code>Engine::readTexture</code> and recorded at the end of the next frame.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 330" role="img" aria-label="EngineConfig::platform picks SdlPlatform or HeadlessPlatform. With SDL, the Vulkan device has a surface and a VulkanSwapchain. Headless, it has no surface and an OffscreenSwapchain of two images. Either way the tone map and the UI write the swapchain image. At the end of the frame, recordReadbacks copies the image or a readable target into a host-readable buffer. After the frame's fence, takeReadback converts it into a ReadbackImage, and writePng saves it.">
+    <rect x="20" y="20" width="200" height="40" rx="6" class="cpu"/><text x="120" y="45" class="mid mono">EngineConfig::platform</text>
+    <line x1="120" y1="60" x2="70" y2="90" class="arrow" marker-end="url(#ah)"/>
+    <line x1="120" y1="60" x2="190" y2="90" class="arrow" marker-end="url(#ah)"/>
+    <rect x="10" y="92" width="120" height="40" rx="6" class="cpu"/><text x="70" y="117" class="mid mono">SdlPlatform</text>
+    <rect x="140" y="92" width="140" height="40" rx="6" class="cpu"/><text x="210" y="117" class="mid mono">HeadlessPlatform</text>
+    <line x1="70" y1="132" x2="70" y2="168" class="arrow" marker-end="url(#ah)"/>
+    <line x1="210" y1="132" x2="210" y2="168" class="arrow" marker-end="url(#ah)"/>
+    <rect x="10" y="170" width="120" height="50" rx="6" class="gpu"/><text x="70" y="191" class="mid small">surface +</text><text x="70" y="208" class="mid mono small">VulkanSwapchain</text>
+    <rect x="140" y="170" width="140" height="50" rx="6" class="gpu"/><text x="210" y="191" class="mid small">no surface,</text><text x="210" y="208" class="mid mono small">OffscreenSwapchain</text>
+    <line x1="130" y1="250" x2="300" y2="250" class="arrow"/>
+    <line x1="70" y1="220" x2="70" y2="250" class="arrow"/>
+    <line x1="210" y1="220" x2="210" y2="250" class="arrow"/>
+    <line x1="300" y1="250" x2="320" y2="250" class="arrow" marker-end="url(#ah)"/>
+    <text x="70" y="270" class="mid small">swapchain image</text>
+    <rect x="322" y="226" width="140" height="48" rx="6" class="gpu"/><text x="392" y="246" class="mid small">tone map, UI</text><text x="392" y="263" class="mid small">write the image</text>
+    <line x1="462" y1="250" x2="490" y2="250" class="arrow" marker-end="url(#ah)"/>
+    <rect x="492" y="226" width="130" height="48" rx="6" class="mem"/><text x="557" y="246" class="mid mono small">recordReadbacks</text><text x="557" y="263" class="mid small">copy, endFrame</text>
+    <line x1="622" y1="250" x2="650" y2="250" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="652" y="226" width="100" height="48" rx="6" class="cpu"/><text x="702" y="246" class="mid mono small">takeReadback</text><text x="702" y="263" class="mid small">after the fence</text>
+    <rect x="460" y="130" width="194" height="44" rx="6" class="box"/><text x="557" y="149" class="mid small">or a readable target</text><text x="557" y="165" class="mid mono small">RenderTargetDesc::readable</text>
+    <line x1="557" y1="174" x2="557" y2="224" class="arrow dashed" marker-end="url(#ah)"/>
+    <line x1="702" y1="274" x2="702" y2="300" class="arrow" marker-end="url(#ah)"/>
+    <text x="702" y="318" class="mid mono small">writePng</text>
+  </svg>
+  <figcaption>The engine after the platform does not know whether a window exists: it acquires, draws and "presents" the same way. Only <code>endFrame</code> skips the move to the present layout for an offscreen image.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>This page</th><th>RASM</th></tr>
+  <tr><td>Images of your own instead of a swapchain</td><td><code>OffscreenSwapchain</code>, an <code>rhi::Swapchain</code> on <code>rhi::Device</code> textures, so every backend gets it. <code>MAX_FRAMES_IN_FLIGHT</code> images, each handed out again after the frame fence of its last present submit (<code>submitted</code>).</td></tr>
+  <tr><td>Copy-source usage only where needed</td><td><code>TextureDesc::readable</code>, <code>RenderTargetDesc::readable</code> (off by default). A window's swapchain images get it when the surface's <code>supportedUsageFlags</code> has <code>TRANSFER_SRC</code>; else <code>readFrame</code> returns invalid.</td></tr>
+  <tr><td>Barrier, copy, barrier</td><td><code>rhi::CommandBuffer::copyFromTexture</code>: the image goes to the copy layout and back to its tracked state, then a copy → host barrier. Rows are tightly packed.</td></tr>
+  <tr><td>Wait on the frame's fence, later</td><td>Each readback keeps the frame fence value of the frame that copied it. <code>isReadbackReady</code> compares it with the fence; <code>takeReadback</code> waits only when called too early.</td></tr>
+  <tr><td>A temporary target needs memory of its own</td><td>A graph makes a readable target outside the shared transient memory, as it does a history target.</td></tr>
+  <tr><td>Convert on the CPU</td><td><code>convertReadback</code>, when the image is taken: <code>ReadbackFormat::RGBA8_SRGB</code> or <code>RGBA32_FLOAT</code>.</td></tr>
+  <tr><td>Wait for all loads</td><td><code>Engine::waitForLoads</code>; the examples call it with <code>--wait-for-loads</code> (<code>C16</code>), which <code>verify-change</code> passes.</td></tr>
+  <tr><td>A fixed GPU order</td><td>Culling compacts draws with prefix sums, the light clusters use integer atomics whose result does not depend on order, and the blend sort is a fixed bitonic network, so a frame does not depend on thread timing.</td></tr>
+  <tr><td>Bring your own window</td><td>Not yet: the private <code>Platform</code> interface is its first step (<code>D7</code>).</td></tr>
+</table>
+</div>
+
+<h3>Code map</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The platform choice, events</td><td><code>Platform</code>, <code>PlatformEvents</code> in <code>src/platform/platform.h</code>; <code>src/platform/sdlPlatform.cpp</code>, <code>src/platform/headlessPlatform.cpp</code>; <code>Engine::pollEvents</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>A device without a surface</td><td><code>VulkanDevice::initialize</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
+  <tr><td>The offscreen images</td><td><code>src/rhi/offscreenSwapchain.cpp</code>; made in <code>RenderContext::initialize</code> (<code>src/rhi/renderContext.cpp</code>)</td></tr>
+  <tr><td>The copy</td><td><code>VulkanCommandBuffer::copyFromTexture</code>, <code>RenderContext::copyTextureToBuffer</code></td></tr>
+  <tr><td>Readbacks and conversion</td><td><code>src/renderer/readback.cpp</code>: <code>Engine::readFrame</code>, <code>readTexture</code>, <code>isReadbackReady</code>, <code>takeReadback</code>, <code>recordReadbacks</code>, <code>convertReadback</code>, <code>writePng</code></td></tr>
+  <tr><td>The example</td><td><code>examples/16_headless/main.cpp</code>: a PNG of the frame and the HDR target's brightest and mean values</td></tr>
+  <tr><td>Tests</td><td><code>tests/readbackTests.cpp</code>: every conversion, and a PNG written and read again</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Rules to keep</strong>
+  <p>A readback is recorded after every pass and the UI, before the image moves to the present layout. Never wait for a readback in the frame that asked for it. A render target that is read back is made <code>readable</code>; do not add copy-source usage to images nobody reads.</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Vulkan specification, "Copying Data Between Buffers and Images" (<code>vkCmdCopyImageToBuffer2</code>).</li>
+  <li>Khronos, "Synchronization examples": a transfer write read by the host.</li>
+  <li><a href="frames-in-flight.html">Frames in flight</a>, <a href="swapchain.html">The swapchain and presenting</a>, <a href="color-spaces.html">Color spaces</a>.</li>
+</ul>
+
+
+</main>
+</div>
+</body>
+</html>

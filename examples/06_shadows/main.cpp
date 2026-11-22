@@ -3,6 +3,8 @@
 
 #include "rasm/rasm.h"
 
+#include "exampleArgs.h"
+
 #include <cmath>
 #include <cstdint>
 #include <string>
@@ -68,8 +70,9 @@ namespace
     }
 }
 
-int main()
+int main(int argc, char **argv)
 {
+    const ExampleArgs args = parseExampleArgs(argc, argv);
     rasm::EngineConfig config = {
         .appName = "example_6",
         .windowWidth = 1280,
@@ -298,6 +301,9 @@ int main()
     // The RASM window (F1) over the finished image.
     engine.addUiPass(graph);
     graph.compile();
+
+    if (args.waitForLoads)
+        engine.waitForLoads();
 
     // Animation advances per frame, not per second, so a given frame renders the same on every run.
     while (engine.running())

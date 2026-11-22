@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Coordinate Spaces · RASM</title>
 <meta name="description" content="How a vertex travels from object space to world, view, clip, NDC and pixels: handedness, axis conventions, the model and view matrices, lookAt, quaternions, and the Y flip of Vulkan. Then how RASM does it.">
-<meta name="rasm-sources" content="include/rasm/transform.h include/rasm/camera.h src/scene/transform.cpp src/scene/camera.cpp src/renderer/gpuScene.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/platform/window.cpp shaders/passes/rasm.slang shaders/passes/statsOverlay.slang src/CMakeLists.txt">
+<meta name="rasm-sources" content="include/rasm/transform.h include/rasm/camera.h src/scene/transform.cpp src/scene/camera.cpp src/renderer/gpuScene.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/platform/sdlPlatform.cpp src/platform/platform.h shaders/passes/rasm.slang shaders/passes/statsOverlay.slang src/CMakeLists.txt">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -1038,7 +1038,7 @@ pixels:  x_p = vx + (x_n + 1) / 2 · width
   <tr><td>View matrix</td><td><var>R</var><sup>T</sup> · <var>T</var>(−<var>eye</var>), or lookAt</td><td><code>getViewMatrix</code>: <code class="lang-text">mat4_cast(conjugate(rotation)) * translate(-position)</code>. No general inverse, and no lookAt: the controllers produce the rotation directly. The camera's scale is not used.</td></tr>
   <tr><td>Y flip for Vulkan</td><td>fix A, B or a final flip</td><td>Fix A, inside <code>VulkanCommandBuffer::setViewport</code>: <code class="lang-text">y = y + height</code>, <code class="lang-text">height = -height</code>. Callers pass a normal top-left rectangle.</td></tr>
   <tr><td>Hand-written clip positions</td><td>must follow the clip convention</td><td>Clip space is Y-up, so <code>statsOverlay.slang</code> maps pixel rows with <code class="lang-text">1.0 - pixel.y / screen.y * 2.0</code>, and occlusion culling maps NDC back to rows with <code class="lang-text">0.5 - y * 0.5</code>.</td></tr>
-  <tr><td>Mouse</td><td>flip <var>y</var></td><td><code>toNDC</code> in <code>window.cpp</code> flips it, so mouse motion is Y-up too (<a href="camera-controllers.html#in-rasm">Camera controllers</a>).</td></tr>
+  <tr><td>Mouse</td><td>flip <var>y</var></td><td><code>toNDC</code> in <code>sdlPlatform.cpp</code> flips it, so mouse motion is Y-up too (<a href="camera-controllers.html#in-rasm">Camera controllers</a>).</td></tr>
   <tr><td>Normals</td><td>inverse transpose</td><td>Computed once per instance on the CPU (<code>normalMatrix</code> in the instance row), not per vertex.</td></tr>
 </table>
 </div>

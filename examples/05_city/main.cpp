@@ -4,6 +4,8 @@
 
 #include "rasm/rasm.h"
 
+#include "exampleArgs.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -836,6 +838,7 @@ namespace
 
 int main(int argc, char **argv)
 {
+    const ExampleArgs args = parseExampleArgs(argc, argv);
     rasm::EngineConfig config = {
         .appName = "rasm city",
         .windowWidth = 1280,
@@ -900,17 +903,20 @@ int main(int argc, char **argv)
 
     // Seconds stay a double: a float would make the cars stutter after a day of running.
     // --freeze-culling freezes culling at frame 30, and the tour flies on past what it kept.
-    bool fixedStep = false;
     bool freezeCulling = false;
     for (int i = 1; i < argc; ++i)
     {
-        fixedStep = fixedStep || std::strcmp(argv[i], "--fixed-step") == 0;
         freezeCulling = freezeCulling || std::strcmp(argv[i], "--freeze-culling") == 0;
     }
+
+    if (args.waitForLoads)
+        engine.waitForLoads();
+
     double seconds = 0.0;
     std::chrono::steady_clock::time_point lastTime = std::chrono::steady_clock::now();
     bool touring = true;
     bool aviationOn = false;
+
     for (uint32_t frame = 0; engine.running(); ++frame)
     {
         if (freezeCulling && frame == 30)
@@ -949,7 +955,7 @@ int main(int argc, char **argv)
             touring = false;
 
         const std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
-        seconds += fixedStep ? FIXED_STEP_SECONDS : std::chrono::duration<double>(now - lastTime).count();
+        seconds += args.fixedStep ? FIXED_STEP_SECONDS : std::chrono::duration<double>(now - lastTime).count();
         lastTime = now;
     }
 

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Swapchain · RASM</title>
 <meta name="description" content="How a program shows its frames: the swapchain's ring of images, acquire, render and present, the semaphores between them, present modes and vsync, out-of-date swapchains and resize, and how RASM does it.">
-<meta name="rasm-sources" content="src/rhi/vulkan/vulkanSwapchain.h src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanQueue.cpp src/rhi/device.h src/rhi/renderContext.cpp src/engine.cpp include/rasm/types.h src/platform/window.cpp">
+<meta name="rasm-sources" content="src/rhi/vulkan/vulkanSwapchain.h src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanQueue.cpp src/rhi/device.h src/rhi/renderContext.cpp src/engine.cpp include/rasm/types.h src/platform/sdlPlatform.cpp src/platform/platform.h src/rhi/offscreenSwapchain.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -535,6 +535,11 @@
 
 <p><code>VulkanSwapchain</code> builds the swapchain with vk-bootstrap and owns all of its sync objects. No semaphore crosses the RHI: a submit only names the swapchain, to wait for its image (<code>SubmitDesc::acquireSwapchain</code>) or to present it (<code>SubmitDesc::presentSwapchain</code>), and the swapchain fills in the waits and signals. A frame is one submit, or with <a href="async-compute.html">async compute</a> a few (<a href="frame-loop.html">the frame loop</a>): the first graphics submit waits for the image, and the last one presents it. The engine's frame loop handles skipped frames and resize.</p>
 
+<div class="callout">
+  <strong>No window, no swapchain</strong>
+  <p>A headless engine (<code>PlatformType::HEADLESS</code>) has no surface. <code>RenderContext</code> then makes an <code>OffscreenSwapchain</code> instead: two readable <code>R8G8B8A8_SRGB</code> images on the device, handed out in turn, each after the frame fence of the last submit that drew into it. Submits name no swapchain, and <code>present</code> does nothing. The window's images also get copy-source usage when the surface allows it, so <code>readFrame</code> can read either. See <a href="headless-readback.html">Headless rendering and readback</a>.</p>
+</div>
+
 <figure class="diagram">
   <svg viewBox="0 0 760 390" role="img" aria-label="acquireNextImage first waits on the CPU until releaseTimeline reaches the value stored for its acquire slot, then acquires with acquireSemaphores of that slot. The frame's first graphics submit waits on that semaphore at color attachment output. The last one, which presents, signals presentSemaphores of the image and releaseTimeline with the next value. Each graphics submit signals the frame fence. present waits on the image's present semaphore.">
     <text x="20" y="60"  class="title t-cpu">CPU</text>
@@ -725,7 +730,7 @@
   <tr><td>Result codes</td><td><code>SwapchainStatus</code> in <code>include/rasm/types.h</code></td></tr>
   <tr><td>Image handles, layout at acquire</td><td><code>RenderContext::acquireNextImage</code>, <code>recreateSwapchain</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
   <tr><td>Skips, resize, present</td><td><code>Engine::beginFrame</code>, <code>endFrame</code>, <code>submitBatches</code>, <code>recreateSwapchain</code>, <code>createSwapchainResources</code> in <code>src/engine.cpp</code></td></tr>
-  <tr><td>Resize and minimize events</td><td><code>pollEvents</code> in <code>src/platform/window.cpp</code></td></tr>
+  <tr><td>Resize and minimize events</td><td><code>pollEvents</code> in <code>src/platform/sdlPlatform.cpp src/platform/platform.h</code></td></tr>
 </table>
 </div>
 

@@ -116,6 +116,7 @@ namespace rasm
         bool                        cube                            = false;    // CUBE_FACES layers, sampled as a cube, drawn one face at a time
         uint32_t                    mipLevels                       = 0;        // 0: one, or the full chain for a sampled RGBA8 texture; at most the full chain
         uint32_t                    samples                         = 1;        // per pixel: 1, 2, 4 or 8; above 1 an attachment with one mip
+        bool                        readable                        = false;    // a copy source, for Engine::readTexture
 
         bool                        operator==(const TextureDesc&) const = default;
     };
@@ -168,6 +169,7 @@ namespace rasm
         bool                        cube                                          = false; // depth-only and square: its depth is a cube texture, and each pass draws one face
         bool                        storage                                       = false; // colors only, no depth: compute passes write them as storage images
         uint32_t                    samples                                       = 1;     // per pixel: 1, 2, 4 or 8 (RenderContext::supportsSampleCount); read a multisampled color through addMsaaResolvePass
+        bool                        readable                                      = false; // its colors and depth are copy sources for Engine::readTexture; in a graph it gets memory of its own, as history does
 
         bool                        operator==(const RenderTargetDesc&) const = default;
     };

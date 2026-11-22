@@ -3,6 +3,8 @@
 
 #include "rasm/rasm.h"
 
+#include "exampleArgs.h"
+
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -29,6 +31,7 @@ namespace
 
 int main(int argc, char **argv)
 {
+    const ExampleArgs args = parseExampleArgs(argc, argv);
     std::string modelPath = "models/gltf/FlightHelmet/FlightHelmet.gltf";
     bool measure = false;
     for (int i = 1; i < argc; ++i)
@@ -101,6 +104,10 @@ int main(int argc, char **argv)
     bool loaded = false;
     uint32_t loadedFrame = 0;
     bool reported = false;
+
+    if (args.waitForLoads)
+        engine.waitForLoads();
+
     for (uint32_t frame = 0; engine.running(); ++frame)
     {
         engine.render(scene, camera);

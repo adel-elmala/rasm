@@ -1,12 +1,14 @@
 #include "rasm/engine.h"
 #include "core/utils.h"
 #include "platform/paths.h"
+#include "platform/platform.h"
 #include "renderer/environmentBake.h"
 #include "renderer/geometryPool.h"
 #include "renderer/frameStats.h"
 #include "renderer/gpuScene.h"
 #include "renderer/inspector.h"
 #include "renderer/lightClusters.h"
+#include "renderer/readback.h"
 #include "renderer/animation.h"
 #include "renderer/renderer.h"
 #include "renderer/shaderCompiler.h"
@@ -20,6 +22,7 @@
 
 #include "glm/glm.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <future>
 #include <utility>
@@ -53,6 +56,7 @@ namespace rasm
 
     Engine::Engine(const EngineConfig &config) : config(config), geometryPool(std::make_unique<GeometryPool>()), gpuScene(std::make_unique<GpuScene>()), gpuLights(std::make_unique<GpuLights>()), gpuAnimation(std::make_unique<GpuAnimation>()), environments(std::make_unique<Environments>()), frameStats(std::make_unique<FrameStatsCollector>()), statsOverlay(std::make_unique<StatsOverlay>()), ctx(this), shaderCompiler(std::make_unique<ShaderCompiler>())
     {
+        readbacks = std::make_unique<Readbacks>();
         // In a real implementation, this is where we'd initialize the window, graphics context, etc.
         spdlog::info("initializing engine with config: appName={}, windowWidth={}, windowHeight={}, enableValidation={}",
                      config.appName, config.windowWidth, config.windowHeight, config.enableValidation);
@@ -69,11 +73,19 @@ namespace rasm
             return;
         }
 
+        const bool headless = config.platform == PlatformType::HEADLESS;
+        platform = headless ? createHeadlessPlatform() : createSdlPlatform();
         this->mainWindow = createWindow(config.windowWidth, config.windowHeight);
-        if (!mainWindow.handle.isValid())
+        if (!headless && !mainWindow.handle.isValid())
         {
             spdlog::error("Failed to initialize engine window.");
             return;
+        }
+        // Dear ImGui takes its input from the window's events, which a headless engine has none of.
+        if (headless && config.ui)
+        {
+            spdlog::warn("EngineConfig::ui needs a window; a headless engine runs without the UI.");
+            this->config.ui = false;
         }
 
         if (!ctx.initialize(config.preferredBackend))
@@ -158,10 +170,10 @@ namespace rasm
             return;
         // So is the UI's. A UI that fails to start stays off, and the stats overlay takes its place.
 #if defined(RASM_IMGUI)
-        if (config.ui)
+        if (this->config.ui)
             createUi();
 #else
-        if (config.ui)
+        if (this->config.ui)
             spdlog::warn("EngineConfig::ui is set, but RASM was built without Dear ImGui (RASM_IMGUI=OFF); the UI stays off.");
 #endif
 
@@ -196,6 +208,46 @@ namespace rasm
 
         destroyWindow(this->mainWindow);
         spdlog::info("Engine shutdown, cleaned up resources.");
+    }
+
+    Window Engine::createWindow(uint32_t width, uint32_t height)
+    {
+        return platform ? platform->createWindow(width, height) : Window{};
+    }
+
+    void Engine::destroyWindow(const Window &window)
+    {
+        if (platform)
+            platform->destroyWindow(window);
+    }
+
+    void Engine::pollEvents(CameraHandle camera)
+    {
+        // The first frame has no previous one, and a long stall (a debugger, a window drag) is capped so the camera does not jump.
+        const auto now = std::chrono::steady_clock::now();
+        deltaTime = lastFrameTime == std::chrono::steady_clock::time_point{} ? 0.0f : std::min(std::chrono::duration<float>(now - lastFrameTime).count(), 0.1f);
+        lastFrameTime = now;
+
+        PlatformEvents events = {};
+        bool uiActive = false;
+#if defined(RASM_IMGUI)
+        uiActive = ui && ui->active;
+#endif
+        if (platform)
+            platform->pollEvents(mainWindow, uiActive, events);
+
+        if (events.quit)
+            isRunning = false;
+        if (events.statsToggles % 2 == 1)
+            config.showStats = !config.showStats;
+        // Cycles by distance (-1), LOD 0, 1, ..., MAX_MESH_LODS - 1, by distance.
+        for (uint32_t i = 0; i < events.forcedLodSteps; ++i)
+            config.forcedLod = config.forcedLod + 1 >= static_cast<int32_t>(MAX_MESH_LODS) ? -1 : config.forcedLod + 1;
+        if (events.dumpGraph)
+            graphDumpRequested = true;
+
+        events.camera.deltaTime = deltaTime;
+        updateCamera(camera, events.camera);
     }
 
     std::string Engine::resolveAssetPath(const std::string &path) const
@@ -389,6 +441,8 @@ namespace rasm
             return false;
         if (asyncCompute && !ctx.waitForFence(computeFence, currentFrame.computeFenceValue))
             return false;
+        if (readbackComputeWait > 0 && ctx.getFenceValue(frameFence) >= readbackComputeWait)
+            readbackComputeWait = 0;
 
         // After the wait: they read what the slot's last frame measured and rewrite the tables it read.
         updateFrameStats();
@@ -456,7 +510,10 @@ namespace rasm
 #endif
             if (!ui)
                 drawStatsOverlay();
-            ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::PRESENT_SRC);
+            recordReadbacks();
+            // An offscreen swapchain image is never presented; the next acquire of it drops what it holds.
+            if (config.platform != PlatformType::HEADLESS)
+                ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::PRESENT_SRC);
             // updateFrameStats reads the cull stats on the host, after the slot's fence. With a compute queue the
             // culling runs there, and submitBatches puts the barrier in its last batch.
             if (!asyncCompute)
@@ -471,6 +528,7 @@ namespace rasm
         closeBatch(QueueType::COMPUTE);
         closeBatch(QueueType::GRAPHICS);
         const bool presenting = submitBatches();
+        finishReadbackSubmit(presenting);
         finishEnvironmentBakes();
         if (presenting)
         {
@@ -523,6 +581,10 @@ namespace rasm
             batchOpen[q] = true;
             for (uint32_t x = 0; x < QUEUE_COUNT; ++x)
                 batchWaits[q][x] = 0;
+            // Readback copies run outside any graph, so no graph orders a later compute use of their textures after
+            // them. The frame that made them was submitted before this one, so the wait is on a batch already out.
+            if (queue == QueueType::COMPUTE)
+                batchWaits[q][static_cast<uint32_t>(QueueType::GRAPHICS)] = readbackComputeWait;
         }
         recordingQueue = queue;
         frameResources[frameCount].commandBuffer = commandBuffers[batchesUsed[q] - 1];

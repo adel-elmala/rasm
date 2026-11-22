@@ -44,7 +44,16 @@ namespace rasm::rhi
 
         // With mutable formats the images can also be viewed as UNORM, which the UI draws through. The format list must
         // hold the swapchain's format, so only a surface that has B8G8R8A8_SRGB gets them; mutableFormat says whether it did.
-        vkb::Result<vkb::Swapchain> buildSwapchain(const vkb::Device &device, uint32_t width, uint32_t height, const vkb::Swapchain *oldSwapchain, bool &mutableFormat)
+        // The images are copy sources for Engine::readFrame when the surface allows it.
+        bool surfaceAllowsCopies(const vkb::Device &device)
+        {
+            VkSurfaceCapabilitiesKHR capabilities = {};
+            if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device.physical_device.physical_device, device.surface, &capabilities) != VK_SUCCESS)
+                return false;
+            return (capabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
+        }
+
+        vkb::Result<vkb::Swapchain> buildSwapchain(const vkb::Device &device, uint32_t width, uint32_t height, const vkb::Swapchain *oldSwapchain, bool &mutableFormat, bool &readable)
         {
             vkb::SwapchainBuilder swapchainBuilder{device};
             swapchainBuilder.set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
@@ -57,6 +66,9 @@ namespace rasm::rhi
             mutableFormat = mutableFormat && surfaceHasSrgbFormat(device);
             if (mutableFormat)
                 swapchainBuilder.set_create_flags(VK_SWAPCHAIN_CREATE_MUTABLE_FORMAT_BIT_KHR).add_pNext(&formatList);
+            readable = surfaceAllowsCopies(device);
+            if (readable)
+                swapchainBuilder.add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
 
             auto swapRet = swapchainBuilder.build();
             if (!swapRet)
@@ -112,7 +124,7 @@ namespace rasm::rhi
             return false;
 
         mutableFormat = device.hasMutableSwapchainFormat();
-        auto swapRet = buildSwapchain(device.getVkbDevice(), desc.width, desc.height, nullptr, mutableFormat);
+        auto swapRet = buildSwapchain(device.getVkbDevice(), desc.width, desc.height, nullptr, mutableFormat, readable);
         if (!swapRet)
             return false;
 
@@ -148,6 +160,7 @@ namespace rasm::rhi
             image.desc.height = swapchain.extent.height;
             image.desc.format = toFormat(swapchain.image_format);
             image.desc.usage = TextureUsage::COLOR_ATTACHMENT;
+            image.desc.readable = readable;
             device.setObjectName(VK_OBJECT_TYPE_IMAGE_VIEW, reinterpret_cast<uint64_t>(image.view), image.desc.name);
         }
         // After every image holds its view, so a failure here leaves destroyImages all of them to destroy.
@@ -385,7 +398,7 @@ namespace rasm::rhi
 
         destroyImages();
         mutableFormat = device.hasMutableSwapchainFormat();
-        auto swapRet = buildSwapchain(device.getVkbDevice(), width, height, swapchain.swapchain != VK_NULL_HANDLE ? &swapchain : nullptr, mutableFormat);
+        auto swapRet = buildSwapchain(device.getVkbDevice(), width, height, swapchain.swapchain != VK_NULL_HANDLE ? &swapchain : nullptr, mutableFormat, readable);
 
         // Passing it as oldSwapchain retired the old swapchain, even if creation failed, so it is destroyed
         // either way. Without a swapchain, acquire reports OUT_OF_DATE so the caller keeps trying to recreate it.
