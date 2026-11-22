@@ -48,7 +48,7 @@ namespace rasm::rhi
     {
         while (!tagged.empty() || !untagged.empty())
         {
-            const uint64_t done[RELEASE_TIMELINES] = {UINT64_MAX, UINT64_MAX, UINT64_MAX};
+            const uint64_t done[RELEASE_TIMELINES] = {UINT64_MAX, UINT64_MAX, UINT64_MAX, UINT64_MAX};
             tag(done);
             collect(done);
         }

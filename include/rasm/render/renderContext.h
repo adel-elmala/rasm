@@ -94,6 +94,14 @@ namespace rasm
         void                                writeTimestamp(const CommandBufferHandle& commandBuffer, const QueryPoolHandle& pool, uint32_t index);
         bool                                fillTexture(const TextureHandle& texture, const void* data);
         bool                                fillTexture(const TextureHandle& texture, const TextureLevel* levels, uint32_t levelCount);
+        bool                                fillTexturePart(const TextureHandle& texture, const TextureLevel* levels, uint32_t levelCount, TextureFillProgress& progress, uint64_t maxBytes);
+        // A load's fills go between these two; their data may be used once isLoadUploadDone(the value endLoadUploads returns).
+        void                                beginLoadUploads();
+        uint64_t                            endLoadUploads();
+        void                                updateLoadUploadsDone();
+        bool                                isLoadUploadDone(uint64_t value) const;
+        bool                                waitForLoadUploads(uint64_t value);
+        float                               takeUploadGpuMs();
         bool                                supportsTextureFormat(Format format) const;
         bool                                supportsSampleCount(uint32_t samples) const;
         [[nodiscard]] SwapchainStatus       recreateSwapchain();

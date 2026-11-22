@@ -195,6 +195,7 @@ namespace rasm
         float        lodErrorPixels          = 1.0f;
         int32_t      forcedLod               = -1;
         bool         asyncCompute            = false;
+        bool         transferQueue           = true;     // loads copy their data on a queue family that only copies (the copy engine), where the GPU has one; else on the graphics queue
         bool         clusteredLighting       = true;     // false: every pixel shades every light of the scene
         bool         hostImageCopy           = true;     // where the device copies a format on the host into video memory at full speed; false: every texture comes from the staging ring
         bool         bloom                   = false;    // Engine::render adds the bloom passes (Camera::bloomStrength)

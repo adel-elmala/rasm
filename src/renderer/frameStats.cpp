@@ -141,6 +141,8 @@ namespace rasm
         }
         slot.readFenceValue = fenceValue;
         stats.cpuFrameMs = frameTime * 1000.0f;
+        // Every frame, measured or not: the copies' time is summed as their batches finish, on whatever queue.
+        stats.uploadGpuMs = ctx.takeUploadGpuMs();
 
         slot.timerCount = 0;
         gpuScene->drawTotals[frame] = {};

@@ -18,7 +18,8 @@
 // ASTC or ETC2 on mobile ones, RGBA8 where there is none. The stats overlay (F1) shows the video memory in use.
 //
 // --model <path> loads another glTF in place of the helmet, relative to the asset root, for instance the helmet's
-// PNG variant. --measure prints the load time, the frames it took and the longest of them, the video memory the
+// PNG variant. --measure prints the load time, the frames it took and the longest of them, the longest GPU frame and the
+// GPU time of the upload copies (FrameStats::uploadGpuMs, on the queue --transfer-queue on|off picks), the video memory the
 // model takes (allocated, and in whole memory blocks), the load workers and the most decoded memory waiting at once
 // (since the start, so the bunny and the environment count too), then quits. --staging fills every texture from the staging ring
 // (EngineConfig::hostImageCopy false), as on a GPU without host image copy.
@@ -111,6 +112,8 @@ int main(int argc, char **argv)
     // The frame stats are two frames old, so the memory is read a few frames after the load finished.
     double loadMs = 0.0;
     double longestFrameMs = 0.0;
+    float longestGpuFrameMs = 0.0f;
+    double uploadGpuMs = 0.0;
     uint32_t loadFrames = 0;
     bool loaded = false;
     uint32_t loadedFrame = 0;
@@ -129,6 +132,9 @@ int main(int argc, char **argv)
         if (!loaded)
         {
             longestFrameMs = std::max(longestFrameMs, std::chrono::duration<double, std::milli>(frameEnd - frameStart).count());
+            const rasm::FrameStats &stats = engine.getFrameStats();
+            longestGpuFrameMs = std::max(longestGpuFrameMs, stats.gpuFrameMs);
+            uploadGpuMs += stats.uploadGpuMs;
             ++loadFrames;
         }
         if (!loaded && engine.isLoaded(helmet))
@@ -147,8 +153,8 @@ int main(int argc, char **argv)
             continue;
         const rasm::VRAMStats vramAfter = engine.getFrameStats().memory;
         const rasm::LoadStats loads = engine.getLoadStats();
-        std::printf("%s: loaded in %.0f ms over %u frames, longest frame %.1f ms, %.1f MiB of video memory allocated (%.1f MiB in blocks); %u load workers, at most %.1f MiB decoded at once\n",
-                    modelPath.c_str(), loadMs, loadFrames, longestFrameMs, (static_cast<double>(vramAfter.vramAllocated) - static_cast<double>(vramBefore.vramAllocated)) / MIB,
+        std::printf("%s: loaded in %.0f ms over %u frames, longest frame %.1f ms, longest GPU frame %.2f ms, %.1f ms of upload copies on the GPU, %.1f MiB of video memory allocated (%.1f MiB in blocks); %u load workers, at most %.1f MiB decoded at once\n",
+                    modelPath.c_str(), loadMs, loadFrames, longestFrameMs, longestGpuFrameMs, uploadGpuMs, (static_cast<double>(vramAfter.vramAllocated) - static_cast<double>(vramBefore.vramAllocated)) / MIB,
                     (static_cast<double>(vramAfter.vramUsage) - static_cast<double>(vramBefore.vramUsage)) / MIB, loads.workers, static_cast<double>(loads.peakDecodedBytes) / MIB);
         std::fflush(stdout);
         reported = true;

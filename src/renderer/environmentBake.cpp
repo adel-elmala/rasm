@@ -170,7 +170,7 @@ namespace rasm
                 ctx.destroyTexture(environment.source);
                 environment.source = {};
             }
-            if (!waiting && environment.state == BakeState::WAITING)
+            if (!waiting && environment.state == BakeState::WAITING && ctx.isLoadUploadDone(environment.uploadValue))
                 waiting = &environment;
         }
 

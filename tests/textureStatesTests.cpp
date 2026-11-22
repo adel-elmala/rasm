@@ -44,6 +44,7 @@ namespace
         void copyBuffers(Buffer *, const BufferCopy *, uint32_t) override {}
         void copyFromTexture(Texture *, TextureUsage, uint32_t, uint32_t, Buffer *, uint64_t) override {}
         void copyToTextures(Buffer *, const TextureCopy *, uint32_t) override {}
+        void acquireTextures(Texture *const *, uint32_t) override {}
         void writeTimestamp(QueryPool *, uint32_t) override {}
 
         std::vector<Transition> transitions;

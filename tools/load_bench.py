@@ -1,6 +1,7 @@
-"""Load-time benchmark: the numbers of P14 and P21 (docs/guides/job-system.html).
+"""Load-time benchmark: the numbers of P14, P21 (docs/guides/job-system.html) and D13's transfer queue
+(docs/guides/transfer-queue.html).
 
-    python tools/load_bench.py --preset x64-release --runs 3
+    python tools/load_bench.py --preset x64-release --runs 3 [--transfer-queue on|off|both]
 
 Fetches (once) the PNG Flight Helmet and Sponza from a pinned commit of KhronosGroup/glTF-Sample-Assets into
 build/test-assets/, each file checked by SHA-256, and makes build/test-assets/burst/: 300 copies of Sponza's images
@@ -9,8 +10,10 @@ under their own names, so each is its own load. Then it runs, headless:
     10_ktx2_textures --measure --model <the KTX2 helmet, the PNG helmet, Sponza>
     17_streaming --burst build/test-assets/burst
 
-and prints the median of each line. On Windows it also samples the process while it runs (every 5 ms): the most
-threads it had at once and its peak private memory, so builds without Engine::getLoadStats can be compared too.
+and prints the median of each line: the load time, the longest frame, the longest GPU frame and the GPU time of the upload
+copies while it loads, once with the copies on the transfer queue and once on the graphics queue (EngineConfig::
+transferQueue, the examples' --transfer-queue). On Windows it also samples the process while it runs (every 5 ms): the
+most threads it had at once and its peak private memory, so builds without Engine::getLoadStats can be compared too.
 """
 
 import argparse
@@ -136,7 +139,7 @@ def run(exe, args, pattern):
     match = re.search(pattern, output)
     if not match:
         sys.exit(f"{exe.name} {' '.join(args)}: no result line.\n{output[-3000:]}")
-    return [float(v) for v in match.groups()], sampler.threads, sampler.peak_private / (1 << 20)
+    return [float(v) if v is not None else float("nan") for v in match.groups()], sampler.threads, sampler.peak_private / (1 << 20)
 
 
 def main():
@@ -144,6 +147,7 @@ def main():
     parser.add_argument("--preset", default="x64-release")
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--build-dir", help="another build's folder (for a before/after), default build/<preset>")
+    parser.add_argument("--transfer-queue", choices=["on", "off", "both"], default="both", help="the queue the upload copies run on")
     args = parser.parse_args()
 
     sponza = fetch_sponza()
@@ -152,24 +156,28 @@ def main():
     examples = Path(args.build_dir) if args.build_dir else ROOT / "build" / args.preset / "examples"
     suffix = ".exe" if os.name == "nt" else ""
     headless = ["--headless", "--frames", "100000"]
-    measure = r"loaded in (\d+) ms over \d+ frames, longest frame ([\d.]+) ms"
+    # A build from before the GPU times prints none, and they read nan.
+    gpu = r"(?:, longest GPU frame ([\d.]+) ms, ([\d.]+) ms of upload copies on the GPU)?"
+    measure = r"loaded in (\d+) ms over \d+ frames, longest frame ([\d.]+) ms" + gpu
     cases = [
         ("Flight Helmet, KTX2", examples / f"10_ktx2_textures{suffix}", ["--measure"] + headless, measure),
         ("Flight Helmet, PNG", examples / f"10_ktx2_textures{suffix}", ["--measure", "--model", str(helmet)] + headless, measure),
         ("Sponza", examples / f"10_ktx2_textures{suffix}", ["--measure", "--model", str(sponza)] + headless, measure),
         (f"Burst of {BURST_FILES} images", examples / f"17_streaming{suffix}", ["--burst", str(burst)] + headless,
-         r"loaded in (\d+) ms over \d+ frames, longest frame ([\d.]+) ms"),
+         measure),
     ]
-    print(f"{'case':24} {'load ms':>8} {'longest frame ms':>17} {'threads':>8} {'peak private MiB':>17}")
+    queues = ["on", "off"] if args.transfer_queue == "both" else [args.transfer_queue]
+    print(f"{'case':24} {'copies on':>9} {'load ms':>8} {'longest frame ms':>17} {'longest GPU ms':>15} {'upload GPU ms':>14} {'threads':>8} {'peak private MiB':>17}")
     for name, exe, case_args, pattern in cases:
-        loads, frames, threads, private = [], [], [], []
-        for _ in range(args.runs):
-            values, most_threads, peak = run(exe, case_args, pattern)
-            loads.append(values[0])
-            frames.append(values[1])
-            threads.append(most_threads)
-            private.append(peak)
-        print(f"{name:24} {statistics.median(loads):8.0f} {statistics.median(frames):17.1f} {statistics.median(threads):8.0f} {statistics.median(private):17.0f}")
+        for queue in queues:
+            columns = [[] for _ in range(6)]
+            for _ in range(args.runs):
+                values, most_threads, peak = run(exe, case_args + ["--transfer-queue", queue], pattern)
+                for i, value in enumerate(values + [most_threads, peak]):
+                    columns[i].append(value)
+            load, frame, gpu_frame, upload, threads, private = (statistics.median(c) for c in columns)
+            where = "transfer" if queue == "on" else "graphics"
+            print(f"{name:24} {where:>9} {load:8.0f} {frame:17.1f} {gpu_frame:15.2f} {upload:14.1f} {threads:8.0f} {private:17.0f}")
 
 
 if __name__ == "__main__":

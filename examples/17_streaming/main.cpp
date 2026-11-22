@@ -31,8 +31,9 @@
 // --burst <folder> asks for every image (loadTexture: .png, .jpg, .ktx2) in the folder in the first frame, like a
 // map engine that needs a screen of tiles at once, and quits once all are in. After the first frame it destroys every
 // fourth texture, like tiles the camera left before they loaded: their loads are dropped. It prints how long that took, the
-// longest frame meanwhile, the load workers and the most decoded memory waiting at once (getLoadStats), which the
-// workers keep under EngineConfig::loadMemoryBudget.
+// longest frame meanwhile and the longest GPU frame, the GPU time of the upload copies (FrameStats::uploadGpuMs), the load
+// workers and the most decoded memory waiting at once (getLoadStats), which the workers keep under
+// EngineConfig::loadMemoryBudget. --transfer-queue on|off picks the queue the copies run on.
 
 namespace
 {
@@ -69,6 +70,8 @@ namespace
         std::vector<rasm::TextureHandle> textures;
         std::chrono::steady_clock::time_point start;
         double longestFrameMs = 0.0;
+        float longestGpuFrameMs = 0.0f;
+        double uploadGpuMs = 0.0;
         uint32_t frames = 0;
         uint32_t dropped = 0;
     };
@@ -416,6 +419,9 @@ int main(int argc, char **argv)
 
         const auto frameEnd = std::chrono::steady_clock::now();
         burst.longestFrameMs = std::max(burst.longestFrameMs, std::chrono::duration<double, std::milli>(frameEnd - frameStart).count());
+        const rasm::FrameStats &frameStats = engine.getFrameStats();
+        burst.longestGpuFrameMs = std::max(burst.longestGpuFrameMs, frameStats.gpuFrameMs);
+        burst.uploadGpuMs += frameStats.uploadGpuMs;
         ++burst.frames;
         if (burst.frames == 1)
         {
@@ -429,9 +435,9 @@ int main(int argc, char **argv)
         if (burstLoaded(engine, burst))
         {
             const rasm::LoadStats loads = engine.getLoadStats();
-            std::printf("burst: %zu textures (%u dropped) loaded in %.0f ms over %u frames, longest frame %.1f ms; %u load workers, at most %.1f MiB decoded at once\n",
+            std::printf("burst: %zu textures (%u dropped) loaded in %.0f ms over %u frames, longest frame %.1f ms, longest GPU frame %.2f ms, %.1f ms of upload copies on the GPU; %u load workers, at most %.1f MiB decoded at once\n",
                         burst.textures.size() - burst.dropped, burst.dropped, std::chrono::duration<double, std::milli>(frameEnd - burst.start).count(), burst.frames,
-                        burst.longestFrameMs, loads.workers, static_cast<double>(loads.peakDecodedBytes) / (1024.0 * 1024.0));
+                        burst.longestFrameMs, burst.longestGpuFrameMs, burst.uploadGpuMs, loads.workers, static_cast<double>(loads.peakDecodedBytes) / (1024.0 * 1024.0));
             std::fflush(stdout);
             return 0;
         }

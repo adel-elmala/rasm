@@ -17,6 +17,7 @@
 //   --frames N         frames a headless run renders (60)
 //   --out <file.png>   where a headless run writes its last frame (frame.png in the working directory)
 //   --no-cache         no disk caches (EngineConfig::cacheDir = ""): every shader is compiled and every pipeline built
+//   --transfer-queue on|off   EngineConfig::transferQueue: loads copy on the GPU's copy queue, or on the graphics queue
 // main returns exampleExit(args): a headless run that did not write its frame fails.
 struct ExampleArgs
 {
@@ -24,6 +25,7 @@ struct ExampleArgs
     bool                    waitForLoads    = false;
     bool                    headless        = false;
     bool                    noCache         = false;
+    int                     transferQueue   = -1;       // 1 on, 0 off, -1 the example's own setting
     uint32_t                frames          = 60;
     const char*             out             = "frame.png";
     uint32_t                frame           = 0;        // frames exampleRunning let start
@@ -44,6 +46,8 @@ inline ExampleArgs parseExampleArgs(int argc, char** argv)
             args.frames     = static_cast<uint32_t>(std::max(1, std::atoi(argv[++i])));
         else if (i + 1 < argc && std::strcmp(argv[i], "--out") == 0)
             args.out        = argv[++i];
+        else if (i + 1 < argc && std::strcmp(argv[i], "--transfer-queue") == 0)
+            args.transferQueue = std::strcmp(argv[++i], "on") == 0 ? 1 : 0;
     }
     return args;
 }
@@ -56,6 +60,8 @@ inline void applyExampleArgs(const ExampleArgs& args, rasm::EngineConfig& config
         config.fixedDeltaTime   = 1.0f / 60.0f;
     if (args.noCache)
         config.cacheDir         = "";
+    if (args.transferQueue >= 0)
+        config.transferQueue    = args.transferQueue == 1;
 }
 
 // The frame loop's condition, in place of Engine::running. Headless, it asks for a copy of the last frame before that
