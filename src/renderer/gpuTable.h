@@ -29,15 +29,21 @@ namespace rasm
         bool                    upload(RenderContext& ctx, uint32_t frame);
         BufferHandle            buffer(uint32_t frame) const;
         uint32_t                capacity() const;
+        const std::string&      name() const;
+        uint32_t                rowBytes() const;
+        const uint8_t*          row(uint32_t row) const;    // the CPU copy: what the slots receive
+        uint32_t                uploadedRows() const;       // by the last upload
 
     private:
         BufferHandle            buffers[MAX_FRAMES_IN_FLIGHT]   = {};
+        std::string             tableName;
         std::vector<uint8_t>    shadow;
         std::vector<uint8_t>    dirtySlots;
         std::vector<uint32_t>   dirtyRows[MAX_FRAMES_IN_FLIGHT];
         std::vector<RowRange>   ranges;
         uint32_t                rowSize                         = 0;
         uint32_t                rowCapacity                     = 0;
+        uint32_t                lastUploadRows                  = 0;
     };
 
 }

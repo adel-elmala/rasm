@@ -15,6 +15,7 @@
 #include <fstream>
 #include <string>
 #include <filesystem>
+#include <unordered_map>
 
 namespace rasm
 {
@@ -76,6 +77,111 @@ namespace rasm
 
             auto fieldType = field->getTypeLayout();
             return fieldType->getKind() == slang::TypeReflection::Kind::Struct ? fieldType : fieldType->getElementTypeLayout();
+        }
+
+        // A vector's or a matrix's scalar type, through its element types.
+        FieldType getFieldType(slang::TypeReflection *type)
+        {
+            while (type && type->getKind() != slang::TypeReflection::Kind::Scalar && type->getElementType())
+                type = type->getElementType();
+            switch (type ? type->getScalarType() : slang::TypeReflection::ScalarType::None)
+            {
+            case slang::TypeReflection::ScalarType::Float32:
+                return FieldType::FLOAT;
+            case slang::TypeReflection::ScalarType::Int32:
+                return FieldType::INT;
+            case slang::TypeReflection::ScalarType::UInt32:
+                return FieldType::UINT;
+            case slang::TypeReflection::ScalarType::UInt64:
+                return FieldType::UINT64;
+            default:
+                return FieldType::OTHER;
+            }
+        }
+
+        std::string getScalarName(FieldType type)
+        {
+            switch (type)
+            {
+            case FieldType::FLOAT:
+                return "float";
+            case FieldType::INT:
+                return "int";
+            case FieldType::UINT:
+                return "uint";
+            case FieldType::UINT64:
+                return "uint64_t";
+            default:
+                return "?";
+            }
+        }
+
+        void flattenFields(slang::TypeLayoutReflection *layout, const std::string &name, uint32_t offset, std::vector<StructField> &fields)
+        {
+            using Kind = slang::TypeReflection::Kind;
+            const char *typeName = layout->getName();
+            StructField field = {.name = name, .typeName = typeName ? typeName : "", .offset = offset, .size = static_cast<uint32_t>(layout->getSize())};
+            switch (layout->getKind())
+            {
+            case Kind::Struct:
+                for (unsigned int i = 0; i < layout->getFieldCount(); ++i)
+                {
+                    auto member = layout->getFieldByIndex(i);
+                    flattenFields(member->getTypeLayout(), name.empty() ? member->getName() : name + "." + member->getName(),
+                                  offset + static_cast<uint32_t>(member->getOffset(slang::ParameterCategory::Uniform)), fields);
+                }
+                return;
+            case Kind::Array:
+                for (size_t i = 0; i < layout->getElementCount(); ++i)
+                    flattenFields(layout->getElementTypeLayout(), name + "[" + std::to_string(i) + "]",
+                                  offset + static_cast<uint32_t>(i * layout->getElementStride(SLANG_PARAMETER_CATEGORY_UNIFORM)), fields);
+                return;
+            case Kind::Pointer:
+                field.type = FieldType::POINTER;
+                field.typeName = "pointer";
+                break;
+            case Kind::Enum:
+                field.type = FieldType::UINT;
+                break;
+            case Kind::Scalar:
+                field.type = getFieldType(layout->getType());
+                break;
+            case Kind::Vector:
+                field.type = getFieldType(layout->getType());
+                field.count = static_cast<uint32_t>(layout->getElementCount());
+                field.columns = field.count;
+                field.typeName = getScalarName(field.type) + std::to_string(field.count);
+                break;
+            case Kind::Matrix:
+                field.type = getFieldType(layout->getType());
+                field.count = layout->getRowCount() * layout->getColumnCount();
+                field.columns = layout->getColumnCount();
+                field.typeName = getScalarName(field.type) + std::to_string(layout->getRowCount()) + "x" + std::to_string(layout->getColumnCount());
+                break;
+            default:
+                break;
+            }
+            fields.push_back(field);
+        }
+
+        // Every struct the layout reaches, through fields, arrays and pointers, by name. A struct seen before is
+        // skipped, which also ends pointer cycles.
+        void collectStructLayouts(slang::TypeLayoutReflection *layout, std::unordered_map<std::string, std::vector<StructField>> &layouts)
+        {
+            using Kind = slang::TypeReflection::Kind;
+            if (!layout)
+                return;
+            if (layout->getKind() == Kind::Pointer || layout->getKind() == Kind::Array)
+            {
+                collectStructLayouts(layout->getElementTypeLayout(), layouts);
+                return;
+            }
+            const char *name = layout->getName();
+            if (layout->getKind() != Kind::Struct || !name || layouts.count(name) > 0)
+                return;
+            flattenFields(layout, "", 0, layouts[name]);
+            for (unsigned int i = 0; i < layout->getFieldCount(); ++i)
+                collectStructLayouts(layout->getFieldByIndex(i)->getTypeLayout(), layouts);
         }
 
         bool validateStruct(slang::TypeLayoutReflection *structLayout, const char *name, size_t expectedSize, const std::vector<FieldOffset> &expectedFields)
@@ -249,8 +355,8 @@ namespace rasm
                 }
             }
 
-            // The tone-map pass, the MSAA resolve, TAA, the bloom passes, the environment bake and the UI pass have their own push
-            // constants.
+            // The tone-map pass, the MSAA resolve, TAA, the bloom passes, the environment bake, the UI pass and the Inspect
+            // pass have their own push constants.
             if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "ToneMapPushConstants") == 0)
             {
                 return validateStruct(pushConstants, "ToneMapPushConstants", sizeof(gfx::ToneMapPushConstants),
@@ -289,6 +395,29 @@ namespace rasm
                                       {{"vertices", offsetof(gfx::UiPushConstants, vertices)},
                                        {"texture", offsetof(gfx::UiPushConstants, texture)},
                                        {"displaySize", offsetof(gfx::UiPushConstants, displaySize)}});
+            }
+            if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "InspectPushConstants") == 0)
+            {
+                bool valid = validateStruct(pushConstants, "InspectPushConstants", sizeof(gfx::InspectPushConstants),
+                                            {{"params", offsetof(gfx::InspectPushConstants, params)},
+                                             {"padding", offsetof(gfx::InspectPushConstants, padding)}});
+                return validateStruct(fieldStruct(pushConstants, "params"), "InspectParams", sizeof(gfx::InspectParams),
+                                      {{"scene", offsetof(gfx::InspectParams, scene)},
+                                       {"mode", offsetof(gfx::InspectParams, mode)},
+                                       {"source", offsetof(gfx::InspectParams, source)},
+                                       {"target", offsetof(gfx::InspectParams, target)},
+                                       {"flags", offsetof(gfx::InspectParams, flags)},
+                                       {"channel", offsetof(gfx::InspectParams, channel)},
+                                       {"face", offsetof(gfx::InspectParams, face)},
+                                       {"level", offsetof(gfx::InspectParams, level)},
+                                       {"sample", offsetof(gfx::InspectParams, sample)},
+                                       {"sourceWidth", offsetof(gfx::InspectParams, sourceWidth)},
+                                       {"sourceHeight", offsetof(gfx::InspectParams, sourceHeight)},
+                                       {"width", offsetof(gfx::InspectParams, width)},
+                                       {"height", offsetof(gfx::InspectParams, height)},
+                                       {"exposure", offsetof(gfx::InspectParams, exposure)},
+                                       {"depthRange", offsetof(gfx::InspectParams, depthRange)}}) &&
+                       valid;
             }
             if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "EnvironmentPushConstants") == 0)
             {
@@ -623,6 +752,17 @@ namespace rasm
             spdlog::error("The C++ structs do not match shaders/lib/core.slang; '{}' is not compiled.", outputPath);
             return {};
         }
+        // The same walk as the check's: only pc's pointers report the scalar layout the shaders read.
+        if (keepLayouts)
+        {
+            slang::ProgramLayout *programLayout = linkedProgram->getLayout();
+            for (unsigned int i = 0; i < programLayout->getParameterCount(); ++i)
+            {
+                auto parameter = programLayout->getParameterByIndex(i);
+                if (std::strcmp(parameter->getName(), "pc") == 0)
+                    collectStructLayouts(parameter->getTypeLayout()->getElementTypeLayout(), structLayouts);
+            }
+        }
 
         constexpr SlangInt TARGET_INDEX = 0;
 
@@ -653,6 +793,17 @@ namespace rasm
         result.code = std::move(code);
 
         return result;
+    }
+
+    void ShaderCompiler::keepStructLayouts()
+    {
+        keepLayouts = true;
+    }
+
+    const std::vector<StructField> *ShaderCompiler::findStructLayout(const std::string &name) const
+    {
+        const auto it = structLayouts.find(name);
+        return it != structLayouts.end() ? &it->second : nullptr;
     }
 
     slang::TargetDesc ShaderCompiler::getTargetDesc(Target target)
