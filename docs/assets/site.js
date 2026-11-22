@@ -95,6 +95,7 @@ const SECTIONS = [
             { path: "guides/gpu-timing.html",            title: "GPU timing and frame statistics",     blurb: "Measuring where a frame's time goes." },
             { path: "guides/bitmap-text.html",           title: "Text from a bitmap font",             blurb: "Debug text from bits packed into integers." },
             { path: "guides/immediate-mode-ui.html",     title: "Immediate-mode UI",                   blurb: "Windows and sliders as code each frame: draw lists, clip rectangles and an atlas." },
+            { path: "guides/debug-views.html",           title: "Debug views",                         blurb: "Normals, UVs, overdraw, LODs, culling and light counts in place of the shading." },
         ],
     },
     {

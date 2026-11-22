@@ -401,6 +401,7 @@
   <tr><td>Cap</td><td>a fixed list per cluster</td><td><code>MAX_CLUSTER_LIGHTS</code> (256) per cluster and 24 × 256 per tile. The lights left out are <code>FrameStats::lightsDropped</code>, with a warning in the log.</td></tr>
   <tr><td>Global lights</td><td>a separate list</td><td>The front of the scene's light list; <code>FrameStats::lightsGlobal</code> counts them.</td></tr>
   <tr><td>Shadowed lights</td><td>—</td><td>A view's shadowed lights (up to <code>MAX_VIEW_SHADOWS</code>) are shaded in their own loop with their shadows, and left out of the clusters. Every other light has no shadow.</td></tr>
+  <tr><td>Seeing it</td><td>–</td><td>The light count debug view (<code>DebugView::LIGHT_COUNT</code>, <a href="debug-views.html#lights">Debug views</a>) shows, as a heat color, how many lights each pixel shades: the shadowed ones, the other global ones and its cluster's.</td></tr>
   <tr><td>Memory</td><td>the lists</td><td>About 6.8 MiB per shaded view and frame slot: cluster lists, tile lists, a sphere and a bit per light.</td></tr>
 </table>
 </div>

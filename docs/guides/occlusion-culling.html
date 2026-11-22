@@ -1966,6 +1966,8 @@
   <tr><td>Bound</td><td>box corners or exact sphere</td><td>The view-space box around the sphere, 8 corners. Works for perspective and orthographic cameras.</td></tr>
   <tr><td>Level choice</td><td>log<sub>2</sub> formula, or check the texel range</td><td>Checks the texel range, one level at a time, from level 0 up.</td></tr>
   <tr><td>Granularity</td><td>objects, clusters or triangles</td><td>Draws (one sub-mesh of one entity). No clusters.</td></tr>
+  <tr><td>Seeing it</td><td>–</td><td>The culling debug view (<code>DebugView::CULLING</code>, <a href="debug-views.html#culling">Debug views</a>) colors each draw by its pass, green early and yellow late, and draws the culled ones as ghosts through the walls: red when occluded, blue outside the frustum.</td></tr>
+  <tr><td>Freezing it</td><td>–</td><td><code>Engine::setCullingFrozen</code> keeps a shaded view's frustum, LOD camera and visibility of one frame. Only <code>Cull 1</code> and <code>Scene 1</code> run, with them; <code>Hi-Z</code>, <code>Cull 2</code> and <code>Scene 2</code> record nothing, so the visibility buffer stays as it was. The early pass then also keeps the blend run, unsorted. Fly out and look at what was kept.</td></tr>
   <tr><td>When it is skipped</td><td>–</td><td>Without <code>EngineConfig::occlusionCulling</code> the view has only the passes <code>Cull</code> and <code>Scene</code>. With it, a frame is only frustum culled (<code>hizLevelCount</code> = 0) when <code>hiz.slang</code> fails to compile, when the depth texture has no bindless slot, or when the Hi-Z buffer cannot grow.</td></tr>
 </table>
 </div>
