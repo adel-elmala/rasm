@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Debug views · RASM</title>
 <meta name="description" content="How a renderer shows what it does instead of the shaded image: normals and UVs as colors, overdraw counted with additive blending, light counts per cluster, LODs as tints, and a culling view with ghosts of the culled draws and a frozen frustum. How the values reach the screen without a tone curve, and how such views cost nothing while they are off.">
-<meta name="rasm-sources" content="shaders/lib/debugViews.slang shaders/passes/rasm.slang shaders/passes/debugGhosts.slang shaders/passes/toneMap.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/engineUi.cpp src/renderer/ui.cpp include/rasm/engine.h include/rasm/types.h include/rasm/render/resource.h src/rhi/resource.cpp src/rhi/vulkan/vulkanDevice.cpp src/renderer/uberMaterialTypes.h shaders/lib/core.slang examples/15_debug_ui/main.cpp examples/05_city/main.cpp">
+<meta name="rasm-sources" content="src/renderer/debugViews.cpp shaders/lib/debugViews.slang shaders/passes/rasm.slang shaders/passes/debugGhosts.slang shaders/passes/toneMap.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/engineUi.cpp src/renderer/ui.cpp include/rasm/engine.h include/rasm/types.h include/rasm/render/resource.h src/rhi/resource.cpp src/rhi/vulkan/vulkanDevice.cpp src/renderer/uberMaterialTypes.h shaders/lib/core.slang examples/15_debug_ui/main.cpp examples/05_city/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
