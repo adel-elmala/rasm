@@ -588,13 +588,13 @@
 <p><samp>python tools/load_bench.py</samp>: Release, headless, RTX 3060, i7-13700KF (24 hardware threads, so 23 workers), the median of three runs, before and after the pool.</p>
 
 <div class="stats">
-  <div><b>536 → 108 ms</b><span>Flight Helmet KTX2, whole load</span><small>15 images transcoded on several workers</small></div>
-  <div><b>931 → 188 ms</b><span>Flight Helmet PNG</span><small>decode and mips of each image in its own job</small></div>
-  <div><b>1065 → 197 ms</b><span>Sponza</span><small>69 JPEG and PNG images</small></div>
-  <div><b>3880 → 2962 MiB</b><span>300 images asked in one frame</span><small>peak private memory; at most 512 MiB decoded at once</small></div>
+  <div><b>535 → 107 ms</b><span>Flight Helmet KTX2, whole load</span><small>15 images transcoded on several workers</small></div>
+  <div><b>931 → 189 ms</b><span>Flight Helmet PNG</span><small>decode and mips of each image in its own job</small></div>
+  <div><b>1052 → 196 ms</b><span>Sponza</span><small>69 JPEG and PNG images</small></div>
+  <div><b>3519 → 2965 MiB</b><span>300 images asked in one frame</span><small>peak private memory; at most 512 MiB decoded at once</small></div>
 </div>
 
-<p>The longest frame while a model loads does not change (5 to 9 ms): the main thread does the same work. The burst (<samp>17_streaming --burst</samp>) ends in 528 ms against 588, and its longest frame is 22.8 ms against 35.5. On Windows the old <samp>std::async</samp> used the system's thread pool, so it had 44 threads at most, not 300; libc++ on macOS starts one thread per call.</p>
+<p>The main thread does the same work, so the longest frame while a model loads stays about the same (5 to 9 ms); Sponza's is sometimes up to 16 ms, because 23 busy workers and the driver leave the main thread less of the CPU (<code>P25</code>). The burst (<samp>17_streaming --burst</samp>) ends in 425 ms against 501, and its longest frame is 27.0 ms against 37.2. On Windows the old <samp>std::async</samp> used the system's thread pool, so it had 44 threads at most, not 300; libc++ on macOS starts one thread per call.</p>
 
 <h3>Where it lives in code</h3>
 
@@ -627,7 +627,7 @@
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>No priority per load: the load queue is FIFO. Files are read by the same workers that decode. A load's steps on the main thread are not split (<code>P24</code>).</p>
+  <p>No priority per load: the load queue is FIFO. Files are read by the same workers that decode. The workers run at the main thread's priority, so a full pool can stretch a frame (<code>P25</code>). A load's steps on the main thread are not split (<code>P24</code>).</p>
 </div>
 
 <h3>Further reading</h3>

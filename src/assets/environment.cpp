@@ -63,7 +63,7 @@ namespace rasm
         const EnvironmentHandle handle{slot.index, slot.generation};
         environments->environments.resize(registry.environmentHandles.size());
         environments->environments[handle.index] = Environment{.path = path};
-        // RGBA16F: 8 bytes a texel.
+        // While it decodes, the 16-byte floats stb_image gives and the 8-byte RGBA16F texels; then the texels alone.
         auto job = std::make_shared<EnvironmentLoadJob>();
         WorkerPool *pool = workers.get();
         auto decode = [job, pool, path]()
@@ -73,7 +73,7 @@ namespace rasm
             pool->setLoadBytes(job->ticket, job->raw.pixels.size() * sizeof(uint16_t));
             pool->finishLoad(job->ticket);
         };
-        pool->push({.run = std::move(decode), .bytes = static_cast<uint64_t>(width) * static_cast<uint64_t>(height) * 8, .ticket = std::shared_ptr<LoadTicket>(job, &job->ticket)});
+        pool->push({.run = std::move(decode), .bytes = static_cast<uint64_t>(width) * static_cast<uint64_t>(height) * 24, .ticket = std::shared_ptr<LoadTicket>(job, &job->ticket)});
         pendingEnvironments.push_back({handle, path, std::move(job)});
         return handle;
     }
