@@ -60,7 +60,7 @@ namespace rasm
     // makes the pipelines before it asks, and the strength does not change within a frame.
     bool Engine::bloomRuns(CameraHandle camera) const
     {
-        return registry.cameras[camera.index].bloomStrength > 0.0f && debugView == DebugView::NONE && bloomPipelinesReady();
+        return registry.cameras[camera.index].bloomStrength > 0.0f && getDrawnDebugView(camera) == DebugView::NONE && bloomPipelinesReady();
     }
 
     // A shader error logs and retries the next frame, like the tone map, so a fix on disk is picked up.

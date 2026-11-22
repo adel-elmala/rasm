@@ -317,7 +317,6 @@ namespace rasm
     static_assert(2 * (static_cast<uint32_t>(CullMode::BACK) + 1) + 1 == gfx::MAX_DRAW_RUNS, "a draw list has a run per cull mode for OPAQUE and MASK, and one for BLEND");
     static_assert(static_cast<uint32_t>(gfx::TextureTransformSlot::EMISSIVE) + 1 == gfx::TEXTURE_TRANSFORMS, "every texture transform slot has a row");
     static_assert(static_cast<uint32_t>(BlendSortStep::WRITE) + 1 == BLEND_SORT_STEPS, "every sort step has a pipeline");
-    static_assert(static_cast<uint32_t>(DebugView::LIGHT_COUNT) == 6, "shaders/lib/debugViews.slang numbers the debug views the same");
 
     bool Engine::createGpuScene()
     {
@@ -1212,11 +1211,23 @@ namespace rasm
             if (!debug.pipeline.isValid())
                 debug.pipeline = createScenePipeline("rasmDebug", "passes/rasm.slang", defines, view.renderTarget, "vertMain", "fragMain", blendMode, true);
             if (hasMask && !debug.maskPipeline.isValid())
+            {
                 debug.maskPipeline = createScenePipeline("rasmDebugMask", "passes/rasm.slang", defines + "#define RASM_ALPHA_MASK 1\n", view.renderTarget, "vertMain", "fragMain", blendMode, true);
+                if (!debug.maskPipeline.isValid())
+                    spdlog::error("Failed to create the debug view's MASK pipeline; the view is drawn without its cut-out materials.");
+            }
             if (hasBlend && !debug.blendPipeline.isValid())
+            {
                 debug.blendPipeline = createScenePipeline("rasmDebugBlend", "passes/rasm.slang", defines + "#define RASM_ALPHA_BLEND 1\n", view.renderTarget, "vertMain", "fragMain", blendMode, false);
+                if (!debug.blendPipeline.isValid())
+                    spdlog::error("Failed to create the debug view's BLEND pipeline; the view is drawn without its see-through materials.");
+            }
             if (debugView == DebugView::CULLING && !shaded.ghostPipeline.isValid())
+            {
                 shaded.ghostPipeline = createScenePipeline("debugGhosts", "passes/debugGhosts.slang", getMotionDefine(ctx, view), view.renderTarget, "vertMain", "fragMain", BlendMode::ADDITIVE, false, false, false);
+                if (!shaded.ghostPipeline.isValid())
+                    spdlog::error("Failed to create the culling view's ghost pipeline; the view is drawn without its ghosts.");
+            }
             // Without its pipeline the view draws its shading, which the debug display then shows as it is.
             if (debug.pipeline.isValid())
             {
@@ -1337,8 +1348,10 @@ namespace rasm
         // A shadow's map is fitted to the view that reads it, and takes its LODs from that view's camera and size, so a
         // surface is shadowed by the same triangles it is drawn with. Any other view uses its own camera and size.
         const bool shadowView = view.depthOnly && view.shadowCount > 0;
+        // A frozen reader keeps its LOD camera, so its shadow maps take that one too.
         uint32_t cameraWidth = width;
         uint32_t cameraHeight = height;
+        const SceneView *frozenReader = nullptr;
         for (uint32_t i = 0; shadowView && i < MAX_SCENE_VIEWS; ++i)
         {
             const SceneView &reader = gpuScene->views[i];
@@ -1346,6 +1359,7 @@ namespace rasm
                 continue;
             cameraWidth = ctx.getRenderTarget(reader.renderTarget).width;
             cameraHeight = ctx.getRenderTarget(reader.renderTarget).height;
+            frozenReader = reader.frozen && cullingFrozen ? &reader : nullptr;
             break;
         }
         const glm::mat4 cameraProjection = getProjectionMatrix(view.camera, static_cast<float>(cameraWidth) / static_cast<float>(cameraHeight));
@@ -1469,6 +1483,11 @@ namespace rasm
             std::copy(view.frozenPlanes, view.frozenPlanes + 6, sceneData.frustumPlanes);
             sceneData.lodPixelsPerUnit = view.frozenLodPixelsPerUnit;
             sceneData.lodDepthPlane = view.frozenLodDepthPlane;
+        }
+        if (frozenReader != nullptr)
+        {
+            sceneData.lodPixelsPerUnit = frozenReader->frozenLodPixelsPerUnit;
+            sceneData.lodDepthPlane = frozenReader->frozenLodDepthPlane;
         }
         sceneData.debugView = static_cast<uint32_t>(view.debugView);
         ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), viewIndex * sizeof(gfx::SceneData));
@@ -1706,20 +1725,5 @@ namespace rasm
         ctx.pushConstants(commandBuffer, ghostPipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
         ctx.draw(commandBuffer, GHOST_BOX_VERTICES, static_cast<uint32_t>(gpuScene->drawLists[view.scene.index].draws.size()));
         ctx.setCullMode(commandBuffer, CullMode::NONE);
-    }
-
-    // A new view starts TAA over, so its first frame does not blend with the frames of the view before.
-    void Engine::setDebugView(DebugView view)
-    {
-        if (view == debugView)
-            return;
-        debugView = view;
-        for (Camera &camera : registry.cameras)
-            ++camera.historyResets;
-    }
-
-    void Engine::setCullingFrozen(bool frozen)
-    {
-        cullingFrozen = frozen;
     }
 }

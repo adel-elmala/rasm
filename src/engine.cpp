@@ -395,7 +395,7 @@ namespace rasm
             updateStatsOverlay();
 #if defined(RASM_IMGUI)
         if (ui)
-            buildUi();
+            buildUi(camera);
 #endif
         syncGpuScene();
 

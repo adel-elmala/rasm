@@ -56,10 +56,12 @@ namespace rasm
                 }
                 // A debug view shows the target's values as they are, or its counts as a heat color, made the first
                 // time a view is chosen.
+                // The view the camera's scene views drew this frame: a view that drew shaded is tone mapped.
                 PipelineHandle pipeline = toneMapPipeline;
-                if (debugView != DebugView::NONE)
+                const DebugView shown = getDrawnDebugView(camera);
+                if (shown != DebugView::NONE)
                 {
-                    const bool heat = debugView == DebugView::OVERDRAW || debugView == DebugView::LIGHT_COUNT;
+                    const bool heat = shown == DebugView::OVERDRAW || shown == DebugView::LIGHT_COUNT;
                     PipelineHandle &debugPipeline = heat ? debugHeatPipeline : debugDisplayPipeline;
                     if (!debugPipeline.isValid())
                     {

@@ -363,7 +363,8 @@ namespace rasm
         void                        drawSceneView(uint32_t view, uint32_t phase);
         void                        drawTransparent(uint32_t view);
         void                        drawCullingGhosts(uint32_t view);
-        void                        drawFrozenFrustums();
+        void                        drawFrozenFrustums(CameraHandle camera);
+        DebugView                   getDrawnDebugView(CameraHandle camera) const;
         void                        createFrameStats();
         void                        updateFrameStats();
         bool                        createStatsOverlay();
@@ -371,7 +372,7 @@ namespace rasm
         void                        drawStatsOverlay();
         bool                        createUi();
         void                        destroyUi();
-        void                        buildUi();
+        void                        buildUi(CameraHandle camera);
         void                        drawUi();
         void                        drawUiFallback();
         void                        drawEngineWindow();

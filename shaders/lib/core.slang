@@ -206,7 +206,7 @@ struct SceneData
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.
-// argument is for compute passes: the cull phase or the Hi-Z level (cull.slang).
+// argument is the cull phase (cull.slang, and the draw passes for the culling debug view) or the Hi-Z level.
 struct PushConstants
 {
     SceneData* scene;

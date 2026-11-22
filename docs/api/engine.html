@@ -860,7 +860,7 @@ engine.addUiPass(graph);</code></pre>
 <div class="api" id="setDebugView">
   <pre class="sig">void setDebugView(DebugView view);</pre>
   <div class="body">
-    <p>Every shaded scene view draws <code>view</code> from the next frame on, until you set <code>DebugView::NONE</code> again. A debug view replaces the shading in the scene passes; the tone map then shows the values as they are (or a count as a heat color), without exposure, and the bloom passes dispatch nothing. MSAA and TAA stay on, so edges are smooth, and a new view starts TAA's history over. Shadow maps are drawn as usual.</p>
+    <p>Every shaded scene view draws <code>view</code> from the next frame on, until you set <code>DebugView::NONE</code> again. A debug view replaces the shading in the scene passes; the tone map then shows the values as they are (or a count as a heat color), without exposure, and the bloom passes dispatch nothing. MSAA and TAA stay on, so edges are smooth, and a new view starts TAA's history over. Shadow maps are drawn as usual. A value outside the enum logs an error and changes nothing.</p>
     <p>Each view's pipelines are compiled the first time it is chosen, so the first frame of a view can take longer. With <code>DebugView::NONE</code> nothing of it runs: the normal shaders have no debug branch.</p>
     <pre><code>// From examples/15_debug_ui/main.cpp: --debug-view overdraw
 for (int i = 1; i + 1 &lt; argc; ++i)
@@ -878,7 +878,8 @@ for (int i = 1; i + 1 &lt; argc; ++i)
     <ul>
       <li>Only the early culling pass runs. The Hi-Z and the late pass record nothing.</li>
       <li>See-through (BLEND) draws are culled in the early pass too, and drawn in list order, not sorted.</li>
-      <li>Shadow maps are not frozen: they follow the camera.</li>
+      <li>Shadow maps are not frozen: they follow the camera, with the frozen LOD camera.</li>
+      <li>What the frozen visibility never saw stays hidden until you unfreeze: an entity added after the freeze, or a mesh that finished loading after it.</li>
       <li>Freeze after a few frames of normal culling: a view's first frame has seen nothing yet.</li>
     </ul>
   </div>

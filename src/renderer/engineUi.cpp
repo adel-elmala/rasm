@@ -192,9 +192,9 @@ namespace rasm
         ImGui::End();
     }
 
-    // A frozen view's frustum as lines on the UI's background, seen from the view's camera: the near rectangle, the
-    // side edges and a far rectangle at FROZEN_FAR_DEPTH.
-    void Engine::drawFrozenFrustums()
+    // A frozen view's frustum as lines on the UI's background, seen from the frame's camera: the near rectangle, the
+    // side edges and a far rectangle at FROZEN_FAR_DEPTH. Views of other cameras draw elsewhere, so they are left out.
+    void Engine::drawFrozenFrustums(CameraHandle camera)
     {
         if (!cullingFrozen)
             return;
@@ -203,16 +203,16 @@ namespace rasm
         const float thickness = 2.0f * ImGui::GetStyle().FontScaleDpi;
         for (const SceneView &view : gpuScene->views)
         {
-            if (view.graphs == 0 || view.depthOnly || !view.frozen)
+            if (view.graphs == 0 || view.depthOnly || !view.frozen || view.camera != camera)
                 continue;
             const RenderTarget &target = ctx.getRenderTarget(view.renderTarget);
-            const glm::mat4 camera = getProjectionMatrix(view.camera, static_cast<float>(target.width) / static_cast<float>(target.height)) * getViewMatrix(view.camera);
+            const glm::mat4 live = getProjectionMatrix(view.camera, static_cast<float>(target.width) / static_cast<float>(target.height)) * getViewMatrix(view.camera);
             const glm::mat4 toWorld = glm::inverse(view.frozenViewProjection);
             glm::vec4 corners[8];
             for (uint32_t i = 0; i < 8; ++i)
             {
                 const glm::vec4 world = toWorld * glm::vec4((i & 1) != 0 ? 1.0f : -1.0f, (i & 2) != 0 ? 1.0f : -1.0f, i < 4 ? 1.0f : FROZEN_FAR_DEPTH, 1.0f);
-                corners[i] = camera * glm::vec4(glm::vec3(world) / world.w, 1.0f);
+                corners[i] = live * glm::vec4(glm::vec3(world) / world.w, 1.0f);
             }
             const uint32_t edges[12][2] = {{0, 1}, {1, 3}, {3, 2}, {2, 0}, {4, 5}, {5, 7}, {7, 6}, {6, 4}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
             for (const auto &edge : edges)
