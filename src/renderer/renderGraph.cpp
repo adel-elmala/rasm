@@ -269,6 +269,7 @@ namespace rasm
         transientsPlaced = other.transientsPlaced;
         sceneViews = std::exchange(other.sceneViews, {});
         animationPass = std::exchange(other.animationPass, false);
+        inspectPass = std::exchange(other.inspectPass, UINT32_MAX);
         engine = other.engine;
         compiled = other.compiled;
         return *this;
@@ -338,6 +339,19 @@ namespace rasm
             spdlog::error("Async compute pass '{}' cannot write a render target; use addComputePass. The write is ignored.", pass.name);
             pass.outputRenderTarget = {};
         }
+    }
+
+    // Takes a pass out, as if it had never been added: the indices after it move down by one.
+    void RenderGraph::removePass(uint32_t passIdx)
+    {
+        if (passIdx >= passes.size())
+            return;
+        passes.erase(passes.begin() + passIdx);
+        if (inspectPass == passIdx)
+            inspectPass = UINT32_MAX;
+        else if (inspectPass != UINT32_MAX && inspectPass > passIdx)
+            --inspectPass;
+        compiled = false;
     }
 
     void RenderGraph::compile()
@@ -487,6 +501,21 @@ namespace rasm
             return;
         }
 
+        // 5. The Inspect pass copies what it reads right after the last pass it depends on, before a later pass can
+        // write it again or take its memory. Its readers come later anyway, so the order stays valid.
+        const auto inspect = std::find(sortedIndices.begin(), sortedIndices.end(), inspectPass);
+        if (inspect != sortedIndices.end())
+        {
+            auto after = sortedIndices.begin();
+            for (auto it = sortedIndices.begin(); it != inspect; ++it)
+            {
+                const auto &successors = passes[*it].successors;
+                if (std::find(successors.begin(), successors.end(), inspectPass) != successors.end())
+                    after = it + 1;
+            }
+            std::rotate(after, inspect, inspect + 1);
+        }
+
         // The transient memory is laid out from the lifetimes, so it is laid out again only when they change.
         const std::vector<uint32_t> firstPasses = transientFirstPasses;
         const std::vector<uint32_t> lastPasses = transientLastPasses;
@@ -500,7 +529,7 @@ namespace rasm
 
         assignAttachmentOps(sortedIndices);
 
-        // 5. Store the final execution order.
+        // 6. Store the final execution order.
         executionOrder = std::move(sortedIndices);
         compiled = true;
         spdlog::info("Successfully compiled {} passes.", executionOrder.size());
@@ -510,6 +539,8 @@ namespace rasm
     {
         ZoneScoped;
 
+        // The RASM window's Buffers section adds or takes out its Inspect pass before the graph compiles.
+        engine->updateInspectPass(*this);
         if (!compiled)
             compile();
 

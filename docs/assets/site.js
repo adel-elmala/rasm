@@ -96,6 +96,7 @@ const SECTIONS = [
             { path: "guides/bitmap-text.html",           title: "Text from a bitmap font",             blurb: "Debug text from bits packed into integers." },
             { path: "guides/immediate-mode-ui.html",     title: "Immediate-mode UI",                   blurb: "Windows and sliders as code each frame: draw lists, clip rectangles and an atlas." },
             { path: "guides/debug-views.html",           title: "Debug views",                         blurb: "Normals, UVs, overdraw, LODs, culling and light counts in place of the shading." },
+            { path: "guides/inspecting-gpu-resources.html", title: "Inspecting GPU resources",         blurb: "Show a target, depth, Hi-Z or light clusters mid-frame, and GPU table rows from reflection." },
         ],
     },
     {

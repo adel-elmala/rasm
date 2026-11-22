@@ -154,5 +154,8 @@ namespace rasm
         SceneDrawList                   drawLists[MAX_SCENES];
     };
 
+    // The device address of a view's SceneData in a frame slot's buffer.
+    uint64_t                            getSceneDataAddress(RenderContext& ctx, const GpuScene& gpuScene, uint32_t frame, uint32_t view);
+
 }
 // clang-format on

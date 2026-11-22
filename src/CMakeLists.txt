@@ -86,6 +86,7 @@ if (RASM_IMGUI)
     target_sources(rasm PRIVATE
         "platform/uiPlatform.cpp"
         "renderer/engineUi.cpp"
+        "renderer/inspector.cpp"
         "renderer/ui.cpp"
     )
     target_link_libraries(rasm PUBLIC imgui::imgui)

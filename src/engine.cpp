@@ -5,6 +5,7 @@
 #include "renderer/geometryPool.h"
 #include "renderer/frameStats.h"
 #include "renderer/gpuScene.h"
+#include "renderer/inspector.h"
 #include "renderer/lightClusters.h"
 #include "renderer/animation.h"
 #include "renderer/renderer.h"
@@ -746,12 +747,36 @@ namespace rasm
             renderer->render({.scene = scene, .camera = camera});
     }
 
+    void Engine::setInspection(const Inspection &value)
+    {
+        if (!inspector)
+            spdlog::warn("setInspection: the UI is off (EngineConfig::ui), so nothing is shown.");
+        // The sections open for a new pick only, so a call every frame (a new exposure) leaves the window as it is.
+        const bool newPick = value.target != inspection.target || value.kind != inspection.kind || value.attachment != inspection.attachment;
+        const bool newEntity = !(value.entity == inspection.entity);
+        inspection = value;
+        if (inspector && newPick)
+            inspector->openBuffers = !value.target.empty();
+        if (inspector && newEntity)
+        {
+            inspector->openTables = value.entity.isValid();
+            inspector->openRows = value.entity.isValid();
+        }
+    }
+
+    const Inspection &Engine::getInspection() const
+    {
+        return inspection;
+    }
+
 #if !defined(RASM_IMGUI)
     // Built without Dear ImGui: the UI is always off.
     bool Engine::addUiPass(RenderGraph &)
     {
         return false;
     }
+
+    void Engine::updateInspectPass(RenderGraph &) {}
 
     void Engine::setUiCallback(std::function<void()>)
     {

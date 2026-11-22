@@ -6,11 +6,36 @@
 #include <slang.h>
 #include <slang-com-ptr.h>
 
+#include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace rasm
 {
+    enum class FieldType
+    {
+        FLOAT,
+        INT,
+        UINT,
+        UINT64,
+        POINTER,
+        OTHER,
+    };
+
+    // A field of a GPU struct as the shaders lay it out: a nested struct's and an array's fields are flattened into
+    // vectors, matrices and scalars, named like "material.normal.scale" or "previousWorld[2]".
+    struct StructField
+    {
+        std::string             name;
+        std::string             typeName;
+        uint32_t                offset          = 0;
+        uint32_t                size            = 0;
+        FieldType               type            = FieldType::OTHER;
+        uint32_t                count           = 1;    // scalars: a vector's or a matrix's
+        uint32_t                columns         = 1;    // a vector's scalars, a matrix's columns; a matrix is stored column by column
+    };
+
     class ShaderCompiler
     {
     public:
@@ -36,6 +61,10 @@ namespace rasm
 
         CompiledShader  compile(const std::string& sourcePath, const std::string& outputPath, const std::string& entryPointName);
         CompiledShader  compileFromString(const std::string& sourceCode, const std::string& outputPath, const std::string& entryPointName);
+        // From now on, each program compiled keeps the layouts of the structs its push constants reach.
+        void            keepStructLayouts();
+        // The layout of a struct some compiled program reached, or nullptr.
+        const std::vector<StructField>* findStructLayout(const std::string& name) const;
 
     private:
         slang::TargetDesc getTargetDesc(Target target);
@@ -44,6 +73,8 @@ namespace rasm
         Slang::ComPtr<slang::IGlobalSession>    globalSession;
         Slang::ComPtr<slang::ISession>          activeSession;
         std::string                             buildPath = "./build/shaders/";
+        bool                                    keepLayouts = false;
+        std::unordered_map<std::string, std::vector<StructField>>   structLayouts;
     };
 
 }

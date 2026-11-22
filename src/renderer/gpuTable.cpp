@@ -51,6 +51,7 @@ namespace rasm
             }
         }
 
+        tableName = name;
         rowSize = bytesPerRow;
         rowCapacity = capacity;
         shadow.assign(static_cast<size_t>(rowSize) * capacity, 0);
@@ -76,6 +77,7 @@ namespace rasm
     bool GpuTable::upload(RenderContext &ctx, uint32_t frame)
     {
         auto &rows = dirtyRows[frame];
+        lastUploadRows = static_cast<uint32_t>(rows.size());
         if (rows.empty())
             return true;
 
@@ -107,5 +109,26 @@ namespace rasm
     uint32_t GpuTable::capacity() const
     {
         return rowCapacity;
+    }
+
+    const std::string &GpuTable::name() const
+    {
+        return tableName;
+    }
+
+    uint32_t GpuTable::rowBytes() const
+    {
+        return rowSize;
+    }
+
+    const uint8_t *GpuTable::row(uint32_t row) const
+    {
+        assert(row < rowCapacity);
+        return shadow.data() + static_cast<size_t>(row) * rowSize;
+    }
+
+    uint32_t GpuTable::uploadedRows() const
+    {
+        return lastUploadRows;
     }
 }

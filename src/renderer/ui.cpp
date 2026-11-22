@@ -3,6 +3,8 @@
 #include "core/utils.h"
 #include "platform/paths.h"
 #include "platform/uiPlatform.h"
+#include "renderer/inspector.h"
+#include "renderer/shaderCompiler.h"
 #include "renderer/uberMaterialTypes.h"
 
 #include "imgui.h"
@@ -172,6 +174,9 @@ namespace rasm
     {
         IMGUI_CHECKVERSION();
         ui = std::make_unique<Ui>();
+        // The Buffers section's state, and the GPU tables section's struct layouts from the shaders compiled from now on.
+        inspector = std::make_unique<Inspector>();
+        shaderCompiler->keepStructLayouts();
         ui->context = ImGui::CreateContext();
         ImGuiIO &io = ImGui::GetIO();
         // No imgui.ini in the working directory (principle 5), and nothing that carries over between runs.
@@ -223,6 +228,7 @@ namespace rasm
             ImGui::DestroyContext(ui->context);
         }
         ui.reset();
+        inspector.reset();
     }
 
     // Runs in beginFrame after the slot's fence wait and before syncGpuScene, so what the UI changes reaches this frame.
@@ -231,6 +237,7 @@ namespace rasm
     {
         ui->draws.clear();
         ui->drawn = false;
+        inspector->shown = false;
         const bool active = config.showStats || static_cast<bool>(ui->callback);
         if (!active)
         {

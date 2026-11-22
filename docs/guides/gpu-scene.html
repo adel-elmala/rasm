@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GPU Scene Tables · RASM</title>
 <meta name="description" content="The GPU scene tables (geometry, material, instance, draw lists), how an entity gets its rows and joins the draw lists, syncGpuScene step by step, and the runs by alpha mode and cull mode.">
-<meta name="rasm-sources" content="src/renderer/animation.cpp src/renderer/gpuScene.h src/renderer/gpuScene.cpp src/renderer/gpuTable.h src/renderer/gpuTable.cpp src/renderer/geometryPool.h src/renderer/geometryPool.cpp src/renderer/uberMaterialTypes.h shaders/lib/core.slang src/engine.cpp include/rasm/engine.h src/scene/entity.cpp src/scene/scene.cpp src/scene/transform.cpp src/assets/material.cpp src/assets/mesh.cpp include/rasm/types.h include/rasm/scene.h include/rasm/mesh.h include/rasm/transform.h shaders/passes/cull.slang shaders/passes/rasm.slang src/assets/meshLod.cpp src/assets/meshLod.h">
+<meta name="rasm-sources" content="src/renderer/animation.cpp src/renderer/gpuScene.h src/renderer/gpuScene.cpp src/renderer/gpuTable.h src/renderer/gpuTable.cpp src/renderer/geometryPool.h src/renderer/geometryPool.cpp src/renderer/uberMaterialTypes.h shaders/lib/core.slang src/engine.cpp include/rasm/engine.h src/scene/entity.cpp src/scene/scene.cpp src/scene/transform.cpp src/assets/material.cpp src/assets/mesh.cpp include/rasm/types.h include/rasm/scene.h include/rasm/mesh.h include/rasm/transform.h shaders/passes/cull.slang shaders/passes/rasm.slang src/assets/meshLod.cpp src/assets/meshLod.h src/renderer/inspector.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -197,6 +197,11 @@
 </div>
 
 <p>All of these are created once, in <code>createGpuScene</code> and <code>GeometryPool::create</code>, except the draw-list buffers, which grow on demand, and the buffers of a scene view. A scene view is one (scene, camera, target) that <code>addScenePasses</code> draws; it is made the first time a graph adds its passes (<code>createSceneView</code>), and its visible-draw and Hi-Z buffers start small and grow in place, so the handles the passes declared stay valid. How a <code>GpuTable</code> uploads only its dirty rows, per frame slot, is in <a href="gpu-memory.html#in-rasm">GPU memory and uploads</a>.</p>
+
+<div class="callout">
+  <strong>See the tables while it runs</strong>
+  <p>With <code>EngineConfig::ui</code>, the RASM window's <b>GPU tables</b> section lists each <code>GpuTable</code> above (rows used, capacity, bytes per slot, and <code>GpuTable::uploadedRows</code>: rows sent this frame) and shows one entity's instance, material and animated entity rows field by field. The field names, types and offsets come from the shader compiler's reflection (<code>ShaderCompiler::findStructLayout</code>), and the values from <code>GpuTable::row</code>, the CPU copy every slot receives: what was uploaded, not a readback. See <a href="inspecting-gpu-resources.html#tables">Inspecting GPU resources</a>.</p>
+</div>
 
 <h3>How a shader finds the tables</h3>
 

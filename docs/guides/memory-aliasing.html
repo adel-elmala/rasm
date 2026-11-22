@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Transient Memory and Aliasing · RASM</title>
 <meta name="description" content="How transient memory and memory aliasing work: lifetimes as intervals, memory requirements, heaps and placed resources, the greedy packing, alignment and memory types, the barrier a takeover needs, variants in Vulkan, Direct3D 12 and Metal, and how RASM does it.">
-<meta name="rasm-sources" content="src/rhi/memoryAliasing.h src/rhi/memoryAliasing.cpp src/rhi/renderContext.cpp include/rasm/render/renderContext.h src/renderer/renderGraph.cpp include/rasm/render/renderGraph.h src/rhi/device.h src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp tests/memoryAliasingTests.cpp examples/01_render_graph/main.cpp">
+<meta name="rasm-sources" content="src/rhi/memoryAliasing.h src/rhi/memoryAliasing.cpp src/rhi/renderContext.cpp include/rasm/render/renderContext.h src/renderer/renderGraph.cpp include/rasm/render/renderGraph.h src/rhi/device.h src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp tests/memoryAliasingTests.cpp examples/01_render_graph/main.cpp src/renderer/inspector.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -1033,6 +1033,7 @@ uint64_t pack(const Request *req, uint32_t count, uint64_t *offsets)
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>What is transient</td><td>any resource made inside the frame</td><td>Render targets without <code>history</code> from <code>RenderGraph::createRenderTarget</code> or <code>PassBuilder::createRenderTarget</code>. Textures and buffers from the builder, history targets, and targets from <code>Engine::createRenderTarget</code> get their own memory.</td></tr>
   <tr><td>Lifetime</td><td>first to last use, both ends included</td><td>The same, as positions in the sorted order (<code>RenderGraph::transientLifetimes</code>). A target that no pass declares lives the whole frame.</td></tr>
+  <tr><td>Looking inside</td><td>–</td><td>A transient target holds its data only during its lifetime. The RASM window's Buffers section copies one with an Inspect pass placed right after its last writer, which counts as a use, so its lifetime covers the copy (<a href="inspecting-gpu-resources.html">Inspecting GPU resources</a>). Adding or removing that pass lays the memory out again.</td></tr>
   <tr><td>One request per</td><td>resource</td><td>Texture: each color and the depth of a target is its own request, with the target's lifetime (<code>attachmentTextureDescs</code>).</td></tr>
   <tr><td>Asking</td><td>needs from the description</td><td><code>VulkanDevice::getTextureMemoryRequirements</code>, with <code>vkGetDeviceImageMemoryRequirements</code>.</td></tr>
   <tr><td>Packing</td><td>greedy, biggest first, lowest free aligned offset</td><td>The same (<code>rhi::packAliased</code>). Equal sizes keep their order (a stable sort).</td></tr>

@@ -122,6 +122,7 @@ namespace rasm
         };
 
         void                analyzeDependencies();
+        void                removePass(uint32_t passIdx);
         bool                bufferBarrier(const Pass& pass, QueueType queue, PipelineStage& before, PipelineStage& after);
         void                waitForOtherQueue(const Access& access, QueueType queue, bool writes);
         void                textureWaits(const Pass& pass, QueueType queue);
@@ -158,6 +159,7 @@ namespace rasm
         bool                                                        transientsPlaced = false;
         std::vector<uint32_t>                                       sceneViews;     // Engine::addScenePasses's views
         bool                                                        animationPass = false;  // Engine::addAnimationPass ran
+        uint32_t                                                    inspectPass = UINT32_MAX;   // Engine::updateInspectPass's: it runs right after the last pass it reads from
         Engine*                                                     engine   = nullptr;
         bool                                                        compiled = false;
     };

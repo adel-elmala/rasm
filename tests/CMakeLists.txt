@@ -14,6 +14,7 @@ add_executable(rasm_tests
             "gpuTableTests.cpp"
             "handleTests.cpp"
             "importMeshText.cpp"
+            "inspectorTests.cpp"
             "ktxImageTests.cpp"
             "lightClustersTests.cpp"
             "localShadowsTests.cpp"

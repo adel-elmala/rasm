@@ -413,6 +413,42 @@ namespace rasm::gfx
         float            scale;
     };
 
+    // The Inspect pass's modes and flags (shaders/passes/inspect.slang).
+    constexpr uint32_t   INSPECT_MODE_COLOR         = 0;
+    constexpr uint32_t   INSPECT_MODE_MOTION        = 1;
+    constexpr uint32_t   INSPECT_MODE_DEPTH         = 2;
+    constexpr uint32_t   INSPECT_MODE_HIZ           = 3;
+    constexpr uint32_t   INSPECT_MODE_CLUSTERS      = 4;
+    constexpr uint32_t   INSPECT_FLAG_MULTISAMPLED  = 1u << 0;
+    constexpr uint32_t   INSPECT_FLAG_CUBE          = 1u << 1;
+
+    // The Inspect pass's parameters, in a host-visible buffer per frame slot: what to read, and how to show it in the
+    // capture target's top-left width x height texels.
+    struct InspectParams
+    {
+        uint64_t         scene;             // the view's SceneData for DEPTH, HIZ and CLUSTERS, 0 otherwise
+        uint32_t         mode;              // INSPECT_MODE_*
+        uint32_t         source;            // bindless index of the texture; a buffer is reached through scene
+        uint32_t         target;            // storage slot of the capture target
+        uint32_t         flags;             // INSPECT_FLAG_*
+        uint32_t         channel;           // 0 all, 1 to 4 one as gray
+        uint32_t         face;
+        uint32_t         level;             // HIZ: the level; CLUSTERS: the slice, or rasm::INSPECT_TILES
+        uint32_t         sample;            // rasm::INSPECT_ALL_SAMPLES: their average
+        uint32_t         sourceWidth;       // of the level, in texels
+        uint32_t         sourceHeight;
+        uint32_t         width;
+        uint32_t         height;
+        float            exposure;
+        float            depthRange;
+    };
+
+    struct InspectPushConstants
+    {
+        uint64_t         params;
+        uint32_t         padding[2];
+    };
+
     // These structs are read by shaders/passes/rasm.slang through buffer-device-address pointers,
     // compiled with GLSL scalar layout. Any drift here silently corrupts the GPU reads (a wrong
     // vertsPtr/instancesPtr turns into a device lost on the first draw).
@@ -532,6 +568,9 @@ namespace rasm::gfx
     static_assert(sizeof(UiPushConstants) == PUSH_CONSTANTS_SIZE, "UiPushConstants must fill the push-constant range");
     static_assert(offsetof(UiPushConstants, displaySize) == 12, "UiPushConstants must match the shader's scalar layout");
     static_assert(offsetof(ToneMapPushConstants, exposure) == 4, "ToneMapPushConstants must match the shader's scalar layout");
+    static_assert(sizeof(InspectPushConstants) == PUSH_CONSTANTS_SIZE, "InspectPushConstants must fill the push-constant range");
+    static_assert(sizeof(InspectParams) == 64, "InspectParams must match the shader's scalar layout");
+    static_assert(offsetof(InspectParams, depthRange) == 60, "InspectParams must match the shader's scalar layout");
 
 
 } // namespace rasm::gfx

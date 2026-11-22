@@ -1,6 +1,7 @@
 #include "rasm/engine.h"
 #include "renderer/frameStats.h"
 #include "renderer/gpuScene.h"
+#include "renderer/inspector.h"
 #include "renderer/ui.h"
 
 #include "glm/glm.hpp"
@@ -9,6 +10,7 @@
 #include <cfloat>
 #include <chrono>
 #include <string>
+#include <utility>
 
 namespace rasm
 {
@@ -19,7 +21,7 @@ namespace rasm
 
         constexpr const char *DEBUG_VIEW_NAMES[] = {"None", "Normals", "UVs", "Overdraw", "LODs", "Culling", "Light count"};
         // The display colors of the views' keys: DEBUG_LOD_COLORS and the culling colors in debugViews.slang and
-        // debugGhosts.slang (the ghosts' a few layers deep), HEAT_COLORS in toneMap.slang.
+        // debugGhosts.slang (the ghosts' a few layers deep), HEAT_COLORS in lib/heat.slang.
         constexpr float LOD_COLORS[MAX_MESH_LODS][3] = {{0.20f, 0.80f, 0.25f}, {0.65f, 0.85f, 0.15f}, {0.95f, 0.85f, 0.15f}, {1.00f, 0.55f, 0.10f}, {0.95f, 0.20f, 0.15f}, {0.90f, 0.25f, 0.70f}, {0.55f, 0.30f, 0.95f}, {0.20f, 0.45f, 1.00f}};
         constexpr const char *LOD_LABELS[MAX_MESH_LODS] = {"0", "1", "2", "3", "4", "5", "6", "7"};
         constexpr float CULLING_COLORS[4][3] = {{0.20f, 0.80f, 0.25f}, {0.95f, 0.85f, 0.15f}, {0.60f, 0.04f, 0.04f}, {0.04f, 0.12f, 0.60f}};
@@ -121,7 +123,13 @@ namespace rasm
         }
     }
 
-    // The RASM window, F1: the frame stats, the forced LOD (F2) and the render graph's dump (F3).
+    void drawHeatKey()
+    {
+        drawKey(HEAT_COLORS, HEAT_LABELS, 7);
+    }
+
+    // The RASM window, F1: the frame stats, the forced LOD (F2), the debug views, the frame's resources and GPU tables,
+    // and the render graph's dump (F3).
     void Engine::drawEngineWindow()
     {
         const auto now = std::chrono::steady_clock::now();
@@ -140,8 +148,15 @@ namespace rasm
             ImGui::End();
             return;
         }
+        // setInspection opens the sections it fills, and closes the others, once.
+        const bool openBuffers = std::exchange(inspector->openBuffers, false);
+        const bool openTables = std::exchange(inspector->openTables, false);
+        if (openBuffers || openTables)
+            ImGui::SetNextItemOpen(false);
         if (ImGui::CollapsingHeader("Frame", ImGuiTreeNodeFlags_DefaultOpen))
             drawStatsSection(ui->stats);
+        if (openBuffers || openTables)
+            ImGui::SetNextItemOpen(false);
         if (ImGui::CollapsingHeader("Culling and LODs", ImGuiTreeNodeFlags_DefaultOpen))
         {
             drawCullingSection(ui->stats);
@@ -158,6 +173,8 @@ namespace rasm
                 ImGui::EndCombo();
             }
         }
+        if (openBuffers || openTables)
+            ImGui::SetNextItemOpen(false);
         if (ImGui::CollapsingHeader("Debug views", ImGuiTreeNodeFlags_DefaultOpen))
         {
             DebugView view = debugView;
@@ -176,6 +193,14 @@ namespace rasm
             if (ImGui::Checkbox("Freeze culling", &frozen))
                 setCullingFrozen(frozen);
         }
+        if (openBuffers)
+            ImGui::SetNextItemOpen(true);
+        if (ImGui::CollapsingHeader("Buffers"))
+            drawBuffersSection();
+        if (openTables)
+            ImGui::SetNextItemOpen(true);
+        if (ImGui::CollapsingHeader("GPU tables"))
+            drawTablesSection();
         if (ImGui::CollapsingHeader("Render graph"))
         {
             if (ImGui::Button("Dump (F3)"))

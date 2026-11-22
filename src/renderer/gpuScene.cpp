@@ -183,11 +183,6 @@ namespace rasm
             }
         }
 
-        uint64_t getSceneDataAddress(RenderContext &ctx, const GpuScene &gpuScene, uint32_t frame, uint32_t view)
-        {
-            return ctx.getBufferDeviceAddress(gpuScene.sceneData[frame]) + view * sizeof(gfx::SceneData);
-        }
-
         // glTF: a transform with a negative determinant mirrors the mesh, so its front faces turn clockwise (D8).
         // det(T * R * S * M) = sx * sy * sz * det(M). The blend run is one run, so that it stays in one sorted order:
         // fragBlend drops the back faces of a single-sided material instead.
@@ -317,6 +312,11 @@ namespace rasm
     static_assert(2 * (static_cast<uint32_t>(CullMode::BACK) + 1) + 1 == gfx::MAX_DRAW_RUNS, "a draw list has a run per cull mode for OPAQUE and MASK, and one for BLEND");
     static_assert(static_cast<uint32_t>(gfx::TextureTransformSlot::EMISSIVE) + 1 == gfx::TEXTURE_TRANSFORMS, "every texture transform slot has a row");
     static_assert(static_cast<uint32_t>(BlendSortStep::WRITE) + 1 == BLEND_SORT_STEPS, "every sort step has a pipeline");
+
+    uint64_t getSceneDataAddress(RenderContext &ctx, const GpuScene &gpuScene, uint32_t frame, uint32_t view)
+    {
+        return ctx.getBufferDeviceAddress(gpuScene.sceneData[frame]) + view * sizeof(gfx::SceneData);
+    }
 
     bool Engine::createGpuScene()
     {

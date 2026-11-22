@@ -126,6 +126,32 @@ namespace rasm
         LIGHT_COUNT,
     };
 
+    // What the RASM window's Buffers section shows of a frame resource (Engine::setInspection).
+    enum class InspectKind
+    {
+        COLOR,              // a color of a render target: a motion color as a direction and length, any other one with exposure
+        DEPTH,              // a render target's depth, as view depth
+        HIZ,                // a scene view's Hi-Z level, as view depth
+        LIGHT_CLUSTERS,     // a scene view's lights per cluster of a depth slice, or per screen tile, as heat
+    };
+
+    constexpr uint32_t  INSPECT_ALL_SAMPLES     = UINT32_MAX;   // Inspection::sample: the samples' average
+    constexpr uint32_t  INSPECT_TILES           = 24;           // Inspection::level of LIGHT_CLUSTERS: the screen tiles' counts, after the 24 slices
+
+    struct Inspection
+    {
+        std::string  target                  = {};       // the render target's RenderTargetDesc::name, for HIZ and LIGHT_CLUSTERS the view's; empty: nothing
+        InspectKind  kind                    = InspectKind::COLOR;
+        uint32_t     attachment              = 0;        // COLOR: which color
+        uint32_t     face                    = 0;        // a cube target's face; HIZ, LIGHT_CLUSTERS: the view's face
+        uint32_t     level                   = 0;        // HIZ: the level; LIGHT_CLUSTERS: the depth slice, or INSPECT_TILES
+        uint32_t     sample                  = 0;        // a multisampled target's sample, or INSPECT_ALL_SAMPLES
+        uint32_t     channel                 = 0;        // COLOR: 0 all, 1 to 4 red, green, blue or alpha alone as gray
+        float        exposure                = 1.0f;     // COLOR: the value's multiplier before it is clamped to 0..1; motion: its gain
+        float        depthRange              = 50.0f;    // DEPTH, HIZ: the view depth shown black, of a perspective view
+        EntityHandle entity                  = {};       // the GPU tables' rows of this entity
+    };
+
     struct EngineConfig
     {
         std::string  appName                 = {};
