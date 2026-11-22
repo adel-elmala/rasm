@@ -63,6 +63,8 @@ namespace rasm
         RenderTargetDesc                    getRenderTargetDesc(const RenderTargetHandle& handle);
         std::vector<TextureHandle>          getSwapchainImages();
         Format                              getSwapchainImageFormat();
+        // The swapchain's UNORM view format for AttachmentOps::encodedColor, or UNKNOWN when the device has none.
+        Format                              getSwapchainEncodedFormat();
         glm::uvec2                          getSwapchainExtent();
         uint64_t                            getBufferDeviceAddress(const BufferHandle& buffer);
         BufferDesc                          getBufferDesc(const BufferHandle& buffer);

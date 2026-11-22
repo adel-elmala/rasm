@@ -5,12 +5,19 @@
 #include "spdlog/spdlog.h"
 
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 namespace rasm::rhi
 {
     namespace
     {
+        // A linear color as the sRGB number a UNORM view stores for it.
+        float encodeSrgb(float linear)
+        {
+            return linear <= 0.0031308f ? linear * 12.92f : 1.055f * std::pow(linear, 1.0f / 2.4f) - 0.055f;
+        }
+
         VkIndexType toVkIndexType(Format format)
         {
             switch (format)
@@ -312,13 +319,17 @@ namespace rasm::rhi
         VkRenderingAttachmentInfo colorAttachmentInfos[MAX_COLOR_ATTACHMENTS] = {};
         for (uint32_t i = 0; i < colorCount; ++i)
         {
+            // Through the UNORM view the blend works on the stored sRGB numbers, so a clear stores the encoded color.
+            const auto *color = static_cast<VulkanTexture *>(colorAttachments[i]);
+            const bool encoded = ops.encodedColor && i == 0 && color->encodedView != VK_NULL_HANDLE;
+            const glm::vec4 clear = encoded ? glm::vec4(encodeSrgb(clearColor.r), encodeSrgb(clearColor.g), encodeSrgb(clearColor.b), clearColor.a) : clearColor;
             colorAttachmentInfos[i] = {
                 .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                .imageView = static_cast<VulkanTexture *>(colorAttachments[i])->view,
+                .imageView = encoded ? color->encodedView : color->view,
                 .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
                 .loadOp = ops.loadColor ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR,
                 .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-                .clearValue{.color{.float32{clearColor.r, clearColor.g, clearColor.b, clearColor.a}}}};
+                .clearValue{.color{.float32{clear.r, clear.g, clear.b, clear.a}}}};
         }
 
         VkRenderingAttachmentInfo depthAttachmentInfo{

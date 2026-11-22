@@ -726,7 +726,7 @@ namespace rasm
         for (uint32_t passIdx : order)
         {
             Pass &pass = passes[passIdx];
-            pass.attachmentOps = {};
+            pass.attachmentOps = {.encodedColor = pass.encodedSwapchain};
             for (auto renderTarget : pass.depthRenderTargets)
             {
                 auto it = lastWriters.find(renderTarget);

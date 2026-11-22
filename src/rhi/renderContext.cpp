@@ -1098,6 +1098,11 @@ namespace rasm
         return impl->swapchain->getFormat();
     }
 
+    Format RenderContext::getSwapchainEncodedFormat()
+    {
+        return impl->swapchain->getEncodedFormat();
+    }
+
     glm::uvec2 RenderContext::getSwapchainExtent()
     {
         return impl->swapchain->getExtent();
@@ -1386,6 +1391,10 @@ namespace rasm
         rhiCommandBuffer->beginRendering(colors, colorCount, depth, clearColor, ops, face);
         for (uint32_t i = 0; i < MAX_COLOR_ATTACHMENTS; ++i)
             impl->passColorFormats[i] = i < colorCount ? colors[i]->desc.format : Format::UNKNOWN;
+        // A swapchain image drawn through its UNORM view takes pipelines made for that view's format.
+        const bool swapchainColor = colorCount > 0 && std::find(impl->swapchainImages.begin(), impl->swapchainImages.end(), colorAttachments[0]) != impl->swapchainImages.end();
+        if (ops.encodedColor && swapchainColor && impl->swapchain->getEncodedFormat() != Format::UNKNOWN)
+            impl->passColorFormats[0] = impl->swapchain->getEncodedFormat();
         impl->passDepthFormat = depth ? depth->desc.format : Format::UNKNOWN;
         impl->passSamples = samples;
         impl->skipDraws = false;

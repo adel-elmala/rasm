@@ -190,6 +190,8 @@ namespace rasm::rhi
         virtual uint32_t            getImageCount() const = 0;
         virtual Texture*            getImage(uint32_t index) = 0;
         virtual Format              getFormat() const = 0;
+        // The format of a view that sees the images' stored sRGB numbers (blending on them), or UNKNOWN without one.
+        virtual Format              getEncodedFormat() const = 0;
         virtual glm::uvec2          getExtent() const = 0;
     };
 

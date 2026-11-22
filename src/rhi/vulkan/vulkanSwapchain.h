@@ -24,6 +24,7 @@ namespace rasm::rhi
         uint32_t                    getImageCount() const override;
         Texture*                    getImage(uint32_t index) override;
         Format                      getFormat() const override;
+        Format                      getEncodedFormat() const override;
         glm::uvec2                  getExtent() const override;
         bool                        getAcquireWait(VkSemaphoreSubmitInfo& acquireWait, uint32_t& waitCount) const;
         void                        onAcquireWaited();
