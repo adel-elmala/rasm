@@ -34,5 +34,8 @@ namespace rasm
         std::chrono::steady_clock::time_point   lightsDroppedTime   = {};
     };
 
+    // 1234, 12.3K, 1.23M: a count short enough for the stats overlay and the RASM window.
+    std::string                                 formatCount(uint64_t count);
+
 }
 // clang-format on

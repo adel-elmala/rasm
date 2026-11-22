@@ -249,7 +249,7 @@ namespace rasm
                 }
             }
 
-            // The tone-map pass, the MSAA resolve, TAA, the bloom passes and the environment bake have their own push
+            // The tone-map pass, the MSAA resolve, TAA, the bloom passes, the environment bake and the UI pass have their own push
             // constants.
             if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "ToneMapPushConstants") == 0)
             {
@@ -282,6 +282,13 @@ namespace rasm
                                        {"target", offsetof(gfx::BloomPushConstants, target)},
                                        {"base", offsetof(gfx::BloomPushConstants, base)},
                                        {"scale", offsetof(gfx::BloomPushConstants, scale)}});
+            }
+            if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "UiPushConstants") == 0)
+            {
+                return validateStruct(pushConstants, "UiPushConstants", sizeof(gfx::UiPushConstants),
+                                      {{"vertices", offsetof(gfx::UiPushConstants, vertices)},
+                                       {"texture", offsetof(gfx::UiPushConstants, texture)},
+                                       {"displaySize", offsetof(gfx::UiPushConstants, displaySize)}});
             }
             if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "EnvironmentPushConstants") == 0)
             {

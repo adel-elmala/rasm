@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Immediate-mode UI · RASM</title>
+<meta name="description" content="How an immediate-mode UI like Dear ImGui works: the UI is code that runs every frame, widgets append triangles to draw lists, draw commands carry a clip rectangle and a texture, one atlas holds the font, and the renderer turns it all into indexed draws with scissors. Input capture, sRGB blending of UI colors, and how RASM draws Dear ImGui through its own RHI.">
+<meta name="rasm-sources" content="src/renderer/ui.cpp src/renderer/ui.h src/renderer/engineUi.cpp src/platform/uiPlatform.cpp src/platform/uiPlatform.h shaders/passes/ui.slang src/platform/window.cpp src/engine.cpp include/rasm/engine.h include/rasm/types.h src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp examples/15_debug_ui/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/immediate-mode-ui.js"></script>
+</head>
+<body data-root="../" data-page="guides/immediate-mode-ui.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Culling and the frame</p>
+<h1>Immediate-mode UI</h1>
+<p class="lead">Debug windows, sliders and tool panels are code that runs every frame. An immediate-mode UI library, like Dear ImGui, turns that code into a few buffers of triangles, and the engine draws them over its image. This page explains how the UI becomes triangles, how they are drawn, and what input and color need. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>In an <b>immediate-mode</b> UI, the program calls <code class="lang-text">Button("Save")</code> every frame. The call draws the button and returns true on the frame it is clicked. There are no widget objects to keep in sync.</li>
+    <li>Each window appends triangles to a <b>draw list</b>: a vertex buffer (position, UV, color), an index buffer, and <b>draw commands</b>.</li>
+    <li>A draw command is a range of indices with a <b>clip rectangle</b> and a <b>texture</b>. The renderer draws each range with the rectangle as its scissor.</li>
+    <li>One <b>atlas</b> texture holds the font and a white pixel, so most of the UI is a few draws.</li>
+    <li>The UI reads input first and says whether it wants the mouse or the keyboard, so a click on a window does not also turn the camera.</li>
+    <li>UI colors are <b>sRGB numbers</b> and are meant to be blended as numbers. Blending them in linear light makes light text on a dark window look bolder.</li>
+  </ul>
+</div>
+
+<h2 id="problem"><span class="n">1</span>Two ways to build a UI</h2>
+
+<p>A <b>retained-mode</b> UI keeps a tree of widget objects. The program creates them once, keeps them up to date, and reacts to their events. An <b>immediate-mode</b> UI keeps no widgets for the program: the program describes the UI again in every frame, and the library draws it at once.</p>
+
+<div class="split">
+  <div>
+    <svg viewBox="0 0 320 140" role="img" aria-label="Retained mode: a tree of widget objects, a window with a slider and a button. The program's value and the slider's value are two copies that must be kept in sync, with an event callback.">
+      <rect x="110" y="10" width="100" height="28" rx="4" class="box"/><text x="160" y="29" class="mid small">Window</text>
+      <rect x="30"  y="72" width="100" height="28" rx="4" class="box"/><text x="80"  y="91" class="mid small">Slider</text>
+      <rect x="190" y="72" width="100" height="28" rx="4" class="box"/><text x="240" y="91" class="mid small">Button</text>
+      <path d="M160,38 V55 H80 V70 M160,55 H240 V70" class="arrow"/>
+      <rect x="30" y="112" width="100" height="22" rx="4" class="mem"/><text x="80" y="127" class="mid small">app's value</text>
+      <path d="M80,110 V102" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="140" y="128" class="small t-hot">two copies, synced by events</text>
+    </svg>
+    <h4>Retained mode</h4>
+    <p>Widgets live between frames. The program creates them, updates them and handles their events.</p>
+  </div>
+  <div>
+    <svg viewBox="0 0 320 140" role="img" aria-label="Immediate mode: three lines of code that run every frame. Begin a window, a slider that reads and writes the program's own value, a button that returns true when clicked.">
+      <rect x="10" y="10" width="300" height="92" rx="4" class="paper"/>
+      <text x="22" y="32" class="mono small">Begin("Light");</text>
+      <text x="22" y="52" class="mono small">SliderFloat("Power", &amp;power, 0, 10);</text>
+      <text x="22" y="72" class="mono small">if (Button("Reset")) power = 1;</text>
+      <text x="22" y="92" class="mono small">End();</text>
+      <rect x="30" y="112" width="100" height="22" rx="4" class="mem"/><text x="80" y="127" class="mid small">power</text>
+      <text x="140" y="128" class="small t-ok">one copy: the program's</text>
+    </svg>
+    <h4>Immediate mode</h4>
+    <p>The program's code is the UI. It runs every frame and works on the program's own values.</p>
+  </div>
+</div>
+
+<p>The library still keeps a little state inside, keyed by each widget's label: which window is open, where it is, which slider is being dragged. The program does not see it. Immediate mode is the usual choice for engine tools and debug windows, because a new value on screen is one line of code.</p>
+
+<h2 id="frame"><span class="n">2</span>One UI frame</h2>
+
+<p>The UI is rebuilt between reading the input and drawing the frame:</p>
+
+<ol class="flow">
+  <li class="cpu"><b>Input.</b> Mouse, keys and text go to the library.</li>
+  <li class="cpu"><b>New frame.</b> It takes the display size and the time step.</li>
+  <li class="cpu"><b>Build.</b> Each widget checks the input and adds its triangles.</li>
+  <li class="mem"><b>Render.</b> The <b>draw data</b>: every window's draw list.</li>
+  <li class="gpu"><b>Draw.</b> Copied to GPU buffers, drawn last in the frame.</li>
+</ol>
+
+<p>A click is handled in the same frame it arrives: the button sees the press in step 3 and returns true. The program changes its values right there, before the frame is drawn.</p>
+
+<h2 id="triangles"><span class="n">3</span>From widgets to triangles</h2>
+
+<p>Everything a UI shows is made of triangles: a window is a rectangle, a button is a rectangle with text, a letter is a small rectangle cut out of the font texture. A rectangle is 4 vertices and 6 indices.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="A button and its triangles. The button's background is one rectangle, 4 vertices and 6 indices. Each letter of its label is one more rectangle whose UVs point at the letter in the font texture. On the right, the layout of one vertex, 20 bytes: position as two floats, UV as two floats, color as 4 bytes.">
+    <text x="20" y="22" class="title">A button: rectangles</text>
+    <rect x="20" y="40" width="220" height="80" rx="2" class="cpu o-50"/>
+    <path d="M20,40 L240,120 M20,120 L240,40" class="arrow dashed o-50"/>
+    <circle cx="20"  cy="40"  r="4" class="handle"/><circle cx="240" cy="40"  r="4" class="handle"/>
+    <circle cx="20"  cy="120" r="4" class="handle"/><circle cx="240" cy="120" r="4" class="handle"/>
+    <text x="130" y="142" class="mid small">background: 4 vertices, 6 indices</text>
+    <rect x="60"  y="62" width="34" height="36" class="accent o-75"/><text x="77"  y="88" class="mid big">S</text>
+    <rect x="98"  y="62" width="34" height="36" class="accent o-75"/><text x="115" y="88" class="mid big">a</text>
+    <rect x="136" y="62" width="34" height="36" class="accent o-75"/><text x="153" y="88" class="mid big">v</text>
+    <rect x="174" y="62" width="34" height="36" class="accent o-75"/><text x="191" y="88" class="mid big">e</text>
+    <text x="130" y="164" class="mid small">each letter: one more rectangle,</text>
+    <text x="130" y="180" class="mid small">its UVs point into the font texture</text>
+    <text x="130" y="210" class="mid small">5 rectangles = 20 vertices, 30 indices</text>
+
+    <text x="300" y="22" class="title">One vertex: 20 bytes</text>
+    <rect x="300" y="40" width="160" height="44" class="cpu"/><text x="380" y="60" class="mid">position</text><text x="380" y="76" class="mid small mono">float x, y</text>
+    <rect x="460" y="40" width="160" height="44" class="shader"/><text x="540" y="60" class="mid">UV</text><text x="540" y="76" class="mid small mono">float u, v</text>
+    <rect x="620" y="40" width="80"  height="44" class="mem"/><text x="660" y="60" class="mid">color</text><text x="660" y="76" class="mid small mono">RGBA8</text>
+    <text x="300" y="100" class="small">0</text><text x="455" y="100" class="small end">8</text><text x="615" y="100" class="small end">16</text><text x="700" y="100" class="small end">20</text>
+    <text x="300" y="134" class="small">Positions are in display points, from the top-left corner.</text>
+    <text x="300" y="152" class="small">A flat color uses the UV of a white texel; text uses the glyph's UVs.</text>
+    <text x="300" y="170" class="small">The shader multiplies the vertex color by the texel.</text>
+    <text x="300" y="206" class="small">Indices are 16 bits, so one draw reaches at most 65,536 vertices;</text>
+    <text x="300" y="224" class="small">a bigger list starts a new draw with a vertex offset.</text>
+  </svg>
+  <figcaption>Each widget appends its rectangles to the window's draw list. Rounded corners and lines are more triangles of the same kind.</figcaption>
+</figure>
+
+<h2 id="commands"><span class="n">4</span>Draw commands and clip rectangles</h2>
+
+<p>A draw list is one vertex buffer, one index buffer, and a list of <b>draw commands</b>. A command says: draw these indices, with this texture, only inside this rectangle. A new command starts when the texture or the clip rectangle changes, for example when a scrolling child area begins.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 240" role="img" aria-label="A window with a scrolling list inside. The list's rows go past the bottom of the list area. The window's draw list has three commands: the window frame with the whole window as clip rectangle, the list rows clipped to the list area, and an image with its own texture. Each command is a range of the index buffer.">
+    <text x="20" y="22" class="title">A window with a scrolling list</text>
+    <rect x="20" y="36" width="260" height="190" rx="4" class="box"/>
+    <rect x="20" y="36" width="260" height="22" rx="4" class="cpu"/><text x="30" y="52" class="small">Window</text>
+    <rect x="34" y="70" width="232" height="90" class="zone"/>
+    <rect x="34" y="70" width="232" height="90" class="nofill accent thick"/>
+    <text x="40" y="88"  class="small">row 3</text><text x="40" y="108" class="small">row 4</text><text x="40" y="128" class="small">row 5</text><text x="40" y="148" class="small">row 6</text>
+    <text x="120" y="188" class="small t-faint">row 7: outside, not drawn</text>
+    <rect x="34" y="174" width="70" height="44" class="mem"/><text x="69" y="200" class="mid small">image</text>
+    <text x="120" y="208" class="small t-hot">orange: the list's clip rectangle</text>
+
+    <text x="320" y="22" class="title">Its draw commands</text>
+    <rect x="320" y="36" width="420" height="26" class="mem"/>
+    <rect x="320" y="36" width="140" height="26" class="cpu"/><text x="390" y="54" class="mid small">frame</text>
+    <rect x="460" y="36" width="200" height="26" class="accent"/><text x="560" y="54" class="mid small">list rows</text>
+    <rect x="660" y="36" width="80" height="26" class="mem"/><text x="700" y="54" class="mid small">image</text>
+    <text x="320" y="78" class="small">the index buffer, split into ranges</text>
+    <text x="320" y="110" class="small title">command</text><text x="400" y="110" class="small title">indices</text><text x="490" y="110" class="small title">texture</text><text x="570" y="110" class="small title">clip rectangle</text>
+    <text x="320" y="132" class="small mono">1</text><text x="400" y="132" class="small mono">0..71</text><text x="490" y="132" class="small">atlas</text><text x="570" y="132" class="small">the window</text>
+    <text x="320" y="152" class="small mono t-hot">2</text><text x="400" y="152" class="small mono t-hot">72..173</text><text x="490" y="152" class="small t-hot">atlas</text><text x="570" y="152" class="small t-hot">the list area</text>
+    <text x="320" y="172" class="small mono">3</text><text x="400" y="172" class="small mono">174..179</text><text x="490" y="172" class="small">photo</text><text x="570" y="172" class="small">the window</text>
+    <text x="320" y="206" class="small">The renderer draws each range with its clip rectangle as the scissor:</text>
+    <text x="320" y="224" class="small">row 7 is in the index buffer, but no pixel of it is drawn.</text>
+  </svg>
+  <figcaption>Clipping costs nothing per pixel: the GPU's scissor test drops the fragments outside the rectangle before they are shaded.</figcaption>
+</figure>
+
+<p>The clip rectangle is in display points. On a high-DPI screen a point is several pixels, so the renderer scales it by the <b>framebuffer scale</b>, rounds it outward to whole pixels (a pixel that is partly inside stays), and clamps it to the framebuffer. A rectangle with nothing left is not drawn at all.</p>
+
+<div class="formula">
+  <p class="eq">x₀ = floor(max((clip.left − display.x) · s, 0))</p>
+  <p class="eq">x₁ = ceil(min((clip.right − display.x) · s, width))</p>
+  <dl>
+    <dt>s</dt><dd>the framebuffer scale: pixels per point (1 on a normal screen, 2 on most high-DPI laptops)</dd>
+    <dt>display.x</dt><dd>where the UI's display starts, usually 0</dd>
+    <dt>x₀, x₁</dt><dd>the scissor's left and right edge in pixels; y works the same way with the top and bottom</dd>
+  </dl>
+</div>
+
+<figure class="lab" data-lab="ui-scissor" data-title="Turn a clip rectangle into a scissor">
+  <figcaption>Drag the two corners of the clip rectangle, and change the framebuffer scale. The scissor (solid) covers every pixel the rectangle touches. Drag a corner out of the display, or make the rectangle empty.</figcaption>
+</figure>
+
+<h2 id="atlas"><span class="n">5</span>One texture for nearly everything</h2>
+
+<p>Switching textures needs a new draw command, so the library puts all its images into one <b>atlas</b>: every glyph of the font at the sizes in use, the mouse cursors, and one white texel. A flat rectangle samples the white texel, so its color is just the vertex color. Text samples its glyph. Then a whole window is usually one command.</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A font atlas: a texture packed with glyphs in rows, and a white texel in the corner.">
+      <rect x="40" y="10" width="160" height="100" class="paper"/>
+      <text x="50" y="34" class="mono">ABCDEFGHIJ</text>
+      <text x="50" y="56" class="mono">KLMNOPQRST</text>
+      <text x="50" y="78" class="mono">abcdefg123</text>
+      <rect x="186" y="96" width="10" height="10" class="ok"/>
+      <text x="120" y="124" class="mid small">glyphs, and a white texel</text>
+    </svg>
+    <h4>The atlas</h4>
+    <p>Packed by the library. It grows when text needs a new size, and the renderer uploads it again.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Alpha of a glyph: the letter A as coverage, 1 inside the stroke and values between 0 and 1 on its edges.">
+      <text x="120" y="96" class="mid big">A</text>
+      <rect x="96" y="50" width="48" height="56" class="nofill accent dashed"/>
+      <text x="120" y="124" class="mid small">alpha = how much the pixel is covered</text>
+    </svg>
+    <h4>Glyphs as coverage</h4>
+    <p>A glyph's texels are white, and the alpha says how much of each one the letter covers. Edges are partly covered: that is the anti-aliasing.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An image widget: a rectangle whose draw command names another texture, so it is a command of its own.">
+      <rect x="70" y="20" width="100" height="80" class="mem"/>
+      <path d="M70,100 L110,60 L135,80 L150,66 L170,86" class="arrow"/>
+      <text x="120" y="124" class="mid small">its own texture, its own command</text>
+    </svg>
+    <h4>Images</h4>
+    <p>A widget can show any texture of the program. The library only passes its <b>texture ID</b> through; what the ID means is up to the renderer.</p>
+  </div>
+</div>
+
+<h2 id="blending"><span class="n">6</span>Colors are sRGB numbers</h2>
+
+<p>The UI's colors are the numbers the designer picked on screen: sRGB numbers (see <a href="color-spaces.html">Color spaces</a>). Its anti-aliasing mixes them by coverage, and the look was tuned for mixing the numbers themselves. Mixed in linear light instead, an edge pixel comes out brighter. So light text on a dark window looks bolder and softer.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Mixed in linear light: a white text edge pixel at half coverage over a dark gray background comes out at 0.74, much closer to white.">
+      <rect x="20" y="24" width="60" height="80" class="box"/><text x="50" y="122" class="mid small">text 1.0</text>
+      <rect x="130" y="45" width="60" height="59" class="bad"/><text x="160" y="122" class="mid small">edge 0.74</text>
+      <rect x="240" y="96" width="60" height="8" class="box"/><text x="270" y="122" class="mid small">window 0.10</text>
+      <path d="M10,104 H310" class="arrow"/>
+      <text x="160" y="16" class="mid small t-bad">decode, mix, encode: the bar is how bright</text>
+    </svg>
+    <h4>Mixed in linear light</h4>
+    <p>The edge is almost white. The strokes look thicker than designed.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Mixed as numbers: the same edge pixel comes out at 0.55, half way between the text and the window.">
+      <rect x="20" y="24" width="60" height="80" class="box"/><text x="50" y="122" class="mid small">text 1.0</text>
+      <rect x="130" y="60" width="60" height="44" class="ok"/><text x="160" y="122" class="mid small">edge 0.55</text>
+      <rect x="240" y="96" width="60" height="8" class="box"/><text x="270" y="122" class="mid small">window 0.10</text>
+      <path d="M10,104 H310" class="arrow"/>
+      <text x="160" y="16" class="mid small t-ok">mix the numbers: the bar is how bright</text>
+    </svg>
+    <h4>Mixed as numbers</h4>
+    <p>The edge is half way, as the font and the style were designed.</p>
+  </div>
+</div>
+
+<div class="stats">
+  <div><b>0.55</b><span>white over 0.10 at half coverage, mixed as numbers</span><small>0.5 · 1 + 0.5 · 0.10; byte 140</small></div>
+  <div><b>0.74</b><span>the same mixed in linear light</span><small>encode(0.5 · 1 + 0.5 · 0.010); byte 188</small></div>
+  <div><b>+48</b><span>bytes brighter on every half-covered edge pixel</span><small>about a third of the way to white</small></div>
+</div>
+
+<p>The scene, on the other hand, must blend in linear light. So a renderer that draws the UI into an sRGB target has two ways out. The clean one: draw the UI through a second, <b>UNORM view</b> of the same image, where the hardware stores and blends the numbers as they are; the swapchain must allow a mutable format for that. The fallback: decode the UI's colors in the shader, and accept the bolder look.</p>
+
+<figure class="lab" data-lab="ui-blend" data-title="Blend a glyph edge two ways">
+  <figcaption>A row of pixels across a glyph edge, from fully covered to empty. Change the coverage of the middle pixel and the colors, and compare the two rows.</figcaption>
+</figure>
+
+<h2 id="input"><span class="n">7</span>Who gets the input</h2>
+
+<p>The UI and the program share one mouse and one keyboard. After each frame the library says what it wants: the mouse (the pointer is over a window, or drags one), the keyboard (a window has the focus), or text (a text field takes typing). The program then keeps that input away from the rest:</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The mouse pointer over a UI window: the drag moves the slider, not the camera.">
+      <rect x="20" y="20" width="120" height="80" rx="4" class="box"/>
+      <rect x="20" y="20" width="120" height="16" rx="4" class="cpu"/>
+      <rect x="32" y="54" width="96" height="10" class="zone"/><rect x="70" y="50" width="10" height="18" class="accent"/>
+      <path d="M86,66 L86,88 L92,82 L98,94 L102,92 L96,80 L104,80 z" class="solid"/>
+      <text x="190" y="64" class="mid small t-faint">camera</text><text x="190" y="80" class="mid small t-faint">stays</text>
+      <text x="120" y="124" class="mid small">wants the mouse</text>
+    </svg>
+    <h4>Mouse</h4>
+    <p>Presses and the wheel over a window go to the UI only.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A focused UI window: the W, A, S, D keys do not fly the camera.">
+      <rect x="60" y="30" width="28" height="28" rx="4" class="box"/><text x="74" y="49" class="mid">W</text>
+      <rect x="30" y="62" width="28" height="28" rx="4" class="box"/><text x="44" y="81" class="mid">A</text>
+      <rect x="60" y="62" width="28" height="28" rx="4" class="box"/><text x="74" y="81" class="mid">S</text>
+      <rect x="90" y="62" width="28" height="28" rx="4" class="box"/><text x="104" y="81" class="mid">D</text>
+      <text x="180" y="64" class="mid small t-faint">camera</text><text x="180" y="80" class="mid small t-faint">stays</text>
+      <text x="120" y="124" class="mid small">wants the keyboard</text>
+    </svg>
+    <h4>Keyboard</h4>
+    <p>Keys for the camera are ignored while a window has the focus.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A text field with a cursor: Escape and the function keys type into the field, they do not quit or toggle anything.">
+      <rect x="30" y="44" width="180" height="30" rx="4" class="paper"/>
+      <text x="40" y="64" class="mono">name: cube_</text>
+      <text x="120" y="124" class="mid small">wants text</text>
+    </svg>
+    <h4>Text</h4>
+    <p>Even Escape and the function keys belong to the text field.</p>
+  </div>
+</div>
+
+<p>The flags come from the last built frame, so they are one frame old. That is fine for input: a pointer that just entered a window is caught on the next event.</p>
+
+<h2 id="pitfalls"><span class="n">8</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>Light text looks bold and soft</dt><dd>The UI is blended in linear light. Draw it through a UNORM view of the target, so its colors blend as numbers.</dd></div>
+  <div><dt>Dragging a slider also turns the camera</dt><dd>The program ignores the library's capture flags. Check them before the camera takes the mouse.</dd></div>
+  <div><dt>The UI flickers or shows garbage after the font grows</dt><dd>The atlas was changed in place while the GPU still drew the last frame with it. Upload a new texture, and free the old one only when no frame in flight uses it.</dd></div>
+  <div><dt>Large lists draw wrong vertices</dt><dd>The renderer ignores a command's vertex offset, which the library uses to pass 65,536 vertices with 16-bit indices. On APIs where the vertex index does not include the base vertex, pass the offset to the shader yourself.</dd></div>
+  <div><dt>The UI is tiny on a 4K laptop</dt><dd>Sizes and fonts are in points, but were not scaled by the display's scale. Scale the style and the font by it.</dd></div>
+  <div><dt>Scene colors look washed out in an image widget</dt><dd>The texture is sampled as linear light but drawn as numbers, or the other way round. Convert by the texture's format, so the image shows its stored colors.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
+
+<p>RASM uses <a href="https://github.com/ocornut/imgui">Dear ImGui</a> for the UI part, and draws its draw data with a small renderer of its own, through the <a href="graphics-apis-rhi.html">RHI</a> and the <a href="render-graphs.html">render graph</a>. ImGui's own SDL3 platform backend feeds it the input. Turn it on with <code>EngineConfig::ui</code>; <kbd>F1</kbd> shows the RASM window, and <code>Engine::setUiCallback</code> adds the application's windows. The API: <a href="../api/engine.html#ui">UI with Dear ImGui</a>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="How RASM draws ImGui. In beginFrame, SDL events go through uiPlatform to ImGui, then buildUi runs ImGui's frame, the RASM window and the application's callback, and copies each list's vertices and indices into the frame slot's host-visible buffers. Each draw command becomes a UiDraw with a vertex address, an index range, a bindless texture and a scissor. In the UI pass, each draw sets its scissor, pushes 16 bytes and calls drawIndexed; the vertex shader pulls the vertex through the address.">
+    <text x="10" y="22" class="title t-cpu">beginFrame (CPU)</text>
+    <rect x="10"  y="34" width="140" height="56" rx="6" class="cpu"/><text x="80"  y="57" class="mid">uiPlatform</text><text x="80"  y="75" class="mid small">SDL events → ImGui</text>
+    <rect x="170" y="34" width="190" height="56" rx="6" class="cpu"/><text x="265" y="57" class="mid">buildUi</text><text x="265" y="75" class="mid small">RASM window, your callback</text>
+    <rect x="380" y="34" width="170" height="56" rx="6" class="mem"/><text x="465" y="57" class="mid">UI Vertices / Indices</text><text x="465" y="75" class="mid small">per frame slot, grow ×2</text>
+    <rect x="570" y="34" width="180" height="56" rx="6" class="cpu"/><text x="660" y="57" class="mid">UiDraw list</text><text x="660" y="75" class="mid small">address, range, slot, scissor</text>
+    <path d="M150,62 H166" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <path d="M360,62 H376" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <path d="M550,62 H566" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <text x="10" y="130" class="title t-gpu">UI pass (GPU), after the tone map</text>
+    <rect x="10"  y="142" width="240" height="56" rx="6" class="gpu"/><text x="130" y="165" class="mid">per draw</text><text x="130" y="183" class="mid small">setScissor · push 16 B · drawIndexed</text>
+    <rect x="270" y="142" width="230" height="56" rx="6" class="shader"/><text x="385" y="165" class="mid">ui.slang</text><text x="385" y="183" class="mid small">vertices[SV_VertexID] via the address</text>
+    <rect x="520" y="142" width="230" height="56" rx="6" class="gpu"/><text x="635" y="165" class="mid">swapchain, UNORM view</text><text x="635" y="183" class="mid small">blends the sRGB numbers</text>
+    <path d="M250,170 H266" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <path d="M500,170 H516" class="arrow shader" marker-end="url(#ah-shader)"/>
+    <path d="M660,90 V108 H232 V138" class="arrow cpu dashed" marker-end="url(#ah-cpu)"/>
+
+    <text x="10" y="232" class="small">Push constants: vertices (8 B, the draw's first vertex) · texture (4 B, bindless slot, bit 31 = sRGB) · displaySize (4 B, points)</text>
+    <text x="10" y="252" class="small">No vertex input, no depth, premultiplied alpha. Without the UNORM view the shader decodes the colors instead (D31).</text>
+  </svg>
+  <figcaption>The renderer uses only RHI calls (buffers, a pipeline, scissors, push constants, indexed draws), so it works on every backend the RHI gets, unlike ImGui's own Vulkan backend.</figcaption>
+</figure>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Library</td><td>an immediate-mode UI</td><td>Dear ImGui from vcpkg (the <code>imgui</code> port with <code>sdl3-binding</code>), behind the CMake option <code>RASM_IMGUI</code>. One context, owned by the engine; the application's <code>ImGui::</code> calls use it.</td></tr>
+  <tr><td>Input</td><td>events to the library, capture flags</td><td>ImGui's SDL3 backend, called only from <code>src/platform/uiPlatform.cpp</code>, so <code>D7</code> can replace it. <code>Engine::pollEvents</code> keeps the mouse, the W/A/S/D keys and, while typing, Escape and F1–F3 from the camera and the engine.</td></tr>
+  <tr><td>When it is built</td><td>between input and drawing</td><td>In <code>beginFrame</code>, after the slot's fence wait and before <code>syncGpuScene</code>, so the callback's changes show in the same frame. Only while the RASM window is shown or a callback is set; otherwise nothing runs.</td></tr>
+  <tr><td>Buffers</td><td>vertex and index buffers</td><td>Host-visible <code>UI Vertices</code> and <code>UI Indices</code> per frame slot, written with <code>fillBuffer</code>. They grow to the next power of two and are never made per frame.</td></tr>
+  <tr><td>Vertices</td><td>a vertex layout</td><td>No vertex input: <a href="vertex-pulling.html">vertex pulling</a> through a <a href="device-addresses.html">device address</a>. The address points at the draw's first vertex, so the base vertex works on D3D12 too.</td></tr>
+  <tr><td>Clip</td><td>clip rectangle → scissor</td><td><code>getUiScissor</code>, the rule of the formula above, with <code>io.DisplayFramebufferScale</code>.</td></tr>
+  <tr><td>Textures</td><td>an atlas, IDs for images</td><td>ImGui's texture requests (<code>ImGuiBackendFlags_RendererHasTextures</code>): a new texture for each request, in a <a href="bindless.html">bindless</a> slot; the old one is freed once the graphics fence passes the last frame submitted with it. An <code>ImTextureID</code> is the slot + 1, with a bit for sRGB textures (<code>Engine::getUiTexture</code>).</td></tr>
+  <tr><td>Blending</td><td>as numbers, through a UNORM view</td><td>The swapchain's <code>B8G8R8A8_UNORM</code> view (<code>VK_KHR_swapchain_mutable_format</code>) when the device has it; else colors decoded in the shader (<code>D31</code>).</td></tr>
+  <tr><td>Where it draws</td><td>last in the frame</td><td>The <code>UI</code> pass of <code>Engine::addUiPass</code>, after the tone map. A graph without it gets one from <code>endFrame</code>, at the cost of one more load and store of the image.</td></tr>
+  <tr><td>Scale</td><td>style and font by the display scale</td><td>The display's content scale, read once at startup (<code>getUiContentScale</code>).</td></tr>
+</table>
+</div>
+
+<div class="stats">
+  <div><b>0</b><span>cost with <code>EngineConfig::ui</code> off: no context, no pass, no zones</span><small>with <code>RASM_IMGUI=OFF</code> not even linked</small></div>
+  <div><b>16 B</b><span>push constants per draw</span><small>address 8 + texture 4 + display size 4</small></div>
+  <div><b>20 B</b><span>per vertex, copied as ImGui writes it</span><small><code>ImDrawVert</code></small></div>
+</div>
+
+<div class="stats">
+  <div><b>0.12 ms</b><span>GPU: the <code>UI</code> pass of <code>15_debug_ui</code></span><small>two windows and an image, 1280 × 720, RTX 3060</small></div>
+  <div><b>0.17 ms</b><span>CPU: the <code>UI</code> zone, ImGui's frame and the copies</span><small>the same frame, Release</small></div>
+  <div><b>0 ms</b><span>both, with <code>EngineConfig::ui</code> off</span><small>no <code>UI</code> zone, no <code>UI</code> pass</small></div>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Setup, frame, draws</td><td><code>createUi</code>, <code>buildUi</code>, <code>drawUi</code>, <code>drawUiFallback</code>, <code>addUiPass</code> in <code>src/renderer/ui.cpp</code></td></tr>
+  <tr><td>State</td><td><code>Ui</code>, <code>UiDraw</code>, <code>UiRelease</code> in <code>src/renderer/ui.h</code></td></tr>
+  <tr><td>RASM window</td><td><code>drawEngineWindow</code> in <code>src/renderer/engineUi.cpp</code></td></tr>
+  <tr><td>Input, scale</td><td><code>src/platform/uiPlatform.cpp</code>, used by <code>Engine::pollEvents</code></td></tr>
+  <tr><td>Shader</td><td><code>shaders/passes/ui.slang</code>, <code>gfx::UiPushConstants</code></td></tr>
+  <tr><td>UNORM view</td><td><code>VulkanSwapchain::getEncodedFormat</code>, <code>AttachmentOps::encodedColor</code></td></tr>
+  <tr><td>Example</td><td><code>examples/15_debug_ui/main.cpp</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li><code>gfx::UiPushConstants</code> and <code>UiPushConstants</code> in <code>ui.slang</code> change together and stay 16 bytes; <code>UiVertex</code> matches <code>ImDrawVert</code> (a <code>static_assert</code> checks the C++ side).</li>
+    <li>A UI texture is never changed in place: a change makes a new texture, and the old one is freed only when the fence says no submitted frame draws with it.</li>
+    <li>Only <code>src/platform/uiPlatform.cpp</code> calls ImGui's SDL3 backend.</li>
+    <li>With the UI off, nothing of it may run: no context, no pass, no buffers.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Omar Cornut, <i>Dear ImGui</i>, its <samp>docs/BACKENDS.md</samp> and <samp>docs/FAQ.md</samp>.</li>
+  <li>Casey Muratori, <i>Immediate-Mode Graphical User Interfaces</i> (2005), the talk that named the idea.</li>
+  <li><a href="color-spaces.html">Color spaces</a>, <a href="bitmap-text.html">Text from a bitmap font</a>, <a href="vertex-pulling.html">Vertex pulling</a>, <a href="bindless.html">Bindless resources</a>.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

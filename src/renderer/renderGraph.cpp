@@ -601,6 +601,13 @@ namespace rasm
             engine->resetRenderTarget();
         }
         engine->endFrame();
+
+        // F3 (or the RASM window's button) asks the next graph that runs for its dump, in the compiled order.
+        if (std::exchange(engine->graphDumpRequested, false))
+        {
+            engine->graphDump = dump();
+            spdlog::info("{}", engine->graphDump);
+        }
     }
 
     // The passes in the order they run, then each resource's lifetime: one column per pass in that order, W where a
@@ -726,7 +733,7 @@ namespace rasm
         for (uint32_t passIdx : order)
         {
             Pass &pass = passes[passIdx];
-            pass.attachmentOps = {};
+            pass.attachmentOps = {.encodedColor = pass.encodedSwapchain};
             for (auto renderTarget : pass.depthRenderTargets)
             {
                 auto it = lastWriters.find(renderTarget);

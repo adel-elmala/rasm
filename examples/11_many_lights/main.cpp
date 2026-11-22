@@ -192,7 +192,8 @@ int main(int argc, char **argv)
         .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
         .shaderDir = RASM_EXAMPLE_SHADER_DIR,
         .maxLights = std::max(options.lights + 1, 1u << 14), // and the moon
-        .clusteredLighting = !options.allLights};
+        .clusteredLighting = !options.allLights,
+        .ui = true};
 
     rasm::Engine engine(config);
     if (!engine.running())
@@ -284,6 +285,8 @@ int main(int argc, char **argv)
     if (!engine.addScenePasses(graph, scene, camera, sceneTarget, options.bench ? nullptr : &shadow, options.bench ? 0 : 1) ||
         !engine.addToneMapPass(graph, sceneTarget, camera))
         return 1;
+    // The RASM window (F1) over the finished image.
+    engine.addUiPass(graph);
     graph.compile();
 
     std::printf("%u lights of range %.1f, %s. F1: stats.\n", options.lights, range, options.allLights ? "every light per pixel" : "in clusters");

@@ -24,6 +24,7 @@ namespace rasm::rhi
         uint32_t                    getImageCount() const override;
         Texture*                    getImage(uint32_t index) override;
         Format                      getFormat() const override;
+        Format                      getEncodedFormat() const override;
         glm::uvec2                  getExtent() const override;
         bool                        getAcquireWait(VkSemaphoreSubmitInfo& acquireWait, uint32_t& waitCount) const;
         void                        onAcquireWaited();
@@ -45,6 +46,7 @@ namespace rasm::rhi
         VkSemaphore                 acquireSemaphores[MAX_FRAMES_IN_FLIGHT]     = {};
         uint64_t                    acquireReleaseValues[MAX_FRAMES_IN_FLIGHT]  = {};
         VkSemaphore                 releaseTimeline                             = VK_NULL_HANDLE;
+        bool                        mutableFormat                               = false;    // made MUTABLE_FORMAT, with a UNORM view per image
         uint64_t                    releaseValue                                = 0;
         uint32_t                    nextAcquireSlot                             = 0;
         uint32_t                    acquiredSlot                                = NO_ACQUIRE;

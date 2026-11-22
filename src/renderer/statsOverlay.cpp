@@ -32,18 +32,6 @@ namespace rasm
 
     namespace
     {
-        std::string formatCount(uint64_t count)
-        {
-            char text[32];
-            if (count >= 1000000)
-                std::snprintf(text, sizeof(text), "%.2fM", static_cast<double>(count) / 1e6);
-            else if (count >= 10000)
-                std::snprintf(text, sizeof(text), "%.1fK", static_cast<double>(count) / 1e3);
-            else
-                std::snprintf(text, sizeof(text), "%llu", static_cast<unsigned long long>(count));
-            return text;
-        }
-
         std::string buildText(const FrameStats &stats, int32_t forcedLod)
         {
             char line[128];

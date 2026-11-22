@@ -863,7 +863,7 @@ encode (linear light L → sRGB code s):
     <text x="690" y="274" class="mid mono small">B8G8R8A8_SRGB</text>
     <text x="614" y="264" class="end small">encodes on write</text>
   </svg>
-  <figcaption>glTF factors (base color, emissive, metallic, roughness) are linear in the file and are copied as they are. No shader applies the sRGB curve: the formats do it. Blending is off in every RASM pipeline, so the alpha the shaders return is not used for transparency.</figcaption>
+  <figcaption>glTF factors (base color, emissive, metallic, roughness) are linear in the file and are copied as they are. No scene shader applies the sRGB curve: the formats do it. The see-through materials blend in the float scene target, so in linear. Only the UI's shader converts, by hand (the last row below).</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
@@ -879,7 +879,8 @@ encode (linear light L → sRGB code s):
   <tr><td>HDR target</td><td>16-bit float, tone map in a final pass</td><td>The same: the scene passes draw into a <code>SCENE_COLOR_FORMAT</code> (<code>R16G16B16A16_SFLOAT</code>) target, and <code>Engine::addToneMapPass</code> maps it to the swapchain in a pass of its own.</td></tr>
   <tr><td>Tone mapping</td><td>exposure + a curve, before the encode</td><td>The camera's <code>exposure</code>, then AgX (<a href="tone-mapping.html#in-rasm">tone mapping</a>). Unlit materials and the clear color go through the same curve, so an unlit texture does not show its exact colors.</td></tr>
   <tr><td>Output and encode</td><td>an _SRGB target encodes</td><td>The swapchain asks for <code>VK_FORMAT_B8G8R8A8_SRGB</code> with <code>VK_COLOR_SPACE_SRGB_NONLINEAR_KHR</code>. The scene targets are float, with no curve; only the swapchain encodes.</td></tr>
-  <tr><td>Blending</td><td>in linear, by the _SRGB target</td><td>Not used: every pipeline has blending off.</td></tr>
+  <tr><td>Blending</td><td>in linear, by the _SRGB target</td><td>The <code>Transparent</code> pass blends in the float scene target, so in linear light.</td></tr>
+  <tr><td>UI colors</td><td>codes, meant to be blended as codes</td><td>Dear ImGui's colors are sRGB codes. The UI pass draws through the swapchain's <code>B8G8R8A8_UNORM</code> view, which stores and blends the codes as they are; an sRGB texture in an image is encoded back to codes in <code>ui.slang</code>. Without the view (<code>D31</code>) the shader decodes the colors and the blend is in linear light. See <a href="immediate-mode-ui.html#blending">Immediate-mode UI</a>.</td></tr>
   <tr><td>Linear constants</td><td>clear colors are linear</td><td><code>Engine::render</code> clears <code>scene_hdr</code> to <code>BACKGROUND_COLOR</code>, 0.018 linear, which then goes through the tone map. The same constant clears passes that draw straight to the swapchain, not tone mapped; the encode turns it into byte 36. The stats overlay's colors in <code>statsOverlay.slang</code> are linear too, and are not tone mapped.</td></tr>
 </table>
 </div>

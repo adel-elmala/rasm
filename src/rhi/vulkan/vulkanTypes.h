@@ -25,6 +25,7 @@ namespace rasm::rhi
         VkImageView             view                        = VK_NULL_HANDLE;   // a cube's view samples all its faces
         VkImageView             faceViews[CUBE_FACES]       = {};               // a cube's attachments, one face each
         VkImageView             mipViews[MAX_TEXTURE_MIPS]  = {};               // a storage texture's: one mip, every layer, as a 2D array
+        VkImageView             encodedView                 = VK_NULL_HANDLE;   // an sRGB swapchain image's UNORM view (AttachmentOps::encodedColor)
         VmaAllocation           allocation                  = nullptr;
     };
 

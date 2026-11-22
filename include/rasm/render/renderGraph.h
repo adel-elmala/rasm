@@ -42,6 +42,7 @@ namespace rasm
         bool                                compute             = false;
         bool                                async               = false;
         bool                                writesSwapchain     = false;
+        bool                                encodedSwapchain    = false;    // draws the swapchain through its UNORM view (AttachmentOps::encodedColor): the UI pass
 
         // For Sorting
         uint32_t                inDegree = 0;

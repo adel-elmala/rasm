@@ -94,6 +94,7 @@ const SECTIONS = [
             { path: "guides/temporal-history.html",      title: "History buffers: last frame's image", blurb: "Reading what the last frame drew." },
             { path: "guides/gpu-timing.html",            title: "GPU timing and frame statistics",     blurb: "Measuring where a frame's time goes." },
             { path: "guides/bitmap-text.html",           title: "Text from a bitmap font",             blurb: "Debug text from bits packed into integers." },
+            { path: "guides/immediate-mode-ui.html",     title: "Immediate-mode UI",                   blurb: "Windows and sliders as code each frame: draw lists, clip rectangles and an atlas." },
         ],
     },
     {

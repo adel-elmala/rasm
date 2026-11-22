@@ -486,6 +486,8 @@ namespace rasm::rhi
         const bool astc = physicalDevice.enable_features_if_present(VkPhysicalDeviceFeatures{.textureCompressionASTC_LDR = VK_TRUE});
         const bool etc2 = physicalDevice.enable_features_if_present(VkPhysicalDeviceFeatures{.textureCompressionETC2 = VK_TRUE});
         spdlog::info("Texture compression: BC {}, ASTC {}, ETC2 {}.", bc ? "yes" : "no", astc ? "yes" : "no", etc2 ? "yes" : "no");
+        // A UNORM view of the sRGB swapchain lets the UI blend on the stored sRGB numbers, as Dear ImGui is designed for.
+        swapchainMutable = physicalDevice.enable_extension_if_present(VK_KHR_SWAPCHAIN_MUTABLE_FORMAT_EXTENSION_NAME);
 
         auto vkbDevice = vkb::DeviceBuilder{physicalDevice}.build();
         if (!vkbDevice)
@@ -1258,6 +1260,11 @@ namespace rasm::rhi
     bool VulkanDevice::hasAsyncCompute() const
     {
         return computeQueue != nullptr;
+    }
+
+    bool VulkanDevice::hasMutableSwapchainFormat() const
+    {
+        return swapchainMutable;
     }
 
     bool VulkanDevice::fillBuffer(Buffer *buffer, const void *data, size_t size, size_t offset)

@@ -67,6 +67,7 @@ namespace rasm::rhi
         VkPhysicalDevice            getVkPhysicalDevice() const;
         VkSurfaceKHR                getSurface() const;
         VulkanQueue*                getGraphicsQueue() const;
+        bool                        hasMutableSwapchainFormat() const;
         void                        setObjectName(VkObjectType type, uint64_t handle, const std::string& name);
 
     private:
@@ -94,6 +95,7 @@ namespace rasm::rhi
         uint32_t                        sharedFamilyCount   = 0;
         VkSurfaceKHR                    surface             = VK_NULL_HANDLE;
         bool                            debugUtilsEnabled   = false;
+        bool                            swapchainMutable    = false;    // VK_KHR_swapchain_mutable_format: the swapchain has a UNORM view
         uint64_t                        timestampMask       = 0;
         double                          timestampPeriod     = 0.0;
         VkDeviceSize                    maxBufferSize       = 0;

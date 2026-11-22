@@ -24,6 +24,7 @@ namespace rasm::rhi
         case Format::R8G8B8A8_UNORM:
         case Format::R8G8B8A8_SRGB:
         case Format::B8G8R8A8_SRGB:
+        case Format::B8G8R8A8_UNORM:
         case Format::D24_UNORM_S8_UINT:
         case Format::D32_SFLOAT:
         case Format::U32_UINT:

@@ -21,5 +21,16 @@
         "ktx",
         "shader-slang",
         "doctest"
-    ]
+    ],
+    "features": {
+        "imgui": {
+            "description": "Dear ImGui for the engine's debug window and the application's UI (CMake option RASM_IMGUI)",
+            "dependencies": [
+                {
+                    "name": "imgui",
+                    "features": ["sdl3-binding"]
+                }
+            ]
+        }
+    }
 }

@@ -2,7 +2,9 @@
 #include "rasm/engine.h"
 #include "rasm/transform.h"
 #include "rasm/camera.h"
+#include "platform/uiPlatform.h"
 #include "platform/windowSurface.h"
+#include "renderer/ui.h"
 
 #include <algorithm>
 #include <chrono>
@@ -77,9 +79,23 @@ namespace rasm
         if (mainWindow.minimized)
             SDL_WaitEventTimeout(nullptr, 100);
 
+        // The UI takes the mouse over its windows and the keys while it has the focus, as the last ImGui frame decided.
+        // Function keys and Escape still work, except while a text field takes typing. A UI that builds no frame
+        // (no RASM window, no callback) gets no events.
+        UiInputCapture capture = {};
+#if defined(RASM_IMGUI)
+        const bool uiActive = ui && ui->active;
+        if (uiActive)
+            capture = getUiInputCapture();
+#endif
+
         SDL_Event event;
         while (SDL_PollEvent(&event))
         {
+#if defined(RASM_IMGUI)
+            if (uiActive)
+                processUiEvent(&event);
+#endif
             switch (event.type)
             {
             case SDL_EVENT_QUIT:
@@ -90,6 +106,8 @@ namespace rasm
             }
             case SDL_EVENT_KEY_DOWN:
             {
+                if (capture.text)
+                    break;
                 if (event.key.key == SDLK_ESCAPE)
                 {
                     spdlog::info("Escape key pressed, closing window.");
@@ -106,6 +124,8 @@ namespace rasm
             }
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
             {
+                if (capture.mouse)
+                    break;
                 mainWindow.lastMousePos = toNDC(glm::vec2(event.button.x, event.button.y), mainWindow);
                 dragStart = mainWindow.lastMousePos;
                 dragEnd = mainWindow.lastMousePos;
@@ -129,6 +149,8 @@ namespace rasm
             }
             case SDL_EVENT_MOUSE_WHEEL:
             {
+                if (capture.mouse)
+                    break;
                 wheelDelta += event.wheel.y;
                 break;
             }
@@ -182,10 +204,13 @@ namespace rasm
             input.mouseStart = dragStart;
             input.mouseEnd = dragEnd;
         }
-        input.forward = keys[SDL_SCANCODE_W];
-        input.backward = keys[SDL_SCANCODE_S];
-        input.left = keys[SDL_SCANCODE_A];
-        input.right = keys[SDL_SCANCODE_D];
+        if (!capture.keyboard)
+        {
+            input.forward = keys[SDL_SCANCODE_W];
+            input.backward = keys[SDL_SCANCODE_S];
+            input.left = keys[SDL_SCANCODE_A];
+            input.right = keys[SDL_SCANCODE_D];
+        }
 
         updateCamera(camera, input);
         mainWindow.lastMousePos = dragEnd;

@@ -344,12 +344,13 @@ void write(const BufferHandle (&amp;perFrame)[MAX_FRAMES_IN_FLIGHT]);</pre>
     bool                                compute             = false;
     bool                                async               = false;
     bool                                writesSwapchain     = false;
+    bool                                encodedSwapchain    = false;
 
     uint32_t                inDegree = 0;
     std::vector&lt;uint32_t&gt;   successors;
 };</pre>
   <div class="body">
-    <p>What the graph stores per pass. <code>read</code> and <code>write</code> fill the input and output lists (the per-frame ones fill <code>frameInputBuffers</code> and <code>frameOutputBuffers</code>), <code>addComputePass</code> sets <code>compute</code>, <code>addAsyncComputePass</code> sets <code>compute</code> and <code>async</code>, <code>readPrevious</code> fills <code>previousRenderTargets</code> or <code>previousBuffers</code>, <code>readDepth</code> fills <code>depthRenderTargets</code>, and <code>writeSwapchain</code> sets <code>writesSwapchain</code>. <code>compile</code> fills <code>attachmentOps</code> (see <a href="#load-store">Load and store</a>). <code>timerName</code>, empty for your passes, lets compute passes next to each other in the order, on one queue, share one GPU timer of that name; the <a href="engine.html#addBloomPasses">bloom passes</a> share <code>Bloom</code>. <code>inDegree</code> and <code>successors</code> are filled by <code>compile</code>: the number of passes that must run first, and the passes that wait for this one. You never build a <code>Pass</code> yourself.</p>
+    <p>What the graph stores per pass. <code>read</code> and <code>write</code> fill the input and output lists (the per-frame ones fill <code>frameInputBuffers</code> and <code>frameOutputBuffers</code>), <code>addComputePass</code> sets <code>compute</code>, <code>addAsyncComputePass</code> sets <code>compute</code> and <code>async</code>, <code>readPrevious</code> fills <code>previousRenderTargets</code> or <code>previousBuffers</code>, <code>readDepth</code> fills <code>depthRenderTargets</code>, and <code>writeSwapchain</code> sets <code>writesSwapchain</code>. <code>encodedSwapchain</code>, set by <a href="engine.html#addUiPass"><code>addUiPass</code></a>, draws the swapchain through its UNORM view (<a href="engine.html#AttachmentOps"><code>AttachmentOps::encodedColor</code></a>). <code>compile</code> fills <code>attachmentOps</code> (see <a href="#load-store">Load and store</a>). <code>timerName</code>, empty for your passes, lets compute passes next to each other in the order, on one queue, share one GPU timer of that name; the <a href="engine.html#addBloomPasses">bloom passes</a> share <code>Bloom</code>. <code>inDegree</code> and <code>successors</code> are filled by <code>compile</code>: the number of passes that must run first, and the passes that wait for this one. You never build a <code>Pass</code> yourself.</p>
   </div>
 </div>
 
@@ -477,7 +478,7 @@ struct Access
 <div class="api" id="dump">
   <pre class="sig">std::string dump() const;</pre>
   <div class="body">
-    <p>Returns the graph as text, for debugging. <kbd>F3</kbd> logs the dump of the graph that <code>Engine::render</code> runs, with <code>spdlog::info</code>, after the next frame. A graph you run with <code>execute</code> yourself is not logged by <kbd>F3</kbd>: call <code>dump</code> on it. It has two parts:</p>
+    <p>Returns the graph as text, for debugging. <kbd>F3</kbd> (or the Dump button of the RASM window) logs the dump of the next graph that runs, <code>Engine::render</code>'s or one you run with <code>execute</code>, with <code>spdlog::info</code> after its frame, and the RASM window shows it. It has two parts:</p>
     <ul>
       <li><b>The passes</b>, in the order they run. Each shows its queue (<code>async compute</code> only when the engine runs async compute; otherwise an async pass shows <code>compute</code>, as it runs on the graphics queue), what it reads and writes, its load and store ops, and the passes that wait for it (<code>before</code>).</li>
       <li><b>The lifetimes</b>: one row per resource, one column per pass. <code>W</code> write, <code>R</code> read, <code>P</code> read of what the frame before left, <code>-</code> alive between its first and last use, <code>.</code> not used.</li>

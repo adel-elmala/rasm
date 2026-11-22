@@ -18,6 +18,10 @@ find_dependency(tinyobjloader CONFIG)
 find_dependency(meshoptimizer CONFIG)
 find_dependency(slang CONFIG)
 find_dependency(Ktx CONFIG)
+# Only a rasm built with RASM_IMGUI links Dear ImGui (the vcpkg port, static).
+if (@RASM_IMGUI@)
+    find_dependency(imgui CONFIG)
+endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/rasmTargets.cmake")
 

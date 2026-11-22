@@ -10,6 +10,7 @@
 #include "renderer/renderer.h"
 #include "renderer/shaderCompiler.h"
 #include "renderer/statsOverlay.h"
+#include "renderer/ui.h"
 
 #include "spdlog/spdlog.h"
 #include "tracy/Tracy.hpp"
@@ -154,6 +155,14 @@ namespace rasm
         // Its pipeline is built with the bindless layout, so it comes after it.
         if (!createStatsOverlay())
             return;
+        // So is the UI's. A UI that fails to start stays off, and the stats overlay takes its place.
+#if defined(RASM_IMGUI)
+        if (config.ui)
+            createUi();
+#else
+        if (config.ui)
+            spdlog::warn("EngineConfig::ui is set, but RASM was built without Dear ImGui (RASM_IMGUI=OFF); the UI stays off.");
+#endif
 
         // The glTF default material: white base color, metallic 1, roughness 1.
         defaultMaterial = createMaterial(MaterialType::PBR);
@@ -179,6 +188,9 @@ namespace rasm
 
         // Its graph frees what it made through the context.
         renderer.reset();
+#if defined(RASM_IMGUI)
+        destroyUi();
+#endif
         ctx.cleanup();
 
         destroyWindow(this->mainWindow);
@@ -378,7 +390,12 @@ namespace rasm
 
         // After the wait: they read what the slot's last frame measured and rewrite the tables it read.
         updateFrameStats();
-        updateStatsOverlay();
+        if (!ui)
+            updateStatsOverlay();
+#if defined(RASM_IMGUI)
+        if (ui)
+            buildUi();
+#endif
         syncGpuScene();
 
         // B4
@@ -432,7 +449,11 @@ namespace rasm
                 endPass();
                 setRenderTarget(renderTarget, face);
             }
-            drawStatsOverlay();
+#if defined(RASM_IMGUI)
+            drawUiFallback();
+#endif
+            if (!ui)
+                drawStatsOverlay();
             ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::PRESENT_SRC);
             // updateFrameStats reads the cull stats on the host, after the slot's fence. With a compute queue the
             // culling runs there, and submitBatches puts the barrier in its last batch.
@@ -721,8 +742,26 @@ namespace rasm
     {
         // The renderer is made last in the constructor, so an engine that failed to start has none.
         if (renderer)
-            renderer->render({.scene = scene, .camera = camera}, std::exchange(graphDumpRequested, false));
+            renderer->render({.scene = scene, .camera = camera});
     }
+
+#if !defined(RASM_IMGUI)
+    // Built without Dear ImGui: the UI is always off.
+    bool Engine::addUiPass(RenderGraph &)
+    {
+        return false;
+    }
+
+    void Engine::setUiCallback(std::function<void()>)
+    {
+        spdlog::warn("setUiCallback: RASM was built without Dear ImGui (RASM_IMGUI=OFF), so the callback never runs.");
+    }
+
+    uint64_t Engine::getUiTexture(const TextureHandle &)
+    {
+        return 0;
+    }
+#endif
 
     bool Engine::running() const
     {

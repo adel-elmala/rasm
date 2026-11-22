@@ -894,7 +894,7 @@ lit  = bit g.x of row g.y of the glyph of code</code></pre>
 
 <h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
 
-<p>RASM uses exactly the method of sections 2 to 6 for its <b>stats overlay</b>, the panel that shows the numbers from <a href="gpu-timing.html#in-rasm">GPU timing and frame statistics</a>. The font, the lookup and the panel layout are in one shader, <code>shaders/passes/statsOverlay.slang</code>. The text is built on the CPU in <code>src/renderer/statsOverlay.cpp</code>. <kbd>F1</kbd> turns it on and off (<code>showStats</code>).</p>
+<p>RASM uses exactly the method of sections 2 to 6 for its <b>stats overlay</b>, the panel that shows the numbers from <a href="gpu-timing.html#in-rasm">GPU timing and frame statistics</a>. The font, the lookup and the panel layout are in one shader, <code>shaders/passes/statsOverlay.slang</code>. The text is built on the CPU in <code>src/renderer/statsOverlay.cpp</code>. <kbd>F1</kbd> turns it on and off (<code>showStats</code>). With the Dear ImGui UI on (<code>EngineConfig::ui</code>), the same numbers show in the RASM window instead, and the overlay is not drawn; see <a href="immediate-mode-ui.html#in-rasm">Immediate-mode UI</a>.</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 300" role="img" aria-label="Every 250 ms, buildText formats FrameStats into lines and buildGrid pads them into a grid of at most 40 columns and 76 rows. Every frame, updateStatsOverlay copies the grid into the frame slot's text buffer. At the end of the frame, endFrame calls drawStatsOverlay, which begins a pass of its own on the window, pushes 16 bytes of push constants and draws 6 vertices with the statsOverlay pipeline.">
@@ -971,7 +971,7 @@ lit  = bit g.x of row g.y of the glyph of code</code></pre>
   <tr><td>Background</td><td>opaque, translucent, outline …</td><td>Opaque, no blending: <code>BACKGROUND</code> near black, <code>FOREGROUND</code> light grey, both linear colors.</td></tr>
   <tr><td>Depth</td><td>depth test off, or nearest depth</td><td>Drawn last, in a pass with no depth attachment, so nothing is tested. The shader still puts the panel at depth 1, the nearest value under reversed-Z (see <a href="projection-depth.html">Projection and reversed-Z depth</a>).</td></tr>
   <tr><td>When drawn</td><td>last</td><td>Once per frame, after every other pass: <code>endFrame</code> calls <code>drawStatsOverlay</code>, which begins a pass of its own on the window that loads the color (so the frame's image stays) and has no depth attachment, so it costs no depth clear. The pass has no GPU timer.</td></tr>
-  <tr><td>Alternatives</td><td>atlas, SDF, UI library</td><td>None yet. A Dear ImGui integration is planned in the development plan (phase 4).</td></tr>
+  <tr><td>Alternatives</td><td>atlas, SDF, UI library</td><td>A UI library: with <code>EngineConfig::ui</code> the stats show in a Dear ImGui window, with an atlas font, and this overlay is off (<a href="immediate-mode-ui.html">Immediate-mode UI</a>). The overlay stays for programs without the UI, and for a rasm built without ImGui.</td></tr>
 </table>
 </div>
 
@@ -981,7 +981,7 @@ lit  = bit g.x of row g.y of the glyph of code</code></pre>
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>Font, panel, per-pixel lookup</td><td><code>FONT</code>, <code>vertMain</code>, <code>fragMain</code> in <code>shaders/passes/statsOverlay.slang</code></td></tr>
-  <tr><td>Text and grid</td><td><code>buildText</code>, <code>buildGrid</code>, <code>formatCount</code> in <code>src/renderer/statsOverlay.cpp</code></td></tr>
+  <tr><td>Text and grid</td><td><code>buildText</code>, <code>buildGrid</code> in <code>src/renderer/statsOverlay.cpp</code>; <code>formatCount</code> in <code>src/renderer/frameStats.cpp</code></td></tr>
   <tr><td>Buffers and pipeline</td><td><code>Engine::createStatsOverlay</code>; per-slot state <code>StatsOverlaySlot</code> in <code>src/renderer/statsOverlay.h</code></td></tr>
   <tr><td>Per-frame copy, the draw</td><td><code>Engine::updateStatsOverlay</code>, <code>Engine::drawStatsOverlay</code> in <code>src/renderer/statsOverlay.cpp</code></td></tr>
   <tr><td>Where it is called</td><td><code>Engine::beginFrame</code> and <code>Engine::endPass</code> in <code>src/engine.cpp</code></td></tr>

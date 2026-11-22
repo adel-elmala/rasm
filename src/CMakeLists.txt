@@ -12,6 +12,9 @@ find_package(tinyobjloader CONFIG REQUIRED)
 find_package(meshoptimizer CONFIG REQUIRED)
 find_package(slang CONFIG REQUIRED)
 find_package(Ktx CONFIG REQUIRED)
+if (RASM_IMGUI)
+    find_package(imgui CONFIG REQUIRED)
+endif()
 
 add_library(rasm STATIC)
 add_library(rasm::rasm ALIAS rasm)
@@ -75,6 +78,18 @@ target_sources(rasm PRIVATE
     "rhi/vulkan/vulkanSwapchain.cpp"
     "rhi/vulkan/vulkanUtils.cpp"
 )
+
+# Dear ImGui: the UI renderer, the RASM window and the SDL3 input. PUBLIC, so the application's ImGui calls use the same
+# static library and context as RASM's, and RASM_IMGUI tells its code that the UI exists.
+if (RASM_IMGUI)
+    target_sources(rasm PRIVATE
+        "platform/uiPlatform.cpp"
+        "renderer/engineUi.cpp"
+        "renderer/ui.cpp"
+    )
+    target_link_libraries(rasm PUBLIC imgui::imgui)
+    target_compile_definitions(rasm PUBLIC RASM_IMGUI)
+endif()
 
 # Debug and Release share one install prefix, and their libraries can't be swapped: the Windows runtimes differ.
 set_target_properties(rasm PROPERTIES DEBUG_POSTFIX "d")

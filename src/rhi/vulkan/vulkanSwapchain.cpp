@@ -4,7 +4,9 @@
 
 #include "spdlog/spdlog.h"
 
+#include <algorithm>
 #include <string>
+#include <vector>
 
 namespace rasm::rhi
 {
@@ -27,7 +29,22 @@ namespace rasm::rhi
 
         // FIFO, because with NVIDIA's overlay on, the other present modes crash vkDestroyDevice when the window fills the screen (B21).
         // The extent is only used when the surface leaves it to the swapchain (currentExtent == 0xFFFFFFFF, e.g. Wayland).
-        vkb::Result<vkb::Swapchain> buildSwapchain(const vkb::Device &device, uint32_t width, uint32_t height, const vkb::Swapchain *oldSwapchain)
+        // The format the swapchain asks for, which vk-bootstrap takes when the surface has it.
+        bool surfaceHasSrgbFormat(const vkb::Device &device)
+        {
+            uint32_t count = 0;
+            if (vkGetPhysicalDeviceSurfaceFormatsKHR(device.physical_device.physical_device, device.surface, &count, nullptr) != VK_SUCCESS)
+                return false;
+            std::vector<VkSurfaceFormatKHR> formats(count);
+            if (vkGetPhysicalDeviceSurfaceFormatsKHR(device.physical_device.physical_device, device.surface, &count, formats.data()) != VK_SUCCESS)
+                return false;
+            return std::any_of(formats.begin(), formats.begin() + count, [](const VkSurfaceFormatKHR &format)
+                               { return format.format == VK_FORMAT_B8G8R8A8_SRGB && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR; });
+        }
+
+        // With mutable formats the images can also be viewed as UNORM, which the UI draws through. The format list must
+        // hold the swapchain's format, so only a surface that has B8G8R8A8_SRGB gets them; mutableFormat says whether it did.
+        vkb::Result<vkb::Swapchain> buildSwapchain(const vkb::Device &device, uint32_t width, uint32_t height, const vkb::Swapchain *oldSwapchain, bool &mutableFormat)
         {
             vkb::SwapchainBuilder swapchainBuilder{device};
             swapchainBuilder.set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
@@ -35,6 +52,11 @@ namespace rasm::rhi
                 .set_desired_extent(width, height);
             if (oldSwapchain != nullptr)
                 swapchainBuilder.set_old_swapchain(*oldSwapchain);
+            const VkFormat viewFormats[2] = {VK_FORMAT_B8G8R8A8_SRGB, VK_FORMAT_B8G8R8A8_UNORM};
+            VkImageFormatListCreateInfo formatList = {.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO, .viewFormatCount = 2, .pViewFormats = viewFormats};
+            mutableFormat = mutableFormat && surfaceHasSrgbFormat(device);
+            if (mutableFormat)
+                swapchainBuilder.set_create_flags(VK_SWAPCHAIN_CREATE_MUTABLE_FORMAT_BIT_KHR).add_pNext(&formatList);
 
             auto swapRet = swapchainBuilder.build();
             if (!swapRet)
@@ -89,7 +111,8 @@ namespace rasm::rhi
         if (releaseTimeline == VK_NULL_HANDLE)
             return false;
 
-        auto swapRet = buildSwapchain(device.getVkbDevice(), desc.width, desc.height, nullptr);
+        mutableFormat = device.hasMutableSwapchainFormat();
+        auto swapRet = buildSwapchain(device.getVkbDevice(), desc.width, desc.height, nullptr, mutableFormat);
         if (!swapRet)
             return false;
 
@@ -127,6 +150,24 @@ namespace rasm::rhi
             image.desc.usage = TextureUsage::COLOR_ATTACHMENT;
             device.setObjectName(VK_OBJECT_TYPE_IMAGE_VIEW, reinterpret_cast<uint64_t>(image.view), image.desc.name);
         }
+        // After every image holds its view, so a failure here leaves destroyImages all of them to destroy.
+        for (auto &image : images)
+        {
+            if (getEncodedFormat() == Format::UNKNOWN)
+                break;
+            const VkImageViewCreateInfo viewInfo = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                                                    .image = image.image,
+                                                    .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                                                    .format = VK_FORMAT_B8G8R8A8_UNORM,
+                                                    .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .levelCount = 1, .layerCount = 1}};
+            const VkResult result = vkCreateImageView(device.getVkDevice(), &viewInfo, nullptr, &image.encodedView);
+            if (result != VK_SUCCESS)
+            {
+                spdlog::error("Failed to create the swapchain's UNORM view. Error: {}", toVkResultString(result));
+                return false;
+            }
+            device.setObjectName(VK_OBJECT_TYPE_IMAGE_VIEW, reinterpret_cast<uint64_t>(image.encodedView), image.desc.name + " UNORM");
+        }
 
         // One per image rather than per frame: an image is only acquired again after its present finished, so
         // its semaphore is free by then. They outlive a resize, because a present can still be waiting on one
@@ -147,6 +188,8 @@ namespace rasm::rhi
         {
             if (image.view != VK_NULL_HANDLE)
                 vkDestroyImageView(device.getVkDevice(), image.view, nullptr);
+            if (image.encodedView != VK_NULL_HANDLE)
+                vkDestroyImageView(device.getVkDevice(), image.encodedView, nullptr);
         }
         images.clear();
     }
@@ -341,7 +384,8 @@ namespace rasm::rhi
         device.waitIdle();
 
         destroyImages();
-        auto swapRet = buildSwapchain(device.getVkbDevice(), width, height, swapchain.swapchain != VK_NULL_HANDLE ? &swapchain : nullptr);
+        mutableFormat = device.hasMutableSwapchainFormat();
+        auto swapRet = buildSwapchain(device.getVkbDevice(), width, height, swapchain.swapchain != VK_NULL_HANDLE ? &swapchain : nullptr, mutableFormat);
 
         // Passing it as oldSwapchain retired the old swapchain, even if creation failed, so it is destroyed
         // either way. Without a swapchain, acquire reports OUT_OF_DATE so the caller keeps trying to recreate it.
@@ -373,6 +417,12 @@ namespace rasm::rhi
     Format VulkanSwapchain::getFormat() const
     {
         return toFormat(swapchain.image_format);
+    }
+
+    // Only the B8G8R8A8_SRGB swapchain asked for has a UNORM view, and only where formats are mutable.
+    Format VulkanSwapchain::getEncodedFormat() const
+    {
+        return mutableFormat && swapchain.image_format == VK_FORMAT_B8G8R8A8_SRGB ? Format::B8G8R8A8_UNORM : Format::UNKNOWN;
     }
 
     glm::uvec2 VulkanSwapchain::getExtent() const

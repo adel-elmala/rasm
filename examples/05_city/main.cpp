@@ -831,7 +831,8 @@ int main(int argc, char **argv)
         .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
         .shaderDir = RASM_EXAMPLE_SHADER_DIR,
         .maxInstances = 1u << 18,
-        .showStats = true};
+        .showStats = true,
+        .ui = true};
 
     rasm::Engine engine(config);
     if (!engine.running())

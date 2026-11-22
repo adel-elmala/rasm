@@ -179,6 +179,7 @@ namespace rasm
         bool                        loadDepth                       = false;
         bool                        storeDepth                      = false;
         bool                        firstWrite                      = false;    // no earlier pass drew into the target this frame, so a cube's other faces may be dropped
+        bool                        encodedColor                    = false;    // the swapchain through its UNORM view (RenderContext::getSwapchainEncodedFormat), if it has one
     };
 
     struct BindlessDescriptorSetLayoutDesc

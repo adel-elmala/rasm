@@ -131,7 +131,8 @@ int main(int argc, char **argv)
         .enableValidation = true,
         .preferredBackend = rasm::Backend::VULKAN,
         .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
-        .shaderDir = RASM_EXAMPLE_SHADER_DIR};
+        .shaderDir = RASM_EXAMPLE_SHADER_DIR,
+        .ui = true};
 
     rasm::Engine engine(config);
     if (!engine.running())
@@ -227,6 +228,8 @@ int main(int argc, char **argv)
     const rasm::RenderTargetHandle bloomTarget = bloom ? engine.addBloomPasses(graph, resolved, camera) : rasm::RenderTargetHandle{};
     if ((bloom && !bloomTarget.isValid()) || !engine.addToneMapPass(graph, resolved, camera, bloomTarget))
         return 1;
+    // The RASM window (F1) over the finished image.
+    engine.addUiPass(graph);
 
     std::vector<std::string> timerNames;
     std::vector<double> timerSums;
