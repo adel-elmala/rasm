@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Engine · RASM</title>
 <meta name="description" content="The Engine class: EngineConfig, construction and shutdown, the frame functions, loading, frame stats, paths and the window, plus an index of every Engine method.">
-<meta name="rasm-sources" content="include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h src/engine.cpp src/platform/window.cpp src/platform/paths.cpp src/renderer/frameStats.cpp src/renderer/gpuScene.cpp src/renderer/renderGraph.cpp src/renderer/renderer.cpp src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/msaaResolve.cpp src/renderer/taa.cpp src/renderer/engineUi.cpp src/renderer/debugViews.cpp src/renderer/inspector.cpp src/rhi/renderContext.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.cpp src/assets/mesh.cpp src/assets/texture.cpp src/renderer/geometryPool.cpp src/renderer/gpuTable.cpp CMakeLists.txt shaders/lib/shadow.slang shaders/passes/shadow.slang examples/06_shadows/main.cpp">
+<meta name="rasm-sources" content="include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h src/engine.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/platform/headlessPlatform.cpp src/renderer/readback.cpp include/rasm/readback.h src/platform/paths.cpp src/renderer/frameStats.cpp src/renderer/gpuScene.cpp src/renderer/renderGraph.cpp src/renderer/renderer.cpp src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/msaaResolve.cpp src/renderer/taa.cpp src/renderer/engineUi.cpp src/renderer/debugViews.cpp src/renderer/inspector.cpp src/rhi/renderContext.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.cpp src/assets/mesh.cpp src/assets/texture.cpp src/renderer/geometryPool.cpp src/renderer/gpuTable.cpp CMakeLists.txt shaders/lib/shadow.slang shaders/passes/shadow.slang examples/06_shadows/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -57,6 +57,8 @@
   <tr><td><a href="#getCurrentFrameResources"><code>getCurrentFrameResources</code></a></td><td>this frame's command buffer and depth</td><td>this page</td></tr>
   <tr><td><a href="#recreateSwapchain"><code>recreateSwapchain</code></a></td><td>rebuild after a resize</td><td>this page</td></tr>
   <tr><td><a href="#waitForLoads"><code>waitForLoads</code></a></td><td>finish every background load now</td><td>this page</td></tr>
+  <tr><td><a href="#readFrame"><code>readFrame</code></a> / <a href="#readTexture"><code>readTexture</code></a></td><td>copy the frame or a texture to the CPU (screenshots, thumbnails, tests)</td><td>this page</td></tr>
+  <tr><td><a href="#isReadbackReady"><code>isReadbackReady</code></a> / <a href="#takeReadback"><code>takeReadback</code></a></td><td>is the copy done, take its pixels</td><td>this page</td></tr>
   <tr><td><a href="#getFrameStats"><code>getFrameStats</code></a></td><td>frame times, draws, memory</td><td>this page</td></tr>
   <tr><td><a href="#beginGpuTimer"><code>beginGpuTimer</code></a> / <a href="#endGpuTimer"><code>endGpuTimer</code></a></td><td>time your own GPU work</td><td>this page</td></tr>
   <tr><td><a href="#queryMemoryStats"><code>queryMemoryStats</code></a></td><td>GPU memory budget and use</td><td>this page</td></tr>
@@ -119,7 +121,7 @@
   <svg viewBox="0 0 760 172" role="img" aria-label="The constructor opens the window, creates the Vulkan device, the frame resources, the shader compiler, the GPU scene tables, the bindless texture set and the default material. If any step fails, running returns false. The destructor waits for loads and frees everything.">
     <text x="10" y="20" class="title">Engine(config)</text>
     <text x="120" y="20" class="small">each step logs an error and stops if it fails</text>
-    <rect x="10"  y="34" width="112" height="50" rx="6" class="cpu"/><text x="66"  y="55" class="mid">window</text><text x="66"  y="72" class="mid small">SDL, resizable</text>
+    <rect x="10"  y="34" width="112" height="50" rx="6" class="cpu"/><text x="66"  y="55" class="mid">window</text><text x="66"  y="72" class="mid small">SDL, or headless</text>
     <rect x="134" y="34" width="112" height="50" rx="6" class="cpu"/><text x="190" y="55" class="mid">device</text><text x="190" y="72" class="mid small">Vulkan 1.4</text>
     <rect x="258" y="34" width="112" height="50" rx="6" class="cpu"/><text x="314" y="55" class="mid">frames</text><text x="314" y="72" class="mid small">fence, 2 slots</text>
     <rect x="382" y="34" width="112" height="50" rx="6" class="cpu"/><text x="438" y="55" class="mid">shaders</text><text x="438" y="72" class="mid small">Slang compiler</text>
@@ -185,7 +187,8 @@ if (!engine.running())
 <table>
   <tr><th>Field</th><th>Default</th><th>Meaning</th></tr>
   <tr><td><code>appName</code></td><td>empty</td><td>Vulkan application name (<code>rasm_app</code> when empty). The window title is always "RASM Engine".</td></tr>
-  <tr><td><code>windowWidth</code>, <code>windowHeight</code></td><td>0, 0</td><td>Window size in logical units (screen points). Must be greater than 0.</td></tr>
+  <tr><td><code>platform</code></td><td><code>SDL</code></td><td>Who owns the window and the input (<a href="types.html#PlatformType"><code>PlatformType</code></a>). <code>HEADLESS</code>: no window and no events; frames go to an offscreen swapchain (<a href="#headless">headless</a>).</td></tr>
+  <tr><td><code>windowWidth</code>, <code>windowHeight</code></td><td>0, 0</td><td>Window size in logical units (screen points), or the offscreen swapchain's size in pixels when headless. Must be greater than 0.</td></tr>
   <tr><td><code>enableValidation</code></td><td><code>false</code></td><td>Turns on the Vulkan validation layers, if they are installed. Keep it on while you develop.</td></tr>
   <tr><td><code>enableSyncValidation</code></td><td><code>false</code></td><td>With <code>enableValidation</code>: also reports missing or wrong barriers and read/write hazards between passes. Slow. Without <code>enableValidation</code> it is ignored, with a warning in the log. <code>VK_LAYER_VALIDATE_SYNC=1</code> does the same without a rebuild.</td></tr>
   <tr><td><code>enableGpuValidation</code></td><td><code>false</code></td><td>With <code>enableValidation</code>: GPU-assisted validation checks shader accesses while they run, such as an out-of-bounds bindless index, bad indirect draw arguments or a bad buffer device address. Slow. Without <code>enableValidation</code> it is ignored, with a warning in the log. <code>VK_LAYER_GPUAV_ENABLE=1</code> does the same without a rebuild.</td></tr>
@@ -956,8 +959,20 @@ engine.setInspection(inspection);</code></pre>
 
 <div class="callout warn">
   <strong>The engine owns the window and the input</strong>
-  <p>Events are read inside <code>beginFrame</code>, and your program does not see them. You cannot render into a window you made yourself, or run without a window (<code>D7</code>).</p>
+  <p>Events are read inside <code>beginFrame</code>, and your program does not see them. You cannot render into a window you made yourself yet (<code>D7</code>). You can run without a window: see <a href="#headless">headless</a> below.</p>
 </div>
+
+<h3 id="headless">Headless: no window</h3>
+
+<p>With <code>EngineConfig::platform = PlatformType::HEADLESS</code> the engine opens no window, starts no SDL and reads no events. The device has no surface. Each frame renders into one of two offscreen images of <code>windowWidth</code> × <code>windowHeight</code> pixels, which take the place of the swapchain: the tone map and every pass that writes "the swapchain" write there, and <a href="#readFrame"><code>readFrame</code></a> copies one back. <code>EngineConfig::ui</code> is turned off with a warning, since the UI's input comes from the window. <code>running()</code> stays true until the engine is destroyed, so the program decides how many frames to render. <code>examples/16_headless</code> renders a scene and writes a PNG.</p>
+
+<pre><code>rasm::EngineConfig config = {
+    .appName = "thumbnails",
+    .platform = rasm::PlatformType::HEADLESS,
+    .windowWidth = 512,
+    .windowHeight = 288,
+    .assetRoot = "assets"};
+rasm::Engine engine(config);</code></pre>
 
 <div class="api" id="getMainWindow">
   <pre class="sig">const Window&amp; getMainWindow() const;</pre>
@@ -973,18 +988,77 @@ const float aspect = width / height;</code></pre>
 <div class="api" id="createWindow">
   <pre class="sig">Window createWindow(uint32_t width, uint32_t height);</pre>
   <div class="body">
-    <p>Starts SDL and opens a resizable Vulkan window titled "RASM Engine". The constructor calls it for the main window. A program has no use for it: a second window gets no rendering. Returns a <code>Window</code> with an invalid handle on failure (logged).</p>
+    <p>Asks the platform for a window. With SDL it starts SDL and opens a resizable Vulkan window titled "RASM Engine"; headless it returns a <code>Window</code> with no handle and a pixel size of <code>width</code> × <code>height</code>. The constructor calls it for the main window. A program has no use for it: a second window gets no rendering. With SDL it returns a <code>Window</code> with an invalid handle on failure (logged).</p>
   </div>
 </div>
 
 <div class="api" id="destroyWindow">
   <pre class="sig">void destroyWindow(const Window&amp; window);</pre>
   <div class="body">
-    <p>Closes the window and shuts SDL down. The destructor calls it for the main window; do not call it on the main window yourself. <code>docs/code_review.md</code> lists both window functions among the calls that should leave the public API for a platform layer (<code>D2</code>, <code>D7</code>).</p>
+    <p>Closes the window and shuts SDL down (nothing when headless). The destructor calls it for the main window; do not call it on the main window yourself. <code>docs/code_review.md</code> lists both window functions among the calls that should leave the public API for a platform layer (<code>D2</code>, <code>D7</code>).</p>
   </div>
 </div>
 
-<h2 id="resources"><span class="n">10</span>Raw GPU resources</h2>
+<h2 id="readback"><span class="n">10</span>Reading images back</h2>
+
+<p>A readback copies an image from the GPU to the CPU, for a screenshot, a thumbnail or an image test. The copy is recorded at the end of a frame and is done when the GPU has finished that frame, so asking never stalls the frame. With two frames in flight the pixels are ready about two frames later. The idea, with pictures of the frames: <a href="../guides/headless-readback.html">Headless rendering and readback</a>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 180" role="img" aria-label="A time line of frames F, F+1 and F+2. In frame F the program calls readFrame, and endFrame records a copy into a CPU-readable buffer. The GPU runs frame F while the CPU records F+1. At the start of F+2 the CPU waits for frame F's fence, so isReadbackReady becomes true, and takeReadback converts the pixels.">
+    <text x="10" y="46" class="title t-cpu">CPU</text>
+    <text x="10" y="116" class="title t-gpu">GPU</text>
+    <rect x="80"  y="24" width="200" height="34" rx="5" class="cpu"/><text x="180" y="46" class="mid">frame F: readFrame()</text>
+    <rect x="290" y="24" width="200" height="34" rx="5" class="cpu o-50"/><text x="390" y="46" class="mid">frame F+1</text>
+    <rect x="500" y="24" width="250" height="34" rx="5" class="cpu"/><text x="625" y="46" class="mid">F+2: takeReadback()</text>
+    <rect x="290" y="94" width="200" height="34" rx="5" class="gpu"/><text x="390" y="116" class="mid">frame F + the copy</text>
+    <rect x="500" y="94" width="160" height="34" rx="5" class="gpu o-50"/><text x="580" y="116" class="mid">frame F+1</text>
+    <path d="M270,58 V76 H300 V92" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="214" y="80" class="small">submit</text>
+    <path d="M490,128 V150 H510 V62" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+    <text x="520" y="160" class="small t-hot">frame F's fence: isReadbackReady() is true</text>
+  </svg>
+  <figcaption>The copy rides along with frame F. Poll <code>isReadbackReady</code> while you keep rendering; <code>takeReadback</code> before that blocks until the GPU is done.</figcaption>
+</figure>
+
+<div class="api" id="readFrame">
+  <pre class="sig">ReadbackHandle readFrame(ReadbackFormat format = ReadbackFormat::RGBA8_SRGB);</pre>
+  <div class="body">
+    <p>Asks for a copy of the image the frame shows, with the UI and the overlay: the offscreen image of a headless engine, or the window's swapchain image. Call it before <code>render</code> or <code>graph.execute</code> (or inside the frame, from the UI callback): the copy goes into the next <code>endFrame</code>. Returns an invalid handle when the window's surface does not allow copies from its images (logged); a headless engine can always be read.</p>
+    <pre><code>const rasm::ReadbackHandle shot = engine.readFrame();
+engine.render(scene, camera);</code></pre>
+  </div>
+</div>
+
+<div class="api" id="readTexture">
+  <pre class="sig">ReadbackHandle readTexture(const TextureHandle&amp; texture, ReadbackFormat format = ReadbackFormat::RGBA8_SRGB, uint32_t layer = 0, uint32_t mip = 0);</pre>
+  <div class="body">
+    <p>The same for one layer (a cube face) and mip of a readable texture, as it is at the end of the frame. A render target is readable when it is made with <a href="render-graph.html#RenderTargetDesc"><code>RenderTargetDesc::readable</code></a>; take its texture for the frame with <a href="render-graph.html#getRenderTargetTexture"><code>getRenderTargetTexture</code></a>. Returns an invalid handle, with an error that names the reason, for a texture that is not readable, a multisampled one (read its resolve), a block-compressed or 3-channel format, a depth asked for as <code>RGBA8_SRGB</code>, or a layer or mip it does not have.</p>
+    <pre><code>// The HDR scene color as floats, e.g. for its average brightness.
+const rasm::ReadbackHandle hdr = engine.readTexture(engine.getRenderTargetTexture(sceneTarget), rasm::ReadbackFormat::RGBA32_FLOAT);</code></pre>
+  </div>
+</div>
+
+<div class="api" id="isReadbackReady">
+  <pre class="sig">bool isReadbackReady(ReadbackHandle readback);</pre>
+  <div class="body">
+    <p>True once <code>takeReadback</code> would not wait: the GPU has finished the frame that copied it, or the copy failed. Poll it each frame so the program never stalls. False for a readback no frame has copied yet, and for an unknown handle.</p>
+  </div>
+</div>
+
+<div class="api" id="takeReadback">
+  <pre class="sig">bool takeReadback(ReadbackHandle readback, ReadbackImage&amp; image);</pre>
+  <div class="body">
+    <p>Converts the copy into <a href="types.html#ReadbackImage"><code>image</code></a> and frees it; the handle is then used up. <span class="tag main-thread">may block</span> When the copy is recorded but the GPU has not finished it, it waits for that frame's fence. Returns false when the copy failed, or when no frame has copied it yet: then it does not wait, and the readback stays pending for the next frame.</p>
+    <pre><code>if (engine.isReadbackReady(shot))
+{
+    rasm::ReadbackImage image;
+    if (engine.takeReadback(shot, image))
+        rasm::writePng("frame.png", image);
+}</code></pre>
+  </div>
+</div>
+
+<h2 id="resources"><span class="n">11</span>Raw GPU resources</h2>
 
 <p>For your own passes you may need buffers and textures that are not part of a scene. These two functions forward to <code>RenderContext</code>. The descriptors (<a href="low-level.html#BufferDesc"><code>BufferDesc</code></a>, <a href="low-level.html#TextureDesc"><code>TextureDesc</code></a>) and how to fill, read and bind the resources are on <a href="low-level.html">RenderContext and resources</a>.</p>
 

@@ -329,6 +329,13 @@ constexpr uint32_t QUEUE_COUNT = 2;</pre>
   </div>
 </div>
 
+<div class="api" id="copyTextureToBuffer">
+  <pre class="sig">bool copyTextureToBuffer(const CommandBufferHandle&amp; commandBuffer, const TextureHandle&amp; texture, uint32_t layer, uint32_t mip, const BufferHandle&amp; buffer);</pre>
+  <div class="body">
+    <p>Records a copy of one layer and mip of a readable texture (<code>TextureDesc::readable</code>) into the start of <code>buffer</code>, rows tightly packed (width × texel size bytes each; a depth gives its depth). The texture keeps its tracked use: it moves to a copy layout and back inside the copy. The bytes are visible to the host once the submit's fence is reached; then <a href="#readBuffer"><code>readBuffer</code></a> them from a buffer made with <code>hostReadable</code>. Refused with an error inside a render pass, and for a texture that is not readable, a multisampled one, a layer or mip it does not have, or one that holds nothing yet. <a href="engine.html#readTexture"><code>Engine::readTexture</code></a> does all of it for you, at the end of a frame.</p>
+  </div>
+</div>
+
 <div class="api" id="transitionImageLayout">
   <pre class="sig">bool transitionImageLayout(const CommandBufferHandle&amp; commandBuffer, TextureHandle texture, TextureUsage newUsage, bool discard = false);</pre>
   <div class="body">
@@ -569,6 +576,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
     bool         cube      = false;
     uint32_t     mipLevels = 0;
     uint32_t     samples   = 1;
+    bool         readable  = false;
 
     bool operator==(const TextureDesc&amp;) const = default;
 };</pre>
@@ -580,6 +588,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
       <dt>cube</dt><dd><code>true</code>: <code>CUBE_FACES</code> square layers, one per face of a cube, in Vulkan's order +X, −X, +Y, −Y, +Z, −Z. Its bindless slot holds a cube view, which a shader reads as a <var>SamplerCube</var>; each face also has its own view, which <a href="#beginRendering"><code>beginRendering</code></a> draws into. A render target with <code>RenderTargetDesc::cube</code> makes one for its depth. Only a depth attachment (<code>DEPTH_STENCIL_ATTACHMENT</code> or <code>SAMPLED_DEPTH_ATTACHMENT</code>) or a <code>SAMPLED_STORAGE</code> texture can be a cube: <code>createTexture</code> rejects any other usage with an error.</dd>
       <dt>mipLevels</dt><dd>0: the rule above. Any other count makes that many levels, at most the full chain down to 1 × 1. Only a <code>SAMPLED_STORAGE</code> texture (compute writes its mips) or a <code>SAMPLED</code> one (<code>fillTexture</code> copies them, or makes them for RGBA8) may ask for more than 1: <code>createTexture</code> refuses any other with an error, since an attachment is drawn into one mip.</dd>
       <dt>samples</dt><dd>Samples per pixel: 1, or 2, 4 or 8 for a color or depth attachment of one mip, not a cube, in a count the device has (<a href="#supportsSampleCount"><code>supportsSampleCount</code></a>); <code>createTexture</code> refuses anything else with an error. A render target sets it from <code>RenderTargetDesc::samples</code>. A shader reads such a texture sample by sample, as a <var>Sampler2DMS</var>.</dd>
+      <dt>readable</dt><dd><code>true</code> adds copy-source usage (<code>VK_IMAGE_USAGE_TRANSFER_SRC_BIT</code>), so <a href="#copyTextureToBuffer"><code>copyTextureToBuffer</code></a> and <a href="engine.html#readTexture"><code>Engine::readTexture</code></a> can copy it. <code>RenderTargetDesc::readable</code> sets it on a target's textures.</dd>
     </dl>
   </div>
 </div>

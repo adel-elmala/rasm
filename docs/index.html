@@ -81,7 +81,7 @@
     <a href="guides/gpu-sync.html"><rect x="510" y="258" width="115" height="50" rx="6" class="box"/><text x="567" y="288" class="mid title">GPU sync</text></a>
     <a href="guides/struct-layout.html"><rect x="635" y="258" width="115" height="50" rx="6" class="box"/><text x="692" y="288" class="mid title">Struct layout</text></a>
       </svg>
-  <figcaption>The path of a frame: assets become rows in GPU tables, the CPU uploads what changed, the GPU culls, draws, shades, runs the passes and presents.</figcaption>
+  <figcaption>The path of a frame: assets become rows in GPU tables, the CPU uploads what changed, the GPU culls, draws, shades, runs the passes and presents, or with no window copies the image back (<a href="guides/headless-readback.html">headless rendering and readback</a>).</figcaption>
 </figure>
 
 <h2 id="how-to-read">How a guide is built</h2>

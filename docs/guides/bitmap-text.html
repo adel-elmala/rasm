@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bitmap Text · RASM</title>
 <meta name="description" content="How to draw text from a 1-bit bitmap font on the GPU: glyphs as bits packed into integers, a grid of character codes in a buffer, and one quad whose fragment shader finds each pixel's cell, glyph and bit. Scaling, background boxes, font atlases and SDF fonts as alternatives, and how RASM's stats overlay does it.">
-<meta name="rasm-sources" content="shaders/passes/statsOverlay.slang src/renderer/statsOverlay.cpp src/renderer/statsOverlay.h src/engine.cpp src/platform/window.cpp include/rasm/types.h">
+<meta name="rasm-sources" content="shaders/passes/statsOverlay.slang src/renderer/statsOverlay.cpp src/renderer/statsOverlay.h src/engine.cpp src/platform/sdlPlatform.cpp src/platform/platform.h include/rasm/types.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -985,7 +985,7 @@ lit  = bit g.x of row g.y of the glyph of code</code></pre>
   <tr><td>Buffers and pipeline</td><td><code>Engine::createStatsOverlay</code>; per-slot state <code>StatsOverlaySlot</code> in <code>src/renderer/statsOverlay.h</code></td></tr>
   <tr><td>Per-frame copy, the draw</td><td><code>Engine::updateStatsOverlay</code>, <code>Engine::drawStatsOverlay</code> in <code>src/renderer/statsOverlay.cpp</code></td></tr>
   <tr><td>Where it is called</td><td><code>Engine::beginFrame</code> and <code>Engine::endPass</code> in <code>src/engine.cpp</code></td></tr>
-  <tr><td><kbd>F1</kbd>, <code>showStats</code></td><td><code>Engine::pollEvents</code> in <code>src/platform/window.cpp</code>; <code>EngineConfig</code> in <code>include/rasm/types.h</code></td></tr>
+  <tr><td><kbd>F1</kbd>, <code>showStats</code></td><td><code>Engine::pollEvents</code> in <code>src/engine.cpp</code>, the SDL events in <code>src/platform/sdlPlatform.cpp</code>; <code>EngineConfig</code> in <code>include/rasm/types.h</code></td></tr>
 </table>
 </div>
 

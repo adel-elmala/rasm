@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LOD Selection · RASM</title>
 <meta name="description" content="How an engine picks a level of detail for each object every frame: distance thresholds versus screen-space error, projecting an object-space error to pixels, view depth versus distance, the orthographic case, conservative choices, popping, hysteresis and cross-fading, and how RASM does it.">
-<meta name="rasm-sources" content="shaders/lib/lodSelection.slang shaders/passes/cull.slang shaders/lib/frustumCulling.slang shaders/lib/core.slang src/renderer/gpuScene.cpp include/rasm/types.h src/platform/window.cpp src/renderer/statsOverlay.cpp src/renderer/frameStats.cpp">
+<meta name="rasm-sources" content="shaders/lib/lodSelection.slang shaders/passes/cull.slang shaders/lib/frustumCulling.slang shaders/lib/core.slang src/renderer/gpuScene.cpp include/rasm/types.h src/platform/sdlPlatform.cpp src/platform/platform.h src/renderer/statsOverlay.cpp src/renderer/frameStats.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -792,7 +792,7 @@ float limit = scene->lodErrorPixels / (pixelsPerUnit * sphere.scale);</code></pr
   <tr><td>Sphere and scale</td><td><code>getWorldSphere</code> in <code>shaders/lib/frustumCulling.slang</code></td></tr>
   <tr><td>Settings on the GPU</td><td><code>SceneData::lodErrorPixels</code>, <code>SceneData::forcedLod</code>, <code>viewportHeight</code> in <code>shaders/lib/core.slang</code>; filled in <code>Engine::prepareSceneView</code>, <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Settings for the app</td><td><code>EngineConfig::lodErrorPixels</code>, <code>EngineConfig::forcedLod</code>, <code>EngineConfig::meshLods</code> in <code>include/rasm/types.h</code></td></tr>
-  <tr><td>The F2 key</td><td><code>SDLK_F2</code> in <code>src/platform/window.cpp</code></td></tr>
+  <tr><td>The F2 key</td><td><code>SDLK_F2</code> in <code>src/platform/sdlPlatform.cpp</code></td></tr>
   <tr><td>Stats per level</td><td><code>STATS_LOD_DRAWS</code> in <code>cull.slang</code>; <code>drawsPerLod</code>, <code>trianglesVisibleLod0</code> in <code>src/renderer/frameStats.cpp</code>; shown by <code>src/renderer/statsOverlay.cpp</code></td></tr>
 </table>
 </div>
