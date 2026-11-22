@@ -142,16 +142,17 @@ namespace rasm
         std::error_code error;
         std::vector<FolderFile> files;
         uint64_t total = 0;
-        for (const auto &entry : std::filesystem::directory_iterator(folder, error))
+        // increment with an error code: another run may remove or rename files while this one reads the folder.
+        for (auto it = std::filesystem::directory_iterator(folder, error); !error && it != std::filesystem::directory_iterator(); it.increment(error))
         {
             std::error_code entryError;
-            if (!entry.is_regular_file(entryError))
+            if (!it->is_regular_file(entryError))
                 continue;
-            const uint64_t size = entry.file_size(entryError);
-            const auto time = entry.last_write_time(entryError);
+            const uint64_t size = it->file_size(entryError);
+            const auto time = it->last_write_time(entryError);
             if (entryError)
                 continue;
-            files.push_back({entry.path(), time, size});
+            files.push_back({it->path(), time, size});
             total += size;
         }
         if (error || total <= maxBytes)

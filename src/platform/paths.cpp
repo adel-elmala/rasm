@@ -10,8 +10,11 @@
 
 #if defined(_WIN32)
 #include <windows.h>
-#elif defined(__APPLE__)
+#else
+#include <dlfcn.h>
+#if defined(__APPLE__)
 #include <mach-o/dyld.h>
+#endif
 #endif
 
 namespace rasm
@@ -32,19 +35,7 @@ namespace rasm
 
         std::string getExecutableName()
         {
-#if defined(_WIN32)
-            wchar_t buffer[MAX_PATH] = {};
-            const DWORD length = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
-            const std::filesystem::path path = length > 0 && length < MAX_PATH ? std::filesystem::path(buffer) : std::filesystem::path();
-#elif defined(__APPLE__)
-            char buffer[4096] = {};
-            uint32_t size = sizeof(buffer);
-            const std::filesystem::path path = _NSGetExecutablePath(buffer, &size) == 0 ? std::filesystem::path(buffer) : std::filesystem::path();
-#else
-            std::error_code error;
-            const std::filesystem::path path = std::filesystem::read_symlink("/proc/self/exe", error);
-#endif
-            const std::string name = pathToUtf8(path.stem());
+            const std::string name = pathToUtf8(pathFromUtf8(getModulePath(nullptr)).stem());
             return name.empty() ? "app" : name;
         }
 
@@ -145,6 +136,42 @@ namespace rasm
         }
         spdlog::warn("Cannot write the cache folder {}; shaders and pipelines are built without disk caches.", pathToUtf8(folder));
         return {};
+    }
+
+    // The executable for nullptr, else the executable or shared library whose code holds address.
+    std::string getModulePath(const void *address)
+    {
+#if defined(_WIN32)
+        HMODULE module = nullptr;
+        if (address != nullptr && !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, static_cast<LPCWSTR>(address), &module))
+            return {};
+        // A path may be longer than MAX_PATH; a full buffer means it was cut.
+        std::wstring buffer(MAX_PATH, L'\0');
+        for (;;)
+        {
+            const DWORD length = GetModuleFileNameW(module, buffer.data(), static_cast<DWORD>(buffer.size()));
+            if (length == 0)
+                return {};
+            if (length < buffer.size())
+                return pathToUtf8(std::filesystem::path(buffer.substr(0, length)));
+            buffer.resize(buffer.size() * 2);
+        }
+#else
+        if (address != nullptr)
+        {
+            Dl_info info = {};
+            return dladdr(address, &info) != 0 && info.dli_fname != nullptr ? pathToUtf8(pathFromUtf8(info.dli_fname)) : std::string();
+        }
+#if defined(__APPLE__)
+        uint32_t size = 0;
+        _NSGetExecutablePath(nullptr, &size);
+        std::string buffer(size, '\0');
+        return _NSGetExecutablePath(buffer.data(), &size) == 0 ? pathToUtf8(pathFromUtf8(buffer.c_str())) : std::string();
+#else
+        std::error_code error;
+        return pathToUtf8(std::filesystem::read_symlink("/proc/self/exe", error));
+#endif
+#endif
     }
 
     std::FILE *openFileForReading(const std::string &path)

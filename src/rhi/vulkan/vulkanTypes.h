@@ -12,9 +12,8 @@
 namespace rasm::rhi
 {
     // A full chain of the largest texture any GPU allows (32768) has 16 levels.
-    constexpr uint32_t          MAX_TEXTURE_MIPS    = 16;
-    // The one push-constant range's stages: every pipeline layout has it, so every push names them all.
-    constexpr VkShaderStageFlags PUSH_CONSTANT_STAGES = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+    constexpr uint32_t              MAX_TEXTURE_MIPS        = 16;
+    constexpr VkShaderStageFlags    PUSH_CONSTANT_STAGES    = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
 
     struct VulkanBuffer : Buffer
     {

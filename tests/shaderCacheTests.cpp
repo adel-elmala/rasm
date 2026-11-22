@@ -56,7 +56,7 @@ namespace
         static inline uint32_t nextId = 0;
     };
 
-    const std::string SOURCE = R"(#include "common.slang"
+    constexpr const char *SOURCE = R"(#include "common.slang"
 struct Item
 {
     float4 value;
@@ -135,7 +135,7 @@ TEST_CASE("every input of the SPIR-V is in the key")
     }
     SUBCASE("a define before the source, like a variant's")
     {
-        CHECK(Run(folders, "#define SCALE 3\n#line 1\n" + SOURCE, "mainA", folders.cacheDir()).compiled());
+        CHECK(Run(folders, std::string("#define SCALE 3\n#line 1\n") + SOURCE, "mainA", folders.cacheDir()).compiled());
     }
     SUBCASE("an edit of an included file")
     {

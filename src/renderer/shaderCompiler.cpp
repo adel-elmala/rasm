@@ -166,13 +166,23 @@ namespace rasm
             fields.push_back(field);
         }
 
+        // A struct's name with its namespaces and generic arguments, so two structs a program reaches never share one.
+        // A struct at global scope, like every RASM struct, keeps its plain name.
+        std::string getStructName(slang::TypeLayoutReflection *layout)
+        {
+            Slang::ComPtr<slang::IBlob> fullName;
+            if (layout->getType() && SLANG_SUCCEEDED(layout->getType()->getFullName(fullName.writeRef())) && fullName && fullName->getBufferSize() > 0)
+                return std::string(static_cast<const char *>(fullName->getBufferPointer()), strnlen(static_cast<const char *>(fullName->getBufferPointer()), fullName->getBufferSize()));
+            const char *name = layout->getName();
+            return name ? name : "";
+        }
+
         // The struct a member holds, directly or through a pointer or an array, like the checks look it up.
         std::string memberStructName(slang::TypeLayoutReflection *type)
         {
             using Kind = slang::TypeReflection::Kind;
             slang::TypeLayoutReflection *held = type->getKind() == Kind::Struct ? type : type->getElementTypeLayout();
-            const char *name = held && held->getKind() == Kind::Struct ? held->getName() : nullptr;
-            return name ? name : "";
+            return held && held->getKind() == Kind::Struct ? getStructName(held) : "";
         }
 
         // Every struct the layout reaches, through fields, arrays and pointers, by name. A struct seen before is
@@ -187,8 +197,10 @@ namespace rasm
                 collectStructLayouts(layout->getElementTypeLayout(), layouts);
                 return;
             }
-            const char *name = layout->getName();
-            if (layout->getKind() != Kind::Struct || !name || layouts.count(name) > 0)
+            if (layout->getKind() != Kind::Struct)
+                return;
+            const std::string name = getStructName(layout);
+            if (name.empty() || layouts.count(name) > 0)
                 return;
             StructLayout &structLayout = layouts[name];
             structLayout.size = static_cast<uint32_t>(layout->getSize());
@@ -261,9 +273,13 @@ namespace rasm
         {
             std::error_code error;
             std::vector<std::filesystem::path> files;
-            for (const auto &entry : std::filesystem::recursive_directory_iterator(folder, error))
-                if (entry.is_regular_file(error))
-                    files.push_back(entry.path());
+            // increment with an error code: a file removed while the folder is read must not throw.
+            for (auto it = std::filesystem::recursive_directory_iterator(folder, error); !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
+            {
+                std::error_code fileError;
+                if (it->is_regular_file(fileError))
+                    files.push_back(it->path());
+            }
             if (error)
                 return false;
             std::sort(files.begin(), files.end());
@@ -722,6 +738,11 @@ namespace rasm
             return true;
         hashNumber(baseKey, SHADER_CACHE_KEY_VERSION);
         hashString(baseKey, globalSession->getBuildTagString());
+        // The tag is the release ("2026.2"), which a patched build of the same release keeps; its library file does not.
+        const std::filesystem::path slangLibrary = pathFromUtf8(getModulePath(reinterpret_cast<const void *>(&slang_createGlobalSession)));
+        hashString(baseKey, pathToUtf8(slangLibrary.filename()));
+        hashNumber(baseKey, static_cast<uint64_t>(std::filesystem::file_size(slangLibrary, errorCode)));
+        hashNumber(baseKey, static_cast<uint64_t>(std::filesystem::last_write_time(slangLibrary, errorCode).time_since_epoch().count()));
         hashNumber(baseKey, static_cast<uint64_t>(targetDesc.format));
         hashNumber(baseKey, static_cast<uint64_t>(targetDesc.profile));
         hashOptions(baseKey, targetDesc.compilerOptionEntries, targetDesc.compilerOptionEntryCount);
@@ -775,6 +796,8 @@ namespace rasm
         else
         {
             const auto start = std::chrono::steady_clock::now();
+            // A rejected entry may have filled some of shader before it failed.
+            shader = {};
             CompiledShader compiled;
             bool cacheable = true;
             if (!compileWithSlang(sourceCode, outputPath, entryPointName, compiled, shader.pushConstants, shader.layouts, cacheable))
@@ -894,7 +917,7 @@ namespace rasm
             if (std::strcmp(parameter->getName(), "pc") != 0)
                 continue;
             slang::TypeLayoutReflection *pcLayout = parameter->getTypeLayout()->getElementTypeLayout();
-            pushConstants = pcLayout && pcLayout->getName() ? pcLayout->getName() : "";
+            pushConstants = pcLayout ? getStructName(pcLayout) : "";
             collectStructLayouts(pcLayout, layouts);
         }
 
