@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <mutex>
 
 namespace rasm
 {
@@ -372,7 +373,16 @@ namespace rasm
         if (info.basis)
         {
             ZoneScopedN("ktxTexture2_TranscodeBasis");
-            result = ktxTexture2_TranscodeBasis(texture.texture, toTranscodeFormat(format), 0);
+            // libktx sets up the Basis transcoder's tables on its first transcode, behind a flag with no lock, and
+            // several workers transcode at once: the first transcode runs alone.
+            static std::once_flag firstTranscode;
+            bool transcoded = false;
+            std::call_once(firstTranscode, [&]()
+                           {
+                               result = ktxTexture2_TranscodeBasis(texture.texture, toTranscodeFormat(format), 0);
+                               transcoded = true; });
+            if (!transcoded)
+                result = ktxTexture2_TranscodeBasis(texture.texture, toTranscodeFormat(format), 0);
             if (result != KTX_SUCCESS)
             {
                 error = std::string("transcoding failed: ") + ktxErrorString(result);

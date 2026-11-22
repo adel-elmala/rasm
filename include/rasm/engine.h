@@ -16,7 +16,6 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
-#include <future>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -30,6 +29,7 @@ namespace rasm
     class GeometryPool;
     class Platform;
     class Renderer;
+    class WorkerPool;
     class ShaderCompiler;
     struct GpuScene;
     struct GpuLights;
@@ -38,6 +38,9 @@ namespace rasm
     struct SceneDrawList;
     struct FrameStatsCollector;
     struct StatsOverlay;
+    struct MeshLoadJob;
+    struct TextureLoadJob;
+    struct EnvironmentLoadJob;
     struct Ui;
     struct Inspector;
     struct Readbacks;
@@ -107,6 +110,7 @@ namespace rasm
         void                        destroyCamera(CameraHandle camera);
         void                        destroyScene(SceneHandle scene);
         PoolStats                   getPoolStats() const;
+        LoadStats                   getLoadStats() const;
         void                        setSceneEnvironment(SceneHandle scene, const SceneEnvironment& environment);
         void                        setAnimationTime(double seconds);
         void                        playAnimation(EntityHandle entity, const AnimationPlay& play);
@@ -329,28 +333,31 @@ namespace rasm
     private:
         static constexpr Format     DEPTH_FORMAT    = Format::D32_SFLOAT;
 
+        // Each load's jobs run on the worker pool and write its job struct; finishLoads reads it once its ticket is done.
         struct PendingMeshLoad
         {
-            MeshHandle                  handle;
-            std::string                 path;
-            std::future<GLTFRaw>        result;
+            MeshHandle                          handle;
+            std::string                         path;
+            std::shared_ptr<MeshLoadJob>        job;
+            uint64_t                            movedBytes  = 0;    // of its budget bytes, those its textures took (finishMeshLoad)
         };
 
-        // A load decodes on a worker (result); a glTF texture arrives decoded with its mesh (levels). Either is filled
-        // by finishLoads under its budget.
+        // A load decodes on a worker (job); a glTF texture arrives decoded with its mesh (levels, which hold bytes of
+        // the load budget). Either is filled by finishLoads under its budget.
         struct PendingTextureLoad
         {
             TextureHandle                       handle;
             std::string                         path;
-            std::future<TextureRaw>             result;
+            std::shared_ptr<TextureLoadJob>     job;
             std::shared_ptr<const TextureRaw>   levels;
+            uint64_t                            bytes       = 0;
         };
 
         struct PendingEnvironmentLoad
         {
-            EnvironmentHandle               handle;
-            std::string                     path;
-            std::future<EnvironmentRaw>     result;
+            EnvironmentHandle                   handle;
+            std::string                         path;
+            std::shared_ptr<EnvironmentLoadJob> job;
         };
 
         PipelineHandle              createGraphicsPipeline(const std::string& name, const std::string& shaderSource, const Format* colorFormats, Format depthFormat, const char* vertexEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite, uint32_t samples = 1, bool alphaToCoverage = false, bool depthTest = true);
@@ -368,6 +375,8 @@ namespace rasm
         bool                        bloomRuns(CameraHandle camera) const;
         bool                        createBloomPipelines();
         void                        finishLoads(bool wait);
+        bool                        finishReadyLoads(bool budgeted);
+        void                        dropTextureLoad(TextureHandle texture);
         bool                        createGpuScene();
         void                        syncGpuScene();
         void                        queueInstanceRows(EntityHandle entity);
@@ -435,6 +444,7 @@ namespace rasm
         void                        recordReadbacks();
         void                        finishReadbackSubmit(bool submitted);
 
+        std::unique_ptr<WorkerPool>                                             workers;
         std::vector<PendingMeshLoad>                                            pendingMeshes;
         std::unordered_map<TextureHandle, PendingTextureLoad, HandleHash>       pendingTextures;
         std::vector<PendingEnvironmentLoad>                                     pendingEnvironments;

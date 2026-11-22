@@ -6,11 +6,15 @@
 #include "exampleArgs.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <deque>
+#include <filesystem>
 #include <string>
+#include <system_error>
 #include <vector>
 
 // Streaming a world in tiles, like a map engine or a level streamer. The camera flies along a road over ground made of
@@ -23,6 +27,12 @@
 // - After frame 120, every 40 tiles the fox mesh is destroyed, with the materials and textures its glTF import made,
 //   and loaded again.
 // - Every 120 frames it prints getPoolStats; at the end the peaks, which a long run (--frames 6000) shows are flat.
+//
+// --burst <folder> asks for every image (loadTexture: .png, .jpg, .ktx2) in the folder in the first frame, like a
+// map engine that needs a screen of tiles at once, and quits once all are in. After the first frame it destroys every
+// fourth texture, like tiles the camera left before they loaded: their loads are dropped. It prints how long that took, the
+// longest frame meanwhile, the load workers and the most decoded memory waiting at once (getLoadStats), which the
+// workers keep under EngineConfig::loadMemoryBudget.
 
 namespace
 {
@@ -52,6 +62,15 @@ namespace
         rasm::EntityHandle houses[HOUSES];
         rasm::EntityHandle fox;
         rasm::LightHandle light;
+    };
+
+    struct Burst
+    {
+        std::vector<rasm::TextureHandle> textures;
+        std::chrono::steady_clock::time_point start;
+        double longestFrameMs = 0.0;
+        uint32_t frames = 0;
+        uint32_t dropped = 0;
     };
 
     uint32_t hash(uint32_t value)
@@ -238,6 +257,42 @@ namespace
                     static_cast<unsigned long long>(stats.instances), static_cast<unsigned long long>(stats.animationPoolBytes), stats.releasesWaiting);
     }
 
+    bool startBurst(rasm::Engine &engine, const std::string &folder, Burst &burst)
+    {
+        std::error_code error;
+        std::vector<std::filesystem::path> files;
+        for (const auto &entry : std::filesystem::directory_iterator(std::filesystem::absolute(folder), error))
+        {
+            if (entry.is_regular_file())
+                files.push_back(entry.path());
+        }
+        std::sort(files.begin(), files.end());
+        burst.start = std::chrono::steady_clock::now();
+        for (const std::filesystem::path &file : files)
+        {
+            const std::string extension = file.extension().string();
+            if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".ktx2")
+                burst.textures.push_back(engine.loadTexture(file.string()));
+        }
+        if (burst.textures.empty())
+        {
+            std::fprintf(stderr, "error: --burst %s: no image in the folder.\n", folder.c_str());
+            return false;
+        }
+        return true;
+    }
+
+    // A texture whose decode fails counts as loaded too (it stays white), so the burst always ends.
+    bool burstLoaded(const rasm::Engine &engine, const Burst &burst)
+    {
+        for (rasm::TextureHandle texture : burst.textures)
+        {
+            if (texture.isValid() && !engine.isLoaded(texture))
+                return false;
+        }
+        return true;
+    }
+
     void keepPeak(rasm::PoolStats &peak, const rasm::PoolStats &stats)
     {
         peak.entities = std::max(peak.entities, stats.entities);
@@ -258,6 +313,12 @@ namespace
 int main(int argc, char **argv)
 {
     ExampleArgs args = parseExampleArgs(argc, argv);
+    std::string burstFolder;
+    for (int i = 1; i + 1 < argc; ++i)
+    {
+        if (std::strcmp(argv[i], "--burst") == 0)
+            burstFolder = argv[i + 1];
+    }
     rasm::EngineConfig config = {
         .appName = "example_17",
         .windowWidth = WIDTH,
@@ -298,6 +359,9 @@ int main(int argc, char **argv)
     uint32_t frame = 0;
     rasm::PoolStats peak = {};
     double seconds = 0.0;
+    Burst burst;
+    if (!burstFolder.empty() && !startBurst(engine, burstFolder, burst))
+        return 1;
     while (exampleRunning(engine, args))
     {
         // Fixed 1/60 s per frame, so a headless run shows the same tiles at frame N every time.
@@ -345,7 +409,32 @@ int main(int argc, char **argv)
         keepPeak(peak, stats);
         if (frame % 120 == 0)
             printStats(("frame " + std::to_string(frame)).c_str(), stats, tilesMade);
+        const auto frameStart = std::chrono::steady_clock::now();
         engine.render(scene, camera);
+        if (burstFolder.empty())
+            continue;
+
+        const auto frameEnd = std::chrono::steady_clock::now();
+        burst.longestFrameMs = std::max(burst.longestFrameMs, std::chrono::duration<double, std::milli>(frameEnd - frameStart).count());
+        ++burst.frames;
+        if (burst.frames == 1)
+        {
+            for (size_t i = 3; i < burst.textures.size(); i += 4)
+            {
+                engine.destroyTexture(burst.textures[i]);
+                burst.textures[i] = {};
+                ++burst.dropped;
+            }
+        }
+        if (burstLoaded(engine, burst))
+        {
+            const rasm::LoadStats loads = engine.getLoadStats();
+            std::printf("burst: %zu textures (%u dropped) loaded in %.0f ms over %u frames, longest frame %.1f ms; %u load workers, at most %.1f MiB decoded at once\n",
+                        burst.textures.size() - burst.dropped, burst.dropped, std::chrono::duration<double, std::milli>(frameEnd - burst.start).count(), burst.frames,
+                        burst.longestFrameMs, loads.workers, static_cast<double>(loads.peakDecodedBytes) / (1024.0 * 1024.0));
+            std::fflush(stdout);
+            return 0;
+        }
     }
 
     printStats("peak", peak, tilesMade);

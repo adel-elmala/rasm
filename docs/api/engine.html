@@ -104,6 +104,7 @@
   <tr><td><a href="scene.html#destroyEntity"><code>destroyEntity</code></a>, <a href="scene.html#destroyMesh"><code>destroyMesh</code></a>, <a href="materials.html#destroyMaterial"><code>destroyMaterial</code></a>, <a href="scene.html#destroyLight"><code>destroyLight</code></a>, <a href="scene.html#destroyEnvironment"><code>destroyEnvironment</code></a>, <a href="camera.html#destroyCamera"><code>destroyCamera</code></a>, <a href="scene.html#destroyScene"><code>destroyScene</code></a></td><td>destroy what you made; rows, ranges and indices are reused</td><td>scene.html, materials.html, camera.html</td></tr>
   <tr><td><a href="scene.html#removeEntityFromScene"><code>removeEntityFromScene</code></a> / <a href="scene.html#removeLightFromScene"><code>removeLightFromScene</code></a></td><td>take an entity or light out of a scene</td><td>scene.html</td></tr>
   <tr><td><a href="#getPoolStats"><code>getPoolStats</code></a></td><td>live objects and pool use, for streaming budgets</td><td>engine.html</td></tr>
+  <tr><td><a href="#getLoadStats"><code>getLoadStats</code></a></td><td>load workers, queued loads, decoded memory</td><td>engine.html</td></tr>
   <tr><td><a href="render-graph.html#setRenderTarget"><code>setRenderTarget</code></a> / <a href="render-graph.html#resetRenderTarget"><code>resetRenderTarget</code></a></td><td>where the next pass draws</td><td>render-graph.html</td></tr>
   <tr><td><a href="render-graph.html#getRenderTargetTexture"><code>getRenderTargetTexture</code></a></td><td>read a target in a later pass</td><td>render-graph.html</td></tr>
   <tr><td><a href="render-graph.html#getPreviousRenderTargetTexture"><code>getPreviousRenderTargetTexture</code></a></td><td>read last frame's copy of a history target</td><td>render-graph.html</td></tr>
@@ -210,6 +211,8 @@ if (!engine.running())
   <tr><td><code>maxLights</code></td><td>2<sup>14</sup> = 16,384</td><td>Lights in total (<a href="scene.html#createLight"><code>createLight</code></a>). 56 bytes each, two copies (about 1.8 MiB). 0, or a table larger than the GPU allows, logs an error and the engine does not start.</td></tr>
   <tr><td><code>maxAnimatedEntities</code></td><td>2<sup>14</sup> = 16,384</td><td>Entities that have played a clip (<a href="scene.html#playAnimation"><code>playAnimation</code></a>), and entities of a skinned or morphed mesh, which are posed at rest; each keeps its row. 120 bytes each, two copies. A play past it is refused with an error. 0, or more than 65,535 (one Animate group per row), logs an error and the engine does not start.</td></tr>
   <tr><td><code>animationPoolBytes</code></td><td>16 MiB</td><td>The kept nodes, samplers, channel tables and keys of every loaded mesh with clips, uploaded once per mesh. A mesh that does not fit fails to load with an error that names this setting.</td></tr>
+  <tr><td><code>loadThreads</code></td><td>0</td><td>Threads of the load worker pool, which reads and decodes every <code>loadMesh</code>, <code>loadTexture</code> and <code>loadEnvironment</code>. 0 takes the hardware threads minus one, for the main thread (at least 1). A game with threads of its own (physics, audio, its own jobs) sets fewer, so the loads do not take the cores those need. See <a href="../guides/job-system.html">Job systems</a>.</td></tr>
+  <tr><td><code>loadMemoryBudget</code></td><td>512 MiB</td><td>Decoded load data in memory at once: what running loads hold and the results that wait for upload. A load whose estimate (from the file's header) would pass it waits in the queue, as a path, until earlier results are uploaded. One load bigger than the budget still runs, alone. <a href="#getLoadStats"><code>getLoadStats</code></a> shows the use.</td></tr>
   <tr><td><code>maxMorphWeights</code></td><td>2<sup>16</sup> = 65,536</td><td>Morph weights of all posed entities together (<a href="scene.html#setMorphWeights"><code>setMorphWeights</code></a>); each entity of a morphed mesh keeps its range. 4 bytes each, four times: a weight buffer and an override table, each with one copy per frame slot (1 MiB). An entity past it is not posed, with an error that names this setting. 0 logs an error and the engine does not start.</td></tr>
   <tr><td><code>showStats</code></td><td><code>false</code></td><td>Shows the stats from the first frame: the RASM window with <code>ui</code>, the stats overlay without. <kbd>F1</kbd> toggles it at runtime.</td></tr>
   <tr><td><code>fixedDeltaTime</code></td><td><code>0.0f</code></td><td>Seconds per frame for the cameras' movement and easing, Dear ImGui and the refresh of the stats (every 0.25 s of these steps). 0: the measured time since the last frame, at most 0.1 s. A fixed step makes frame N the same in every run, for screenshots and image checks; the examples' <code>--fixed-step</code> sets 1/60. <code>FrameStats::cpuFrameMs</code> stays measured.</td></tr>
@@ -636,9 +639,9 @@ ctx.draw(commandBuffer, 3);</code></pre>
 <h2 id="loading"><span class="n">4</span>Loading and waiting</h2>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 210" role="img" aria-label="loadMesh or loadTexture returns a handle at once. A worker thread reads and decodes the file. The next beginFrame uploads finished loads for up to 4 milliseconds. Then isLoaded is true, and syncGpuScene adds the entities that wait for it to the draw lists. waitForLoads finishes every load at once instead.">
+  <svg viewBox="0 0 760 210" role="img" aria-label="loadMesh or loadTexture returns a handle at once. The load workers read and decode the file. The next beginFrame uploads finished loads for up to 4 milliseconds. Then isLoaded is true, and syncGpuScene adds the entities that wait for it to the draw lists. waitForLoads finishes every load at once instead.">
     <rect x="10"  y="30" width="140" height="56" rx="6" class="cpu"/><text x="80"  y="52" class="mid mono">loadMesh</text><text x="80"  y="72" class="mid small">returns a handle now</text>
-    <rect x="165" y="30" width="140" height="56" rx="6" class="ghost"/><text x="235" y="52" class="mid">worker thread</text><text x="235" y="72" class="mid small">reads, decodes</text>
+    <rect x="165" y="30" width="140" height="56" rx="6" class="ghost"/><text x="235" y="52" class="mid">load workers</text><text x="235" y="72" class="mid small">read, decode</text>
     <rect x="320" y="30" width="140" height="56" rx="6" class="mem"/><text x="390" y="52" class="mid">finishLoads</text><text x="390" y="72" class="mid small">uploads, ≤ 4 ms/frame</text>
     <rect x="475" y="30" width="125" height="56" rx="6" class="cpu"/><text x="537" y="52" class="mid mono">isLoaded</text><text x="537" y="72" class="mid small">now true</text>
     <rect x="615" y="30" width="135" height="56" rx="6" class="mem"/><text x="682" y="52" class="mid">syncGpuScene</text><text x="682" y="72" class="mid small">entity is drawn</text>
@@ -664,7 +667,7 @@ ctx.draw(commandBuffer, 3);</code></pre>
 <div class="api" id="waitForLoads">
   <pre class="sig">void waitForLoads();</pre>
   <div class="body">
-    <p>Finishes every pending mesh and texture load now: it waits for the worker threads and uploads the results, with no time limit. After it returns, <code>isLoaded</code> is true for every successful load. Entities that use them join their scenes' draw lists at the next <code>beginFrame</code>, so the first frame after it shows everything.</p>
+    <p>Finishes every pending mesh and texture load now: it uploads each result as soon as its workers are done, which frees its part of <code>EngineConfig::loadMemoryBudget</code> for the loads that wait for it, with no time limit. After it returns, <code>isLoaded</code> is true for every successful load. Entities that use them join their scenes' draw lists at the next <code>beginFrame</code>, so the first frame after it shows everything.</p>
     <p><span class="tag main-thread">blocks the main thread</span> Use it before the main loop to avoid objects popping in, or in tests. Do not call it every frame.</p>
     <pre><code>auto mesh = engine.loadGLTF("models/gltf/coffee-room/scene.gltf");
 engine.waitForLoads();
@@ -1093,7 +1096,7 @@ const uint64_t address = engine.getRenderContext().getBufferDeviceAddress(partic
     <p>Destroys a texture from <a href="materials.html#loadTexture"><code>loadTexture</code></a> or <a href="#createTexture"><code>createTexture</code></a>. The handle is invalid at once: a later call with it logs an error, even when a new texture took its index. The texture and its bindless slot are freed once the GPU has finished every frame that may sample them, so the call never waits, and a new texture then reuses the slot.</p>
     <ul>
       <li>Every material that uses the texture loses it: that texture slot of the material samples nothing from the next frame on (the material's factor alone, as with no texture). An entity that waited for it to load is drawn.</li>
-      <li>A load that has not finished is dropped when its decode ends. <code>loadTexture</code> of the same path then loads it again.</li>
+      <li>A load that has not finished is dropped at once: a decode still in the queue never runs, and a running one gives its result up. <code>loadTexture</code> of the same path then loads it again.</li>
       <li>Swapchain images and render target textures are refused: they belong to the swapchain and to their render target.</li>
     </ul>
     <pre><code>// A tile's material gets a new texture; the old one goes once no frame in flight samples it.
@@ -1109,6 +1112,13 @@ engine.destroyTexture(tile.texture);</code></pre>
   <pre class="sig">PoolStats getPoolStats() const;</pre>
   <div class="body">
     <p>The live objects and the used part of each engine-wide pool (<a href="types.html#PoolStats"><code>PoolStats</code></a>). It walks no object: every number is kept as things are made and destroyed, except the bindless slot count (1024 slots). <code>examples/17_streaming</code> prints it every 120 frames.</p>
+  </div>
+</div>
+
+<div class="api" id="getLoadStats">
+  <pre class="sig">LoadStats getLoadStats() const;</pre>
+  <div class="body">
+    <p>The load workers now (<a href="types.html#LoadStats"><code>LoadStats</code></a>): how many there are, the jobs that wait and run, and the decoded bytes held now and at most since the start. The RASM window (F1) shows it on its Loads line. <code>examples/17_streaming --burst</code> and <code>examples/10_ktx2_textures --measure</code> print the workers and the peak. See <a href="../guides/job-system.html">Job systems</a>.</p>
   </div>
 </div>
 

@@ -1,4 +1,6 @@
 #include "rasm/engine.h"
+#include "assets/loadJobs.h"
+#include "core/workerPool.h"
 #include "renderer/environmentBake.h"
 
 #include "glm/gtc/packing.hpp"
@@ -9,7 +11,7 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <future>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -61,7 +63,18 @@ namespace rasm
         const EnvironmentHandle handle{slot.index, slot.generation};
         environments->environments.resize(registry.environmentHandles.size());
         environments->environments[handle.index] = Environment{.path = path};
-        pendingEnvironments.push_back({handle, path, std::async(std::launch::async, decodeEnvironment, path)});
+        // While it decodes, the 16-byte floats stb_image gives and the 8-byte RGBA16F texels; then the texels alone.
+        auto job = std::make_shared<EnvironmentLoadJob>();
+        WorkerPool *pool = workers.get();
+        auto decode = [job, pool, path]()
+        {
+            if (!job->ticket.cancelled)
+                job->raw = decodeEnvironment(path);
+            pool->setLoadBytes(job->ticket, job->raw.pixels.size() * sizeof(uint16_t));
+            pool->finishLoad(job->ticket);
+        };
+        pool->push({.run = std::move(decode), .bytes = static_cast<uint64_t>(width) * static_cast<uint64_t>(height) * 24, .ticket = std::shared_ptr<LoadTicket>(job, &job->ticket)});
+        pendingEnvironments.push_back({handle, path, std::move(job)});
         return handle;
     }
 
@@ -86,6 +99,16 @@ namespace rasm
             if (scene.environment.environment == environment)
                 scene.environment.environment = {};
         }
+        // A load still in the pool is dropped: a queued job never runs, a running one gives its result up.
+        for (auto it = pendingEnvironments.begin(); it != pendingEnvironments.end(); ++it)
+        {
+            if (it->handle == environment)
+            {
+                workers->dropLoad(it->job->ticket);
+                pendingEnvironments.erase(it);
+                break;
+            }
+        }
         Environment &entry = environments->environments[environment.index];
         // A bake recorded in the frame being made still writes the storage slots: none is rewritten before it is done.
         if (entry.state == BakeState::RECORDED)
@@ -109,8 +132,7 @@ namespace rasm
     {
         ZoneScoped;
 
-        EnvironmentRaw raw = load.result.get();
-        // Destroyed while it decoded: the image is dropped.
+        const EnvironmentRaw raw = std::move(load.job->raw);
         if (!isLive(load.handle))
             return;
         Environment &environment = environments->environments[load.handle.index];

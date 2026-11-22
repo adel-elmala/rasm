@@ -38,13 +38,13 @@ Put traces in the scratchpad directory. `zones`/`frames` cache CSVs next to the 
 2. capture (10 s)                   loading is in the first 1-3 s
 3. frames --from 3                  steady state: is it CPU or GPU bound? any spikes?
 4. zones --from 3 --self            where the CPU time goes
-5. zones --to 3                     startup/loading cost (importMeshFile, fillTexture, createPipeline, the first syncGpuScene)
+5. zones --to 3                     startup/loading cost (parseMeshFile, runImageWork, fillTexture, createPipeline, the first syncGpuScene)
 6. change code → capture again → compare old new --from 3
 ```
 
 ## Reading RASM traces
 
-- **Thread 1 is the main thread.** Other threads are `std::async` loaders (`importMeshFile`, `decodeTexture`).
+- **Thread 1 is the main thread.** Other threads include the load workers, named `RASM loader N` (`runMeshImport`, `parseMeshFile`, `runImageWork`, `buildMeshLods`, `decodeTexture`).
 - **Frame zones**: `Renderer::render` → `RenderGraph::execute` → `beginFrame` (contains `waitForFence`, `UI` with `EngineConfig::ui` while the RASM window or a UI callback is on (ImGui's frame, the windows, the vertex copies), `syncGpuScene` with `rebuildDrawList` and `GpuTable::upload` when something changed, `acquireNextImage`) → the passes (`prepareSceneView` in the first scene pass, `createPipeline` on first use; the draws and dispatches have no zones, so they count as `execute`'s self time) → `endFrame` (`submitBatches` with one `submit` per batch: one without async compute, four for a scene view with it; then `present` and `FrameMark`).
 - **`waitForFence` big = GPU bound.** The CPU waits for the frame-in-flight slot. Tracy has **no GPU zones** in RASM yet (`D16` in `docs/code_review.md`), so GPU cost only shows up as this wait. GPU time per pass is in the stats overlay (`EngineConfig::showStats`, F1) and `Engine::getFrameStats()`. For deeper GPU-side questions use the `frame-debug` skill, or propose adding Tracy Vulkan GPU zones (ask first, it is a new subsystem).
 - **Present mode matters**: with vsync, `waitForFence`/`acquireNextImage` include waiting for the display, so frame time is capped (16.7 ms at 60 Hz). A headless run (`-- --headless --frames 100000`, `examples/exampleArgs.h`) opens no window and presents nothing, so it has no vsync cap: frame time is the CPU or the GPU work alone. Use it by default; use a window only to measure what presenting costs.

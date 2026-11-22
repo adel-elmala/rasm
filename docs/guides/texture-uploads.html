@@ -364,11 +364,11 @@
 <p>The worker decodes and makes every level; the main thread only creates the texture and copies the levels, a few textures per frame; the device copies through the staging ring unless host copy is safe for the format.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 330" role="img" aria-label="Worker: loadTexture's decodeTexture, or the glTF import's buildImageLevels, decodes and calls buildTextureLevels, which makes every mip in linear light for sRGB, weighted by alpha, and renormalized for normal maps. It returns a TextureRaw with all levels. Main thread: the texture is created and waits in pendingTextures. finishLoads fills them one by one until the 4 ms LOAD_BUDGET is used. fillTexture copies through the staging ring, or by host copy where queryFormatSupport allowed it. The texture lives in a VMA block shared with other textures.">
+  <svg viewBox="0 0 760 330" role="img" aria-label="Worker: loadTexture's decodeTexture, or a glTF image's job, runImageWork, decodes and calls buildTextureLevels, which makes every mip in linear light for sRGB, weighted by alpha, and renormalized for normal maps. It returns a TextureRaw with all levels. Main thread: the texture is created and waits in pendingTextures. finishLoads fills them one by one until the 4 ms LOAD_BUDGET is used. fillTexture copies through the staging ring, or by host copy where queryFormatSupport allowed it. The texture lives in a VMA block shared with other textures.">
     <text x="20" y="22" class="title t-cpu">worker thread</text>
     <rect x="20" y="32" width="220" height="60" rx="6" class="cpu"/>
     <text x="130" y="50" class="mid small mono">decodeTexture</text>
-    <text x="130" y="66" class="mid small mono">or buildImageLevels</text>
+    <text x="130" y="66" class="mid small mono">or runImageWork</text>
     <text x="130" y="84" class="mid small">PNG, JPEG → RGBA8 rows</text>
     <line x1="240" y1="62" x2="268" y2="62" class="arrow cpu" marker-end="url(#ah-cpu)"/>
     <rect x="270" y="32" width="230" height="60" rx="6" class="cpu"/>
@@ -409,7 +409,7 @@
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>Decode</td><td>a worker</td><td><code>decodeTexture</code> (stb_image) for <code>loadTexture</code>; tinygltf inside <code>importMeshFile</code> for a glTF's images. One <code>std::async</code> task per load (<code>P21</code>); a glTF's images are processed one after another on its task (<code>P14</code>).</td></tr>
+  <tr><td>Decode</td><td>a worker</td><td><code>decodeTexture</code> (stb_image) for <code>loadTexture</code>; <code>runImageWork</code> for a glTF's images, one job per image, so a model's images decode and get their mips on several workers at once (<a href="job-system.html#in-rasm">job systems</a>). Every job runs on the engine's <code>WorkerPool</code>.</td></tr>
   <tr><td>Mips</td><td>file, CPU worker, GPU blits or compute</td><td>KTX2: from the file (or made on the worker for a Basis file without them). PNG and JPEG: <code>buildTextureLevels</code> on the worker, with stb_image_resize2's default filter (Mitchell), each level from the one above. GPU mip generation is not used: it would need storage usage on every texture, and blits have no alpha weighting.</td></tr>
   <tr><td>Filtering</td><td>linear light, alpha, renormalize</td><td><code>R8G8B8A8_SRGB</code>: linear light, alpha-weighted. <code>R8G8B8A8_UNORM</code>: the stored numbers. A glTF normal texture (<code>KtxSlot::NORMAL</code>): renormalized; <code>loadTexture</code> does not know the slot, so it does not renormalize.</td></tr>
   <tr><td>Copy</td><td>staging or host copy</td><td>Host copy only for a format where <code>VulkanDevice::queryFormatSupport</code> found the feature, host transfer, <code>optimalDeviceAccess</code>, <code>SHADER_READ_ONLY_OPTIMAL</code> among the copy layouts, and a device-local type in both sets (<code>getHostCopyMemoryTypes</code>); the image is then made with only those types. Every other format, and every format with <code>EngineConfig::hostImageCopy</code> false, goes through the staging ring. The log says which: <samp>Host image copy: off</samp> on the RTX 3060, and on for 13 formats on lavapipe.</td></tr>
@@ -430,7 +430,7 @@
   <div><b>0.61 → 0.02 ms</b><span>17_streaming, freeing per frame</span><small>mean of collectReleases; the max 1.42 → 0.15 ms</small></div>
 </div>
 
-<p>The whole load takes longer, because the worker makes the mips after the decode, one image after another: the PNG helmet 0.92 → 1.00 s, Sponza 0.97 → 1.06 s. Running the images of one model on several workers is <code>P14</code> and <code>P21</code>.</p>
+<p>Each image of a model is a job of its own, so its decode and its mips run on every free worker at once: the whole PNG helmet loads in 191 ms and Sponza in 200 ms (23 workers; <a href="job-system.html#in-rasm">job systems</a>).</p>
 
 <h3>Where it lives in code</h3>
 
@@ -439,7 +439,7 @@
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>Mips</td><td><code>buildTextureLevels</code>, <code>buildMipChain</code>, <code>getFullMipCount</code> in <code>src/rhi/mipChain.cpp</code></td></tr>
   <tr><td>Worker: textures</td><td><code>decodeTexture</code>, <code>Engine::loadTexture</code>, <code>finishTextureLoad</code> in <code>src/assets/texture.cpp</code></td></tr>
-  <tr><td>Worker: glTF images</td><td><code>buildImageLevels</code>, <code>getImageLevelsKey</code> in <code>src/assets/meshImport.cpp</code>; <code>GLTFRaw::imageLevels</code> in <code>include/rasm/mesh.h</code></td></tr>
+  <tr><td>Worker: glTF images</td><td><code>planImageLevels</code>, <code>runImageWork</code>, <code>getImageLevelsKey</code> in <code>src/assets/meshImport.cpp</code>; <code>GLTFRaw::imageLevels</code> in <code>include/rasm/mesh.h</code></td></tr>
   <tr><td>Queued fills</td><td><code>Engine::loadMaterial</code> in <code>src/assets/material.cpp</code>; <code>PendingTextureLoad</code> in <code>include/rasm/engine.h</code>; <code>finishLoads</code> in <code>src/engine.cpp</code></td></tr>
   <tr><td>Host copy or staging</td><td><code>VulkanDevice::queryFormatSupport</code>, <code>createTexture</code>, <code>fillTexture</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code>; <code>getHostCopyMemoryTypes</code> in <code>src/rhi/vulkan/vulkanUtils.cpp</code>; <code>UploadManager::uploadTexture</code> in <code>src/rhi/uploadManager.cpp</code></td></tr>
   <tr><td>Measure</td><td><samp>examples/10_ktx2_textures</samp> (<samp>--measure</samp>, <samp>--staging</samp>, <samp>--model</samp>)</td></tr>

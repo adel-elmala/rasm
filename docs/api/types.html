@@ -186,6 +186,20 @@ public:
   </div>
 </div>
 
+<div class="api" id="LoadStats">
+  <pre class="sig">struct LoadStats
+{
+    uint32_t     workers                 = 0;
+    uint32_t     queued                  = 0;        // jobs that wait for a worker or for the budget
+    uint32_t     running                 = 0;
+    uint64_t     decodedBytes            = 0;        // of EngineConfig::loadMemoryBudget
+    uint64_t     peakDecodedBytes        = 0;        // since the engine started
+};</pre>
+  <div class="body">
+    <p>What <a href="engine.html#getLoadStats"><code>getLoadStats</code></a> returns: the load workers now. <code>decodedBytes</code> counts the loads that started and are not uploaded yet: what their jobs hold, and the decoded results that wait for <code>finishLoads</code>. It stays under <code>EngineConfig::loadMemoryBudget</code>, except for one load bigger than the budget, which runs alone. How the pool works: <a href="../guides/job-system.html">Job systems</a>.</p>
+  </div>
+</div>
+
 <h2><span class="n">2</span>Enums in <code>rasm/types.h</code></h2>
 
 <div class="api" id="Format">
@@ -320,6 +334,8 @@ public:
     uint32_t     maxAnimatedEntities   = 1u &lt;&lt; 14;
     uint32_t     animationPoolBytes    = 16u &lt;&lt; 20;
     uint32_t     maxMorphWeights       = 1u &lt;&lt; 16;
+    uint32_t     loadThreads           = 0;
+    uint64_t     loadMemoryBudget      = 512ull &lt;&lt; 20;
     bool         showStats             = false;
     float        fixedDeltaTime        = 0.0f;
     bool         occlusionCulling      = true;

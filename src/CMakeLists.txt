@@ -35,6 +35,7 @@ target_sources(rasm PRIVATE
     "core/handle.cpp"
     "core/rangeAllocator.cpp"
     "core/utils.cpp"
+    "core/workerPool.cpp"
     "platform/paths.cpp"
     "platform/headlessPlatform.cpp"
     "platform/sdlPlatform.cpp"

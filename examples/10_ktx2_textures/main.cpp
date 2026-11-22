@@ -18,8 +18,9 @@
 // ASTC or ETC2 on mobile ones, RGBA8 where there is none. The stats overlay (F1) shows the video memory in use.
 //
 // --model <path> loads another glTF in place of the helmet, relative to the asset root, for instance the helmet's
-// PNG variant. --measure prints the load time, the frames it took and the longest of them, and the video memory the
-// model takes (allocated, and in whole memory blocks), then quits. --staging fills every texture from the staging ring
+// PNG variant. --measure prints the load time, the frames it took and the longest of them, the video memory the
+// model takes (allocated, and in whole memory blocks), the load workers and the most decoded memory waiting at once
+// (since the start, so the bunny and the environment count too), then quits. --staging fills every texture from the staging ring
 // (EngineConfig::hostImageCopy false), as on a GPU without host image copy.
 
 namespace
@@ -145,9 +146,10 @@ int main(int argc, char **argv)
         if (!loaded || frame < loadedFrame + 4)
             continue;
         const rasm::VRAMStats vramAfter = engine.getFrameStats().memory;
-        std::printf("%s: loaded in %.0f ms over %u frames, longest frame %.1f ms, %.1f MiB of video memory allocated (%.1f MiB in blocks)\n", modelPath.c_str(), loadMs, loadFrames,
-                    longestFrameMs, (static_cast<double>(vramAfter.vramAllocated) - static_cast<double>(vramBefore.vramAllocated)) / MIB,
-                    (static_cast<double>(vramAfter.vramUsage) - static_cast<double>(vramBefore.vramUsage)) / MIB);
+        const rasm::LoadStats loads = engine.getLoadStats();
+        std::printf("%s: loaded in %.0f ms over %u frames, longest frame %.1f ms, %.1f MiB of video memory allocated (%.1f MiB in blocks); %u load workers, at most %.1f MiB decoded at once\n",
+                    modelPath.c_str(), loadMs, loadFrames, longestFrameMs, (static_cast<double>(vramAfter.vramAllocated) - static_cast<double>(vramBefore.vramAllocated)) / MIB,
+                    (static_cast<double>(vramAfter.vramUsage) - static_cast<double>(vramBefore.vramUsage)) / MIB, loads.workers, static_cast<double>(loads.peakDecodedBytes) / MIB);
         std::fflush(stdout);
         reported = true;
         if (measure)

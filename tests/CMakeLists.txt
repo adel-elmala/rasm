@@ -38,6 +38,7 @@ add_executable(rasm_tests
             "transformTests.cpp"
             "uiTests.cpp"
             "uploadManagerTests.cpp"
+            "workerPoolTests.cpp"
     )
 
 # The KTX tests encode small Basis images in memory with libktx, so they need no test files.

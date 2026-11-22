@@ -1,8 +1,11 @@
 #include "rasm/engine.h"
 
 #include "assets/ktxImage.h"
+#include "assets/loadJobs.h"
+#include "core/workerPool.h"
 #include "platform/paths.h"
 #include "renderer/gpuScene.h"
+#include "rhi/device.h"
 #include "rhi/mipChain.h"
 
 #include "spdlog/spdlog.h"
@@ -11,9 +14,11 @@
 #include "stb_image.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
-#include <future>
+#include <memory>
 #include <string>
+#include <system_error>
 #include <unordered_set>
 #include <vector>
 
@@ -132,8 +137,24 @@ namespace rasm
         registry.loadedTextures[cacheKey] = textureHandle;
         registry.textureCacheKeys.resize(std::max<size_t>(registry.textureCacheKeys.size(), textureHandle.index + 1));
         registry.textureCacheKeys[textureHandle.index] = cacheKey;
-        auto result = extension == "ktx2" ? std::async(std::launch::async, decodeKtxFile, path, desc.format) : std::async(std::launch::async, decodeTexture, path, desc.format, desc.mipLevels);
-        pendingTextures.emplace(textureHandle, PendingTextureLoad{textureHandle, path, std::move(result), nullptr});
+        // The header gives the size of every level, so the budget knows what the decode will hold before it starts: the
+        // levels, and while the job runs an image's decoded pixels or a KTX2 file's bytes.
+        std::error_code error;
+        const uint64_t fileBytes = std::filesystem::file_size(pathFromUtf8(path), error);
+        uint64_t levelBytes = extension == "ktx2" ? (error ? 0 : fileBytes) : static_cast<uint64_t>(desc.width) * desc.height * 4;
+        for (uint32_t level = 0; level < desc.mipLevels; ++level)
+            levelBytes += rhi::getTextureLevelSize(desc.format, std::max(1u, desc.width >> level), std::max(1u, desc.height >> level));
+        auto job = std::make_shared<TextureLoadJob>();
+        WorkerPool *pool = workers.get();
+        auto decode = [job, pool, path, ktx = extension == "ktx2", format = desc.format, levelCount = desc.mipLevels]()
+        {
+            if (!job->ticket.cancelled)
+                job->raw = ktx ? decodeKtxFile(path, format) : decodeTexture(path, format, levelCount);
+            pool->setLoadBytes(job->ticket, job->raw.levels.size());
+            pool->finishLoad(job->ticket);
+        };
+        pool->push({.run = std::move(decode), .bytes = levelBytes, .ticket = std::shared_ptr<LoadTicket>(job, &job->ticket)});
+        pendingTextures.emplace(textureHandle, PendingTextureLoad{.handle = textureHandle, .path = path, .job = std::move(job)});
         return textureHandle;
     }
 
@@ -143,7 +164,7 @@ namespace rasm
     }
 
     // Materials sample by slot number, so each one that uses the texture loses it before the slot can take another
-    // texture. A load still decoding is dropped when it finishes (finishTextureLoad).
+    // texture. A load still in the pool is dropped: a queued job never runs, a running one gives its result up.
     void Engine::destroyTexture(const TextureHandle &texture)
     {
         if (!ctx.isAlive(texture))
@@ -176,6 +197,7 @@ namespace rasm
         // An entity that waited for this texture may be drawable now.
         if (changed)
             gpuScene->texturesFinished = true;
+        dropTextureLoad(texture);
 
         if (texture.index < registry.textureCacheKeys.size() && !registry.textureCacheKeys[texture.index].empty())
         {
@@ -183,6 +205,19 @@ namespace rasm
             registry.textureCacheKeys[texture.index].clear();
         }
         ctx.destroyTexture(texture);
+    }
+
+    // The load's bytes go back to the budget here or once it is filled (finishLoads).
+    void Engine::dropTextureLoad(TextureHandle texture)
+    {
+        auto it = pendingTextures.find(texture);
+        if (it == pendingTextures.end())
+            return;
+        if (it->second.job)
+            workers->dropLoad(it->second.job->ticket);
+        else
+            workers->releaseBytes(it->second.bytes);
+        pendingTextures.erase(it);
     }
 
     bool Engine::fillTextureLevels(TextureHandle texture, const TextureRaw &raw)
@@ -203,10 +238,9 @@ namespace rasm
     {
         ZoneScoped;
 
-        const TextureRaw decodedRaw = load.levels ? TextureRaw{} : load.result.get();
-        const TextureRaw &raw = load.levels ? *load.levels : decodedRaw;
+        const TextureRaw &raw = load.levels ? *load.levels : load.job->raw;
 
-        // The app destroyed the texture while it decoded, so there is nothing to fill.
+        // The texture was destroyed through RenderContext while it decoded, so there is nothing to fill.
         if (!ctx.isAlive(load.handle))
             return;
         const TextureDesc desc = ctx.getTextureDesc(load.handle);

@@ -1,5 +1,7 @@
 #include "rasm/engine.h"
+#include "assets/loadJobs.h"
 #include "core/utils.h"
+#include "core/workerPool.h"
 #include "platform/paths.h"
 #include "platform/platform.h"
 #include "renderer/environmentBake.h"
@@ -22,7 +24,7 @@
 
 #include <algorithm>
 #include <chrono>
-#include <future>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -55,6 +57,11 @@ namespace rasm
     Engine::Engine(const EngineConfig &config) : config(config), geometryPool(std::make_unique<GeometryPool>()), gpuScene(std::make_unique<GpuScene>()), gpuLights(std::make_unique<GpuLights>()), gpuAnimation(std::make_unique<GpuAnimation>()), environments(std::make_unique<Environments>()), frameStats(std::make_unique<FrameStatsCollector>()), statsOverlay(std::make_unique<StatsOverlay>()), ctx(this), shaderCompiler(std::make_unique<ShaderCompiler>())
     {
         readbacks = std::make_unique<Readbacks>();
+        // Before anything can fail, so a load on an engine that did not start still has workers. One hardware thread is
+        // left for the main thread.
+        const uint32_t hardwareThreads = std::thread::hardware_concurrency();
+        const uint32_t loadThreads = config.loadThreads > 0 ? config.loadThreads : std::max(2u, hardwareThreads) - 1;
+        workers = std::make_unique<WorkerPool>(loadThreads, config.loadMemoryBudget, "RASM loader");
         registry.lightHandles = HandlePool(static_cast<uint64_t>(config.maxLights) + 1);
         registry.materialHandles = HandlePool(static_cast<uint64_t>(config.maxMaterials) + 1);
         // In a real implementation, this is where we'd initialize the window, graphics context, etc.
@@ -193,6 +200,18 @@ namespace rasm
 
     Engine::~Engine()
     {
+        // Loads that still run stop at their next step, queued ones are dropped, and the workers end. Jobs never touch
+        // the engine, so this could come later; first, so no job outlives what it reads.
+        for (PendingMeshLoad &load : pendingMeshes)
+            workers->dropLoad(load.job->ticket);
+        for (auto &[handle, load] : pendingTextures)
+        {
+            if (load.job)
+                workers->dropLoad(load.job->ticket);
+        }
+        for (PendingEnvironmentLoad &load : pendingEnvironments)
+            workers->dropLoad(load.job->ticket);
+        workers->shutdown();
         // Its graph frees what it made through the context.
         renderer.reset();
         shaderCompiler->shutdown();
@@ -263,52 +282,86 @@ namespace rasm
 
     // Runs at the start of a frame, before anything binds the bindless set or the geometry pool, so
     // what it writes is in place for this frame's draws and its uploads go out with this frame's submit.
-    // Without wait it stops at LOAD_BUDGET, so loads that finish together spread over several frames. Textures come
-    // last: a finished glTF adds its textures, each filled on its own (P2), so a big model's copies spread over frames
-    // too, and waitForLoads fills them in the same call.
+    // Without wait it stops at LOAD_BUDGET, so loads that finish together spread over several frames. With wait it
+    // finishes what is ready, which gives bytes back to the load budget, then waits for the next load to end: a load
+    // queued behind the budget can only start once the main thread has taken the ones before it.
     void Engine::finishLoads(bool wait)
     {
+        if (!wait)
+        {
+            finishReadyLoads(true);
+            return;
+        }
+        for (;;)
+        {
+            const uint64_t seen = workers->completions();
+            if (!finishReadyLoads(false))
+                return;
+            workers->waitForCompletion(seen);
+        }
+    }
+
+    // Returns whether loads are still pending. Textures come last: a finished glTF adds its textures, each filled on its
+    // own (P2), so a big model's copies spread over frames too, and waitForLoads fills them in the same call.
+    bool Engine::finishReadyLoads(bool budgeted)
+    {
         const auto deadline = std::chrono::steady_clock::now() + LOAD_BUDGET;
-        auto overBudget = [wait, deadline]()
-        { return !wait && std::chrono::steady_clock::now() >= deadline; };
+        auto overBudget = [budgeted, deadline]()
+        { return budgeted && std::chrono::steady_clock::now() >= deadline; };
 
         for (size_t i = 0; i < pendingMeshes.size() && !overBudget();)
         {
-            if (!wait && pendingMeshes[i].result.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+            if (pendingMeshes[i].job->ticket.state.load(std::memory_order_acquire) != LoadState::DONE)
             {
                 ++i;
                 continue;
             }
-            finishMeshLoad(pendingMeshes[i]);
-            pendingMeshes.erase(pendingMeshes.begin() + i);
+            PendingMeshLoad load = std::move(pendingMeshes[i]);
+            pendingMeshes.erase(pendingMeshes.begin() + static_cast<std::ptrdiff_t>(i));
+            finishMeshLoad(load);
+            // Its textures took their levels' bytes with them (loadMaterial); the rest of the result is freed now.
+            const uint64_t held = load.job->ticket.bytes.exchange(0);
+            workers->releaseBytes(held - std::min(held, load.movedBytes));
         }
 
         for (size_t i = 0; i < pendingEnvironments.size() && !overBudget();)
         {
-            if (!wait && pendingEnvironments[i].result.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+            if (pendingEnvironments[i].job->ticket.state.load(std::memory_order_acquire) != LoadState::DONE)
             {
                 ++i;
                 continue;
             }
-            finishEnvironmentLoad(pendingEnvironments[i]);
-            pendingEnvironments.erase(pendingEnvironments.begin() + i);
+            PendingEnvironmentLoad load = std::move(pendingEnvironments[i]);
+            pendingEnvironments.erase(pendingEnvironments.begin() + static_cast<std::ptrdiff_t>(i));
+            finishEnvironmentLoad(load);
+            workers->releaseBytes(load.job->ticket.bytes.exchange(0));
         }
 
         // At least one texture a frame, so meshes that use up the budget frame after frame do not hold textures back.
+        // An entry leaves the map before it is filled: a fill that fails destroys its texture.
         bool filledOne = false;
         for (auto it = pendingTextures.begin(); it != pendingTextures.end() && (!filledOne || !overBudget());)
         {
-            if (!wait && !it->second.levels && it->second.result.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+            if (it->second.job && it->second.job->ticket.state.load(std::memory_order_acquire) != LoadState::DONE)
             {
                 ++it;
                 continue;
             }
-            finishTextureLoad(it->second);
-            filledOne = true;
+            PendingTextureLoad load = std::move(it->second);
             it = pendingTextures.erase(it);
+            finishTextureLoad(load);
+            workers->releaseBytes(load.job ? load.job->ticket.bytes.exchange(0) : load.bytes);
+            filledOne = true;
             // syncGpuScene checks the entities that wait for textures only after one finished.
             gpuScene->texturesFinished = true;
         }
+        return !pendingMeshes.empty() || !pendingEnvironments.empty() || !pendingTextures.empty();
+    }
+
+    LoadStats Engine::getLoadStats() const
+    {
+        const WorkerPoolStats pool = workers->stats();
+        return {.workers = pool.workers, .queued = pool.queued, .running = pool.running, .decodedBytes = pool.bytes, .peakDecodedBytes = pool.peakBytes};
     }
 
     TextureHandle Engine::createTexture(const TextureDesc &desc)

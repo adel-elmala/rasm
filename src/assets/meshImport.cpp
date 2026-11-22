@@ -5,6 +5,7 @@
 #include "assets/morphImport.h"
 #include "assets/ktxImage.h"
 #include "platform/paths.h"
+#include "rhi/device.h"
 #include "rhi/mipChain.h"
 
 #include "spdlog/spdlog.h"
@@ -12,6 +13,8 @@
 
 #include "tiny_gltf.h"
 #include "tiny_obj_loader.h"
+
+#include "stb_image.h"
 
 #include "glm/glm.hpp"
 #include "glm/gtc/matrix_transform.hpp"
@@ -24,6 +27,8 @@
 #include <fstream>
 #include <memory>
 #include <string>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace rasm
@@ -389,16 +394,43 @@ namespace rasm
             return traverseNodes(model, scene.nodes, walk);
         }
 
-        // KTX2 bytes stay as they are, for transcodeKtxImages, which knows the slots that use each image. stb decodes the
-        // other images, as tinygltf does by default.
-        bool loadImage(tinygltf::Image *image, int imageIndex, std::string *err, std::string *warn, int width, int height, const unsigned char *bytes, int size, void *userData)
+        // Every image's bytes stay as they are in the file: the image jobs decode them (runImageWork), each on its own
+        // worker, and only the images a material reads.
+        bool loadImage(tinygltf::Image *image, int, std::string *, std::string *, int, int, const unsigned char *bytes, int size, void *)
         {
-            if (!isKtx2(bytes, static_cast<size_t>(size)))
-                return tinygltf::LoadImageData(image, imageIndex, err, warn, width, height, bytes, size, userData);
             image->image.assign(bytes, bytes + size);
             image->as_is = true;
             image->width = image->height = image->component = image->bits = image->pixel_type = -1;
             return true;
+        }
+
+        bool isKtxImage(const tinygltf::Image &image)
+        {
+            return isKtx2(image.image.data(), image.image.size());
+        }
+
+        std::string getImageName(const tinygltf::Image &image, int source)
+        {
+            return image.uri.empty() ? "glTF image " + std::to_string(source) : image.uri;
+        }
+
+        GltfImageWork &findImageWork(std::vector<GltfImageWork> &images, int source, bool ktx, const std::string &name, uint64_t fileBytes)
+        {
+            for (GltfImageWork &work : images)
+            {
+                if (work.source == source && work.ktx == ktx)
+                    return work;
+            }
+            images.push_back({.source = source, .ktx = ktx, .name = name, .fileBytes = fileBytes});
+            return images.back();
+        }
+
+        uint64_t getLevelBytes(Format format, uint32_t width, uint32_t height, uint32_t levelCount)
+        {
+            uint64_t bytes = 0;
+            for (uint32_t level = 0; level < levelCount; ++level)
+                bytes += rhi::getTextureLevelSize(format, std::max(1u, width >> level), std::max(1u, height >> level));
+            return bytes;
         }
 
         // The slots loadMaterial fills, with the same KtxSlot it passes. Unlit reads base color only.
@@ -416,12 +448,10 @@ namespace rasm
         }
 
         // Each KTX2 image gets the best format the device has for each kind of slot that uses it, and is transcoded once
-        // per format: an ORM image read as occlusion and as metallic-roughness is one BC7 texture. Then its file bytes
-        // go, like the glTF buffers (P6).
-        void transcodeKtxImages(tinygltf::Model &model, uint64_t supportedTextureFormats, GLTFRaw &raw)
+        // per format: an ORM image read as occlusion and as metallic-roughness is one BC7 texture. Only the header is
+        // read here; the transcode is the image's job.
+        void planKtxImages(const tinygltf::Model &model, uint64_t supportedTextureFormats, GLTFRaw &raw, std::vector<GltfImageWork> &images)
         {
-            ZoneScoped;
-
             for (const tinygltf::Material &material : model.materials)
             {
                 TextureUse uses[5];
@@ -433,10 +463,10 @@ namespace rasm
                         continue;
                     const uint64_t slotKey = getKtxSlotKey(source, uses[i].slot);
                     const tinygltf::Image &image = model.images[source];
-                    if (raw.ktxFormats.contains(slotKey) || !image.as_is)
+                    if (raw.ktxFormats.contains(slotKey) || !isKtxImage(image))
                         continue;
 
-                    const std::string name = image.uri.empty() ? "glTF image " + std::to_string(source) : image.uri;
+                    const std::string name = getImageName(image, source);
                     KtxInfo info;
                     std::string error;
                     if (!readKtxInfo(image.image.data(), image.image.size(), info, error))
@@ -454,33 +484,24 @@ namespace rasm
                     if (!raw.ktxImages.contains(imageKey))
                     {
                         warnAboutKtxFormat(name, info, format);
-                        TextureRaw texture;
-                        if (!decodeKtx(image.image.data(), image.image.size(), format, texture, error))
-                        {
-                            spdlog::error("Failed to decode KTX2 image {}: {}", name, error);
-                            continue;
-                        }
-                        raw.ktxImages[imageKey] = std::make_shared<const TextureRaw>(std::move(texture));
+                        auto levels = std::make_shared<TextureRaw>();
+                        GltfImageWork &work = findImageWork(images, source, true, name, image.image.size());
+                        work.targets.push_back({.format = format, .levels = levels});
+                        work.bytes += getLevelBytes(format, info.width, info.height, getKtxMipCount(info, format));
+                        raw.ktxImages[imageKey] = std::move(levels);
                     }
                     raw.ktxFormats[slotKey] = format;
                 }
             }
-
-            for (tinygltf::Image &image : model.images)
-            {
-                if (image.as_is)
-                    std::vector<unsigned char>().swap(image.image);
-            }
         }
 
-        // Each PNG or JPEG image a material reads gets its mips here, on the worker, so the main thread only copies them
-        // (P2): once per kind of slot that reads it, sRGB-aware with alpha weighting for color, as it is for data, and
-        // renormalized for normal maps. An image that a KHR_texture_basisu transcode replaces in that slot is left out.
-        // Then the decoded pixels go, like the KTX2 file bytes.
-        void buildImageLevels(tinygltf::Model &model, GLTFRaw &raw)
+        // Each PNG or JPEG image a material reads gets its mips in its job, so the main thread only copies them (P2): once
+        // per kind of slot that reads it, sRGB-aware with alpha weighting for color, as it is for data, and renormalized
+        // for normal maps. An image that a KHR_texture_basisu transcode replaces in that slot is left out. Only the
+        // header is read here. With onlySlots, only those KHR_texture_basisu slots (getKtxSlotKey) are planned: the
+        // fallbacks of failed transcodes, whose other slots were checked, and logged, the first time.
+        void planImageLevels(const tinygltf::Model &model, GLTFRaw &raw, std::vector<GltfImageWork> &images, const std::unordered_set<uint64_t> *onlySlots)
         {
-            ZoneScoped;
-
             for (const tinygltf::Material &material : model.materials)
             {
                 TextureUse uses[5];
@@ -492,13 +513,16 @@ namespace rasm
                     const int basisuSource = getBasisuSource(model, uses[i].texture);
                     if (basisuSource >= 0 && raw.ktxFormats.contains(getKtxSlotKey(basisuSource, uses[i].slot)))
                         continue;
+                    if (onlySlots && (basisuSource < 0 || !onlySlots->contains(getKtxSlotKey(basisuSource, uses[i].slot))))
+                        continue;
                     const int source = model.textures[uses[i].texture].source;
                     if (source < 0 || source >= static_cast<int>(model.images.size()))
                     {
                         spdlog::error("glTF texture {} has no image RASM can read: its source is {}.", uses[i].texture, source);
                         continue;
                     }
-                    if (model.images[source].as_is)
+                    const tinygltf::Image &image = model.images[source];
+                    if (isKtxImage(image))
                     {
                         spdlog::error("glTF image {} is KTX2, but texture {} names it without KHR_texture_basisu; it is not loaded.", source, uses[i].texture);
                         continue;
@@ -507,52 +531,34 @@ namespace rasm
                     if (raw.imageLevels.contains(key))
                         continue;
 
-                    const tinygltf::Image &image = model.images[source];
-                    const std::string name = image.uri.empty() ? "glTF image " + std::to_string(source) : image.uri;
-                    const size_t pixels = static_cast<size_t>(std::max(image.width, 0)) * static_cast<size_t>(std::max(image.height, 0));
-                    if (image.bits != 8 || image.component < 1 || image.component > 4 || pixels == 0 || image.image.size() < pixels * image.component)
+                    const std::string name = getImageName(image, source);
+                    const unsigned char *bytes = image.image.data();
+                    const int size = static_cast<int>(image.image.size());
+                    int width = 0, height = 0, channels = 0;
+                    if (!stbi_info_from_memory(bytes, size, &width, &height, &channels) || width <= 0 || height <= 0)
                     {
-                        spdlog::error("Unsupported glTF image '{}' (expected 8-bit components).", name);
+                        spdlog::error("Unsupported glTF image '{}': it is not an image RASM can read.", name);
                         continue;
                     }
-                    // tinygltf decodes to RGBA, so the copy is only for an image that kept fewer channels.
-                    const unsigned char *rgba = image.image.data();
-                    std::vector<unsigned char> expanded;
-                    if (image.component != 4)
-                    {
-                        expanded.assign(pixels * 4, 255);
-                        for (size_t p = 0; p < pixels; ++p)
-                        {
-                            const unsigned char *src = image.image.data() + p * image.component;
-                            expanded[p * 4] = src[0];
-                            expanded[p * 4 + 1] = image.component >= 3 ? src[1] : src[0];
-                            expanded[p * 4 + 2] = image.component >= 3 ? src[2] : src[0];
-                            if (image.component == 2)
-                                expanded[p * 4 + 3] = src[1];
-                        }
-                        rgba = expanded.data();
-                    }
-                    const auto width = static_cast<uint32_t>(image.width);
-                    const auto height = static_cast<uint32_t>(image.height);
+                    const bool firstUse = std::none_of(images.begin(), images.end(), [source](const GltfImageWork &work)
+                                                       { return work.source == source && !work.ktx; });
+                    if (firstUse && stbi_is_16_bit_from_memory(bytes, size))
+                        spdlog::info("glTF image '{}' has 16 bits per channel; it is loaded with 8.", name);
+
+                    const auto w = static_cast<uint32_t>(width);
+                    const auto h = static_cast<uint32_t>(height);
                     const Format format = uses[i].slot == KtxSlot::COLOR ? Format::R8G8B8A8_SRGB : Format::R8G8B8A8_UNORM;
                     auto levels = std::make_shared<TextureRaw>();
-                    if (!rhi::buildTextureLevels(rgba, width, height, format, uses[i].slot == KtxSlot::NORMAL, rhi::getFullMipCount(width, height), *levels))
-                    {
-                        spdlog::error("Failed to make the mips of glTF image '{}'.", name);
-                        continue;
-                    }
+                    GltfImageWork &work = findImageWork(images, source, false, name, image.image.size());
+                    work.targets.push_back({.format = format, .normals = uses[i].slot == KtxSlot::NORMAL, .levels = levels});
+                    // The decoded pixels live in the job while it makes the levels.
+                    work.bytes += getLevelBytes(format, w, h, rhi::getFullMipCount(w, h)) + (firstUse ? static_cast<uint64_t>(w) * h * 4 : 0);
                     raw.imageLevels[key] = std::move(levels);
                 }
             }
-
-            for (tinygltf::Image &image : model.images)
-            {
-                if (!image.as_is)
-                    std::vector<unsigned char>().swap(image.image);
-            }
         }
 
-        GLTFRaw importGltf(const std::string &path, bool binary, uint64_t supportedTextureFormats)
+        GLTFRaw importGltf(const std::string &path, bool binary, uint64_t supportedTextureFormats, std::vector<GltfImageWork> &images)
         {
             auto model = std::make_shared<tinygltf::Model>();
             tinygltf::TinyGLTF loader;
@@ -616,8 +622,8 @@ namespace rasm
             }
             // Every accessor has been read. Materials need only the decoded images, so the raw buffers go now (P6).
             model->buffers.clear();
-            transcodeKtxImages(*model, supportedTextureFormats, raw);
-            buildImageLevels(*model, raw);
+            planKtxImages(*model, supportedTextureFormats, raw, images);
+            planImageLevels(*model, raw, images, nullptr);
             raw.model = std::move(model);
             raw.loaded = true;
             return raw;
@@ -677,15 +683,110 @@ namespace rasm
         }
     }
 
-    // Runs on a worker thread: it must not touch the engine.
-    GLTFRaw importMeshFile(const std::string &path, uint64_t supportedTextureFormats)
+    // Runs on a worker thread: it must not touch the engine. A glTF's images are only planned (images), so each can be
+    // its own job; finishImageWork then completes raw.
+    GLTFRaw parseMeshFile(const std::string &path, uint64_t supportedTextureFormats, std::vector<GltfImageWork> &images)
     {
         ZoneScoped;
 
         const auto extension = path.substr(path.find_last_of('.') + 1);
         if (extension == "gltf" || extension == "glb")
-            return importGltf(path, extension == "glb", supportedTextureFormats);
+            return importGltf(path, extension == "glb", supportedTextureFormats, images);
         return importObj(path);
+    }
+
+    // The whole import on this thread.
+    GLTFRaw importMeshFile(const std::string &path, uint64_t supportedTextureFormats)
+    {
+        std::vector<GltfImageWork> images;
+        GLTFRaw raw = parseMeshFile(path, supportedTextureFormats, images);
+        if (raw.model)
+        {
+            for (GltfImageWork &work : images)
+                runImageWork(*raw.model, work);
+        }
+        finishImageWork(raw);
+        return raw;
+    }
+
+    // Runs on any worker, next to the other images of the model: it reads only its own image's bytes and writes only its
+    // own targets, so the levels are the same in whatever order the jobs run.
+    void runImageWork(const tinygltf::Model &model, GltfImageWork &work)
+    {
+        ZoneScoped;
+
+        const tinygltf::Image &image = model.images[work.source];
+        if (work.ktx)
+        {
+            for (GltfImageTarget &target : work.targets)
+            {
+                std::string error;
+                if (!decodeKtx(image.image.data(), image.image.size(), target.format, *target.levels, error))
+                {
+                    spdlog::error("Failed to decode KTX2 image {}: {}", work.name, error);
+                    *target.levels = {};
+                }
+            }
+            return;
+        }
+
+        // Always 4 channels: gray becomes (g, g, g, 255), gray and alpha (g, g, g, a), RGB gets alpha 255.
+        int width = 0, height = 0, channels = 0;
+        unsigned char *rgba = stbi_load_from_memory(image.image.data(), static_cast<int>(image.image.size()), &width, &height, &channels, 4);
+        if (!rgba)
+        {
+            spdlog::error("Failed to decode glTF image '{}'.", work.name);
+            return;
+        }
+        const auto w = static_cast<uint32_t>(width);
+        const auto h = static_cast<uint32_t>(height);
+        for (GltfImageTarget &target : work.targets)
+        {
+            if (!rhi::buildTextureLevels(rgba, w, h, target.format, target.normals, rhi::getFullMipCount(w, h), *target.levels))
+            {
+                spdlog::error("Failed to make the mips of glTF image '{}'.", work.name);
+                *target.levels = {};
+            }
+        }
+        stbi_image_free(rgba);
+    }
+
+    // Runs once every image job of the model is done. A KTX2 image that failed gives its slots back to the texture's own
+    // source (a PNG or JPEG fallback), whose levels are made here; levels that failed are taken out. Then the file bytes
+    // go, like the glTF buffers (P6).
+    void finishImageWork(GLTFRaw &raw)
+    {
+        ZoneScoped;
+
+        if (!raw.model)
+            return;
+        tinygltf::Model &model = *raw.model;
+        std::unordered_set<uint64_t> failedSlots;
+        for (auto it = raw.ktxFormats.begin(); it != raw.ktxFormats.end();)
+        {
+            const auto levels = raw.ktxImages.find(getKtxImageKey(static_cast<int>(it->first >> 3), it->second));
+            if (levels == raw.ktxImages.end() || levels->second->levelSizes.empty())
+            {
+                failedSlots.insert(it->first);
+                it = raw.ktxFormats.erase(it);
+            }
+            else
+                ++it;
+        }
+        std::erase_if(raw.ktxImages, [](const std::pair<const uint64_t, std::shared_ptr<const TextureRaw>> &entry)
+                      { return entry.second->levelSizes.empty(); });
+        if (!failedSlots.empty())
+        {
+            std::vector<GltfImageWork> fallbacks;
+            planImageLevels(model, raw, fallbacks, &failedSlots);
+            for (GltfImageWork &work : fallbacks)
+                runImageWork(model, work);
+        }
+        std::erase_if(raw.imageLevels, [](const std::pair<const uint64_t, std::shared_ptr<const TextureRaw>> &entry)
+                      { return entry.second->levelSizes.empty(); });
+
+        for (tinygltf::Image &image : model.images)
+            std::vector<unsigned char>().swap(image.image);
     }
 
     uint64_t getKtxSlotKey(int image, KtxSlot slot)

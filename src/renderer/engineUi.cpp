@@ -161,6 +161,8 @@ namespace rasm
         if (ImGui::CollapsingHeader("Culling and LODs", ImGuiTreeNodeFlags_DefaultOpen))
         {
             drawCullingSection(ui->stats);
+            const LoadStats loads = getLoadStats();
+            ImGui::Text("Loads      %u queued, %u running, %llu MiB, %u workers", loads.queued, loads.running, static_cast<unsigned long long>(loads.decodedBytes >> 20), loads.workers);
             const std::string current = config.forcedLod < 0 ? "by distance" : "LOD " + std::to_string(config.forcedLod);
             if (ImGui::BeginCombo("LOD (F2)", current.c_str()))
             {

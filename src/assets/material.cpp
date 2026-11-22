@@ -2,6 +2,7 @@
 #include "rasm/engine.h"
 #include "assets/ktxImage.h"
 #include "assets/meshImport.h"
+#include "core/workerPool.h"
 
 #include "spdlog/spdlog.h"
 
@@ -331,7 +332,11 @@ namespace rasm
                                               .mipLevels = static_cast<uint32_t>(levels->levelSizes.size())});
                 if (!texture.isValid())
                     return {};
-                pendingTextures.emplace(texture, PendingTextureLoad{texture, name, {}, std::move(levels)});
+                // Its levels take their share of the load's budget bytes with them, until the texture is filled; levels
+                // two textures share are counted once.
+                const uint64_t bytes = cache.countedLevels.insert(levels.get()).second ? levels->levels.size() : 0;
+                cache.movedBytes += bytes;
+                pendingTextures.emplace(texture, PendingTextureLoad{.handle = texture, .path = name, .levels = std::move(levels), .bytes = bytes});
                 addBindlessTexture(bindlessDescriptorSet, texture, sampler);
                 cache.imageTextures[cacheKey] = texture;
                 return texture;
