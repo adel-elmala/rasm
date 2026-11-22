@@ -32,6 +32,7 @@ target_sources(rasm PRIVATE
     "engine.cpp"
     "thirdparty_impl.cpp"
     "core/handle.cpp"
+    "core/rangeAllocator.cpp"
     "core/utils.cpp"
     "platform/paths.cpp"
     "platform/headlessPlatform.cpp"

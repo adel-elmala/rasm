@@ -538,11 +538,11 @@ namespace rasm
     void Engine::drawTablesSection()
     {
         ImGui::TextWrapped("What the CPU uploaded, from each table's CPU copy. Not read back from the GPU.");
-        const TableView tables[] = {{&gpuScene->instances, gpuScene->instanceCount, "InstanceData"},
+        const TableView tables[] = {{&gpuScene->instances, static_cast<uint32_t>(gpuScene->instanceRows.end()), "InstanceData"},
                                     {&gpuScene->materials, static_cast<uint32_t>(registry.materials.size()), "MaterialData"},
                                     {&gpuLights->lights, static_cast<uint32_t>(registry.lights.size()), "Light"},
                                     {&gpuAnimation->entities, gpuAnimation->entityRows, "AnimatedEntity"},
-                                    {&gpuAnimation->weightOverrides, gpuAnimation->weightCount, nullptr}};
+                                    {&gpuAnimation->weightOverrides, static_cast<uint32_t>(gpuAnimation->weightRanges.end()), nullptr}};
         if (ImGui::BeginTable("tables", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit))
         {
             ImGui::TableSetupColumn("Table");

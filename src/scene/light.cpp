@@ -49,6 +49,22 @@ namespace rasm
         return handle;
     }
 
+    // Its scenes rebuild their light lists without it, and its row goes to the next light at once: each frame slot has
+    // its own copy of the light table. A shadow made for it casts nothing from now on.
+    void Engine::destroyLight(LightHandle light)
+    {
+        if (!isLive(light))
+        {
+            spdlog::error("destroyLight: light handle {{{}, {}}} is invalid or was destroyed.", light.index, light.generation);
+            return;
+        }
+        markLightListsDirty(light);
+        if (light.index < gpuLights->lightScenes.size())
+            gpuLights->lightScenes[light.index] = 0;
+        registry.lights[light.index] = {};
+        registry.lightHandles.release(light.index, light.generation);
+    }
+
     Light Engine::getLight(LightHandle light) const
     {
         if (!isLive(light))

@@ -37,7 +37,7 @@
     <li>Meshes come from files (<code>loadMesh</code>, background) or from your own vertices (<code>createMesh</code>, at once).</li>
     <li>An entity is drawn only when its mesh and all its textures are loaded. Until then it is silently skipped.</li>
     <li>Move entities with <code>updateTransform</code>. Only the changed rows are uploaded.</li>
-    <li>Nothing can be destroyed or removed from a scene yet (<code>D4</code>).</li>
+    <li>Everything can be destroyed, and entities and lights can leave a scene; rows, ranges and indices are reused (<a href="../guides/resource-lifetime.html">deferred destruction</a>).</li>
   </ul>
 </div>
 
@@ -91,9 +91,31 @@
     <p>Adds the entity to the scene. If the entity is ready, the scene's draw list is rebuilt at the next <code>beginFrame</code> and the entity is drawn in that frame. If its mesh or textures still load, it joins when they finish.</p>
     <dl>
       <dt>scene</dt><dd>Invalid: logs an error, nothing changes.</dd>
-      <dt>entity</dt><dd>Invalid: logs an error. The same entity added twice is drawn twice.</dd>
+      <dt>entity</dt><dd>Invalid or destroyed: logs an error. An entity already in the scene is not added again (a warning).</dd>
     </dl>
-    <p>A scene holds at most <code>MAX_ENTITIES_PER_SCENE</code> entities (a warning is logged after that). There is no function to remove an entity (<code>D4</code>).</p>
+    <p>A scene holds at most <code>MAX_ENTITIES_PER_SCENE</code> entities (a warning is logged after that). <a href="#removeEntityFromScene"><code>removeEntityFromScene</code></a> takes it out again.</p>
+  </div>
+</div>
+
+<div class="api" id="removeEntityFromScene">
+  <pre class="sig">void removeEntityFromScene(SceneHandle scene, EntityHandle entity);</pre>
+  <div class="body">
+    <p>The scene stops drawing the entity from the next frame on; the entity lives on, and can be added again or be in other scenes. The scene's draw list is rebuilt once, which also drops the entity from <code>Scene::entities</code>. An entity that is not in the scene logs a warning.</p>
+  </div>
+</div>
+
+<div class="api" id="removeLightFromScene">
+  <pre class="sig">void removeLightFromScene(SceneHandle scene, LightHandle light);</pre>
+  <div class="body">
+    <p>The light stops lighting the scene from the next frame on, and a shadow made for it in that scene casts nothing. The light lives on. The scene's light list is rebuilt once.</p>
+  </div>
+</div>
+
+<div class="api" id="destroyScene">
+  <pre class="sig">void destroyScene(SceneHandle scene);</pre>
+  <div class="body">
+    <p>Destroys the scene: its entities and lights live on, in no scene, and its draw list and light list buffers are freed once the GPU is done with them. Its index goes to the next <code>createScene</code>.</p>
+    <p><span class="tag">errors</span> Refused while a render graph draws a view of the scene, with an error that names the view and its camera: destroy that graph first, or let it go out of scope. The graph of <a href="engine.html#render"><code>render</code></a> lets go by itself.</p>
   </div>
 </div>
 
@@ -210,7 +232,7 @@
     <line x1="728" y1="196" x2="728" y2="109" class="arrow cpu" marker-end="url(#ah-cpu)"/>
     <text x="675" y="186" class="mid small">any time, any order</text>
   </svg>
-  <figcaption>A mesh made with <code>createMesh</code> is ready at once, so its entity gets rows at the next <code>beginFrame</code>. A failed entity stays in its scenes but draws nothing. Its rows, once written, are never freed.</figcaption>
+  <figcaption>A mesh made with <code>createMesh</code> is ready at once, so its entity gets rows at the next <code>beginFrame</code>. A failed entity stays in its scenes but draws nothing. Its rows go back when it or its mesh is destroyed.</figcaption>
 </figure>
 
 <div class="api" id="createEntity">
@@ -248,6 +270,18 @@ for (int z = 0; z &lt; GRID_SIZE; ++z)
     <pre><code>rasm::Transform transform = engine.getTransform(bunny);
 transform.rotate(glm::vec3(0.0f, 1.0f, 0.0f), glm::radians(0.01f));
 engine.updateTransform(bunny, transform);</code></pre>
+  </div>
+</div>
+
+<div class="api" id="destroyEntity">
+  <pre class="sig">void destroyEntity(EntityHandle entity);</pre>
+  <div class="body">
+    <p>Destroys the entity. It leaves every scene from the next frame on, and its instance rows (one per sub-mesh) and, for an animated entity, its row and ranges of the animation buffers go to the next entity at once: each frame slot has its own copy of those tables. Its mesh and material stay. A destroyed handle logs an error. See <a href="../guides/resource-lifetime.html">Deferred destruction</a>.</p>
+    <pre><code>engine.destroyEntity(tile.groundEntity);
+engine.destroyMesh(tile.ground);
+engine.destroyMaterial(tile.material);
+engine.destroyTexture(tile.texture);</code></pre>
+    <p>From <code>examples/17_streaming/main.cpp</code>: a tile that leaves the view goes, entities first.</p>
   </div>
 </div>
 
@@ -359,6 +393,18 @@ rasm::EntityHandle entity = engine.createEntity("room", room, {}, transform); //
   <pre class="sig">bool isLoaded(MeshHandle mesh) const;</pre>
   <div class="body">
     <p>True when the mesh is uploaded and ready to draw. False while it loads, after it failed, and for an invalid handle. A mesh from <code>createMesh</code> is loaded at once. You do not need to wait for it before creating entities.</p>
+  </div>
+</div>
+
+<div class="api" id="destroyMesh">
+  <pre class="sig">void destroyMesh(MeshHandle mesh);</pre>
+  <div class="body">
+    <p>Destroys the mesh. Its ranges of the geometry pool, its rows of the geometry table and its range of the animation pool are freed once the GPU has finished the frames that may draw it, and then taken by later meshes, so map tiles or levels can stream in and out for ever.</p>
+    <ul>
+      <li><b>What its glTF import made goes with it:</b> the materials and textures <code>loadMesh</code> created for this file belong to the mesh. An entity that uses one of those materials as its own falls back as after <a href="materials.html#destroyMaterial"><code>destroyMaterial</code></a>, and a material that uses one of those textures as after <a href="engine.html#destroyTexture"><code>destroyTexture</code></a>.</li>
+      <li>Entities that still use the mesh live on and draw nothing; their rows are freed. Destroy them first, and nothing has to be searched.</li>
+      <li>A load that has not finished is dropped when it ends. <code>loadMesh</code> of the same path then loads it again, as a new mesh. A mesh whose load failed can be destroyed too, which frees its index.</li>
+    </ul>
   </div>
 </div>
 
@@ -488,8 +534,11 @@ constexpr uint32_t MAX_MORPH_TARGETS = 256;</pre>
     std::vector&lt;SubMesh&gt;       subMeshes;
     std::vector&lt;AnimationClip&gt; animations;
     std::vector&lt;std::string&gt;   morphTargetNames;
+    std::vector&lt;MaterialHandle&gt; ownedMaterials;
+    std::vector&lt;TextureHandle&gt;  ownedTextures;
+    uint32_t                   users = 0;
 };</pre>
-  <div class="body"><p>A mesh: its load state, its sub-meshes, its clips (<a href="#getAnimations"><code>getAnimations</code></a>) and the name of each morph weight of its entities (<a href="#getMorphTargetNames"><code>getMorphTargetNames</code></a>).</p></div>
+  <div class="body"><p>A mesh: its load state, its sub-meshes, its clips (<a href="#getAnimations"><code>getAnimations</code></a>) and the name of each morph weight of its entities (<a href="#getMorphTargetNames"><code>getMorphTargetNames</code></a>). <code>ownedMaterials</code> and <code>ownedTextures</code> are what its glTF import made, which <a href="#destroyMesh"><code>destroyMesh</code></a> destroys with it; <code>users</code> counts the entities made with it, so destroying a mesh no entity uses searches nothing.</p></div>
 </div>
 
 <div class="api" id="MeshState">
@@ -515,9 +564,10 @@ constexpr uint32_t MAX_MORPH_TARGETS = 256;</pre>
     uint32_t  geometryIndex    = 0;
     glm::vec3 boundsCenter     = glm::vec3(0.0f);
     float     boundsRadius     = 0.0f;
+    bool      allocated        = false;
 };</pre>
   <div class="body">
-    <p>Where a sub-mesh sits in the geometry pool, its row in the geometry table (<code>geometryIndex</code>), and its bounding sphere in mesh space, which frustum and occlusion culling test.</p>
+    <p>Where a sub-mesh sits in the geometry pool, its row in the geometry table (<code>geometryIndex</code>), and its bounding sphere in mesh space, which frustum and occlusion culling test. <code>allocated</code> is true while it holds ranges of the pool, which <a href="#destroyMesh"><code>destroyMesh</code></a> gives back.</p>
     <dl>
       <dt>firstIndex, indexCount</dt><dd>LOD 0, the full detail.</dd>
       <dt>lodIndexCount</dt><dd>The indices of LOD 1 and coarser, together. They come right after LOD 0's in the pool.</dd>
@@ -912,6 +962,13 @@ engine.addLightToScene(scene, spot);</code></pre>
   <div class="body"><p>The record the engine keeps for each light, read with <code>getLight</code> and changed with <code>updateLight</code>. The engine writes it into the GPU's light table only when it changes.</p></div>
 </div>
 
+<div class="api" id="destroyLight">
+  <pre class="sig">void destroyLight(LightHandle light);</pre>
+  <div class="body">
+    <p>Destroys the light: it leaves its scenes from the next frame on, a shadow made for it casts nothing, and its row of the light table goes to the next light at once (each frame slot has its own copy).</p>
+  </div>
+</div>
+
 <div class="api" id="getLight">
   <pre class="sig">Light getLight(LightHandle light) const;</pre>
   <div class="body"><p>A copy of the light's values. An invalid handle logs an error and returns a default <code>Light</code>.</p></div>
@@ -958,7 +1015,14 @@ engine.setSceneEnvironment(scene, {});</code></pre>
   <pre class="sig">EnvironmentHandle loadEnvironment(const std::string& path);</pre>
   <div class="body">
     <p>Loads an equirectangular (2:1 panorama) Radiance <samp>.hdr</samp> image, in the background like <a href="#loadMesh"><code>loadMesh</code></a>. A relative path starts from <code>EngineConfig::assetRoot</code>. The header is read at once; a missing file, another extension or an image that is not HDR logs an error and returns an invalid handle. A worker decodes the pixels. The next <a href="engine.html#beginFrame"><code>beginFrame</code></a> after that creates the textures, and the frame after (or the same one) prepares the light on the GPU, before any pass: about 1 ms for a 2048 × 1024 image. Until then a scene that uses it looks as if it had none.</p>
-    <p>Each call loads the file again (no cache), and an environment is never freed (<code>D22</code>): load each one once.</p>
+    <p>Each call loads the file again (no cache). <a href="#destroyEnvironment"><code>destroyEnvironment</code></a> frees one you no longer need, for example to change the sky with the time of day.</p>
+  </div>
+</div>
+
+<div class="api" id="destroyEnvironment">
+  <pre class="sig">void destroyEnvironment(EnvironmentHandle environment);</pre>
+  <div class="body">
+    <p>Destroys the environment. Scenes that use it have none from the next frame on (a small constant ambient). Its image, its three cubes (about 17 MiB for a 2k image) and their four bindless slots are freed once the GPU is done with them. A load or a bake that has not finished is dropped.</p>
   </div>
 </div>
 
@@ -1040,7 +1104,7 @@ engine.setSceneEnvironment(scene, {});</code></pre>
 
 <div class="callout warn">
   <strong>Known limits</strong>
-  <p>Nothing can be destroyed or removed from a scene, and pool space is never reused (<code>D4</code>). The fixed counts above are compile-time constants (<code>D15</code>). Lights have no update function, and only 7 can exist.</p>
+  <p>Every object can be destroyed, and pool space, rows and handle indices are reused (<a href="../guides/resource-lifetime.html">Deferred destruction</a>). The fixed counts above are compile-time constants (<code>D15</code>). A pool fragments: a mesh needs one free range per stream, so a full pool can refuse a mesh that would fit in its free space added up; the error names the largest free range.</p>
 </div>
 
 </main>

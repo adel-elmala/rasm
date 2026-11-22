@@ -81,6 +81,7 @@ namespace rasm
         uint32_t                    brdfLutSlot             = INVALID_TEXTURE_INDEX;
         BakeState                   brdfLutState            = BakeState::WAITING;
         uint64_t                    storageFreeValue        = 0;    // the storage slots may be rewritten once the frame fence passes it
+        bool                        bakeDestroyed           = false; // an environment this frame bakes was destroyed: finishEnvironmentBakes sets storageFreeValue
         PipelineHandle              cubePipeline;
         PipelineHandle              downsamplePipeline;
         PipelineHandle              specularPipeline;

@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -114,6 +115,11 @@ namespace rasm
         void                                tagReleases(const FenceValue& graphics, const FenceValue& compute);
         // Frees what the GPU is done with, without waiting.
         void                                collectReleases();
+        // Runs free once the GPU has finished every frame that may still use what it frees (with the destroys above).
+        void                                releaseAfterGpu(std::function<void()> free);
+        uint32_t                            getReleasesWaiting() const;
+        uint32_t                            getTextureCount() const;
+        uint32_t                            getBindlessTextureCount() const;
         bool                                resizeBuffer(const BufferHandle& buffer, uint64_t size);
         void                                bindPipeline(const CommandBufferHandle& commandBuffer, const PipelineHandle& pipeline);
         void                                bindIndexBuffer(const CommandBufferHandle& commandBuffer, const BufferHandle& buffer, uint64_t offset, Format indexType);

@@ -58,6 +58,7 @@ namespace rasm
     {
         readbacks = std::make_unique<Readbacks>();
         registry.lightHandles = HandlePool(static_cast<uint64_t>(config.maxLights) + 1);
+        registry.materialHandles = HandlePool(static_cast<uint64_t>(config.maxMaterials) + 1);
         // In a real implementation, this is where we'd initialize the window, graphics context, etc.
         spdlog::info("initializing engine with config: appName={}, windowWidth={}, windowHeight={}, enableValidation={}",
                      config.appName, config.windowWidth, config.windowHeight, config.enableValidation);
@@ -909,6 +910,23 @@ namespace rasm
     uint32_t Engine::getBindlessTextureIndex(const TextureHandle &texture)
     {
         return ctx.getBindlessTextureIndex(texture);
+    }
+
+    PoolStats Engine::getPoolStats() const
+    {
+        const GeometryPoolStats geometry = geometryPool->stats();
+        return {.entities = static_cast<uint32_t>(registry.entityHandles.liveCount()),
+                .meshes = static_cast<uint32_t>(registry.meshHandles.liveCount()),
+                .materials = static_cast<uint32_t>(registry.materialHandles.liveCount()),
+                .lights = static_cast<uint32_t>(registry.lightHandles.liveCount()),
+                .textures = ctx.getTextureCount(),
+                .bindlessTextures = ctx.getBindlessTextureCount(),
+                .vertices = geometry.vertices,
+                .indices = geometry.indices,
+                .subMeshes = geometry.subMeshes,
+                .instances = gpuScene->instanceRows.used(),
+                .animationPoolBytes = gpuAnimation->poolRanges.used(),
+                .releasesWaiting = ctx.getReleasesWaiting()};
     }
 
     bool Engine::isLive(const EntityHandle &entity) const

@@ -48,6 +48,8 @@ namespace rasm
     {
         GpuTable                        lights;
         std::vector<uint16_t>           lightScenes;                                            // per light, a bit per scene that holds it
+        std::vector<uint32_t>           listStamps;                                             // per light, the list rebuild that last met it
+        uint32_t                        rebuildStamp                                    = 0;
         SceneLightList                  lists[MAX_SCENES];
         ViewClusters                    views[MAX_SCENE_VIEWS];
         LightTotals                     totals[MAX_FRAMES_IN_FLIGHT]                    = {};

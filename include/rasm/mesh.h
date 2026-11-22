@@ -108,6 +108,7 @@ namespace rasm
         uint32_t            morphCount       = 0;        // MorphDeltas: vertexCount * morphTargetCount
         uint32_t            morphTargetCount = 0;
         uint32_t            geometryIndex    = 0;
+        bool                allocated        = false;    // it holds ranges of the geometry pool, freed with the mesh
         glm::vec3           boundsCenter     = glm::vec3(0.0f);
         float               boundsRadius     = 0.0f;
     };
@@ -126,6 +127,9 @@ namespace rasm
         std::vector<SubMesh>        subMeshes;
         std::vector<AnimationClip>  animations;
         std::vector<std::string>    morphTargetNames;   // one per weight of an entity (setMorphWeights)
+        std::vector<MaterialHandle> ownedMaterials;     // made by its glTF import: destroyed with it
+        std::vector<TextureHandle>  ownedTextures;
+        uint32_t                    users       = 0;    // entities that use it
     };
 
     struct MeshSize

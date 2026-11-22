@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Deferred Destruction · RASM</title>
 <meta name="description" content="How an engine destroys objects the GPU may still use: the handle dies at once, the memory once the GPU has finished every frame that may read it. Fence values per queue and for uploads, the release queue, what can be reused at once and what must wait, and how RASM does it.">
-<meta name="rasm-sources" content="src/rhi/releaseQueue.h src/rhi/releaseQueue.cpp src/rhi/renderContext.cpp include/rasm/render/renderContext.h include/rasm/engine.h src/engine.cpp src/assets/texture.cpp src/renderer/ui.cpp src/rhi/uploadManager.cpp examples/17_streaming/main.cpp">
+<meta name="rasm-sources" content="src/core/rangeAllocator.h src/core/rangeAllocator.cpp src/renderer/geometryPool.cpp src/assets/mesh.cpp src/assets/material.cpp src/scene/entity.cpp src/scene/scene.cpp src/rhi/releaseQueue.h src/rhi/releaseQueue.cpp src/rhi/renderContext.cpp include/rasm/render/renderContext.h include/rasm/engine.h src/engine.cpp src/assets/texture.cpp src/renderer/ui.cpp src/rhi/uploadManager.cpp examples/17_streaming/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -42,6 +42,8 @@
     <li>"Later" is a <b>fence value</b>: the value the queues signal when the frame that was recorded at the destroy is done. Every queue counts, and so do uploads.</li>
     <li>A <b>release queue</b> holds what waits. Each frame end gives the new entries their values; each frame start frees the entries whose values the fences reached. Nothing waits on the CPU.</li>
     <li>What the GPU finds by a number (a bindless slot, a pool range, a table row with one copy) waits too. Data with <b>one copy per frame slot</b> can be reused at once.</li>
+    <li>Freed <b>ranges</b> of a pool go on a free list that joins neighbours. Reuse brings <b>fragmentation</b>: free space split into holes.</li>
+    <li>Users of a destroyed object <b>fall back</b> to a default, objects made for one owner <b>die with it</b>, and what a renderer still draws is <b>refused</b>.</li>
     <li>When nothing was destroyed, the queue is empty and costs nothing.</li>
   </ul>
 </div>
@@ -245,7 +247,114 @@
   </div>
 </div>
 
-<h2 id="pitfalls"><span class="n">6</span>Pitfalls</h2>
+<h2 id="ranges"><span class="n">6</span>Reusing ranges of a pool</h2>
+
+<p>A GPU-driven engine keeps all meshes in a few big buffers: one for vertices, one for indices, a table with a row per sub-mesh. A mesh takes a <b>range</b> of each. When meshes only come, a counter at the end is enough. When they also go, the freed ranges must come back, or a streaming program fills the pool in minutes.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="A vertex pool of 40 units. Top: meshes A, B, C, D in a row, then free space. B and D are destroyed: their ranges go on the free list, sorted by offset. C goes too: its range joins B's and D's free neighbours into one range. A new mesh E of 14 units takes the first free range that is large enough.">
+    <text x="20" y="22" class="small title">1. A, B, C, D in the pool; the rest is free</text>
+    <rect x="20"  y="30" width="120" height="30" class="mem"/><text x="80"  y="50" class="mid small">A 8</text>
+    <rect x="140" y="30" width="90"  height="30" class="mem"/><text x="185" y="50" class="mid small">B 6</text>
+    <rect x="230" y="30" width="75"  height="30" class="mem"/><text x="267" y="50" class="mid small">C 5</text>
+    <rect x="305" y="30" width="135" height="30" class="mem"/><text x="372" y="50" class="mid small">D 9</text>
+    <rect x="440" y="30" width="180" height="30" class="ghost"/><text x="530" y="50" class="mid small t-faint">free 12</text>
+    <text x="640" y="50" class="small">40 units</text>
+
+    <text x="20" y="96" class="small title">2. B and D are freed: holes, kept in a list sorted by offset</text>
+    <rect x="20"  y="104" width="120" height="30" class="mem"/><text x="80"  y="124" class="mid small">A</text>
+    <rect x="140" y="104" width="90"  height="30" class="ghost"/><text x="185" y="124" class="mid small t-faint">free 6</text>
+    <rect x="230" y="104" width="75"  height="30" class="mem"/><text x="267" y="124" class="mid small">C</text>
+    <rect x="305" y="104" width="315" height="30" class="ghost"/><text x="462" y="124" class="mid small t-faint">free 21 (D and the end joined)</text>
+
+    <text x="20" y="170" class="small title">3. C is freed and joins both neighbours; E (14) takes the first range that fits</text>
+    <rect x="20"  y="178" width="120" height="30" class="mem"/><text x="80"  y="198" class="mid small">A</text>
+    <rect x="140" y="178" width="210" height="30" class="mem"/><rect x="140" y="178" width="210" height="30" class="hot"/><text x="245" y="198" class="mid small">E 14</text>
+    <rect x="350" y="178" width="270" height="30" class="ghost"/><text x="485" y="198" class="mid small t-faint">free 18</text>
+    <text x="20" y="236" class="small">Joining neighbours keeps the list short, so a big mesh still finds one range long enough.</text>
+  </svg>
+  <figcaption>Offsets and sizes in the pool's own unit: vertices, indices, rows or bytes. The same allocator serves every stream.</figcaption>
+</figure>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="First fit: the first free range from the start that is large enough.">
+      <rect x="20" y="50" width="40" height="30" class="ghost"/><rect x="60" y="50" width="40" height="30" class="mem"/><rect x="100" y="50" width="70" height="30" class="hot"/><rect x="170" y="50" width="50" height="30" class="ghost"/>
+      <text x="135" y="40" class="mid small">taken</text>
+    </svg>
+    <h4>First fit</h4>
+    <p>Walk the free list from the start; take the first range that is large enough. Simple, and keeps the end free.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Best fit: the smallest free range that is large enough.">
+      <rect x="20" y="50" width="70" height="30" class="ghost"/><rect x="90" y="50" width="40" height="30" class="mem"/><rect x="130" y="50" width="50" height="30" class="hot"/><rect x="180" y="50" width="40" height="30" class="mem"/>
+      <text x="155" y="40" class="mid small">taken</text>
+    </svg>
+    <h4>Best fit</h4>
+    <p>Take the smallest range that fits. Leaves big ranges whole, but needs the free ranges sorted by size too.</p>
+    <p class="cost">A second index to keep.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Size classes: fixed sizes, each with its own free list.">
+      <rect x="20" y="40" width="30" height="20" class="mem"/><rect x="55" y="40" width="30" height="20" class="ghost"/><rect x="90" y="40" width="30" height="20" class="mem"/>
+      <rect x="20" y="70" width="60" height="20" class="mem"/><rect x="85" y="70" width="60" height="20" class="ghost"/>
+      <rect x="20" y="100" width="120" height="20" class="ghost"/>
+    </svg>
+    <h4>Size classes</h4>
+    <p>Round each request up to a power of two, one free list per size. Fast, never searches, but wastes up to half of a range.</p>
+  </div>
+</div>
+
+<p><b>Fragmentation</b> is the cost of reuse: the free space is split into holes. A request can fail although the holes add up to more than it needs. Try it: free every other range, then ask for a large one.</p>
+
+<figure class="lab" data-lab="range-reuse" data-title="Fill, free, fragment">
+  <figcaption>Stream ranges in and out and watch the free list. Then free every other range and request a big one: the pool has room in total, but no single hole is large enough.</figcaption>
+</figure>
+
+<div class="callout">
+  <strong>What to do about fragmentation</strong>
+  <p>Size the pool with room to spare, so a hole is usually found. Keep ranges of one object together, so they go together. Report the <b>largest free range</b> when a request fails, not only the total, or the error looks impossible. Moving live ranges to close the holes (defragmenting) needs every user of an offset to be updated, and is a step most engines take only when a pool is close to full.</p>
+</div>
+
+<h2 id="users"><span class="n">7</span>What uses a destroyed object</h2>
+
+<p>An object can be destroyed while other objects still name it: a material that entities use, a mesh with entities on it, a texture in a material. There are three answers, and an engine usually mixes them:</p>
+
+<div class="vgrid">
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An entity keeps a stale handle to a destroyed material, whose slot now holds another material.">
+      <rect x="20" y="50" width="80" height="30" rx="4" class="cpu"/><text x="60" y="70" class="mid small">entity</text>
+      <line x1="100" y1="65" x2="150" y2="65" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <rect x="150" y="50" width="70" height="30" rx="4" class="bad"/><text x="185" y="70" class="mid small">new obj</text>
+    </svg>
+    <h4>Leave it</h4>
+    <p>The user keeps a stale number. If the slot is reused, it uses the new object: the ABA bug, on the GPU.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The entity falls back to a default material.">
+      <rect x="20" y="50" width="80" height="30" rx="4" class="cpu"/><text x="60" y="70" class="mid small">entity</text>
+      <line x1="100" y1="65" x2="150" y2="65" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <rect x="150" y="50" width="70" height="30" rx="4" class="mem"/><text x="185" y="70" class="mid small">default</text>
+    </svg>
+    <h4>Fall back</h4>
+    <p>Users let go and take a default: no material, no texture, nothing to draw. The engine must find them, so it counts them.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A mesh owns its materials and textures; they go together.">
+      <rect x="20" y="30" width="90" height="30" rx="4" class="cpu"/><text x="65" y="50" class="mid small">mesh</text>
+      <rect x="130" y="20" width="90" height="24" rx="4" class="mem"/><text x="175" y="36" class="mid small">materials</text>
+      <rect x="130" y="56" width="90" height="24" rx="4" class="mem"/><text x="175" y="72" class="mid small">textures</text>
+      <line x1="110" y1="45" x2="128" y2="34" class="arrow"/><line x1="110" y1="45" x2="128" y2="66" class="arrow"/>
+      <text x="120" y="110" class="mid small">destroyed together</text>
+    </svg>
+    <h4>Own it</h4>
+    <p>What an import made belongs to what was imported, and is destroyed with it. Nobody else is expected to keep it.</p>
+  </div>
+</div>
+
+<p>Refusing is a fourth answer, for objects whose users are few and important: a camera or a scene that a render graph still draws. A clear error that says what holds it is better than a frame that silently draws nothing.</p>
+
+<h2 id="pitfalls"><span class="n">8</span>Pitfalls</h2>
 
 <dl class="pitfalls">
   <div><dt>Garbage or a lost device a frame after a destroy</dt><dd>The memory was freed while a frame in flight read it. Free through the queue, never at the call.</dd></div>
@@ -253,12 +362,13 @@
   <div><dt>A free that never happens</dt><dd>It waits for a value nothing will signal: taken before the submit, or for a submit that failed. Tag at the end of the frame with the values the counters really signaled last.</dd></div>
   <div><dt>Memory grows while the window is minimized</dt><dd>No frame runs, so a queue that is tagged and collected only inside a frame never moves. Between frames nothing is being recorded, so a free may take the values signaled last at once: tag and collect also where a skipped frame still passes.</dd></div>
   <div><dt>A copy writes into freed memory</dt><dd>An upload sent after the frame still writes the object. Its counter is one of the values to wait for.</dd></div>
+  <div><dt>A full pool, although half of it is free</dt><dd>Fragmentation: no single hole is large enough. Join neighbours when freeing, size the pool with room to spare, and report the largest free range.</dd></div>
   <div><dt>The frame stalls at a destroy</dt><dd>A wait for the device to be idle at each destroy. Read counters, never wait on them, to decide what to free.</dd></div>
 </dl>
 
-<h2 id="in-rasm"><span class="n">7</span>In RASM</h2>
+<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
 
-<p><code>RenderContext::destroyTexture</code>, <code>destroyBuffer</code> and <code>destroyRenderTargets</code> (and <code>Engine::destroyTexture</code>, <code>Engine::destroyBuffer</code>, <code>Engine::destroyRenderTarget</code> for applications) release the handle at once and give the free to a <code>rhi::ReleaseQueue</code>. <code>Engine::endFrame</code> tags the queue after <code>submitBatches</code>, and <code>Engine::beginFrame</code> collects it after the fence wait of the frame slot. Nothing waits on the CPU.</p>
+<p>Every object can be destroyed. <code>RenderContext::destroyTexture</code>, <code>destroyBuffer</code> and <code>destroyRenderTargets</code> (and <code>Engine::destroyTexture</code>, <code>Engine::destroyBuffer</code>, <code>Engine::destroyRenderTarget</code> for applications) release the handle at once and give the free to a <code>rhi::ReleaseQueue</code>; the other <code>destroy*</code> calls give it what the GPU reads by number through <code>RenderContext::releaseAfterGpu</code>. <code>Engine::endFrame</code> tags the queue after <code>submitBatches</code>, and <code>Engine::beginFrame</code> collects it after the fence wait of the frame slot. Nothing waits on the CPU.</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 300" role="img" aria-label="destroyTexture releases the handle in the texture pool and pushes a free onto the release queue, untagged. endFrame, after submitBatches, calls tagReleases with frameFenceValue, computeFenceValue and the uploads' last submit. beginFrame, after its fence waits, calls collectReleases at its start and again after the fence wait, which reads the three fences and runs every free whose values they reached: textureStates.forget, cancelUploads, destroyTexture, and the bindless slot goes back to freeBindlessSlots.">
@@ -293,6 +403,23 @@
   <figcaption>The graphics value covers the frame's compute work, because the frame's last graphics batch waits for it (<a href="async-compute.html">async compute</a>). The compute value still counts, for a frame whose later batches failed after a compute one went out.</figcaption>
 </figure>
 
+<h3>Each destroy call</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Call</th><th>Waits for the GPU (release queue)</th><th>Reused at once</th><th>Users fall back</th></tr>
+  <tr><td><code>destroyEntity</code></td><td>nothing</td><td>its instance rows; its animated row and its ranges of the animation buffers (written as stopped, <code>clip</code> −1, which the passes skip)</td><td>its scenes rebuild their draw lists without it</td></tr>
+  <tr><td><code>destroyMesh</code></td><td>its ranges of the five geometry streams, its geometry table rows, its animation pool range</td><td>its index</td><td>entities on it draw nothing (searched only while <code>Mesh::users</code> is not 0); its import's materials and textures are destroyed with it</td></tr>
+  <tr><td><code>destroyMaterial</code></td><td>nothing</td><td>its row of the material table</td><td>entities made with it, and its mesh's sub-meshes, take the entity's or the default material; their rows are rewritten (searched only when something uses it)</td></tr>
+  <tr><td><code>destroyTexture</code></td><td>the image and its bindless slot</td><td>its index</td><td>materials that use it lose it</td></tr>
+  <tr><td><code>destroyLight</code></td><td>nothing</td><td>its row of the light table</td><td>its scenes rebuild their light lists; a shadow made for it casts nothing</td></tr>
+  <tr><td><code>destroyEnvironment</code></td><td>its image, cubes and four slots</td><td>its index</td><td>scenes that use it have none</td></tr>
+  <tr><td><code>destroyCamera</code>, <code>destroyScene</code></td><td>a scene's draw list and light list buffers</td><td>the index (the scene's bit in every entity and light is cleared first)</td><td>refused while a render graph draws a view of them; <code>Engine::render</code>'s graph lets go first</td></tr>
+</table>
+</div>
+
+<p>The pools are <code>RangeAllocator</code>s (<code>src/core/rangeAllocator.cpp</code>): a <code>std::map</code> of free ranges by offset, first fit, joining neighbours on free. The geometry pool has one per stream and one for its table rows; a mesh takes every range of every sub-mesh before it writes anything, and gives all back if one does not fit. The instance table, the animated entity table's ranges and the animation pool have one each. <code>examples/17_streaming</code> pushes thousands of tiles through pools sized for about two windows of them, and <code>Engine::getPoolStats</code> stays flat.</p>
+
 <h3>Where RASM follows this page, and where it differs</h3>
 
 <div class="table-wrap">
@@ -305,7 +432,9 @@
   <tr><td>Free</td><td>a free function per entry</td><td>A <code>std::function</code> per entry, in order. <code>RenderContext::cleanup</code> waits for the device and runs them all (<code>releaseAll</code>).</td></tr>
   <tr><td>Bindless slots</td><td>wait like memory</td><td>The same. A texture holds one slot; its destroy gives it back through the queue, and <code>updateBindlessDescriptorSet</code> takes freed slots first. <a href="bindless.html#in-rasm">Bindless resources</a> has the details.</td></tr>
   <tr><td>Materials that use a destroyed texture</td><td>must stop using its slot</td><td><code>Engine::destroyTexture</code> removes the texture from every material that has it and rewrites their rows, so the slot samples nothing before it is reused.</td></tr>
-  <tr><td>Per-slot table rows</td><td>reusable at once</td><td>The rows of a <code>GpuTable</code> (instances, materials, lights) have one copy per frame slot, written only in <code>syncGpuScene</code> after the slot's fence.</td></tr>
+  <tr><td>Per-slot table rows</td><td>reusable at once</td><td>The rows of a <code>GpuTable</code> (instances, materials, lights, animated entities) have one copy per frame slot, written only in <code>syncGpuScene</code> after the slot's fence.</td></tr>
+  <tr><td>Range allocator</td><td>first fit, best fit or size classes</td><td>First fit over a <code>std::map</code>, neighbours joined. No defragmenting: a refused mesh logs every stream's use and the largest free ranges.</td></tr>
+  <tr><td>Users</td><td>leave, fall back, own or refuse</td><td>Fall back for entities, materials and textures; own for a glTF import's materials and textures; refuse for cameras and scenes a graph draws. Counted: <code>Mesh::users</code> and <code>Registry::materialUsers</code>, so the usual order (entities first) searches nothing.</td></tr>
 </table>
 </div>
 
@@ -317,10 +446,11 @@
   <tr><td>The queue: <code>release</code>, <code>tag</code>, <code>collect</code>, <code>releaseAll</code></td><td><code>src/rhi/releaseQueue.h</code>, <code>src/rhi/releaseQueue.cpp</code></td></tr>
   <tr><td>Deferred frees of textures, buffers (also the old buffer of <code>resizeBuffer</code>), heaps and storage slots; <code>tagReleases</code>, <code>collectReleases</code></td><td><code>src/rhi/renderContext.cpp</code></td></tr>
   <tr><td>Tag and collect in the frame</td><td><code>Engine::endFrame</code>, <code>Engine::beginFrame</code> in <code>src/engine.cpp</code></td></tr>
-  <tr><td>Texture destroy for applications</td><td><code>Engine::destroyTexture</code> in <code>src/assets/texture.cpp</code></td></tr>
+  <tr><td>Destroy calls</td><td><code>destroyTexture</code> in <code>src/assets/texture.cpp</code>, <code>destroyMesh</code> in <code>src/assets/mesh.cpp</code>, <code>destroyMaterial</code> in <code>src/assets/material.cpp</code>, <code>destroyEnvironment</code> in <code>src/assets/environment.cpp</code>, <code>destroyEntity</code> in <code>src/scene/entity.cpp</code>, <code>destroyLight</code> in <code>src/scene/light.cpp</code>, <code>destroyCamera</code> in <code>src/scene/camera.cpp</code>, <code>destroyScene</code> and the <code>remove*FromScene</code> calls in <code>src/scene/scene.cpp</code></td></tr>
+  <tr><td>Ranges</td><td><code>RangeAllocator</code> in <code>src/core/rangeAllocator.cpp</code>; <code>GeometryPool::allocate</code>, <code>write</code>, <code>free</code>; <code>releaseEntityRows</code> in <code>src/renderer/gpuScene.cpp</code>; <code>releaseEntityAnimation</code>, <code>releaseMeshAnimation</code> in <code>src/renderer/animation.cpp</code></td></tr>
   <tr><td>A user: Dear ImGui's textures</td><td><code>releaseUiTexture</code> in <code>src/renderer/ui.cpp</code></td></tr>
-  <tr><td>Unit tests</td><td><code>tests/releaseQueueTests.cpp</code></td></tr>
-  <tr><td>Example: textures streamed through the bindless set</td><td><code>examples/17_streaming</code></td></tr>
+  <tr><td>Unit tests</td><td><code>tests/releaseQueueTests.cpp</code>, <code>tests/rangeAllocatorTests.cpp</code></td></tr>
+  <tr><td>Example: tiles streamed in and out around a moving camera</td><td><code>examples/17_streaming</code></td></tr>
 </table>
 </div>
 
@@ -329,7 +459,7 @@
   <p>Never free a GPU object, a bindless slot or a shared range at the call that destroys it: give the free to the release queue. Never wait on a fence to decide what to free. A table with one copy per frame slot is written only in its slot's frame, so its rows need no queue.</p>
 </div>
 
-<p>Still open: graph teardown (<code>releaseSceneView</code>), re-placing transient render targets and growing the animation buffers still wait for the GPU (<code>D35</code>). Destroy calls for meshes, materials, entities, lights and environments come with <code>D4</code>.</p>
+<p>Still open: graph teardown (<code>releaseSceneView</code>), re-placing transient render targets and growing the animation buffers still wait for the GPU (<code>D35</code>). No pool is defragmented.</p>
 
 <h3>Further reading</h3>
 <ul>

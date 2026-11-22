@@ -73,7 +73,7 @@ namespace rasm
         const HandleSlot slot = registry.materialHandles.allocate();
         if (slot.index == 0)
         {
-            spdlog::warn("Exceeded maximum number of materials ({} alive, MAX_MATERIALS).", registry.materialHandles.liveCount());
+            spdlog::error("The material table is full: {} materials are alive. EngineConfig::maxMaterials ({}) sets its size.", registry.materialHandles.liveCount(), config.maxMaterials);
             return {};
         }
         const MaterialHandle handle{slot.index, slot.generation};
@@ -128,6 +128,61 @@ namespace rasm
         return handle;
     }
 
+    // Entities made with it, and the sub-meshes of the mesh whose import made it, let go of it; their rows are rewritten
+    // with the entity's material or the default one, so the row can take the next material at once (each frame slot has
+    // its own copy of the table). Its textures stay: they are the application's, or its mesh's.
+    void Engine::destroyMaterial(MaterialHandle material)
+    {
+        if (!isLive(material))
+        {
+            spdlog::error("destroyMaterial: material handle {{{}, {}}} is invalid or was destroyed.", material.index, material.generation);
+            return;
+        }
+        if (material == defaultMaterial)
+        {
+            spdlog::error("destroyMaterial: the default material can't be destroyed.");
+            return;
+        }
+        detachMaterial(material);
+        registry.materials[material.index] = {};
+        if (material.index < registry.materialUsers.size())
+            registry.materialUsers[material.index] = 0;
+        if (material.index < registry.materialOwners.size())
+            registry.materialOwners[material.index] = {};
+        registry.materialHandles.release(material.index, material.generation);
+    }
+
+    // Nothing is searched when nothing uses the material, the usual case when a mesh and its entities go first.
+    void Engine::detachMaterial(MaterialHandle material)
+    {
+        const uint32_t users = material.index < registry.materialUsers.size() ? registry.materialUsers[material.index] : 0;
+        const MeshHandle owner = material.index < registry.materialOwners.size() ? registry.materialOwners[material.index] : MeshHandle{};
+        bool ownerUsed = false;
+        if (isLive(owner))
+        {
+            for (SubMesh &subMesh : registry.meshes[owner.index].subMeshes)
+            {
+                if (subMesh.material == material)
+                    subMesh.material = {};
+            }
+            ownerUsed = registry.meshes[owner.index].users > 0;
+        }
+        if (users == 0 && !ownerUsed)
+            return;
+        for (size_t i = 1; i < registry.entities.size(); ++i)
+        {
+            Entity &entity = registry.entities[i];
+            if (!isLive(entity.handle))
+                continue;
+            const bool user = entity.material == material;
+            if (user)
+                entity.material = {};
+            if (user || (ownerUsed && entity.mesh == owner))
+                writeInstanceRows(entity.handle, false);
+        }
+        refreshEntitiesAfterMaterialChange();
+    }
+
     void Engine::updateMaterial(MaterialHandle material, const Material &values)
     {
         if (!isLive(material))
@@ -168,7 +223,7 @@ namespace rasm
         const HandleSlot slot = registry.materialHandles.allocate();
         if (slot.index == 0)
         {
-            spdlog::warn("Exceeded maximum number of materials ({} alive, MAX_MATERIALS).", registry.materialHandles.liveCount());
+            spdlog::error("The material table is full: {} materials are alive. EngineConfig::maxMaterials ({}) sets its size.", registry.materialHandles.liveCount(), config.maxMaterials);
             return {};
         }
         const MaterialHandle handle{slot.index, slot.generation};

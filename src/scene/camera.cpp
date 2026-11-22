@@ -1,5 +1,6 @@
 #include "rasm/camera.h"
 #include "rasm/engine.h"
+#include "renderer/renderer.h"
 
 #include "spdlog/spdlog.h"
 
@@ -268,6 +269,23 @@ namespace rasm
         };
 
         return handle;
+    }
+
+    void Engine::destroyCamera(CameraHandle camera)
+    {
+        if (!isLive(camera))
+        {
+            spdlog::error("destroyCamera: camera handle {{{}, {}}} is invalid or was destroyed.", camera.index, camera.generation);
+            return;
+        }
+        if (viewHolds({}, camera, "destroyCamera"))
+            return;
+        if (renderer)
+            renderer->release({}, camera);
+        for (Scene &scene : registry.scenes)
+            std::erase(scene.cameras, camera);
+        registry.cameras[camera.index] = {};
+        registry.cameraHandles.release(camera.index, camera.generation);
     }
 
     void Engine::setCameraTransform(CameraHandle camera, Transform transform)

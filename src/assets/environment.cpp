@@ -72,6 +72,37 @@ namespace rasm
         return isBakeUsable(environments->environments[environment.index].state);
     }
 
+    // Scenes that use it have no environment from the next frame on. Its textures and their bindless slots are freed once
+    // the frames in flight, which may still light with them or bake them, are done.
+    void Engine::destroyEnvironment(EnvironmentHandle environment)
+    {
+        if (!isLive(environment))
+        {
+            spdlog::error("destroyEnvironment: environment handle {{{}, {}}} is invalid or was destroyed.", environment.index, environment.generation);
+            return;
+        }
+        for (Scene &scene : registry.scenes)
+        {
+            if (scene.environment.environment == environment)
+                scene.environment.environment = {};
+        }
+        Environment &entry = environments->environments[environment.index];
+        // A bake recorded in the frame being made still writes the storage slots: none is rewritten before it is done.
+        if (entry.state == BakeState::RECORDED)
+        {
+            environments->bakeDestroyed = true;
+            environments->storageFreeValue = UINT64_MAX;
+        }
+        for (TextureHandle texture : {entry.source, entry.cube, entry.specular, entry.irradiance})
+        {
+            if (ctx.isAlive(texture))
+                ctx.destroyTexture(texture);
+        }
+        entry = {};
+        entry.state = BakeState::FAILED;
+        registry.environmentHandles.release(environment.index, environment.generation);
+    }
+
     // Makes the image and the three cubes, so the next frame can bake them. A failure leaves the environment without
     // light, as if the scene had none.
     void Engine::finishEnvironmentLoad(PendingEnvironmentLoad &load)
@@ -79,6 +110,9 @@ namespace rasm
         ZoneScoped;
 
         EnvironmentRaw raw = load.result.get();
+        // Destroyed while it decoded: the image is dropped.
+        if (!isLive(load.handle))
+            return;
         Environment &environment = environments->environments[load.handle.index];
         environment.state = BakeState::FAILED;
         if (raw.pixels.empty())

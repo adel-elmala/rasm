@@ -60,7 +60,7 @@ Goal: the structural changes that every later feature depends on. They get much 
 ### 1.2 RHI
 - [x] Define a backend-neutral device interface: device, buffer, texture, sampler, pipeline, command buffer, queue, swapchain, fence/timeline. Move all `Vk*` code behind it (`D1`, done 2026-11-02). The platform's Vulkan surface hook remains until `D7`.
 - [x] Use typed descriptors (`BufferDesc`, `TextureDesc`, `PipelineDesc`, …) with defaulted equality and a real hash combine (`D5`, done 2026-11-02).
-- [ ] Store objects in generational pools. Make `destroy*` APIs available for every object, with destruction deferred until the GPU has finished the frames that use them (`D4`, `P4`). Partly done 2026-11-22: every handle comes from a `HandlePool` (free list, generation bump, stale handles refused), `RenderContext` tables are vectors indexed by handle (`P4`, done), and textures, buffers and render targets are destroyed through a release queue tied to the frame, compute and upload fences, which also reuses bindless slots (`B25`, done); `Engine::destroyTexture`, `destroyBuffer`, `destroyRenderTarget`; example `17_streaming`. Open: destroy calls for meshes (and their geometry pool ranges), materials (`D34`), entities, cameras, lights, scenes and environments (`D22`), with row and range reuse; the remaining waits (`D35`).
+- [x] Store objects in generational pools. Make `destroy*` APIs available for every object, with destruction deferred until the GPU has finished the frames that use them (`D4`, `P4`, done 2026-11-22). Every object has a destroy call (`destroyEntity`, `removeEntityFromScene`, `destroyMesh` with its import's materials and textures, `destroyMaterial`, `destroyTexture`, `destroyLight`, `removeLightFromScene`, `destroyEnvironment`, `destroyCamera`, `destroyScene`, `destroyBuffer`, `destroyRenderTarget`); pools reuse ranges with `RangeAllocator`; `EngineConfig::maxMaterials` (`D34`); `getPoolStats`; example `17_streaming` streams tiles in and out with flat pools. Open: the remaining waits (`D35`), defragmenting. Earlier, 2026-11-22: every handle comes from a `HandlePool` (free list, generation bump, stale handles refused), `RenderContext` tables are vectors indexed by handle (`P4`, done), and textures, buffers and render targets are destroyed through a release queue tied to the frame, compute and upload fences, which also reuses bindless slots (`B25`, done); `Engine::destroyTexture`, `destroyBuffer`, `destroyRenderTarget`; example `17_streaming`. Open: destroy calls for meshes (and their geometry pool ranges), materials (`D34`), entities, cameras, lights, scenes and environments (`D22`), with row and range reuse; the remaining waits (`D35`).
 - [ ] Use a single shared pipeline layout (the bindless set + push-constant range), a `VkPipelineCache` persisted to disk, and an on-disk SPIR-V cache keyed by source hash (`P8`).
 - [x] Load Vulkan functions at run time with volk instead of linking `vulkan-1.dll`: a clear error when the loader is missing or older than 1.3, or no GPU has Vulkan 1.4, device calls without the loader's trampoline, and unit tests that start without a Vulkan loader (`D24`, done 2026-11-22).
 
@@ -85,15 +85,15 @@ Goal: the structural changes that every later feature depends on. They get much 
 
 Goal: make RASM's core promise hold at scale.
 
-- [ ] **GPU scene tables** (`D6`, `P3`, `P7`):
-  - a persistent geometry pool (a sub-allocator inside mega vertex and index buffers, uploaded once per mesh). The pool and a geometry table with per-sub-mesh bounds are done (2026-11-07). They are append-only: freeing and reusing ranges waits for the destroy APIs of `D4`.
+- [x] **GPU scene tables** (`D6`, `P3`, `P7`):
+  - a persistent geometry pool (a sub-allocator inside mega vertex and index buffers, uploaded once per mesh). The pool and a geometry table with per-sub-mesh bounds are done (2026-11-07). Freeing and reusing ranges is done (2026-11-22, `D4`): a `RangeAllocator` per stream and for the table rows, freed through the release queue.
   - an instance table (transform, mesh index, material index, bounds) and a material table (done 2026-11-07; the bounds are in the geometry table),
   - per-frame upload of only the dirty ranges (done 2026-11-07, example `03_instances`).
 - [x] Separate *mesh* from *instance*, so entities that share a mesh share its geometry (`P3`, done 2026-11-07).
 - [x] Compute pipelines and compute passes in the RHI (done 2026-11-07, example `04_compute`). Compute writes buffers only, and samples textures through the bindless set (done 2026-11-07). Storage images (done 2026-11-21, for the environment bake, outside the render graph); render graph compute passes that write textures (done 2026-11-21: storage render targets, `RenderTargetDesc::storage`, and storage textures, moved to `STORAGE` and back to `SAMPLED` by the graph).
 - [x] **GPU frustum culling**: a compute pass that writes a compacted draw list, followed by `vkCmdDrawIndexedIndirectCount` (done 2026-11-07).
 - [x] **Occlusion culling**: a two-pass hierarchical-Z scheme (draw what was visible last frame, build Hi-Z, cull and draw the rest) (done 2026-11-07, `EngineConfig::occlusionCulling`). The Hi-Z is a buffer pyramid built by compute from the sampled depth, so it needs no storage images.
-- [x] LOD selection on the GPU, from per-mesh LOD ranges and screen-space error (done 2026-11-07, `EngineConfig::meshLods` and `lodErrorPixels`). LODs are built with meshoptimizer as meshes load and share the mesh's vertices. Reordering the vertices for coarse-LOD fetch locality, and streaming LODs in and out of the pool (after `D4`), are still open.
+- [x] LOD selection on the GPU, from per-mesh LOD ranges and screen-space error (done 2026-11-07, `EngineConfig::meshLods` and `lodErrorPixels`). LODs are built with meshoptimizer as meshes load and share the mesh's vertices. Reordering the vertices for coarse-LOD fetch locality, and streaming LODs in and out of the pool (the pool frees ranges since `D4`), are still open.
 - [ ] Optional: meshlets with cluster culling, and a mesh-shader path where available (a Tier-A extra; keep the vertex-pulling path as the baseline).
 - [x] Stats overlay: frame time, GPU time per pass, triangles, instances drawn/culled, memory. (Original item 8; done 2026-11-07, `EngineConfig::showStats` or F1, on in example `03_instances`.)
 
@@ -145,7 +145,7 @@ Goal: production look and completeness for glTF content. The order is roughly by
 
 ### Map engines
 - [ ] Large-world precision: double-precision transforms on the CPU, camera-relative rendering (subtract the camera origin on the CPU, float offsets on the GPU), and reversed-Z (from phase 1).
-- [ ] Tile streaming: asynchronous load and destroy of meshes and textures under a memory budget (builds on `D4`, phase 1.3).
+- [ ] Tile streaming: asynchronous load and destroy of meshes and textures under a memory budget (builds on `D4`, phase 1.3). Load and destroy are done (2026-11-22: `D4`, `getPoolStats`, example `17_streaming`); open: a budget that decides what to load and drop.
 - [ ] Vector rendering: anti-aliased wide lines, polygons, points and SDF text and labels. Terrain from heightmap tiles.
 - [ ] Picking: an ID buffer pass with readback, giving the entity and the world position.
 

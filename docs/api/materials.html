@@ -37,7 +37,7 @@
     <li>Change a material: copy it with <code>getMaterial</code>, edit, <code>updateMaterial</code>. Every object that uses it changes in the next frame.</li>
     <li><code>loadTexture</code> loads in the background. Its <code>format</code> names the slot: color textures are sRGB (the default); normal, metallic-roughness and occlusion maps must be <code>R8G8B8A8_UNORM</code>. A <samp>.ktx2</samp> file stays block-compressed on the GPU (<a href="../guides/texture-compression.html">texture compression</a>).</li>
     <li>An entity waits, undrawn, until all its textures are loaded.</li>
-    <li>Limits: 256 materials (<code>MAX_MATERIALS</code>), 1024 texture slots (<code>MAX_BINDLESS_TEXTURES</code>). Neither is ever freed.</li>
+    <li>Limits: <code>EngineConfig::maxMaterials</code> materials alive at once (4096 by default), 1024 texture slots (<code>MAX_BINDLESS_TEXTURES</code>). A destroyed material's row and a destroyed texture's slot are reused.</li>
   </ul>
 </div>
 
@@ -114,7 +114,7 @@
       <dt>textures</dt><dd>In <code>PbrSlot</code> order: albedo, metallic, roughness, normal, occlusion, emissive. Leave the end out, or pass <code>{}</code> for an empty slot. Entries after the sixth are ignored. Textures that still load are fine.</dd>
       <dt>doubleSided</dt><dd>True: back faces are drawn too (no culling) and lit with the flipped normal.</dd>
     </dl>
-    <p>Returns an invalid handle and logs a warning after <code>MAX_MATERIALS</code> materials (256; 254 are left for you and glTF files, because indices start at 1 and the default material takes one).</p>
+    <p>Returns an invalid handle and logs an error when <code>EngineConfig::maxMaterials</code> materials are alive (the default material is one of them); the error names the field. <a href="#destroyMaterial"><code>destroyMaterial</code></a> gives a row back.</p>
     <pre><code>// examples/00_hello_scene
 rasm::TextureHandle albedo = engine.loadTexture("models/obj/bunny/bunny-atlas.jpg");
 rasm::MaterialHandle material =
@@ -289,6 +289,14 @@ engine.updateMaterial(pulse, values);</code></pre>
   </div>
 </div>
 
+<div class="api" id="destroyMaterial">
+  <pre class="sig">void destroyMaterial(MaterialHandle material);</pre>
+  <div class="body">
+    <p>Destroys the material. What used it falls back from the next frame on: an entity made with it uses its mesh's material or the default one, and a glTF sub-mesh that used it uses its entity's material. Their instance rows are rewritten, and the material's row goes to the next material at once. Its textures stay: they are yours, or the mesh's that imported them. The default material is refused.</p>
+    <p>Nothing is searched when no entity uses the material (destroy the entities first); otherwise every entity is checked once.</p>
+  </div>
+</div>
+
 <div class="api" id="updateMaterial">
   <pre class="sig">void updateMaterial(MaterialHandle material, const Material&amp; values);</pre>
   <div class="body">
@@ -443,7 +451,7 @@ ctx.pushConstants(commandBuffer, overlayPipeline, rasm::ShaderType::VERTEX_FRAGM
 
 <div class="callout warn">
   <strong>Every import uses up limits</strong>
-  <p>Each glTF material takes one of the 254 free materials and each image one or more bindless slots, and they are not freed yet: meshes can't be destroyed (<code>D4</code>). Two files that share a material or image create it twice. A primitive without a material uses the entity's material.</p>
+  <p>Each glTF material takes one of the 254 free materials and each image one or more bindless slots, and they belong to the mesh: <code>destroyMesh</code> destroys them with it. Two files that share a material or image create it twice. A primitive without a material uses the entity's material.</p>
 </div>
 
 <h2 id="limits"><span class="n">7</span>Limits</h2>
@@ -451,7 +459,7 @@ ctx.pushConstants(commandBuffer, overlayPipeline, rasm::ShaderType::VERTEX_FRAGM
 <div class="table-wrap">
 <table>
   <tr><th>Constant</th><th>Value</th><th>Meaning</th></tr>
-  <tr><td><code>MAX_MATERIALS</code></td><td>256</td><td>material table rows; 255 usable handles, one is the default material</td></tr>
+  <tr><td><code>EngineConfig::maxMaterials</code></td><td>4096</td><td>materials alive at once, the default material included; the table has one more row, 220 B each, twice</td></tr>
   <tr><td><code>MAX_BINDLESS_TEXTURES</code></td><td>1024</td><td>texture slots, shared by materials, glTF images, render targets and you</td></tr>
   <tr><td><code>MAX_TEXTURE_SLOTS</code></td><td>6</td><td>textures per material</td></tr>
   <tr><td><code>MAX_PARAM_SLOTS</code></td><td>12</td><td>floats in <code>params</code></td></tr>

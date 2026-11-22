@@ -1193,6 +1193,16 @@ void collectReleases();</pre>
   </div>
 </div>
 
+<div class="api" id="releaseAfterGpu">
+  <pre class="sig">void releaseAfterGpu(std::function&lt;void()&gt; free);
+uint32_t getReleasesWaiting() const;
+uint32_t getTextureCount() const;
+uint32_t getBindlessTextureCount() const;</pre>
+  <div class="body">
+    <p><code>releaseAfterGpu</code> runs <code>free</code> once the GPU has finished every frame that may still use what it frees, through the same release queue as the <code>destroy*</code> calls: for your own ranges of a buffer, for example. <code>getReleasesWaiting</code> counts what waits; <code>getTextureCount</code> the live textures; <code>getBindlessTextureCount</code> the bindless slots a texture holds.</p>
+  </div>
+</div>
+
 <div class="api" id="isAlive">
   <pre class="sig">bool isAlive(const TextureHandle&amp; texture) const;
 bool isAlive(const BufferHandle&amp; buffer) const;</pre>

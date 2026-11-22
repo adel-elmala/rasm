@@ -5,6 +5,7 @@
 #include "rasm/scene.h"
 #include "rasm/types.h"
 #include "rasm/material.h"
+#include "core/rangeAllocator.h"
 #include "renderer/blendSort.h"
 #include "renderer/gpuTable.h"
 #include "renderer/uberMaterialTypes.h"
@@ -33,6 +34,7 @@ namespace rasm
         bool                            waitingForTextures                                                  = false;
         uint32_t                        movedSync                                                           = UINT32_MAX;   // GpuScene::syncCount when its rows last changed
         glm::mat4                       syncedMatrix                                                        = glm::mat4(1.0f); // the entity matrix the last synced frame drew
+        uint32_t                        listStamp                                                           = 0;    // the draw list rebuild that last met it, so it is drawn once
     };
 
     struct DrawRun
@@ -144,13 +146,14 @@ namespace rasm
         std::vector<EntityDrawState>    entities;
         std::vector<CullMode>           instanceCullModes;
         std::vector<AlphaMode>          instanceAlphaModes;
-        uint32_t                        instanceCount                                                       = 0;
+        RangeAllocator                  instanceRows;                                                               // a range per entity, reused at once: each slot has its own copy
         std::vector<EntityHandle>       entitiesWaitingForMesh;
         std::vector<EntityHandle>       entitiesWaitingForTextures;
         std::vector<EntityHandle>       movedEntities;          // rows written since the last sync: their previousWorld is the last synced matrix
         std::vector<EntityHandle>       settlingEntities;       // moved before the last sync: the next sync writes previousWorld = world
         uint32_t                        syncCount                                                           = 0;
         bool                            texturesFinished                                                    = false;
+        uint32_t                        rebuildStamp                                                        = 0;
         SceneDrawList                   drawLists[MAX_SCENES];
     };
 

@@ -181,6 +181,7 @@ namespace rasm
         uint32_t     geometryPoolSubMeshes   = 1u << 14; // 136 B each
         uint32_t     maxInstances            = 1u << 16; // 160 B each, twice (one copy per frame slot)
         uint32_t     maxLights               = 1u << 14; // 56 B each, twice
+        uint32_t     maxMaterials            = 1u << 12; // materials alive at once, 220 B each, twice
         uint32_t     maxAnimatedEntities     = 1u << 14; // entities that play a clip, 120 B each, twice
         uint32_t     animationPoolBytes      = 16u << 20; // the nodes, key times and values of every loaded animation
         uint32_t     maxMorphWeights         = 1u << 16; // the morph weights of every posed entity, 4 B each, four times
@@ -196,6 +197,24 @@ namespace rasm
         bool         bloom                   = false;    // Engine::render adds the bloom passes (Camera::bloomStrength)
         bool         ui                      = false;    // Dear ImGui (CMake RASM_IMGUI): the RASM window on F1 and Engine::setUiCallback
         AntiAliasing antiAliasing            = AntiAliasing::NONE; // Engine::render's scene target: MSAA draws it with several samples per pixel
+    };
+
+    // What the engine-wide pools hold now: live objects, and the used part of each pool. A destroyed object's share comes
+    // back once the GPU has finished the frames that may use it, so a streaming application stays flat.
+    struct PoolStats
+    {
+        uint32_t     entities                = 0;
+        uint32_t     meshes                  = 0;
+        uint32_t     materials               = 0;
+        uint32_t     lights                  = 0;
+        uint32_t     textures                = 0;        // textures and render target attachments
+        uint32_t     bindlessTextures        = 0;        // slots of binding 0 held by a texture
+        uint64_t     vertices                = 0;        // of EngineConfig::geometryPoolVertices
+        uint64_t     indices                 = 0;        // of geometryPoolIndices
+        uint64_t     subMeshes               = 0;        // of geometryPoolSubMeshes
+        uint64_t     instances               = 0;        // instance rows, of maxInstances
+        uint64_t     animationPoolBytes      = 0;        // of animationPoolBytes
+        uint32_t     releasesWaiting         = 0;        // destroyed objects the GPU may still use
     };
 
     struct FrameResources

@@ -843,7 +843,7 @@ target = u for a half-edge collapse, the best new point for a full one</code></p
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>No attribute-aware cost, no sloppy fallback, no vertex reordering for coarse levels (development plan, phase 2). Levels cannot be streamed in and out of the pool, because nothing is ever freed from it (D4).</p>
+  <p>No attribute-aware cost, no sloppy fallback, no vertex reordering for coarse levels (development plan, phase 2). Levels are not streamed in and out of the pool on their own: a mesh's levels come and go with it.</p>
 </div>
 
 <h3>Further reading</h3>

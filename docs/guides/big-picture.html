@@ -354,7 +354,7 @@
   <tr><th>Owner</th><th>Type</th><th>Limit</th><th>Where the limit is</th></tr>
   <tr><td rowspan="6"><code>Engine</code> registry</td><td><code>Entity</code></td><td><code>MAX_ENTITIES</code> = 262144 (262143 usable)</td><td><code>rasm/entity.h</code></td></tr>
   <tr><td><code>Mesh</code></td><td>no count limit; its sub-meshes stop at <code>EngineConfig::geometryPoolSubMeshes</code> = 16384 rows, its data at the other pool sizes</td><td><code>rasm/types.h</code></td></tr>
-  <tr><td><code>Material</code></td><td><code>MAX_MATERIALS</code> = 256 (255 usable)</td><td><code>rasm/engine.h</code></td></tr>
+  <tr><td><code>Material</code></td><td><code>EngineConfig::maxMaterials</code> = 4096 alive at once</td><td><code>rasm/types.h</code></td></tr>
   <tr><td><code>Camera</code></td><td><code>MAX_CAMERAS</code> = 8 (7 usable)</td><td><code>rasm/engine.h</code></td></tr>
   <tr><td><code>Light</code></td><td><code>EngineConfig::maxLights</code> = 16384</td><td><code>rasm/types.h</code></td></tr>
   <tr><td><code>Scene</code></td><td><code>MAX_SCENES</code> = 16 (15 usable)</td><td><code>rasm/scene.h</code></td></tr>
@@ -364,10 +364,9 @@
 
 <p>Indices start at 1, so slot 0 is never used. That is why 7 cameras are alive at most with <code>MAX_CAMERAS</code> = 8. The limits count objects alive at once: a destroyed object gives its index back.</p>
 
-<div class="callout warn">
-  <strong>Known issues</strong>
-  <p><b>D4</b>: textures, buffers and render targets can be destroyed (<a href="resource-lifetime.html">deferred destruction</a>); meshes, materials, entities, cameras, lights, scenes and environments not yet, so their indices still only grow.</p>
-  <p><b>B13</b>: <code>loadMesh</code> takes its handle before the file is parsed, so a file that does not parse keeps an index.</p>
+<div class="callout">
+  <strong>Lifetime</strong>
+  <p>Every object can be destroyed, and indices are reused (<a href="resource-lifetime.html">deferred destruction</a>). A file that <code>loadMesh</code> can't parse keeps its index until <code>destroyMesh</code>.</p>
 </div>
 
 <h2 id="dedup"><span class="n">5</span>Descriptors and creation dedup</h2>

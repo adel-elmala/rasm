@@ -1,7 +1,9 @@
 #include "rasm/scene.h"
 #include "rasm/engine.h"
 #include "renderer/environmentBake.h"
+#include "renderer/gpuScene.h"
 #include "renderer/lightClusters.h"
+#include "renderer/renderer.h"
 
 #include "spdlog/spdlog.h"
 
@@ -41,14 +43,119 @@ namespace rasm
 
         auto &sceneRef = registry.scenes[scene.index];
 
+        // Destroyed and removed entities stay in the list until it is compacted, so a full list is compacted first.
+        if (sceneRef.entities.size() >= MAX_ENTITIES_PER_SCENE)
+            compactSceneEntities(scene);
         if (sceneRef.entities.size() >= MAX_ENTITIES_PER_SCENE)
         {
             spdlog::warn("Exceeded maximum entities per scene.");
             return;
         }
 
+        // An entity is in a scene once: added twice, it would be drawn twice.
+        if (!addEntityToDrawList(scene, entity))
+        {
+            spdlog::warn("Entity {} is already in scene {}.", entity.index, scene.index);
+            return;
+        }
         sceneRef.entities.push_back(entity);
-        addEntityToDrawList(scene, entity);
+    }
+
+    // The entity stays; the scene's draw list is rebuilt without it, and drops it from Scene::entities then.
+    void Engine::removeEntityFromScene(SceneHandle scene, EntityHandle entity)
+    {
+        if (!isLive(scene) || !isLive(entity))
+        {
+            spdlog::error("removeEntityFromScene: invalid or destroyed scene or entity handle.");
+            return;
+        }
+        const auto bit = static_cast<uint16_t>(1u << scene.index);
+        EntityDrawState &state = gpuScene->entities[entity.index];
+        if ((state.scenes & bit) == 0)
+        {
+            spdlog::warn("removeEntityFromScene: entity {} is not in scene {}.", entity.index, scene.index);
+            return;
+        }
+        state.scenes = static_cast<uint16_t>(state.scenes & ~bit);
+        gpuScene->drawLists[scene.index].rebuild = true;
+    }
+
+    void Engine::removeLightFromScene(SceneHandle scene, LightHandle light)
+    {
+        if (!isLive(scene) || !isLive(light))
+        {
+            spdlog::error("removeLightFromScene: invalid or destroyed scene or light handle.");
+            return;
+        }
+        const auto bit = static_cast<uint16_t>(1u << scene.index);
+        auto &lightScenes = gpuLights->lightScenes;
+        if (light.index >= lightScenes.size() || (lightScenes[light.index] & bit) == 0)
+        {
+            spdlog::warn("removeLightFromScene: light {} is not in scene {}.", light.index, scene.index);
+            return;
+        }
+        lightScenes[light.index] = static_cast<uint16_t>(lightScenes[light.index] & ~bit);
+        gpuLights->lists[scene.index].rebuild = true;
+    }
+
+    // True when a render graph other than Engine::render's holds a view of the scene or camera, which would draw it after
+    // it is gone: the caller refuses then. Engine::render's graph holds one count of each view of its scene and camera.
+    bool Engine::viewHolds(SceneHandle scene, CameraHandle camera, const char *caller) const
+    {
+        for (uint32_t i = 0; i < MAX_SCENE_VIEWS; ++i)
+        {
+            const SceneView &view = gpuScene->views[i];
+            const uint32_t own = renderer && renderer->draws(view.scene, view.camera) ? 1 : 0;
+            if (view.graphs <= own || !((scene.isValid() && view.scene == scene) || (camera.isValid() && view.camera == camera)))
+                continue;
+            spdlog::error("{}: {} render graph(s) draw view {} (scene {}, camera {}) with it. Destroy those graphs first, or let them go out of scope.", caller,
+                          view.graphs - own, i, view.scene.index, view.camera.index);
+            return true;
+        }
+        return false;
+    }
+
+    void Engine::destroyScene(SceneHandle scene)
+    {
+        if (!isLive(scene))
+        {
+            spdlog::error("destroyScene: scene handle {{{}, {}}} is invalid or was destroyed.", scene.index, scene.generation);
+            return;
+        }
+        if (viewHolds(scene, {}, "destroyScene"))
+            return;
+        if (renderer)
+            renderer->release(scene, {});
+
+        // Its index goes to the next scene, so no entity or light may keep its bit.
+        const auto bit = static_cast<uint16_t>(1u << scene.index);
+        Scene &sceneRef = registry.scenes[scene.index];
+        for (EntityHandle entity : sceneRef.entities)
+        {
+            if (isLive(entity) && entity.index < gpuScene->entities.size())
+                gpuScene->entities[entity.index].scenes = static_cast<uint16_t>(gpuScene->entities[entity.index].scenes & ~bit);
+        }
+        for (LightHandle light : sceneRef.lights)
+        {
+            if (light.index < gpuLights->lightScenes.size())
+                gpuLights->lightScenes[light.index] = static_cast<uint16_t>(gpuLights->lightScenes[light.index] & ~bit);
+        }
+        SceneDrawList &drawList = gpuScene->drawLists[scene.index];
+        for (BufferHandle buffer : drawList.buffers)
+        {
+            if (buffer.isValid())
+                ctx.destroyBuffer(buffer);
+        }
+        drawList = {};
+        SceneLightList &lightList = gpuLights->lists[scene.index];
+        for (BufferHandle buffer : lightList.buffers)
+        {
+            if (buffer.isValid())
+                ctx.destroyBuffer(buffer);
+        }
+        lightList = {};
+        sceneRef = {};
+        registry.sceneHandles.release(scene.index, scene.generation);
     }
 
     void Engine::addCameraToScene(SceneHandle scene, CameraHandle camera)

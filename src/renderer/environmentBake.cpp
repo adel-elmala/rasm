@@ -213,6 +213,12 @@ namespace rasm
             if (submitted)
                 state.storageFreeValue = std::max(state.storageFreeValue, frameValue);
         }
+        // The frame may still write the storage slots for a bake whose environment was destroyed during it.
+        if (state.bakeDestroyed)
+        {
+            state.storageFreeValue = frameValue;
+            state.bakeDestroyed = false;
+        }
         for (Environment &environment : state.environments)
         {
             if (environment.state != BakeState::RECORDED)

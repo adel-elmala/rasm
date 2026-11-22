@@ -747,7 +747,7 @@
 
 <p>The visible-draw lists and the Hi-Z have one copy per slot for a second reason: with async compute, <code>Cull 1</code> of the next frame then does not wait for this frame's draws, and can run next to them.</p>
 
-<p>Nothing is freed while frames are in flight, because nothing can be destroyed yet (<b>D4</b>). Resize is the exception: it waits for the device to go idle, then rebuilds the render targets sized from the window (<code>RenderContext::resizeRenderTargets</code>).</p>
+<p>A destroyed object is freed once the frames in flight that may use it are done, through a release queue tied to these fences (<a href="resource-lifetime.html">deferred destruction</a>). Resize waits for the device to go idle instead, then rebuilds the render targets sized from the window (<code>RenderContext::resizeRenderTargets</code>).</p>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
 
@@ -761,7 +761,7 @@
   <tr><td>Value only on success</td><td>store it after the submit</td><td>The same: a failed submit leaves both values, and calls <code>discardRecording</code>.</td></tr>
   <tr><td>Wait timeout</td><td>a timeout</td><td>None: <code>waitForFence</code> waits with <code>UINT64_MAX</code>. A failed wait skips the frame.</td></tr>
   <tr><td>Readback</td><td><var>N</var> frames late</td><td>The cull stats and GPU timers of a slot are read after its wait, so the overlay and the RASM window show the frame from two frames ago. <code>FrameStatsSlot::readFenceValue</code> skips a slot whose frame was never submitted. An image copy (<code>Engine::readFrame</code>, <code>Engine::readTexture</code>) rides in a frame's last graphics batch and keeps that frame's fence value, so <code>isReadbackReady</code> turns true about two frames later, and nothing waits (<a href="headless-readback.html">readback</a>).</td></tr>
-  <tr><td>Other users of the timeline idea</td><td>uploads, deletes</td><td><code>UploadManager</code> has its own timeline, "Upload Fence", to free staging space. There is no deferred delete (<b>D4</b>).</td></tr>
+  <tr><td>Other users of the timeline idea</td><td>uploads, deletes</td><td><code>UploadManager</code> has its own timeline, "Upload Fence", to free staging space. The release queue waits for the frame, compute and upload fences before it frees a destroyed object (<a href="resource-lifetime.html">deferred destruction</a>).</td></tr>
   <tr><td>Swapchain images</td><td>separate from slots</td><td>Separate. The swapchain also keeps its own acquire semaphores and its own release timeline, so it does not depend on the frame fence. See <a href="swapchain.html#in-rasm">the swapchain</a>.</td></tr>
 </table>
 </div>
@@ -786,7 +786,7 @@
     <li>GPU scene tables are written only in <code>syncGpuScene</code>. Change rows through <code>GpuTable::setRow</code>, never by writing a slot's buffer.</li>
     <li>A slot takes a fence value only after a submit that signals it succeeded.</li>
     <li><code>beginFrame</code> waits for both of the slot's fences before anything reuses its command buffers or writes its buffers.</li>
-    <li>A resource with one copy is only added to while frames are in flight. Replacing or freeing one needs the device idle (as resize does) until deferred destruction exists (<b>D4</b>).</li>
+    <li>A resource with one copy is freed or reused only through the release queue, after the frames that may use it (<a href="resource-lifetime.html">deferred destruction</a>).</li>
   </ul>
 </div>
 
