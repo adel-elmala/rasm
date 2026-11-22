@@ -1,4 +1,11 @@
 cmake_minimum_required(VERSION 3.23)
+
+# Before project(): the vcpkg toolchain installs the manifest's features when project() runs.
+option(RASM_IMGUI "Build with Dear ImGui: EngineConfig::ui, the engine's debug window and the application's UI" ON)
+if (RASM_IMGUI)
+    list(APPEND VCPKG_MANIFEST_FEATURES "imgui")
+endif()
+
 project(rasm VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)

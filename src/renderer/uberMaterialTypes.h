@@ -365,6 +365,15 @@ namespace rasm::gfx
         uint32_t         size;
     };
 
+    // The UI pass's push constants (shaders/passes/ui.slang): the draw's first ImDrawVert, its texture's bindless index
+    // and the display's size in points, width | height << 16.
+    struct UiPushConstants
+    {
+        uint64_t         vertices;
+        uint32_t         texture;
+        uint32_t         displaySize;
+    };
+
     // The tone-map pass's own push constants (shaders/passes/toneMap.slang). bloom is INVALID_TEXTURE_INDEX without one.
     struct ToneMapPushConstants
     {
@@ -520,6 +529,8 @@ namespace rasm::gfx
     static_assert(offsetof(BloomPushConstants, scale) == 12, "BloomPushConstants must match the shader's scalar layout");
     static_assert(sizeof(EnvironmentPushConstants) == PUSH_CONSTANTS_SIZE, "EnvironmentPushConstants must fill the pipelines' push-constant range");
     static_assert(offsetof(EnvironmentPushConstants, size) == 12, "EnvironmentPushConstants must match the shader's scalar layout");
+    static_assert(sizeof(UiPushConstants) == PUSH_CONSTANTS_SIZE, "UiPushConstants must fill the push-constant range");
+    static_assert(offsetof(UiPushConstants, displaySize) == 12, "UiPushConstants must match the shader's scalar layout");
     static_assert(offsetof(ToneMapPushConstants, exposure) == 4, "ToneMapPushConstants must match the shader's scalar layout");
 
 

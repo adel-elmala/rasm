@@ -14,6 +14,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <future>
 #include <memory>
 #include <string>
@@ -35,6 +36,7 @@ namespace rasm
     struct SceneDrawList;
     struct FrameStatsCollector;
     struct StatsOverlay;
+    struct Ui;
     namespace gfx { struct SceneData; }
 
     constexpr uint32_t MAX_MATERIALS        = 256;
@@ -160,6 +162,15 @@ namespace rasm
         // Returns the bloom target for addToneMapPass, or invalid on failure.
         RenderTargetHandle          addBloomPasses(RenderGraph& graph, const RenderTargetHandle& source, CameraHandle camera);
         bool                        addToneMapPass(RenderGraph& graph, const RenderTargetHandle& source, CameraHandle camera, const RenderTargetHandle& bloom = {});
+        // Draws the frame's Dear ImGui windows onto the swapchain: add it after addToneMapPass. Without it endFrame draws
+        // them in a render pass of its own. Returns false when the UI is off (EngineConfig::ui).
+        bool                        addUiPass(RenderGraph& graph);
+        // Runs every frame between ImGui::NewFrame and ImGui::Render, after the input and before the scene is uploaded,
+        // so what it changes shows in the same frame. Needs EngineConfig::ui.
+        void                        setUiCallback(std::function<void()> callback);
+        // The ImTextureID that shows a sampled texture with ImGui::Image, or 0 while the texture loads. A loaded texture
+        // without a bindless slot gets one.
+        uint64_t                    getUiTexture(const TextureHandle& texture);
         bool                        running() const;
         bool                        recreateSwapchain();
         void                        setRenderTarget(const RenderTargetHandle& renderTarget, uint32_t face = 0);
@@ -233,6 +244,7 @@ namespace rasm
         std::unique_ptr<Environments>                               environments                            = {};
         std::unique_ptr<FrameStatsCollector>                        frameStats                              = {};
         std::unique_ptr<StatsOverlay>                               statsOverlay                            = {};
+        std::unique_ptr<Ui>                                         ui                                      = {};
         std::unique_ptr<Renderer>                                   renderer                                = {};
         PipelineHandle                                              toneMapPipeline                         = {};
         PipelineHandle                                              msaaResolvePipeline                     = {};
@@ -348,6 +360,12 @@ namespace rasm
         bool                        createStatsOverlay();
         void                        updateStatsOverlay();
         void                        drawStatsOverlay();
+        bool                        createUi();
+        void                        destroyUi();
+        void                        buildUi();
+        void                        drawUi();
+        void                        drawUiFallback();
+        void                        drawEngineWindow();
 
         std::vector<PendingMeshLoad>                                            pendingMeshes;
         std::unordered_map<TextureHandle, PendingTextureLoad, HandleHash>       pendingTextures;

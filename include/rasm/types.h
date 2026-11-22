@@ -145,6 +145,7 @@ namespace rasm
         bool         clusteredLighting       = true;     // false: every pixel shades every light of the scene
         bool         hostImageCopy           = true;     // false: textures are copied from the staging ring, as on a device without host image copy
         bool         bloom                   = false;    // Engine::render adds the bloom passes (Camera::bloomStrength)
+        bool         ui                      = false;    // Dear ImGui (CMake RASM_IMGUI): the RASM window on F1 and Engine::setUiCallback
         AntiAliasing antiAliasing            = AntiAliasing::NONE; // Engine::render's scene target: MSAA draws it with several samples per pixel
     };
 

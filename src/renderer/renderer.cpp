@@ -31,12 +31,12 @@ namespace rasm
 
     // The frame is a graph of the view's scene passes into an HDR target (multisampled and resolved, or with motion and
     // TAA, by EngineConfig::antiAliasing), with EngineConfig::bloom the bloom passes, then the tone-map pass into the
-    // swapchain.
+    // swapchain and the UI pass over it.
     // It is built for one view and built again only when the view changes. Adding the passes fails on bad handles or
     // a failed allocation, and building again every frame would make a new target each time, so such a view runs the
-    // passes it has, or an empty frame that presents the clear color. Shader errors retry inside the passes. F3 logs
-    // the graph's dump after it runs, so it shows the compiled order.
-    void Renderer::render(const RenderView &view, bool dumpGraph)
+    // passes it has, or an empty frame that presents the clear color. Shader errors retry inside the passes. F3 asks
+    // for the graph's dump after it runs, so it shows the compiled order.
+    void Renderer::render(const RenderView &view, std::string *dump)
     {
         ZoneScoped;
 
@@ -63,14 +63,14 @@ namespace rasm
                 if (taa)
                     resolved = engine.addTaaPass(graph, sceneColor, view.camera);
                 const RenderTargetHandle bloom = config.bloom && resolved.isValid() ? engine.addBloomPasses(graph, resolved, view.camera) : RenderTargetHandle{};
-                if (resolved.isValid())
-                    engine.addToneMapPass(graph, resolved, view.camera, bloom);
+                if (resolved.isValid() && engine.addToneMapPass(graph, resolved, view.camera, bloom))
+                    engine.addUiPass(graph);
             }
             built = true;
             graphView = view;
         }
         graph.execute(view.camera);
-        if (dumpGraph)
-            spdlog::info("{}", graph.dump());
+        if (dump)
+            *dump = graph.dump();
     }
 }
