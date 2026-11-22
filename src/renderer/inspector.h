@@ -35,6 +35,7 @@ namespace rasm
         bool                            noUiPass                                        = false;    // the graph has no UI pass, so nothing is copied
         RenderTargetHandle              capture;                                                    // made on the first copy
         BufferHandle                    params[MAX_FRAMES_IN_FLIGHT]                    = {};       // gfx::InspectParams
+        bool                            captureFailed                                   = false;    // logged once; the section shows nothing
         PipelineHandle                  pipeline;
         bool                            pipelineTried                                   = false;    // since the last pick: a shader error is not retried every frame
         bool                            shown                                           = false;    // the Buffers section was open in the last UI

@@ -54,6 +54,13 @@ namespace rasm
             return true;
         }
 
+        // A target without a name is listed, and picked, by its handle.
+        std::string getTargetName(RenderContext &ctx, RenderTargetHandle target)
+        {
+            const std::string name = ctx.getRenderTargetDesc(target).name;
+            return name.empty() ? "#" + std::to_string(target.index) + ":" + std::to_string(target.generation) : name;
+        }
+
         void addTarget(std::vector<RenderTargetHandle> &targets, RenderTargetHandle target)
         {
             if (target.isValid() && std::find(targets.begin(), targets.end(), target) == targets.end())
@@ -73,12 +80,15 @@ namespace rasm
         std::string formatField(const StructField &field, const uint8_t *row)
         {
             std::string text;
+            // A matrix is stored column by column (the session's column-major layout), and printed row by row.
+            const uint32_t rows = field.count / field.columns;
             for (uint32_t i = 0; i < field.count; ++i)
             {
                 if (i > 0)
                     text += i % field.columns == 0 ? "\n" : "  ";
                 char value[32] = {};
-                const uint8_t *bytes = row + field.offset + i * 4;
+                const uint32_t stored = rows > 1 ? (i % field.columns) * rows + i / field.columns : i;
+                const uint8_t *bytes = row + field.offset + stored * 4;
                 if (field.type == FieldType::FLOAT)
                 {
                     float f = 0.0f;
@@ -158,15 +168,15 @@ namespace rasm
                 ImGui::TextWrapped("Direction as hue, length as color: white is still, full color at %.0f px.", 16.0 / static_cast<double>(inspection.exposure));
             else if (inspection.kind == InspectKind::COLOR)
                 ImGui::TextWrapped("Linear values times the exposure, clamped to 0..1.");
-            else if (orthographic)
-                ImGui::TextWrapped("Orthographic: the depth is linear already, white at the near plane, black at the far one.");
-            else if (inspection.kind == InspectKind::DEPTH || inspection.kind == InspectKind::HIZ)
-                ImGui::TextWrapped("Reversed-Z made linear: view depth = near / depth. White at the camera, black at %.0f m and at the sky.", static_cast<double>(inspection.depthRange));
             else if (inspection.kind == InspectKind::LIGHT_CLUSTERS)
             {
                 ImGui::TextWrapped("Lights per %s, 16 x 9 tiles:", inspection.level >= INSPECT_TILES ? "screen tile (a column of 24 slices)" : "cluster of the slice");
                 drawHeatKey();
             }
+            else if (orthographic)
+                ImGui::TextWrapped("Orthographic: the depth is linear already, white at the near plane, black at the far one.");
+            else if (inspection.kind == InspectKind::DEPTH || inspection.kind == InspectKind::HIZ)
+                ImGui::TextWrapped("Reversed-Z made linear: view depth = near / depth. White at the camera, black at %.0f m and at the sky.", static_cast<double>(inspection.depthRange));
         }
     }
 
@@ -198,7 +208,7 @@ namespace rasm
         state.noUiPass = false;
 
         uint32_t wanted = UINT32_MAX;
-        if (state.shown && !inspection.target.empty())
+        if (state.shown)
         {
             // The targets in the order the passes use them, then each scene view's buffers.
             std::vector<RenderTargetHandle> targets;
@@ -227,7 +237,7 @@ namespace rasm
                 if (target == state.capture)
                     continue;
                 const RenderTarget &rt = ctx.getRenderTarget(target);
-                const std::string name = ctx.getRenderTargetDesc(target).name;
+                const std::string name = getTargetName(ctx, target);
                 const uint32_t view = viewOf(target);
                 for (uint32_t c = 0; c < rt.colorCount; ++c)
                 {
@@ -247,14 +257,14 @@ namespace rasm
             for (uint32_t view : graph.sceneViews)
             {
                 const SceneView &sceneView = gpuScene->views[view];
-                const RenderTargetDesc desc = ctx.getRenderTargetDesc(sceneView.renderTarget);
-                const std::string name = desc.cube ? desc.name + " " + FACE_NAMES[sceneView.face] : desc.name;
+                const std::string target = getTargetName(ctx, sceneView.renderTarget);
+                const std::string name = ctx.getRenderTargetDesc(sceneView.renderTarget).cube ? target + " " + FACE_NAMES[sceneView.face] : target;
                 if (sceneView.visibility.isValid())
-                    state.entries.push_back({.label = name + " Hi-Z", .target = desc.name, .kind = InspectKind::HIZ, .face = sceneView.face, .view = view});
+                    state.entries.push_back({.label = name + " Hi-Z", .target = target, .kind = InspectKind::HIZ, .face = sceneView.face, .view = view});
                 if (gpuLights->views[view].buffers[0].isValid())
-                    state.entries.push_back({.label = name + " light clusters", .target = desc.name, .kind = InspectKind::LIGHT_CLUSTERS, .face = sceneView.face, .view = view});
+                    state.entries.push_back({.label = name + " light clusters", .target = target, .kind = InspectKind::LIGHT_CLUSTERS, .face = sceneView.face, .view = view});
             }
-            for (uint32_t i = 0; i < state.entries.size() && wanted == UINT32_MAX; ++i)
+            for (uint32_t i = 0; i < state.entries.size() && wanted == UINT32_MAX && !inspection.target.empty(); ++i)
                 wanted = matches(state.entries[i], inspection) ? i : UINT32_MAX;
         }
 
@@ -285,7 +295,9 @@ namespace rasm
         if (wanted == UINT32_MAX)
             return;
 
-        // Made on the first copy, and kept: a pick after that needs nothing new.
+        // Made on the first copy, and kept: a pick after that needs nothing new. A failure is not tried again.
+        if (state.captureFailed)
+            return;
         if (!state.capture.isValid())
             state.capture = ctx.createRenderTarget({.name = "inspect", .width = INSPECT_SIZE, .height = INSPECT_SIZE, .colorFormats = {SCENE_COLOR_FORMAT}, .storage = true});
         for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
@@ -295,7 +307,8 @@ namespace rasm
         }
         if (!state.capture.isValid() || !state.params[0].isValid() || !state.params[1].isValid())
         {
-            spdlog::error("The Buffers section could not create its capture target; nothing is shown.");
+            if (!std::exchange(state.captureFailed, true))
+                spdlog::error("The Buffers section could not create its capture target; nothing is shown.");
             return;
         }
 
@@ -580,14 +593,18 @@ namespace rasm
         for (uint32_t i = 0; i < draws.instanceCount; ++i)
         {
             const uint32_t row = draws.firstInstance + i;
+            // Two instances can name one material, so each instance's nodes get IDs of their own.
+            ImGui::PushID(static_cast<int>(row));
             drawRow(gpuScene->instances, row, "InstanceData", instanceLayout, openRows);
-            if (materialOffset == UINT32_MAX || row >= gpuScene->instances.capacity())
-                continue;
-            uint32_t material = 0;
-            std::memcpy(&material, gpuScene->instances.row(row) + materialOffset, sizeof(material));
-            ImGui::Indent();
-            drawRow(gpuScene->materials, material, "MaterialData", shaderCompiler->findStructLayout("MaterialData"));
-            ImGui::Unindent();
+            if (materialOffset != UINT32_MAX && row < gpuScene->instances.capacity())
+            {
+                uint32_t material = 0;
+                std::memcpy(&material, gpuScene->instances.row(row) + materialOffset, sizeof(material));
+                ImGui::Indent();
+                drawRow(gpuScene->materials, material, "MaterialData", shaderCompiler->findStructLayout("MaterialData"));
+                ImGui::Unindent();
+            }
+            ImGui::PopID();
         }
         if (inspection.entity.index < gpuAnimation->entityStates.size() && gpuAnimation->entityStates[inspection.entity.index].row != UINT32_MAX)
             drawRow(gpuAnimation->entities, gpuAnimation->entityStates[inspection.entity.index].row, "AnimatedEntity", shaderCompiler->findStructLayout("AnimatedEntity"));

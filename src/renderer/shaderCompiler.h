@@ -33,7 +33,7 @@ namespace rasm
         uint32_t                size            = 0;
         FieldType               type            = FieldType::OTHER;
         uint32_t                count           = 1;    // scalars: a vector's or a matrix's
-        uint32_t                columns         = 1;    // scalars per line: a matrix's row, in memory order
+        uint32_t                columns         = 1;    // a vector's scalars, a matrix's columns; a matrix is stored column by column
     };
 
     class ShaderCompiler

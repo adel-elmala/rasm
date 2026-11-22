@@ -228,6 +228,7 @@ namespace rasm
             ImGui::DestroyContext(ui->context);
         }
         ui.reset();
+        inspector.reset();
     }
 
     // Runs in beginFrame after the slot's fence wait and before syncGpuScene, so what the UI changes reaches this frame.

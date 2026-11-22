@@ -193,12 +193,12 @@ namespace rasm
             if (ImGui::Checkbox("Freeze culling", &frozen))
                 setCullingFrozen(frozen);
         }
-        if (openBuffers || openTables)
-            ImGui::SetNextItemOpen(openBuffers);
+        if (openBuffers)
+            ImGui::SetNextItemOpen(true);
         if (ImGui::CollapsingHeader("Buffers"))
             drawBuffersSection();
-        if (openBuffers || openTables)
-            ImGui::SetNextItemOpen(openTables);
+        if (openTables)
+            ImGui::SetNextItemOpen(true);
         if (ImGui::CollapsingHeader("GPU tables"))
             drawTablesSection();
         if (ImGui::CollapsingHeader("Render graph"))

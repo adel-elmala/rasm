@@ -751,10 +751,14 @@ namespace rasm
     {
         if (!inspector)
             spdlog::warn("setInspection: the UI is off (EngineConfig::ui), so nothing is shown.");
+        // The sections open for a new pick only, so a call every frame (a new exposure) leaves the window as it is.
+        const bool newPick = value.target != inspection.target || value.kind != inspection.kind || value.attachment != inspection.attachment;
+        const bool newEntity = !(value.entity == inspection.entity);
         inspection = value;
-        if (inspector)
-        {
+        if (inspector && newPick)
             inspector->openBuffers = !value.target.empty();
+        if (inspector && newEntity)
+        {
             inspector->openTables = value.entity.isValid();
             inspector->openRows = value.entity.isValid();
         }
