@@ -57,8 +57,9 @@ namespace rasm
             return {};
         }
 
-        const EnvironmentHandle handle = handleManager.getNextEnvironmentHandle();
-        environments->environments.resize(handle.index + 1);
+        const HandleSlot slot = registry.environmentHandles.allocate();
+        const EnvironmentHandle handle{slot.index, slot.generation};
+        environments->environments.resize(registry.environmentHandles.size());
         environments->environments[handle.index] = Environment{.path = path};
         pendingEnvironments.push_back({handle, path, std::async(std::launch::async, decodeEnvironment, path)});
         return handle;
@@ -66,7 +67,7 @@ namespace rasm
 
     bool Engine::isLoaded(EnvironmentHandle environment) const
     {
-        if (!environment.isValid() || environment.index >= environments->environments.size())
+        if (!isLive(environment))
             return false;
         return isBakeUsable(environments->environments[environment.index].state);
     }

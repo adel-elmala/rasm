@@ -100,6 +100,7 @@
   <tr><td><a href="render-graph.html#createRenderGraph"><code>createRenderGraph</code></a></td><td>new render graph</td><td>render-graph.html</td></tr>
   <tr><td><a href="render-graph.html#createPipeline"><code>createPipeline</code></a> / <a href="render-graph.html#createComputePipeline"><code>createComputePipeline</code></a></td><td>your own Slang shaders</td><td>render-graph.html</td></tr>
   <tr><td><a href="render-graph.html#createRenderTarget"><code>createRenderTarget</code></a></td><td>offscreen color + depth</td><td>render-graph.html</td></tr>
+  <tr><td><a href="#destroyTexture"><code>destroyTexture</code></a> / <a href="#destroyBuffer"><code>destroyBuffer</code></a> / <a href="#destroyRenderTarget"><code>destroyRenderTarget</code></a></td><td>free GPU resources, once the GPU is done with them</td><td>engine.html</td></tr>
   <tr><td><a href="render-graph.html#setRenderTarget"><code>setRenderTarget</code></a> / <a href="render-graph.html#resetRenderTarget"><code>resetRenderTarget</code></a></td><td>where the next pass draws</td><td>render-graph.html</td></tr>
   <tr><td><a href="render-graph.html#getRenderTargetTexture"><code>getRenderTargetTexture</code></a></td><td>read a target in a later pass</td><td>render-graph.html</td></tr>
   <tr><td><a href="render-graph.html#getPreviousRenderTargetTexture"><code>getPreviousRenderTargetTexture</code></a></td><td>read last frame's copy of a history target</td><td>render-graph.html</td></tr>
@@ -1061,12 +1062,12 @@ const rasm::ReadbackHandle hdr = engine.readTexture(engine.getRenderTargetTextur
 
 <h2 id="resources"><span class="n">11</span>Raw GPU resources</h2>
 
-<p>For your own passes you may need buffers and textures that are not part of a scene. These two functions forward to <code>RenderContext</code>. The descriptors (<a href="low-level.html#BufferDesc"><code>BufferDesc</code></a>, <a href="low-level.html#TextureDesc"><code>TextureDesc</code></a>) and how to fill, read and bind the resources are on <a href="low-level.html">RenderContext and resources</a>.</p>
+<p>For your own passes you may need buffers and textures that are not part of a scene. These functions forward to <code>RenderContext</code>. The descriptors (<a href="low-level.html#BufferDesc"><code>BufferDesc</code></a>, <a href="low-level.html#TextureDesc"><code>TextureDesc</code></a>) and how to fill, read and bind the resources are on <a href="low-level.html">RenderContext and resources</a>.</p>
 
 <div class="api" id="createBuffer">
   <pre class="sig">BufferHandle createBuffer(const BufferDesc&amp; desc);</pre>
   <div class="body">
-    <p>Creates a new GPU buffer, every call (two equal descriptors give two buffers). Returns an invalid handle and logs an error on failure. It is device-local unless <code>hostVisible</code> is set. <a href="low-level.html#destroyBuffer"><code>RenderContext::destroyBuffer</code></a> frees it.</p>
+    <p>Creates a new GPU buffer, every call (two equal descriptors give two buffers). Returns an invalid handle and logs an error on failure. It is device-local unless <code>hostVisible</code> is set. <a href="#destroyBuffer"><code>destroyBuffer</code></a> frees it.</p>
     <pre><code>rasm::BufferHandle particles = engine.createBuffer({.name = "Particle Positions",
                                                     .usage = rasm::BufferUsage::STORAGE,
                                                     .size = PARTICLE_COUNT * 2 * sizeof(float)});
@@ -1078,7 +1079,39 @@ const uint64_t address = engine.getRenderContext().getBufferDeviceAddress(partic
 <div class="api" id="createTexture">
   <pre class="sig">TextureHandle createTexture(const TextureDesc&amp; desc);</pre>
   <div class="body">
-    <p>Creates a new, empty texture. Fill it with <a href="low-level.html#fillTexture"><code>RenderContext::fillTexture</code></a>, and add it to the bindless set (<a href="materials.html#addBindlessTexture"><code>addBindlessTexture</code></a>) to sample it in a shader. For image files use <a href="materials.html#loadTexture"><code>loadTexture</code></a> instead. Returns an invalid handle on failure.</p>
+    <p>Creates a new, empty texture. Fill it with <a href="low-level.html#fillTexture"><code>RenderContext::fillTexture</code></a>, and add it to the bindless set (<a href="materials.html#addBindlessTexture"><code>addBindlessTexture</code></a>) to sample it in a shader, or give it to a material. For image files use <a href="materials.html#loadTexture"><code>loadTexture</code></a> instead. Returns an invalid handle on failure. <a href="#destroyTexture"><code>destroyTexture</code></a> frees it.</p>
+  </div>
+</div>
+
+<div class="api" id="destroyTexture">
+  <pre class="sig">void destroyTexture(const TextureHandle&amp; texture);</pre>
+  <div class="body">
+    <p>Destroys a texture from <a href="materials.html#loadTexture"><code>loadTexture</code></a> or <a href="#createTexture"><code>createTexture</code></a>. The handle is invalid at once: a later call with it logs an error, even when a new texture took its index. The texture and its bindless slot are freed once the GPU has finished every frame that may sample them, so the call never waits, and a new texture then reuses the slot.</p>
+    <ul>
+      <li>Every material that uses the texture loses it: that texture slot of the material samples nothing from the next frame on (the material's factor alone, as with no texture). An entity that waited for it to load is drawn.</li>
+      <li>A load that has not finished is dropped when its decode ends. <code>loadTexture</code> of the same path then loads it again.</li>
+      <li>Swapchain images and render target textures are refused: they belong to the swapchain and to their render target.</li>
+    </ul>
+    <pre><code>// A tile's material gets a new texture; the old one goes once no frame in flight samples it.
+rasm::Material values = engine.getMaterial(tile.material);
+values.textures[static_cast&lt;uint32_t&gt;(rasm::PbrSlot::ALBEDO)] = texture;
+engine.updateMaterial(tile.material, values);
+engine.destroyTexture(tile.texture);</code></pre>
+    <p>From <code>examples/17_streaming/main.cpp</code>, which pushes far more textures through the bindless set than it has slots. How the wait works: <a href="../guides/resource-lifetime.html">Deferred destruction</a>.</p>
+  </div>
+</div>
+
+<div class="api" id="destroyBuffer">
+  <pre class="sig">void destroyBuffer(const BufferHandle&amp; buffer);</pre>
+  <div class="body">
+    <p>Destroys a buffer from <a href="#createBuffer"><code>createBuffer</code></a>: the handle at once, the buffer and any upload still queued for it once the GPU has finished every frame that may use it. Calls <a href="low-level.html#destroyBuffer"><code>RenderContext::destroyBuffer</code></a>.</p>
+  </div>
+</div>
+
+<div class="api" id="destroyRenderTarget">
+  <pre class="sig">void destroyRenderTarget(const RenderTargetHandle&amp; renderTarget);</pre>
+  <div class="body">
+    <p>Destroys a render target from <a href="render-graph.html#createRenderTarget"><code>createRenderTarget</code></a>: the handle at once, its textures and bindless slots once the GPU is done with them. A render graph destroys the targets it made itself. Calls <a href="low-level.html#destroyRenderTargets"><code>RenderContext::destroyRenderTarget</code></a>.</p>
   </div>
 </div>
 

@@ -1028,7 +1028,7 @@
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>No thread pool, no priorities, no cancel. Mips are built on the main thread (P2), so a big glTF file can make one long frame. Nothing can be unloaded (D4), so meshes load until the geometry pool is full, and the pool never gets space back.</p>
+  <p>No thread pool, no priorities, no cancel. Mips are built on the main thread (P2), so a big glTF file can make one long frame. A texture can be destroyed (<code>Engine::destroyTexture</code>), also while it loads: its decode is dropped when it ends. Meshes can't be unloaded yet (D4), so they load until the geometry pool is full, and the pool never gets space back.</p>
 </div>
 
 <h3>Further reading</h3>

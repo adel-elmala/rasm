@@ -79,6 +79,7 @@ target_sources(rasm PRIVATE
     "rhi/mipChain.cpp"
     "rhi/renderContext.cpp"
     "rhi/resource.cpp"
+    "rhi/releaseQueue.cpp"
     "rhi/textureStates.cpp"
     "rhi/uploadManager.cpp"
     "rhi/vulkan/vulkanCommandBuffer.cpp"

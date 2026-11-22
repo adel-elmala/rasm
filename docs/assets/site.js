@@ -31,6 +31,7 @@ const SECTIONS = [
             { path: "guides/headless-readback.html",     title: "Headless rendering and readback",     blurb: "Render with no window, and copy the pixels back to the CPU without a stall." },
             { path: "guides/gpu-sync.html",              title: "GPU synchronization: barriers, stages, layouts", blurb: "Why GPU work needs barriers, and what they say." },
             { path: "guides/generational-handles.html",  title: "Generational handles",                blurb: "Safe references: an index plus a generation." },
+            { path: "guides/resource-lifetime.html",     title: "Deferred destruction",                blurb: "Destroy what the GPU may still read: the handle now, the memory later." },
         ],
     },
     {

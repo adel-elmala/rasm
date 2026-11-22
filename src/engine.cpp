@@ -57,6 +57,7 @@ namespace rasm
     Engine::Engine(const EngineConfig &config) : config(config), geometryPool(std::make_unique<GeometryPool>()), gpuScene(std::make_unique<GpuScene>()), gpuLights(std::make_unique<GpuLights>()), gpuAnimation(std::make_unique<GpuAnimation>()), environments(std::make_unique<Environments>()), frameStats(std::make_unique<FrameStatsCollector>()), statsOverlay(std::make_unique<StatsOverlay>()), ctx(this), shaderCompiler(std::make_unique<ShaderCompiler>())
     {
         readbacks = std::make_unique<Readbacks>();
+        registry.lightHandles = HandlePool(static_cast<uint64_t>(config.maxLights) + 1);
         // In a real implementation, this is where we'd initialize the window, graphics context, etc.
         spdlog::info("initializing engine with config: appName={}, windowWidth={}, windowHeight={}, enableValidation={}",
                      config.appName, config.windowWidth, config.windowHeight, config.enableValidation);
@@ -320,6 +321,16 @@ namespace rasm
         return ctx.createRenderTarget(desc);
     }
 
+    void Engine::destroyBuffer(const BufferHandle &buffer)
+    {
+        ctx.destroyBuffer(buffer);
+    }
+
+    void Engine::destroyRenderTarget(const RenderTargetHandle &renderTarget)
+    {
+        ctx.destroyRenderTarget(renderTarget);
+    }
+
     RenderGraph Engine::createRenderGraph()
     {
         RenderGraph graph(this);
@@ -417,6 +428,10 @@ namespace rasm
 
         pollEvents(camera);
         finishLoads(false);
+        // No frame is being recorded, so what was destroyed since the last frame waits only for work already submitted.
+        // Here, and not after the fence wait only, so frees go on while frames are skipped (a minimized window).
+        ctx.tagReleases({.fence = frameFence, .value = frameFenceValue}, {.fence = computeFence, .value = computeFenceValue});
+        ctx.collectReleases();
 
         // Nothing can be presented to a minimized or zero-sized window (B5).
         if (mainWindow.minimized || mainWindow.pixelWidth == 0 || mainWindow.pixelHeight == 0)
@@ -438,6 +453,7 @@ namespace rasm
             return false;
         if (readbackComputeWait > 0 && ctx.getFenceValue(frameFence) >= readbackComputeWait)
             readbackComputeWait = 0;
+        ctx.collectReleases();
 
         // After the wait: they read what the slot's last frame measured and rewrite the tables it read.
         updateFrameStats();
@@ -523,6 +539,7 @@ namespace rasm
         closeBatch(QueueType::COMPUTE);
         closeBatch(QueueType::GRAPHICS);
         const bool presenting = submitBatches();
+        ctx.tagReleases({.fence = frameFence, .value = frameFenceValue}, {.fence = computeFence, .value = computeFenceValue});
         finishReadbackSubmit(presenting);
         finishEnvironmentBakes();
         if (presenting)
@@ -885,22 +902,48 @@ namespace rasm
     {
         auto txtID = ctx.updateBindlessDescriptorSet(bindlessSet, texture, sampler, slot);
         if (txtID == UINT32_MAX)
-        {
             spdlog::error("Failed to add bindless texture.");
-            return UINT32_MAX;
-        }
-        registry.bindlessTextureIndexMap[texture] = txtID;
         return txtID;
     }
 
     uint32_t Engine::getBindlessTextureIndex(const TextureHandle &texture)
     {
-        auto it = registry.bindlessTextureIndexMap.find(texture);
-        if (it != registry.bindlessTextureIndexMap.end())
-        {
-            return it->second;
-        }
-        return UINT32_MAX;
+        return ctx.getBindlessTextureIndex(texture);
+    }
+
+    bool Engine::isLive(const EntityHandle &entity) const
+    {
+        return registry.entityHandles.isAlive(entity.index, entity.generation);
+    }
+
+    bool Engine::isLive(const MeshHandle &mesh) const
+    {
+        return registry.meshHandles.isAlive(mesh.index, mesh.generation);
+    }
+
+    bool Engine::isLive(const MaterialHandle &material) const
+    {
+        return registry.materialHandles.isAlive(material.index, material.generation);
+    }
+
+    bool Engine::isLive(const CameraHandle &camera) const
+    {
+        return registry.cameraHandles.isAlive(camera.index, camera.generation);
+    }
+
+    bool Engine::isLive(const LightHandle &light) const
+    {
+        return registry.lightHandles.isAlive(light.index, light.generation);
+    }
+
+    bool Engine::isLive(const SceneHandle &scene) const
+    {
+        return registry.sceneHandles.isAlive(scene.index, scene.generation);
+    }
+
+    bool Engine::isLive(const EnvironmentHandle &environment) const
+    {
+        return registry.environmentHandles.isAlive(environment.index, environment.generation);
     }
 
     TextureHandle Engine::getRenderTargetTexture(const RenderTargetHandle &renderTarget, uint32_t attachment)

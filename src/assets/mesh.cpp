@@ -75,8 +75,9 @@ namespace rasm
         if (!geometryPool->upload(ctx, raw, mesh.subMeshes[0].geometry))
             return {};
 
-        const MeshHandle handle = handleManager.getNextMeshHandle();
-        registry.meshes.resize(handle.index + 1);
+        const HandleSlot slot = registry.meshHandles.allocate();
+        const MeshHandle handle{slot.index, slot.generation};
+        registry.meshes.resize(registry.meshHandles.size());
         registry.meshes[handle.index] = std::move(mesh);
 
         return handle;
@@ -90,9 +91,12 @@ namespace rasm
         MeshHandle handle;
         if (auto it = registry.loadedMeshes.find(path); it != registry.loadedMeshes.end())
         {
-            if (registry.meshes[it->second.index].state != MeshState::FAILED)
+            if (!isLive(it->second))
+                registry.loadedMeshes.erase(it);
+            else if (registry.meshes[it->second.index].state != MeshState::FAILED)
                 return it->second;
-            handle = it->second;
+            else
+                handle = it->second;
         }
 
         // find if the model extension is supported, if not return invalid handle
@@ -113,9 +117,10 @@ namespace rasm
 
         if (!handle.isValid())
         {
-            handle = handleManager.getNextMeshHandle();
+            const HandleSlot slot = registry.meshHandles.allocate();
+            handle = {slot.index, slot.generation};
             registry.loadedMeshes[path] = handle;
-            registry.meshes.resize(handle.index + 1);
+            registry.meshes.resize(registry.meshHandles.size());
         }
         registry.meshes[handle.index] = Mesh{};
 
@@ -144,7 +149,7 @@ namespace rasm
 
     bool Engine::isLoaded(MeshHandle mesh) const
     {
-        return mesh.isValid() && mesh.index < registry.meshes.size() && registry.meshes[mesh.index].state == MeshState::READY;
+        return isLive(mesh) && registry.meshes[mesh.index].state == MeshState::READY;
     }
 
     void Engine::finishMeshLoad(PendingMeshLoad &load)
@@ -221,7 +226,7 @@ namespace rasm
 
     MeshSize Engine::getMeshByteSize(const MeshHandle &handle) const
     {
-        if (!handle.isValid() || handle.index >= registry.meshes.size())
+        if (!isLive(handle))
         {
             spdlog::error("Mesh handle not found for getting byte size.");
             return {};

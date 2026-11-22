@@ -19,7 +19,7 @@ namespace rasm
     // camera's exposure when it runs. Its pipeline is made when it first runs; a shader error retries every frame.
     RenderTargetHandle Engine::addMsaaResolvePass(RenderGraph &graph, const RenderTargetHandle &source, CameraHandle camera)
     {
-        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        if (!isLive(camera))
         {
             spdlog::error("addMsaaResolvePass needs a valid camera handle.");
             return {};

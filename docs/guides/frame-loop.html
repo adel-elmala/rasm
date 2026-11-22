@@ -828,11 +828,11 @@
 <h2 id="jobs"><span class="n">6</span>Where each job runs in the frame</h2>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 244" role="img" aria-label="The jobs of a frame in order. In beginFrame: finishLoads, the fence wait, updateFrameStats, updateStatsOverlay or, with the UI, buildUi, syncGpuScene, acquire. In RenderGraph::execute, for each pass: graph barriers and queue waits, then the pass: prepareSceneView and recordSceneCulling in a Cull pass, drawSceneView in a Scene pass, recordHiz in the Hi-Z pass, the tone-map draw in the Tone Map pass. In endFrame: the cull stats barrier, submitBatches, the upload flush inside RenderContext::submit, present.">
+  <svg viewBox="0 0 760 244" role="img" aria-label="The jobs of a frame in order. In beginFrame: finishLoads, the fence wait and collectReleases, updateFrameStats, updateStatsOverlay or, with the UI, buildUi, syncGpuScene, acquire. In RenderGraph::execute, for each pass: graph barriers and queue waits, then the pass: prepareSceneView and recordSceneCulling in a Cull pass, drawSceneView in a Scene pass, recordHiz in the Hi-Z pass, the tone-map draw in the Tone Map pass. In endFrame: the cull stats barrier, submitBatches, the upload flush inside RenderContext::submit, tagReleases, present.">
     <rect x="20" y="14" width="220" height="220" rx="8" class="zone"/>
     <text x="36" y="36" class="title mono">beginFrame</text>
     <rect x="36" y="46"  width="188" height="24" rx="4" class="cpu"/><text x="130" y="63"  class="mid mono">finishLoads</text>
-    <rect x="36" y="76"  width="188" height="24" rx="4" class="box"/><text x="130" y="93"  class="mid">fence wait for the slot</text>
+    <rect x="36" y="76"  width="188" height="24" rx="4" class="box"/><text x="130" y="93"  class="mid">fence wait, free released</text>
     <rect x="36" y="106" width="188" height="24" rx="4" class="cpu"/><text x="130" y="123" class="mid mono">updateFrameStats</text>
     <rect x="36" y="136" width="188" height="24" rx="4" class="cpu"/><text x="130" y="153" class="mid">stats overlay, or buildUi</text>
     <rect x="36" y="166" width="188" height="24" rx="4" class="cpu"/><text x="130" y="183" class="mid mono">syncGpuScene</text>
@@ -858,7 +858,8 @@
     <rect x="536" y="76"  width="188" height="24" rx="4" class="cpu"/><text x="630" y="93"  class="mid mono">submitBatches</text>
     <rect x="552" y="106" width="172" height="24" rx="4" class="mem"/><text x="638" y="123" class="mid small">upload flush, in submit</text>
     <rect x="552" y="136" width="172" height="24" rx="4" class="gpu"/><text x="638" y="153" class="mid small">the frame's submits</text>
-    <rect x="536" y="166" width="188" height="24" rx="4" class="cpu"/><text x="630" y="183" class="mid">present</text>
+    <rect x="536" y="166" width="188" height="24" rx="4" class="cpu"/><text x="630" y="183" class="mid mono">tagReleases</text>
+    <rect x="536" y="196" width="188" height="24" rx="4" class="cpu"/><text x="630" y="213" class="mid">present</text>
   </svg>
   <figcaption>The order of the jobs. The table gives the reason for each place.</figcaption>
 </figure>
@@ -879,6 +880,8 @@
   <tr><td>cull stats barrier</td><td><code>endFrame</code>, after the last pass; with a compute queue, <code>submitBatches</code>, at the end of the last compute batch</td><td><code>COMPUTE → HOST</code>, so the CPU can read the counters after the fences</td></tr>
   <tr><td>submits</td><td><code>submitBatches</code>, at the end of <code>endFrame</code></td><td>the GPU starts the frame once it is recorded, and every wait is on a submit already made</td></tr>
   <tr><td>upload flush</td><td>inside <code>RenderContext::submit</code></td><td>the copies must run before the frame that reads them</td></tr>
+  <tr><td><code>tagReleases</code></td><td><code>endFrame</code>, after <code>submitBatches</code>, also for a dropped frame</td><td>what was destroyed since the last frame waits for the values the queues and the uploads signaled last (<a href="resource-lifetime.html">deferred destruction</a>)</td></tr>
+  <tr><td><code>collectReleases</code></td><td><code>beginFrame</code>: at its start (after a <code>tagReleases</code>, so skipped frames still free), and after the fence wait</td><td>frees the destroyed objects and bindless slots whose values the fences reached, by reading the fences, never waiting; nothing to do when nothing was destroyed</td></tr>
 </table>
 </div>
 

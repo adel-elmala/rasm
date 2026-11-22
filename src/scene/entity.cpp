@@ -7,13 +7,13 @@ namespace rasm
 {
     EntityHandle Engine::createEntity(const std::string &name, MeshHandle mesh, MaterialHandle material, Transform transform)
     {
-        const EntityHandle id = handleManager.getNextEntityHandle();
-
-        if (id.index >= MAX_ENTITIES)
+        const HandleSlot slot = registry.entityHandles.allocate();
+        if (slot.index == 0)
         {
-            spdlog::warn("Exceeded maximum number of entities.");
+            spdlog::warn("Exceeded maximum number of entities ({} alive, MAX_ENTITIES).", registry.entityHandles.liveCount());
             return {};
         }
+        const EntityHandle id{slot.index, slot.generation};
 
         auto entity = Entity{.handle = id,
                              .name = name,
@@ -21,7 +21,7 @@ namespace rasm
                              .material = material,
                              .transform = transform};
 
-        registry.entities.resize(id.index + 1);
+        registry.entities.resize(registry.entityHandles.size());
         registry.entities[id.index] = entity;
 
         if (mesh.isValid())
@@ -32,7 +32,7 @@ namespace rasm
 
     void Engine::updateTransform(EntityHandle entity, Transform transform)
     {
-        if (!entity.isValid() || entity.index >= registry.entities.size())
+        if (!isLive(entity))
         {
             spdlog::error("Invalid entity handle for updating transform.");
             return;
@@ -44,7 +44,7 @@ namespace rasm
 
     Transform Engine::getTransform(EntityHandle entity)
     {
-        if (!entity.isValid() || entity.index >= registry.entities.size())
+        if (!isLive(entity))
         {
             spdlog::error("Invalid entity handle for getting transform.");
             return Transform{};

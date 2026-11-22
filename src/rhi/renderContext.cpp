@@ -4,6 +4,7 @@
 #include "rhi/memoryAliasing.h"
 #include "rhi/mipChain.h"
 #include "rhi/offscreenSwapchain.h"
+#include "rhi/releaseQueue.h"
 #include "rhi/textureStates.h"
 #include "rhi/uploadManager.h"
 
@@ -13,6 +14,7 @@
 #include <algorithm>
 #include <bit>
 #include <cassert>
+#include <deque>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -25,6 +27,7 @@ namespace rasm
         {
             RenderTargetDesc desc;
             bool transient = false;
+            bool alive = false; // the slot holds a target; destroyed and never used ones don't
         };
 
         // Transient render targets laid out together in heaps, from the passes that use each one.
@@ -34,6 +37,68 @@ namespace rasm
             std::vector<uint32_t> firstPasses;
             std::vector<uint32_t> lastPasses;
             std::vector<rhi::Heap *> heaps;
+        };
+
+        struct BufferTable
+        {
+            HandlePool handles;
+            std::vector<rhi::Buffer *> objects; // by handle index; null when free
+        };
+
+        struct TextureTable
+        {
+            HandlePool handles;
+            std::vector<rhi::Texture *> objects; // by handle index; null when free
+            std::vector<uint32_t> slots;         // its bindless slot, or UINT32_MAX
+            std::vector<uint8_t> attachments;    // 1 for a render target's texture, which only the target destroys
+        };
+
+        struct ShaderTable
+        {
+            HandlePool handles;
+            std::vector<rhi::Shader *> objects; // by handle index; null when free
+        };
+
+        struct PipelineTable
+        {
+            HandlePool handles;
+            std::vector<rhi::Pipeline *> objects; // by handle index; null when free
+        };
+
+        struct CommandBufferTable
+        {
+            HandlePool handles;
+            std::vector<rhi::CommandBuffer *> objects; // by handle index; null when free
+        };
+
+        struct FenceTable
+        {
+            HandlePool handles;
+            std::vector<rhi::Fence *> objects; // by handle index; null when free
+        };
+
+        struct QueryPoolTable
+        {
+            HandlePool handles;
+            std::vector<rhi::QueryPool *> objects; // by handle index; null when free
+        };
+
+        struct DescriptorSetLayoutTable
+        {
+            HandlePool handles;
+            std::vector<rhi::DescriptorSetLayout *> objects; // by handle index; null when free
+        };
+
+        struct DescriptorPoolTable
+        {
+            HandlePool handles;
+            std::vector<rhi::DescriptorPool *> objects; // by handle index; null when free
+        };
+
+        struct DescriptorSetTable
+        {
+            HandlePool handles;
+            std::vector<rhi::DescriptorSet *> objects; // by handle index; null when free
         };
 
         // The colors of a new history copy, cleared before any frame can read it as the previous one.
@@ -177,114 +242,63 @@ namespace rasm
             }
         }
 
-        rhi::Buffer *lookup(const std::unordered_map<BufferHandle, rhi::Buffer *, HandleHash> &objects, const BufferHandle &handle, const char *caller)
+        // A stale handle (its object was destroyed, maybe its slot reused) fails like one that was never made.
+        bool checkHandle(const HandlePool &pool, uint64_t index, uint64_t generation, const char *caller, const char *kind)
         {
-            auto it = objects.find(handle);
-            if (it == objects.end())
-            {
-                spdlog::error("{}: buffer handle not found.", caller);
-                return nullptr;
-            }
-            return it->second;
+            if (pool.isAlive(index, generation))
+                return true;
+            spdlog::error("{}: {} handle {{{}, {}}} is invalid or was destroyed.", caller, kind, index, generation);
+            return false;
         }
 
-        rhi::Texture *lookup(const std::unordered_map<TextureHandle, rhi::Texture *, HandleHash> &objects, const TextureHandle &handle, const char *caller)
+        rhi::Buffer *lookup(const BufferTable &table, const BufferHandle &handle, const char *caller)
         {
-            auto it = objects.find(handle);
-            if (it == objects.end())
-            {
-                spdlog::error("{}: texture handle not found.", caller);
-                return nullptr;
-            }
-            return it->second;
+            return checkHandle(table.handles, handle.index, handle.generation, caller, "buffer") ? table.objects[handle.index] : nullptr;
         }
 
-        rhi::Shader *lookup(const std::unordered_map<ShaderHandle, rhi::Shader *, HandleHash> &objects, const ShaderHandle &handle, const char *caller)
+        rhi::Texture *lookup(const TextureTable &table, const TextureHandle &handle, const char *caller)
         {
-            auto it = objects.find(handle);
-            if (it == objects.end())
-            {
-                spdlog::error("{}: shader handle not found.", caller);
-                return nullptr;
-            }
-            return it->second;
+            return checkHandle(table.handles, handle.index, handle.generation, caller, "texture") ? table.objects[handle.index] : nullptr;
         }
 
-        rhi::Pipeline *lookup(const std::unordered_map<PipelineHandle, rhi::Pipeline *, HandleHash> &objects, const PipelineHandle &handle, const char *caller)
+        rhi::Shader *lookup(const ShaderTable &table, const ShaderHandle &handle, const char *caller)
         {
-            auto it = objects.find(handle);
-            if (it == objects.end())
-            {
-                spdlog::error("{}: pipeline handle not found.", caller);
-                return nullptr;
-            }
-            return it->second;
+            return checkHandle(table.handles, handle.index, handle.generation, caller, "shader") ? table.objects[handle.index] : nullptr;
         }
 
-        rhi::CommandBuffer *lookup(const std::unordered_map<CommandBufferHandle, rhi::CommandBuffer *, HandleHash> &objects, const CommandBufferHandle &handle, const char *caller)
+        rhi::Pipeline *lookup(const PipelineTable &table, const PipelineHandle &handle, const char *caller)
         {
-            auto it = objects.find(handle);
-            if (it == objects.end())
-            {
-                spdlog::error("{}: command buffer handle not found.", caller);
-                return nullptr;
-            }
-            return it->second;
+            return checkHandle(table.handles, handle.index, handle.generation, caller, "pipeline") ? table.objects[handle.index] : nullptr;
         }
 
-        rhi::Fence *lookup(const std::unordered_map<FenceHandle, rhi::Fence *, HandleHash> &objects, const FenceHandle &handle, const char *caller)
+        rhi::CommandBuffer *lookup(const CommandBufferTable &table, const CommandBufferHandle &handle, const char *caller)
         {
-            auto it = objects.find(handle);
-            if (it == objects.end())
-            {
-                spdlog::error("{}: fence handle not found.", caller);
-                return nullptr;
-            }
-            return it->second;
+            return checkHandle(table.handles, handle.index, handle.generation, caller, "command buffer") ? table.objects[handle.index] : nullptr;
         }
 
-        rhi::QueryPool *lookup(const std::unordered_map<QueryPoolHandle, rhi::QueryPool *, HandleHash> &objects, const QueryPoolHandle &handle, const char *caller)
+        rhi::Fence *lookup(const FenceTable &table, const FenceHandle &handle, const char *caller)
         {
-            auto it = objects.find(handle);
-            if (it == objects.end())
-            {
-                spdlog::error("{}: query pool handle not found.", caller);
-                return nullptr;
-            }
-            return it->second;
+            return checkHandle(table.handles, handle.index, handle.generation, caller, "fence") ? table.objects[handle.index] : nullptr;
         }
 
-        rhi::DescriptorSetLayout *lookup(const std::unordered_map<DescriptorSetLayoutHandle, rhi::DescriptorSetLayout *, HandleHash> &objects, const DescriptorSetLayoutHandle &handle, const char *caller)
+        rhi::QueryPool *lookup(const QueryPoolTable &table, const QueryPoolHandle &handle, const char *caller)
         {
-            auto it = objects.find(handle);
-            if (it == objects.end())
-            {
-                spdlog::error("{}: descriptor set layout handle not found.", caller);
-                return nullptr;
-            }
-            return it->second;
+            return checkHandle(table.handles, handle.index, handle.generation, caller, "query pool") ? table.objects[handle.index] : nullptr;
         }
 
-        rhi::DescriptorPool *lookup(const std::unordered_map<DescriptorPoolHandle, rhi::DescriptorPool *, HandleHash> &objects, const DescriptorPoolHandle &handle, const char *caller)
+        rhi::DescriptorSetLayout *lookup(const DescriptorSetLayoutTable &table, const DescriptorSetLayoutHandle &handle, const char *caller)
         {
-            auto it = objects.find(handle);
-            if (it == objects.end())
-            {
-                spdlog::error("{}: descriptor pool handle not found.", caller);
-                return nullptr;
-            }
-            return it->second;
+            return checkHandle(table.handles, handle.index, handle.generation, caller, "descriptor set layout") ? table.objects[handle.index] : nullptr;
         }
 
-        rhi::DescriptorSet *lookup(const std::unordered_map<DescriptorSetHandle, rhi::DescriptorSet *, HandleHash> &objects, const DescriptorSetHandle &handle, const char *caller)
+        rhi::DescriptorPool *lookup(const DescriptorPoolTable &table, const DescriptorPoolHandle &handle, const char *caller)
         {
-            auto it = objects.find(handle);
-            if (it == objects.end())
-            {
-                spdlog::error("{}: descriptor set handle not found.", caller);
-                return nullptr;
-            }
-            return it->second;
+            return checkHandle(table.handles, handle.index, handle.generation, caller, "descriptor pool") ? table.objects[handle.index] : nullptr;
+        }
+
+        rhi::DescriptorSet *lookup(const DescriptorSetTable &table, const DescriptorSetHandle &handle, const char *caller)
+        {
+            return checkHandle(table.handles, handle.index, handle.generation, caller, "descriptor set") ? table.objects[handle.index] : nullptr;
         }
     }
 
@@ -299,18 +313,21 @@ namespace rasm
         rhi::TextureStates                                                                                                      textureStates;
         std::vector<TextureHandle>                                                                                              swapchainImages;  // also in textures, but owned by the swapchain
 
-        std::unordered_map<BufferHandle, rhi::Buffer*, HandleHash>                                                              buffers;
-        std::unordered_map<TextureHandle, rhi::Texture*, HandleHash>                                                            textures;
-        std::unordered_map<ShaderHandle, rhi::Shader*, HandleHash>                                                              shaders;
-        std::unordered_map<PipelineHandle, rhi::Pipeline*, HandleHash>                                                          pipelines;
-        std::unordered_map<CommandBufferHandle, rhi::CommandBuffer*, HandleHash>                                                commandBuffers;
-        std::unordered_map<FenceHandle, rhi::Fence*, HandleHash>                                                                fences;
-        std::unordered_map<QueryPoolHandle, rhi::QueryPool*, HandleHash>                                                        queryPools;
-        std::unordered_map<DescriptorSetLayoutHandle, rhi::DescriptorSetLayout*, HandleHash>                                    descriptorSetLayouts;
-        std::unordered_map<DescriptorPoolHandle, rhi::DescriptorPool*, HandleHash>                                              descriptorPools;
-        std::unordered_map<DescriptorSetHandle, rhi::DescriptorSet*, HandleHash>                                                descriptorSets;
-        std::unordered_map<RenderTargetHandle, RenderTarget, HandleHash>                                                        renderTargets;
-        std::unordered_map<RenderTargetHandle, RenderTargetInfo, HandleHash>                                                    renderTargetInfos;
+        BufferTable                                                                                                             buffers;
+        TextureTable                                                                                                            textures;
+        ShaderTable                                                                                                             shaders;
+        PipelineTable                                                                                                           pipelines;
+        CommandBufferTable                                                                                                      commandBuffers;
+        FenceTable                                                                                                              fences;
+        QueryPoolTable                                                                                                          queryPools;
+        DescriptorSetLayoutTable                                                                                                descriptorSetLayouts;
+        DescriptorPoolTable                                                                                                     descriptorPools;
+        DescriptorSetTable                                                                                                      descriptorSets;
+        HandlePool                                                                                                              renderTargetHandles;
+        std::deque<RenderTarget>                                                                                                renderTargets;  // by handle index; a deque, so a reference survives a new target
+        std::deque<RenderTargetInfo>                                                                                            renderTargetInfos;
+        rhi::ReleaseQueue                                                                                                       releases;  // what destroy* freed, once the GPU is done (tagReleases, collectReleases)
+        rhi::Fence*                                                                                                             releaseFences[rhi::RELEASE_TIMELINES - 1] = {};  // the frame and compute fences of the last tagReleases
         std::vector<TransientGroup>                                                                                             transientGroups;
         std::vector<HistoryClear>                                                                                               pendingClears;  // made since the last frame began
         std::vector<HistoryClear>                                                                                               recordedClears; // in a frame not yet submitted
@@ -321,7 +338,13 @@ namespace rasm
         std::unordered_map<PipelineDesc, PipelineHandle, PipelineDescHash>                                                      pipelineDescCache;
         std::unordered_map<BindlessDescriptorSetLayoutDesc, DescriptorSetLayoutHandle, BindlessDescriptorSetLayoutDescHash>     descriptorSetLayoutDescCache;
 
+        // Binding 0 slots: never used ones from nextBindlessTextureIndex up, freed ones in freeBindlessSlots once the GPU
+        // is done with their last texture. slotTextures names each slot's texture, the one whose destroy frees it.
         uint32_t                                                                                                                nextBindlessTextureIndex = 0;
+        std::vector<uint32_t>                                                                                                   freeBindlessSlots;
+        TextureHandle                                                                                                           slotTextures[MAX_BINDLESS_TEXTURES] = {};
+        SamplerType                                                                                                             slotSamplers[MAX_BINDLESS_TEXTURES] = {};
+        bool                                                                                                                    slotWaiting[MAX_BINDLESS_TEXTURES] = {};  // released, the GPU may still sample it
         // Binding 1 slots of storage render targets, from RESERVED_STORAGE_IMAGES up. A destroyed target gives its back.
         uint32_t                                                                                                                nextStorageSlot = RESERVED_STORAGE_IMAGES;
         std::vector<uint32_t>                                                                                                   freeStorageSlots;
@@ -336,20 +359,122 @@ namespace rasm
         bool                                                                                                                    insidePass      = false; // between beginRendering and endRendering, where draws are allowed and dispatches and barriers are not
         Viewport                                                                                                                viewport;                // the last setViewport
 
-        void registerSwapchainImages(HandleManager& handleManager)
+        BufferHandle addBuffer(rhi::Buffer* buffer)
         {
-            for (uint32_t i = 0; i < swapchain->getImageCount(); ++i)
-            {
-                auto handle = handleManager.getNextTextureHandle();
-                textures[handle] = swapchain->getImage(i);
-                swapchainImages.push_back(handle);
-            }
+            const HandleSlot slot = buffers.handles.allocate();
+            buffers.objects.resize(buffers.handles.size(), nullptr);
+            buffers.objects[slot.index] = buffer;
+            return {slot.index, slot.generation};
         }
 
+        TextureHandle addTexture(rhi::Texture* texture)
+        {
+            const HandleSlot slot = textures.handles.allocate();
+            textures.objects.resize(textures.handles.size(), nullptr);
+            textures.slots.resize(textures.handles.size(), UINT32_MAX);
+            textures.attachments.resize(textures.handles.size(), 0);
+            textures.objects[slot.index] = texture;
+            textures.slots[slot.index] = UINT32_MAX;
+            textures.attachments[slot.index] = 0;
+            return {slot.index, slot.generation};
+        }
+
+        bool isRenderTarget(const RenderTargetHandle& handle) const
+        {
+            return renderTargetHandles.isAlive(handle.index, handle.generation);
+        }
+
+        RenderTargetHandle addRenderTarget(const RenderTarget& target, const RenderTargetInfo& info)
+        {
+            const HandleSlot slot = renderTargetHandles.allocate();
+            renderTargets.resize(renderTargetHandles.size());
+            renderTargetInfos.resize(renderTargetHandles.size());
+            renderTargets[slot.index] = target;
+            renderTargetInfos[slot.index] = info;
+            renderTargetInfos[slot.index].alive = true;
+            return {slot.index, slot.generation};
+        }
+
+        // A slot nobody uses: a freed one first, so the set does not run out while textures come and go.
+        uint32_t allocateBindlessSlot()
+        {
+            if (!freeBindlessSlots.empty())
+            {
+                const uint32_t slot = freeBindlessSlots.back();
+                freeBindlessSlots.pop_back();
+                return slot;
+            }
+            return nextBindlessTextureIndex < MAX_BINDLESS_TEXTURES ? nextBindlessTextureIndex++ : UINT32_MAX;
+        }
+
+        // The frames submitted so far, and the one being recorded, may still sample the slot's old texture.
+        void releaseBindlessSlot(uint32_t slot)
+        {
+            slotTextures[slot] = {};
+            slotWaiting[slot] = true;
+            releases.release([this, slot]()
+                             {
+                                 slotWaiting[slot] = false;
+                                 freeBindlessSlots.push_back(slot); });
+        }
+
+        // The texture keeps no slot, so its destroy frees none: a new texture takes the slot (createAttachments).
+        uint32_t takeBindlessSlot(const TextureHandle& texture)
+        {
+            if (!textures.handles.isAlive(texture.index, texture.generation) || textures.slots[texture.index] == UINT32_MAX)
+                return UINT32_MAX;
+            const uint32_t slot = textures.slots[texture.index];
+            textures.slots[texture.index] = UINT32_MAX;
+            slotTextures[slot] = {};
+            return slot;
+        }
+
+        // The handle dies now; the texture and its slot once the GPU is done with every frame that may use them.
+        void retireTexture(const TextureHandle& texture)
+        {
+            rhi::Texture* rhiTexture = textures.objects[texture.index];
+            if (textures.slots[texture.index] != UINT32_MAX)
+                releaseBindlessSlot(textures.slots[texture.index]);
+            textures.slots[texture.index] = UINT32_MAX;
+            textures.objects[texture.index] = nullptr;
+            textures.handles.release(texture.index, texture.generation);
+            releases.release([this, rhiTexture]()
+                             {
+                                 textureStates.forget(rhiTexture);
+                                 uploads.cancelUploads(rhiTexture);
+                                 device->destroyTexture(rhiTexture); });
+        }
+
+        void retireBuffer(rhi::Buffer* buffer)
+        {
+            releases.release([this, buffer]()
+                             {
+                                 uploads.cancelUploads(buffer);
+                                 device->destroyBuffer(buffer); });
+        }
+
+        void retireHeap(rhi::Heap* heap)
+        {
+            releases.release([this, heap]() { device->destroyHeap(heap); });
+        }
+
+        void registerSwapchainImages()
+        {
+            for (uint32_t i = 0; i < swapchain->getImageCount(); ++i)
+                swapchainImages.push_back(addTexture(swapchain->getImage(i)));
+        }
+
+        // The swapchain owns the images, so only their handles go.
         void unregisterSwapchainImages()
         {
             for (const auto& handle : swapchainImages)
-                textures.erase(handle);
+            {
+                if (textures.slots[handle.index] != UINT32_MAX)
+                    releaseBindlessSlot(textures.slots[handle.index]);
+                textures.slots[handle.index] = UINT32_MAX;
+                textures.objects[handle.index] = nullptr;
+                textures.handles.release(handle.index, handle.generation);
+            }
             swapchainImages.clear();
         }
 
@@ -387,21 +512,26 @@ namespace rasm
             return true;
         }
 
-        // Called once the GPU is done with the target, so its slots can take other textures at once. Each slot is given
-        // back once, also when both frame slots share it.
-        void releaseStorageSlots(RenderTarget& renderTarget)
+        // Each slot is given back once, also when both frame slots share it: at once for a target no frame has used,
+        // else once the GPU is done with the frames that may write it (afterGpu).
+        void releaseStorageSlots(RenderTarget& renderTarget, bool afterGpu)
         {
+            std::vector<uint32_t> slots;
             for (uint32_t c = 0; c < MAX_COLOR_ATTACHMENTS; ++c)
             {
                 const uint32_t first = renderTarget.storageSlots[0][c];
                 const uint32_t second = renderTarget.storageSlots[1][c];
                 if (first != UINT32_MAX)
-                    freeStorageSlots.push_back(first);
+                    slots.push_back(first);
                 if (second != UINT32_MAX && second != first)
-                    freeStorageSlots.push_back(second);
+                    slots.push_back(second);
             }
-            for (auto& slots : renderTarget.storageSlots)
-                std::fill(std::begin(slots), std::end(slots), UINT32_MAX);
+            for (auto& targetSlots : renderTarget.storageSlots)
+                std::fill(std::begin(targetSlots), std::end(targetSlots), UINT32_MAX);
+            if (!afterGpu)
+                freeStorageSlots.insert(freeStorageSlots.end(), slots.begin(), slots.end());
+            else if (!slots.empty())
+                releases.release([this, slots]() { freeStorageSlots.insert(freeStorageSlots.end(), slots.begin(), slots.end()); });
         }
     };
     // clang-format on
@@ -445,7 +575,7 @@ namespace rasm
             spdlog::error("Failed to create the swapchain.");
             return false;
         }
-        impl->registerSwapchainImages(engine->handleManager);
+        impl->registerSwapchainImages();
 
         // A small fixed set shared by every bindless texture, instead of one sampler per texture (P2).
         for (size_t i = 0; i < static_cast<size_t>(SamplerType::COUNT); ++i)
@@ -466,31 +596,44 @@ namespace rasm
         auto &device = *impl->device;
         device.waitIdle();
 
+        // Everything destroyed is freed first, while the objects it may refer to (a heap's textures) still exist.
+        impl->releases.releaseAll();
         impl->uploads.cleanup();
-        for (const auto &[handle, descriptorSet] : impl->descriptorSets)
-            device.destroyDescriptorSet(descriptorSet);
-        for (const auto &[handle, pool] : impl->descriptorPools)
-            device.destroyDescriptorPool(pool);
-        for (const auto &[handle, layout] : impl->descriptorSetLayouts)
-            device.destroyDescriptorSetLayout(layout);
-        for (const auto &[handle, rhiCommandBuffer] : impl->commandBuffers)
-            device.destroyCommandBuffer(rhiCommandBuffer);
-        for (const auto &[handle, fence] : impl->fences)
-            device.destroyFence(fence);
-        for (const auto &[handle, pool] : impl->queryPools)
-            device.destroyQueryPool(pool);
-        for (const auto &[handle, buffer] : impl->buffers)
-            device.destroyBuffer(buffer);
+        for (auto *descriptorSet : impl->descriptorSets.objects)
+            if (descriptorSet)
+                device.destroyDescriptorSet(descriptorSet);
+        for (auto *pool : impl->descriptorPools.objects)
+            if (pool)
+                device.destroyDescriptorPool(pool);
+        for (auto *layout : impl->descriptorSetLayouts.objects)
+            if (layout)
+                device.destroyDescriptorSetLayout(layout);
+        for (auto *rhiCommandBuffer : impl->commandBuffers.objects)
+            if (rhiCommandBuffer)
+                device.destroyCommandBuffer(rhiCommandBuffer);
+        for (auto *fence : impl->fences.objects)
+            if (fence)
+                device.destroyFence(fence);
+        for (auto *pool : impl->queryPools.objects)
+            if (pool)
+                device.destroyQueryPool(pool);
+        for (auto *buffer : impl->buffers.objects)
+            if (buffer)
+                device.destroyBuffer(buffer);
         impl->unregisterSwapchainImages();
-        for (const auto &[handle, texture] : impl->textures)
-            device.destroyTexture(texture);
+        impl->releases.releaseAll();
+        for (auto *texture : impl->textures.objects)
+            if (texture)
+                device.destroyTexture(texture);
         for (const auto &group : impl->transientGroups)
             for (auto *heap : group.heaps)
                 device.destroyHeap(heap);
-        for (const auto &[handle, pipeline] : impl->pipelines)
-            device.destroyPipeline(pipeline);
-        for (const auto &[handle, shader] : impl->shaders)
-            device.destroyShader(shader);
+        for (auto *pipeline : impl->pipelines.objects)
+            if (pipeline)
+                device.destroyPipeline(pipeline);
+        for (auto *shader : impl->shaders.objects)
+            if (shader)
+                device.destroyShader(shader);
         for (auto *sampler : impl->samplers)
             if (sampler)
                 device.destroySampler(sampler);
@@ -508,9 +651,7 @@ namespace rasm
         if (!buffer)
             return {};
 
-        BufferHandle handle = engine->handleManager.getNextBufferHandle();
-        impl->buffers[handle] = buffer;
-        return handle;
+        return impl->addBuffer(buffer);
     }
 
     // A cube is drawn one face at a time through its face views, which only a depth attachment has, and nothing
@@ -537,9 +678,7 @@ namespace rasm
         if (!texture)
             return {};
 
-        TextureHandle handle = engine->handleManager.getNextTextureHandle();
-        impl->textures[handle] = texture;
-        return handle;
+        return impl->addTexture(texture);
     }
 
     ShaderHandle RenderContext::createShader(const ShaderDesc &desc)
@@ -555,8 +694,10 @@ namespace rasm
         if (!shader)
             return {};
 
-        ShaderHandle handle = engine->handleManager.getNextShaderHandle();
-        impl->shaders[handle] = shader;
+        const HandleSlot slot = impl->shaders.handles.allocate();
+        impl->shaders.objects.resize(impl->shaders.handles.size(), nullptr);
+        impl->shaders.objects[slot.index] = shader;
+        const ShaderHandle handle{slot.index, slot.generation};
         impl->shaderDescCache[desc] = handle;
         return handle;
     }
@@ -598,8 +739,10 @@ namespace rasm
         if (!pipeline)
             return {};
 
-        PipelineHandle handle = engine->handleManager.getNextPipelineHandle();
-        impl->pipelines[handle] = pipeline;
+        const HandleSlot slot = impl->pipelines.handles.allocate();
+        impl->pipelines.objects.resize(impl->pipelines.handles.size(), nullptr);
+        impl->pipelines.objects[slot.index] = pipeline;
+        const PipelineHandle handle{slot.index, slot.generation};
         impl->pipelineDescCache[desc] = handle;
         return handle;
     }
@@ -614,8 +757,10 @@ namespace rasm
         if (!layout)
             return {};
 
-        DescriptorSetLayoutHandle handle = engine->handleManager.getNextDescriptorSetLayoutHandle();
-        impl->descriptorSetLayouts[handle] = layout;
+        const HandleSlot slot = impl->descriptorSetLayouts.handles.allocate();
+        impl->descriptorSetLayouts.objects.resize(impl->descriptorSetLayouts.handles.size(), nullptr);
+        impl->descriptorSetLayouts.objects[slot.index] = layout;
+        const DescriptorSetLayoutHandle handle{slot.index, slot.generation};
         impl->descriptorSetLayoutDescCache[desc] = handle;
         return handle;
     }
@@ -626,8 +771,10 @@ namespace rasm
         if (!pool)
             return {};
 
-        DescriptorPoolHandle handle = engine->handleManager.getNextDescriptorPoolHandle();
-        impl->descriptorPools[handle] = pool;
+        const HandleSlot slot = impl->descriptorPools.handles.allocate();
+        impl->descriptorPools.objects.resize(impl->descriptorPools.handles.size(), nullptr);
+        impl->descriptorPools.objects[slot.index] = pool;
+        const DescriptorPoolHandle handle{slot.index, slot.generation};
         return handle;
     }
 
@@ -642,8 +789,10 @@ namespace rasm
         if (!descriptorSet)
             return {};
 
-        DescriptorSetHandle handle = engine->handleManager.getNextDescriptorSetHandle();
-        impl->descriptorSets[handle] = descriptorSet;
+        const HandleSlot slot = impl->descriptorSets.handles.allocate();
+        impl->descriptorSets.objects.resize(impl->descriptorSets.handles.size(), nullptr);
+        impl->descriptorSets.objects[slot.index] = descriptorSet;
+        const DescriptorSetHandle handle{slot.index, slot.generation};
         return handle;
     }
 
@@ -653,8 +802,10 @@ namespace rasm
         if (!rhiCommandBuffer)
             return {};
 
-        CommandBufferHandle handle = engine->handleManager.getNextCommandBufferHandle();
-        impl->commandBuffers[handle] = rhiCommandBuffer;
+        const HandleSlot slot = impl->commandBuffers.handles.allocate();
+        impl->commandBuffers.objects.resize(impl->commandBuffers.handles.size(), nullptr);
+        impl->commandBuffers.objects[slot.index] = rhiCommandBuffer;
+        const CommandBufferHandle handle{slot.index, slot.generation};
         return handle;
     }
 
@@ -664,8 +815,10 @@ namespace rasm
         if (!fence)
             return {};
 
-        FenceHandle handle = engine->handleManager.getNextFenceHandle();
-        impl->fences[handle] = fence;
+        const HandleSlot slot = impl->fences.handles.allocate();
+        impl->fences.objects.resize(impl->fences.handles.size(), nullptr);
+        impl->fences.objects[slot.index] = fence;
+        const FenceHandle handle{slot.index, slot.generation};
         return handle;
     }
 
@@ -675,8 +828,10 @@ namespace rasm
         if (!pool)
             return {};
 
-        QueryPoolHandle handle = engine->handleManager.getNextQueryPoolHandle();
-        impl->queryPools[handle] = pool;
+        const HandleSlot slot = impl->queryPools.handles.allocate();
+        impl->queryPools.objects.resize(impl->queryPools.handles.size(), nullptr);
+        impl->queryPools.objects[slot.index] = pool;
+        const QueryPoolHandle handle{slot.index, slot.generation};
         return handle;
     }
 
@@ -690,14 +845,11 @@ namespace rasm
             return {};
         if (!createAttachments(rt, desc, nullptr, nullptr))
         {
-            impl->releaseStorageSlots(rt);
+            impl->releaseStorageSlots(rt, false);
             return {};
         }
 
-        RenderTargetHandle rtHandle = engine->handleManager.getNextRenderTargetHandle();
-        impl->renderTargets[rtHandle] = rt;
-        impl->renderTargetInfos[rtHandle] = {.desc = desc};
-        return rtHandle;
+        return impl->addRenderTarget(rt, {.desc = desc});
     }
 
     // The handle is usable at once, but the textures exist only after placeTransientRenderTargets.
@@ -711,10 +863,7 @@ namespace rasm
         RenderTarget rt = renderTargetFromDesc(desc, renderTargetSize(desc, getSwapchainExtent()));
         if (!impl->allocateStorageSlots(rt, desc))
             return {};
-        RenderTargetHandle rtHandle = engine->handleManager.getNextRenderTargetHandle();
-        impl->renderTargets[rtHandle] = rt;
-        impl->renderTargetInfos[rtHandle] = {.desc = desc, .transient = true};
-        return rtHandle;
+        return impl->addRenderTarget(rt, {.desc = desc, .transient = true});
     }
 
     // A group that already holds one of the targets is replaced, after the GPU is done with its memory.
@@ -722,8 +871,7 @@ namespace rasm
     {
         for (uint32_t i = 0; i < count; ++i)
         {
-            auto it = impl->renderTargetInfos.find(renderTargets[i]);
-            if (!checkArgument(it != impl->renderTargetInfos.end() && it->second.transient, __func__, "only transient render targets can be placed."))
+            if (!checkArgument(impl->isRenderTarget(renderTargets[i]) && impl->renderTargetInfos[renderTargets[i].index].transient, __func__, "only transient render targets can be placed."))
                 return false;
         }
 
@@ -741,7 +889,7 @@ namespace rasm
             for (const auto &target : group.targets)
             {
                 if (std::find(renderTargets, end, target) == end)
-                    destroyAttachments(impl->renderTargets[target]);
+                    destroyAttachments(impl->renderTargets[target.index]);
             }
             retired.insert(retired.end(), group.heaps.begin(), group.heaps.end());
             impl->transientGroups.erase(impl->transientGroups.begin() + static_cast<std::ptrdiff_t>(g));
@@ -752,39 +900,55 @@ namespace rasm
                                          .lastPasses = std::vector<uint32_t>(lastPasses, lastPasses + count)});
         const bool placed = placeGroup(static_cast<uint32_t>(impl->transientGroups.size() - 1));
 
-        // placeGroup destroyed the targets' old textures, so nothing lives in these heaps any more.
+        // placeGroup destroyed the targets' old textures, so nothing lives in these heaps once they are freed.
         for (auto *heap : retired)
-            impl->device->destroyHeap(heap);
+            impl->retireHeap(heap);
         return placed;
     }
 
-    // A render graph's targets, transient or with history, go with the graph. The GPU may still use them, so it is
-    // waited for. A transient group none of whose targets is left frees its heaps.
+    // A render graph's targets, transient or with history, go with the graph. Their handles die at once, and their
+    // textures, slots and heaps once the GPU is done with the frames that may use them, so nothing waits here. A
+    // transient group none of whose targets is left frees its heaps, after the textures placed in them.
     void RenderContext::destroyRenderTargets(const RenderTargetHandle *renderTargets, uint32_t count)
     {
-        bool waited = false;
         for (uint32_t i = 0; i < count; ++i)
         {
-            auto it = impl->renderTargetInfos.find(renderTargets[i]);
-            if (it == impl->renderTargetInfos.end())
+            if (!impl->isRenderTarget(renderTargets[i]))
                 continue;
-            if (!waited)
-                impl->device->waitIdle();
-            waited = true;
-            destroyAttachments(impl->renderTargets[renderTargets[i]]);
-            impl->releaseStorageSlots(impl->renderTargets[renderTargets[i]]);
-            impl->renderTargets.erase(renderTargets[i]);
-            impl->renderTargetInfos.erase(it);
+            RenderTarget &renderTarget = impl->renderTargets[renderTargets[i].index];
+            destroyAttachments(renderTarget);
+            impl->releaseStorageSlots(renderTarget, true);
+            renderTarget = {};
+            impl->renderTargetInfos[renderTargets[i].index] = {};
+            impl->renderTargetHandles.release(renderTargets[i].index, renderTargets[i].generation);
+            // Its index may go to a new target at once, so no group may name it any more.
+            for (auto &group : impl->transientGroups)
+            {
+                for (size_t t = group.targets.size(); t-- > 0;)
+                {
+                    if (!(group.targets[t] == renderTargets[i]))
+                        continue;
+                    group.targets.erase(group.targets.begin() + static_cast<std::ptrdiff_t>(t));
+                    group.firstPasses.erase(group.firstPasses.begin() + static_cast<std::ptrdiff_t>(t));
+                    group.lastPasses.erase(group.lastPasses.begin() + static_cast<std::ptrdiff_t>(t));
+                }
+            }
         }
 
         std::erase_if(impl->transientGroups, [this](const TransientGroup &group)
                       {
-                          const bool empty = std::none_of(group.targets.begin(), group.targets.end(), [this](const RenderTargetHandle &target)
-                                                          { return impl->renderTargets.contains(target); });
+                          const bool empty = group.targets.empty();
                           if (empty)
                               for (auto *heap : group.heaps)
-                                  impl->device->destroyHeap(heap);
+                                  impl->retireHeap(heap);
                           return empty; });
+    }
+
+    void RenderContext::destroyRenderTarget(const RenderTargetHandle &renderTarget)
+    {
+        if (!checkArgument(impl->isRenderTarget(renderTarget), __func__, "the render target is invalid or was destroyed."))
+            return;
+        destroyRenderTargets(&renderTarget, 1);
     }
 
     // The clears run before the frame's passes. A frame that is not submitted gives them back for the next one.
@@ -810,16 +974,17 @@ namespace rasm
     // Called with the device idle, after the swapchain changed size.
     void RenderContext::resizeRenderTargets()
     {
-        for (auto &[handle, info] : impl->renderTargetInfos)
+        for (uint64_t i = 1; i < impl->renderTargetHandles.size(); ++i)
         {
-            if (!info.transient && info.desc.swapchainScale > 0.0f)
-                createAttachments(impl->renderTargets[handle], info.desc, nullptr, nullptr);
+            const RenderTargetInfo &info = impl->renderTargetInfos[i];
+            if (info.alive && !info.transient && info.desc.swapchainScale > 0.0f)
+                createAttachments(impl->renderTargets[i], info.desc, nullptr, nullptr);
         }
         for (uint32_t g = 0; g < impl->transientGroups.size(); ++g)
         {
             const auto &targets = impl->transientGroups[g].targets;
             const bool scaled = std::any_of(targets.begin(), targets.end(), [this](const RenderTargetHandle &target)
-                                            { return impl->renderTargetInfos[target].desc.swapchainScale > 0.0f; });
+                                            { return impl->renderTargetInfos[target.index].desc.swapchainScale > 0.0f; });
             if (scaled)
                 placeGroup(g);
         }
@@ -838,7 +1003,7 @@ namespace rasm
         for (uint32_t i = 0; i < count; ++i)
         {
             TextureDesc textureDescs[MAX_COLOR_ATTACHMENTS + 1];
-            const uint32_t textureCount = attachmentTextureDescs(impl->renderTargetInfos[group.targets[i]].desc, extent, engine->config.occlusionCulling, textureDescs);
+            const uint32_t textureCount = attachmentTextureDescs(impl->renderTargetInfos[group.targets[i].index].desc, extent, engine->config.occlusionCulling, textureDescs);
             firstRequests[i] = static_cast<uint32_t>(requests.size());
             for (uint32_t t = 0; t < textureCount; ++t)
             {
@@ -868,8 +1033,8 @@ namespace rasm
 
         for (uint32_t i = 0; i < count; ++i)
         {
-            auto &rt = impl->renderTargets[group.targets[i]];
-            const auto &desc = impl->renderTargetInfos[group.targets[i]].desc;
+            auto &rt = impl->renderTargets[group.targets[i].index];
+            const auto &desc = impl->renderTargetInfos[group.targets[i].index].desc;
             if (!placed)
             {
                 destroyAttachments(rt);
@@ -888,7 +1053,7 @@ namespace rasm
         }
 
         for (auto *heap : oldHeaps)
-            impl->device->destroyHeap(heap);
+            impl->retireHeap(heap);
         if (!placed)
         {
             spdlog::error("Failed to place {} transient render targets.", count);
@@ -919,9 +1084,10 @@ namespace rasm
         const TextureDesc &depthDesc = textureDescs[colorCount];
         const bool sampledDepth = hasDepth && depthDesc.usage == TextureUsage::SAMPLED_DEPTH_ATTACHMENT;
 
+        // The old textures give up their slots before they are destroyed, so the slots stay taken for the new ones.
         auto slotOf = [this](TextureHandle texture)
         {
-            const uint32_t slot = engine->getBindlessTextureIndex(texture);
+            const uint32_t slot = impl->takeBindlessSlot(texture);
             return slot == UINT32_MAX ? MAX_BINDLESS_TEXTURES : slot;
         };
         uint32_t colorSlots[MAX_FRAMES_IN_FLIGHT][MAX_COLOR_ATTACHMENTS];
@@ -932,19 +1098,36 @@ namespace rasm
                 colorSlots[i][c] = slotOf(renderTarget.attachments[i].color[c]);
             depthSlots[i] = slotOf(renderTarget.attachments[i].depth);
         }
+        // On failure, the taken slots that no new texture holds go back to the set.
+        auto releaseTakenSlots = [this, &colorSlots, &depthSlots]()
+        {
+            std::vector<uint32_t> released; // frame slots without history share their slots
+            for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+            {
+                for (uint32_t c = 0; c <= MAX_COLOR_ATTACHMENTS; ++c)
+                {
+                    const uint32_t slot = c < MAX_COLOR_ATTACHMENTS ? colorSlots[i][c] : depthSlots[i];
+                    if (slot < MAX_BINDLESS_TEXTURES && !impl->slotTextures[slot].isValid() && std::find(released.begin(), released.end(), slot) == released.end())
+                    {
+                        released.push_back(slot);
+                        impl->releaseBindlessSlot(slot);
+                    }
+                }
+            }
+        };
         destroyAttachments(renderTarget);
         renderTarget.width = textureDescs[0].width;
         renderTarget.height = textureDescs[0].height;
 
         auto makeTexture = [this, heaps, offsets](const TextureDesc &textureDesc, uint32_t attachment) -> TextureHandle
         {
+            TextureHandle handle;
             if (!heaps)
-                return createTexture(textureDesc);
-            auto *texture = impl->device->createPlacedTexture(textureDesc, heaps[attachment], offsets[attachment]);
-            if (!texture)
-                return {};
-            TextureHandle handle = engine->handleManager.getNextTextureHandle();
-            impl->textures[handle] = texture;
+                handle = createTexture(textureDesc);
+            else if (auto *texture = impl->device->createPlacedTexture(textureDesc, heaps[attachment], offsets[attachment]))
+                handle = impl->addTexture(texture);
+            if (handle.isValid())
+                impl->textures.attachments[handle.index] = 1;
             return handle;
         };
 
@@ -962,6 +1145,7 @@ namespace rasm
             if (!created || (hasDepth && !attachment.depth.isValid()))
             {
                 spdlog::error("Failed to create the attachments of render target '{}'.", desc.name);
+                releaseTakenSlots();
                 destroyAttachments(renderTarget);
                 return false;
             }
@@ -981,6 +1165,7 @@ namespace rasm
             if (!bindless)
             {
                 spdlog::error("Failed to make render target '{}' bindless.", desc.name);
+                releaseTakenSlots();
                 destroyAttachments(renderTarget);
                 return false;
             }
@@ -1014,8 +1199,8 @@ namespace rasm
             { return std::find(std::begin(clear.colors), std::end(clear.colors), texture) != std::end(clear.colors); };
             std::erase_if(impl->pendingClears, clears);
             std::erase_if(impl->recordedClears, clears);
-            engine->registry.bindlessTextureIndexMap.erase(texture);
-            destroyTexture(texture);
+            if (impl->textures.handles.isAlive(texture.index, texture.generation))
+                impl->retireTexture(texture);
         };
         for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
@@ -1038,25 +1223,23 @@ namespace rasm
 
     const RenderTarget &RenderContext::getRenderTarget(const RenderTargetHandle &handle)
     {
-        auto it = impl->renderTargets.find(handle);
-        if (it == impl->renderTargets.end())
+        if (!impl->isRenderTarget(handle))
         {
-            spdlog::error("Render target handle not found.");
+            spdlog::error("Render target handle {{{}, {}}} is invalid or was destroyed.", handle.index, handle.generation);
             static RenderTarget emptyRenderTarget{};
             return emptyRenderTarget;
         }
-        return it->second;
+        return impl->renderTargets[handle.index];
     }
 
     RenderTargetDesc RenderContext::getRenderTargetDesc(const RenderTargetHandle &handle)
     {
-        auto it = impl->renderTargetInfos.find(handle);
-        if (it == impl->renderTargetInfos.end())
+        if (!impl->isRenderTarget(handle))
         {
-            spdlog::error("Render target handle not found.");
+            spdlog::error("Render target handle {{{}, {}}} is invalid or was destroyed.", handle.index, handle.generation);
             return {};
         }
-        return it->second.desc;
+        return impl->renderTargetInfos[handle.index].desc;
     }
 
     void RenderContext::destroyTexture(const TextureHandle &texture)
@@ -1067,13 +1250,11 @@ namespace rasm
             return;
         }
 
-        auto *rhiTexture = lookup(impl->textures, texture, __func__);
-        if (!rhiTexture)
+        if (!lookup(impl->textures, texture, __func__))
             return;
-        impl->textureStates.forget(rhiTexture);
-        impl->uploads.cancelUploads(rhiTexture);
-        impl->device->destroyTexture(rhiTexture);
-        impl->textures.erase(texture);
+        if (!checkArgument(impl->textures.attachments[texture.index] == 0, __func__, "the texture is a render target's; destroy the render target (destroyRenderTarget) instead."))
+            return;
+        impl->retireTexture(texture);
     }
 
     void RenderContext::destroyBuffer(const BufferHandle &buffer)
@@ -1081,14 +1262,14 @@ namespace rasm
         auto *rhiBuffer = lookup(impl->buffers, buffer, __func__);
         if (!rhiBuffer)
             return;
-        impl->uploads.cancelUploads(rhiBuffer);
-        impl->device->destroyBuffer(rhiBuffer);
-        impl->buffers.erase(buffer);
+        impl->buffers.objects[buffer.index] = nullptr;
+        impl->buffers.handles.release(buffer.index, buffer.generation);
+        impl->retireBuffer(rhiBuffer);
     }
 
     // A new buffer with the old desc and the new size, under the same handle, so whatever holds the handle (a render
-    // graph's declarations) stays valid. The contents and the device address change, and the GPU must be done with
-    // the old buffer. On failure the old buffer stays.
+    // graph's declarations) stays valid. The contents and the device address change; the old buffer is freed once the
+    // GPU is done with the frames that may use it. On failure the old buffer stays.
     bool RenderContext::resizeBuffer(const BufferHandle &buffer, uint64_t size)
     {
         auto *oldBuffer = lookup(impl->buffers, buffer, __func__);
@@ -1100,9 +1281,8 @@ namespace rasm
         auto *newBuffer = impl->device->createBuffer(desc);
         if (!newBuffer)
             return false;
-        impl->uploads.cancelUploads(oldBuffer);
-        impl->device->destroyBuffer(oldBuffer);
-        impl->buffers[buffer] = newBuffer;
+        impl->retireBuffer(oldBuffer);
+        impl->buffers.objects[buffer.index] = newBuffer;
         return true;
     }
 
@@ -1275,28 +1455,106 @@ namespace rasm
         return impl->device->queryVRAMStats();
     }
 
+    // A texture holds one slot. Asked for any slot (MAX_BINDLESS_TEXTURES), it keeps the one it has, with the new
+    // sampler, or takes a free one. Asked for a slot, it takes that one from the texture that held it, which then has
+    // none, and gives back the one it had. A slot is free again once the GPU is done with its last texture.
     uint32_t RenderContext::updateBindlessDescriptorSet(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, SamplerType sampler, uint32_t slot)
     {
-        if (!checkArgument(sampler < SamplerType::COUNT, __func__, "invalid sampler type."))
+        if (!checkArgument(sampler < SamplerType::COUNT, __func__, "invalid sampler type.") ||
+            !checkArgument(slot <= MAX_BINDLESS_TEXTURES, __func__, "the slot is past MAX_BINDLESS_TEXTURES."))
             return UINT32_MAX;
-
-        if (slot > MAX_BINDLESS_TEXTURES || (slot == MAX_BINDLESS_TEXTURES && impl->nextBindlessTextureIndex >= MAX_BINDLESS_TEXTURES))
-        {
-            spdlog::error("Slot index exceeds maximum bindless textures.");
-            return UINT32_MAX;
-        }
 
         auto *descriptorSet = lookup(impl->descriptorSets, bindlessSet, __func__);
         auto *rhiTexture = lookup(impl->textures, texture, __func__);
         if (!descriptorSet || !rhiTexture)
             return UINT32_MAX;
 
-        const uint32_t targetSlot = slot == MAX_BINDLESS_TEXTURES ? impl->nextBindlessTextureIndex : slot;
-        impl->device->updateBindlessTexture(descriptorSet, targetSlot, rhiTexture, impl->samplers[static_cast<size_t>(sampler)]);
+        uint32_t &textureSlot = impl->textures.slots[texture.index];
+        // A frame in flight may sample the slot, so its descriptor stays as it is.
+        if (slot == MAX_BINDLESS_TEXTURES && textureSlot != UINT32_MAX)
+        {
+            if (impl->slotSamplers[textureSlot] != sampler)
+                spdlog::error("updateBindlessDescriptorSet: texture '{}' already has slot {} with another sampler; a texture holds one slot. Make a second texture to sample it another way.",
+                              rhiTexture->desc.name, textureSlot);
+            return textureSlot;
+        }
+        if (!checkArgument(slot == MAX_BINDLESS_TEXTURES || !impl->slotWaiting[slot], __func__, "the slot was freed, and frames in flight may still sample its old texture."))
+            return UINT32_MAX;
+        uint32_t targetSlot = slot;
+        if (slot == MAX_BINDLESS_TEXTURES)
+        {
+            targetSlot = impl->allocateBindlessSlot();
+            if (targetSlot == UINT32_MAX)
+            {
+                spdlog::error("All {} bindless texture slots are in use ({} more wait for the GPU to finish with them). Destroy textures that are no longer needed.",
+                              MAX_BINDLESS_TEXTURES, impl->releases.waitingCount());
+                return UINT32_MAX;
+            }
+        }
+        else
+        {
+            // Never handed out yet: the slots below it stay free for automatic allocation.
+            for (; impl->nextBindlessTextureIndex <= slot; ++impl->nextBindlessTextureIndex)
+            {
+                if (impl->nextBindlessTextureIndex != slot)
+                    impl->freeBindlessSlots.push_back(impl->nextBindlessTextureIndex);
+            }
+            std::erase(impl->freeBindlessSlots, slot);
+            const TextureHandle owner = impl->slotTextures[slot];
+            if (owner.isValid() && !(owner == texture) && impl->textures.handles.isAlive(owner.index, owner.generation))
+                impl->textures.slots[owner.index] = UINT32_MAX;
+            if (textureSlot != UINT32_MAX && textureSlot != slot)
+                impl->releaseBindlessSlot(textureSlot);
+        }
 
-        // Explicit slots count too: automatic allocation must never land on one of them.
-        impl->nextBindlessTextureIndex = std::max(impl->nextBindlessTextureIndex, targetSlot + 1);
+        impl->device->updateBindlessTexture(descriptorSet, targetSlot, rhiTexture, impl->samplers[static_cast<size_t>(sampler)]);
+        textureSlot = targetSlot;
+        impl->slotTextures[targetSlot] = texture;
+        impl->slotSamplers[targetSlot] = sampler;
         return targetSlot;
+    }
+
+    uint32_t RenderContext::getBindlessTextureIndex(const TextureHandle &texture) const
+    {
+        if (!impl->textures.handles.isAlive(texture.index, texture.generation))
+            return UINT32_MAX;
+        return impl->textures.slots[texture.index];
+    }
+
+    bool RenderContext::isAlive(const TextureHandle &texture) const
+    {
+        return impl->textures.handles.isAlive(texture.index, texture.generation);
+    }
+
+    bool RenderContext::isAlive(const BufferHandle &buffer) const
+    {
+        return impl->buffers.handles.isAlive(buffer.index, buffer.generation);
+    }
+
+    // Called at the end of every frame, after its submits, also for a frame that was dropped: what was destroyed since
+    // the last call waits for the values the queues and the uploads signaled last. The graphics value covers the frame's
+    // compute work (its last graphics batch waits for it), but a frame whose later batches failed leaves compute work
+    // the graphics value does not cover, so the compute value counts too.
+    void RenderContext::tagReleases(const FenceValue &graphics, const FenceValue &compute)
+    {
+        impl->releaseFences[0] = graphics.fence.isValid() ? lookup(impl->fences, graphics.fence, __func__) : nullptr;
+        impl->releaseFences[1] = compute.fence.isValid() ? lookup(impl->fences, compute.fence, __func__) : nullptr;
+        const uint64_t values[rhi::RELEASE_TIMELINES] = {impl->releaseFences[0] ? graphics.value : 0, impl->releaseFences[1] ? compute.value : 0,
+                                                         impl->uploads.lastSubmit().value};
+        impl->releases.tag(values);
+    }
+
+    // Frees what every queue is done with. Nothing waits: the fence values are only read.
+    void RenderContext::collectReleases()
+    {
+        if (!impl->releases.hasTagged())
+            return;
+        ZoneScoped;
+        const rhi::FenceWait uploads = impl->uploads.lastSubmit();
+        const uint64_t completed[rhi::RELEASE_TIMELINES] = {impl->releaseFences[0] ? impl->device->getFenceValue(impl->releaseFences[0]) : UINT64_MAX,
+                                                            impl->releaseFences[1] ? impl->device->getFenceValue(impl->releaseFences[1]) : UINT64_MAX,
+                                                            uploads.fence ? impl->device->getFenceValue(uploads.fence) : UINT64_MAX};
+        impl->releases.collect(completed);
     }
 
     // A storage slot holds one mip of a texture, written by compute in the STORAGE state. A slot the GPU may still use
@@ -1603,7 +1861,7 @@ namespace rasm
         if (status == SwapchainStatus::OK || impl->swapchain->getImageCount() == 0)
         {
             impl->unregisterSwapchainImages();
-            impl->registerSwapchainImages(engine->handleManager);
+            impl->registerSwapchainImages();
         }
         return status;
     }

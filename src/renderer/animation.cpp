@@ -422,7 +422,7 @@ namespace rasm
 
     void Engine::playAnimation(EntityHandle entity, const AnimationPlay &play)
     {
-        if (!entity.isValid() || entity.index >= registry.entities.size())
+        if (!isLive(entity))
         {
             spdlog::error("playAnimation: invalid entity handle.");
             return;
@@ -433,7 +433,7 @@ namespace rasm
             return;
         }
         const MeshHandle mesh = registry.entities[entity.index].mesh;
-        if (!mesh.isValid() || mesh.index >= registry.meshes.size())
+        if (!isLive(mesh))
         {
             spdlog::error("playAnimation: entity {} has no mesh.", entity.index);
             return;
@@ -462,7 +462,7 @@ namespace rasm
 
     void Engine::stopAnimation(EntityHandle entity)
     {
-        if (!entity.isValid() || entity.index >= registry.entities.size())
+        if (!isLive(entity))
         {
             spdlog::error("stopAnimation: invalid entity handle.");
             return;
@@ -486,14 +486,14 @@ namespace rasm
 
     std::vector<AnimationClip> Engine::getAnimations(MeshHandle mesh) const
     {
-        if (!mesh.isValid() || mesh.index >= registry.meshes.size())
+        if (!isLive(mesh))
             return {};
         return registry.meshes[mesh.index].animations;
     }
 
     int32_t Engine::findAnimation(MeshHandle mesh, const std::string &name) const
     {
-        if (!mesh.isValid() || mesh.index >= registry.meshes.size())
+        if (!isLive(mesh))
             return -1;
         const std::vector<AnimationClip> &clips = registry.meshes[mesh.index].animations;
         for (size_t i = 0; i < clips.size(); ++i)
@@ -509,7 +509,7 @@ namespace rasm
     // move the vertices smoothly, as a clip does.
     void Engine::setMorphWeights(EntityHandle entity, const float *weights, uint32_t count)
     {
-        if (!entity.isValid() || entity.index >= registry.entities.size())
+        if (!isLive(entity))
         {
             spdlog::error("setMorphWeights: invalid entity handle.");
             return;
@@ -528,7 +528,7 @@ namespace rasm
             }
         }
         const MeshHandle mesh = registry.entities[entity.index].mesh;
-        if (!mesh.isValid() || mesh.index >= registry.meshes.size() || registry.meshes[mesh.index].state == MeshState::FAILED)
+        if (!isLive(mesh) || registry.meshes[mesh.index].state == MeshState::FAILED)
         {
             spdlog::error("setMorphWeights: entity {} has no mesh.", entity.index);
             return;
@@ -559,7 +559,7 @@ namespace rasm
 
     void Engine::clearMorphWeights(EntityHandle entity)
     {
-        if (!entity.isValid() || entity.index >= registry.entities.size())
+        if (!isLive(entity))
         {
             spdlog::error("clearMorphWeights: invalid entity handle.");
             return;
@@ -578,7 +578,7 @@ namespace rasm
 
     std::vector<std::string> Engine::getMorphTargetNames(MeshHandle mesh) const
     {
-        if (!mesh.isValid() || mesh.index >= registry.meshes.size())
+        if (!isLive(mesh))
             return {};
         return registry.meshes[mesh.index].morphTargetNames;
     }

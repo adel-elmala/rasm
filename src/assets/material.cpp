@@ -70,12 +70,13 @@ namespace rasm
 
     MaterialHandle Engine::createMaterial(MaterialType type, std::vector<TextureHandle> textures, bool doubleSided)
     {
-        MaterialHandle handle = handleManager.getNextMaterialHandle();
-        if (handle.index >= MAX_MATERIALS)
+        const HandleSlot slot = registry.materialHandles.allocate();
+        if (slot.index == 0)
         {
-            spdlog::warn("Exceeded maximum number of materials.");
+            spdlog::warn("Exceeded maximum number of materials ({} alive, MAX_MATERIALS).", registry.materialHandles.liveCount());
             return {};
         }
+        const MaterialHandle handle{slot.index, slot.generation};
 
         auto material = Material{.handle = handle, .type = type, .textures = {}, .doubleSided = doubleSided};
 
@@ -120,7 +121,7 @@ namespace rasm
             break;
         }
 
-        registry.materials.resize(handle.index + 1);
+        registry.materials.resize(registry.materialHandles.size());
         registry.materials[handle.index] = material;
         writeMaterialRow(handle);
 
@@ -129,7 +130,7 @@ namespace rasm
 
     void Engine::updateMaterial(MaterialHandle material, const Material &values)
     {
-        if (!material.isValid() || material.index >= registry.materials.size())
+        if (!isLive(material))
         {
             spdlog::error("Invalid material handle for updating material.");
             return;
@@ -164,12 +165,13 @@ namespace rasm
         if (auto it = cache.materials.find(materialIndex); it != cache.materials.end())
             return it->second;
 
-        MaterialHandle handle = handleManager.getNextMaterialHandle();
-        if (handle.index >= MAX_MATERIALS)
+        const HandleSlot slot = registry.materialHandles.allocate();
+        if (slot.index == 0)
         {
-            spdlog::warn("Exceeded maximum number of materials.");
+            spdlog::warn("Exceeded maximum number of materials ({} alive, MAX_MATERIALS).", registry.materialHandles.liveCount());
             return {};
         }
+        const MaterialHandle handle{slot.index, slot.generation};
 
         auto mat = Material{.handle = handle, .type = MaterialType::PBR, .textures = {}};
 
@@ -341,7 +343,7 @@ namespace rasm
             mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_STRENGTH)] = emissiveStrength;
         }
 
-        registry.materials.resize(handle.index + 1);
+        registry.materials.resize(registry.materialHandles.size());
         registry.materials[handle.index] = mat;
         writeMaterialRow(handle);
         cache.materials[materialIndex] = handle;
@@ -350,7 +352,7 @@ namespace rasm
 
     const Material &Engine::getMaterial(const MaterialHandle &handle)
     {
-        if (handle.isValid() && handle.index < registry.materials.size())
+        if (isLive(handle))
             return registry.materials[handle.index];
 
         if (handle.isValid())

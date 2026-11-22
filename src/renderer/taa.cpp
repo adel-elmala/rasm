@@ -88,7 +88,7 @@ namespace rasm
     // runs, so the result depends only on the frames.
     RenderTargetHandle Engine::addTaaPass(RenderGraph &graph, const RenderTargetHandle &source, CameraHandle camera)
     {
-        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        if (!isLive(camera))
         {
             spdlog::error("addTaaPass needs a valid camera handle.");
             return {};

@@ -566,7 +566,7 @@ namespace rasm
             ImGui::EndTable();
         }
 
-        const bool valid = inspection.entity.isValid() && inspection.entity.index < registry.entities.size();
+        const bool valid = isLive(inspection.entity);
         const std::string current = valid ? registry.entities[inspection.entity.index].name : "None";
         if (ImGui::BeginCombo("Entity", current.c_str(), ImGuiComboFlags_HeightLarge))
         {
