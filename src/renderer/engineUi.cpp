@@ -131,8 +131,8 @@ namespace rasm
     // and the render graph's dump (F3).
     void Engine::drawEngineWindow()
     {
-        // Counted in frame time, so with EngineConfig::fixedDeltaTime the same frames renew the numbers in every run (C15).
-        ui->statsAge += deltaTime;
+        // Counted in frame time (buildUi adds it), so with EngineConfig::fixedDeltaTime the same frames renew the numbers
+        // in every run (C15).
         if (ui->statsAge >= STATS_REFRESH)
         {
             ui->stats = frameStats->stats;

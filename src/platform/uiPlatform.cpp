@@ -42,17 +42,18 @@ namespace rasm
         ImGui_ImplSDL3_ProcessEvent(static_cast<const SDL_Event *>(event));
     }
 
-    // Headless, the delta time is the engine's frame time; ImGui needs it above 0, which the first frame's is not.
+    // The step is the engine's deltaTime (EngineConfig::fixedDeltaTime, else the measured frame time), with a window
+    // too, in place of SDL's clock; ImGui needs it above 0, which the first frame's is not.
     void newUiPlatformFrame(const Window &window, float deltaTime)
     {
-        if (!isHeadless(window))
-        {
-            ImGui_ImplSDL3_NewFrame();
-            return;
-        }
         ImGuiIO &io = ImGui::GetIO();
-        io.DisplaySize = ImVec2(static_cast<float>(window.pixelWidth), static_cast<float>(window.pixelHeight));
-        io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+        if (isHeadless(window))
+        {
+            io.DisplaySize = ImVec2(static_cast<float>(window.pixelWidth), static_cast<float>(window.pixelHeight));
+            io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+        }
+        else
+            ImGui_ImplSDL3_NewFrame();
         io.DeltaTime = deltaTime > 0.0f ? deltaTime : 1.0f / 60.0f;
     }
 

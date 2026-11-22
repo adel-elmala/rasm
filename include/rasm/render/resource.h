@@ -117,7 +117,7 @@ namespace rasm
         uint32_t                    mipLevels                       = 0;        // 0: one, or the full chain for a sampled RGBA8 texture; at most the full chain
         uint32_t                    samples                         = 1;        // per pixel: 1, 2, 4 or 8; above 1 an attachment with one mip
         bool                        readable                        = false;    // a copy source, for Engine::readTexture
-        bool                        encodedView                     = false;    // R8G8B8A8_SRGB: also an R8G8B8A8_UNORM view, which AttachmentOps::encodedColor draws through
+        bool                        encodedView                     = false;    // R8G8B8A8_SRGB, not a cube: also an R8G8B8A8_UNORM view of mip 0, which AttachmentOps::encodedColor draws through
 
         bool                        operator==(const TextureDesc&) const = default;
     };
@@ -183,7 +183,7 @@ namespace rasm
         bool                        loadDepth                       = false;
         bool                        storeDepth                      = false;
         bool                        firstWrite                      = false;    // no earlier pass drew into the target this frame, so a cube's other faces may be dropped
-        bool                        encodedColor                    = false;    // the swapchain through its UNORM view (RenderContext::getSwapchainEncodedFormat), if it has one
+        bool                        encodedColor                    = false;    // color 0 through its UNORM view (RenderContext::getSwapchainEncodedFormat, TextureDesc::encodedView), if it has one
     };
 
     struct BindlessDescriptorSetLayoutDesc

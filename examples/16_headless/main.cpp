@@ -60,6 +60,7 @@ int main(int argc, char **argv)
         .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
         .shaderDir = RASM_EXAMPLE_SHADER_DIR};
 
+    applyExampleArgs(args, config);
     const auto start = std::chrono::steady_clock::now();
     rasm::Engine engine(config);
     if (!engine.running())

@@ -238,6 +238,8 @@ namespace rasm
         ui->draws.clear();
         ui->drawn = false;
         inspector->shown = false;
+        // Also while the RASM window is hidden, so it shows fresh numbers when it opens again.
+        ui->statsAge += deltaTime;
         const bool active = config.showStats || static_cast<bool>(ui->callback);
         if (!active)
         {

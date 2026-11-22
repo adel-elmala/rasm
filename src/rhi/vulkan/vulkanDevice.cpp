@@ -25,7 +25,7 @@ namespace rasm::rhi
 
         bool hasEncodedView(const TextureDesc &desc)
         {
-            return desc.encodedView && desc.format == Format::R8G8B8A8_SRGB;
+            return desc.encodedView && desc.format == Format::R8G8B8A8_SRGB && !desc.cube;
         }
 
         vkb::Result<vkb::Instance> initInstance(const DeviceDesc &desc, bool &debugUtilsEnabled)
@@ -455,10 +455,15 @@ namespace rasm::rhi
                 viewInfo.subresourceRange.layerCount = texture.desc.cube ? CUBE_FACES : 1;
                 result = vkCreateImageView(device, &viewInfo, nullptr, &texture.mipViews[mip]);
             }
+            // An attachment view: mip 0, layer 0, as beginRendering draws.
             if (hasEncodedView(texture.desc) && result == VK_SUCCESS)
             {
-                viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-                result = vkCreateImageView(device, &viewInfo, nullptr, &texture.encodedView);
+                const VkImageViewCreateInfo encodedInfo = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                                                           .image = texture.image,
+                                                           .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                                                           .format = VK_FORMAT_R8G8B8A8_UNORM,
+                                                           .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .levelCount = 1, .layerCount = 1}};
+                result = vkCreateImageView(device, &encodedInfo, nullptr, &texture.encodedView);
             }
             if (result != VK_SUCCESS)
                 destroyImageViews(device, texture);

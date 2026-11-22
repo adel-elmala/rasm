@@ -146,11 +146,12 @@ namespace rasm
     {
         StatsOverlaySlot &slot = statsOverlay->slots[frameCount];
         slot.rows = 0;
+        // Also while hidden, so the overlay shows fresh numbers when it is shown again.
+        statsOverlay->gridAge += deltaTime;
         if (!config.showStats || !statsOverlay->pipeline.isValid())
             return;
 
         // Counted in frame time, so with EngineConfig::fixedDeltaTime the same frames renew the text in every run (C15).
-        statsOverlay->gridAge += deltaTime;
         if (statsOverlay->grid.empty() || statsOverlay->gridAge >= TEXT_REFRESH)
         {
             statsOverlay->gridAge = 0.0f;
