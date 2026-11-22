@@ -186,7 +186,7 @@ namespace
     {
         if (!std::filesystem::exists(assets.sponza))
         {
-            std::printf("  Sponza is not at %s: tools/image_tests.py --fetch-assets downloads it.\n", assets.sponza.c_str());
+            std::printf("  Sponza is not at %s: tools/image_tests.py fetches it.\n", assets.sponza.c_str());
             return false;
         }
         const rasm::MeshHandle sponza = engine.loadGLTF(assets.sponza);

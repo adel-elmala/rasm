@@ -162,27 +162,51 @@ jobs:
       - name: Probe lavapipe
         if: ${{ runner.os == 'Windows' && !cancelled() && steps.build-release.outcome == 'success' }}
         timeout-minutes: 40
+        shell: pwsh
         env:
           LP_NATIVE_VECTOR_WIDTH: 256
         run: |
-          mkdir -p probe
+          $ErrorActionPreference = 'Continue'
+          New-Item -ItemType Directory -Force probe | Out-Null
           python tools/image_tests.py --lavapipe --fetch-only
-          cdb="/c/Program Files (x86)/Windows Kits/10/Debuggers/x64/cdb.exe"
-          echo "PROBE cdb: $(test -f "$cdb" && echo yes || echo no)"
-          for t in $(build/x64-release/tests/rasm_image_tests.exe --list | tr -d '\r'); do
-            s=$(date +%s); rc=0
-            build/x64-release/tests/rasm_image_tests.exe --update --golden-dir probe/g1 --scenes $t > probe/$t.log 2>&1 || rc=$?
-            echo "PROBE scene $t rc=$rc seconds=$(( $(date +%s) - s )) $(grep -E "^$t " probe/$t.log | tr -d '\r' || true)"
-          done
-          if [ -f "$cdb" ]; then
-            curl -sSfL -o dbg.7z https://github.com/pal1000/mesa-dist-win/releases/download/26.3.0/mesa3d-26.3.0-debug-info-msvc.7z
-            echo "2f491276af43f69c22608af4ecce844fbc5c37ca5cb7c5dd520e92839adad756  dbg.7z" | sha256sum -c -
-            7z x -y -odbg dbg.7z > /dev/null
-            pdb=$(dirname "$(find dbg -iname 'vulkan_lvp.pdb' | head -n 1)")
-            echo "PROBE pdb dir: $pdb"
-            "$cdb" -g -G -lines -y "build/x64-debug/tests;build/x64-debug/src;$(cygpath -w "$pdb")" -c ".exr -1; r; u @rip-0x30 L24; ~*kn 40; q" build/x64-debug/tests/rasm_image_tests.exe --update --golden-dir probe/dbg --scenes alpha_modes > probe/cdb.log 2>&1 || true
-            grep -vE "\] \[info\]|^\s+(name|driver version):|NatVis|ModLoad" probe/cdb.log | tail -n 400
-          fi
+          $exe = 'build/x64-release/tests/rasm_image_tests.exe'
+          $drivers = 'HKLM:\SOFTWARE\Khronos\Vulkan\Drivers'
+          function Use-Mesa($ver, $sha) {
+            $dir = Join-Path $HOME "mesa-$ver"
+            New-Item -ItemType Directory -Force $dir | Out-Null
+            Invoke-WebRequest "https://github.com/pal1000/mesa-dist-win/releases/download/$ver/mesa3d-$ver-release-msvc.7z" -OutFile "$dir/m.7z"
+            if ((Get-FileHash "$dir/m.7z").Hash.ToLower() -ne $sha) { throw "hash of $ver" }
+            7z x -y "-o$dir/x" "$dir/m.7z" | Out-Null
+            $icd = (Get-ChildItem -Recurse "$dir/x" -Filter 'lvp_icd.x86_64.json' | Select-Object -First 1).FullName
+            Remove-Item -Path $drivers -Recurse -Force -ErrorAction SilentlyContinue
+            New-Item -Path $drivers -Force | Out-Null
+            New-ItemProperty -Path $drivers -Name $icd -Value 0 -PropertyType DWord -Force | Out-Null
+          }
+          function Run-Scene($label, $scene) {
+            $start = Get-Date
+            $p = Start-Process -FilePath $exe -ArgumentList @('--update', '--golden-dir', "probe/$label", '--scenes', $scene) -NoNewWindow -Wait -PassThru -RedirectStandardOutput "probe/$label-$scene.log" -RedirectStandardError "probe/$label-$scene.err"
+            $device = (Select-String -Path "probe/$label-$scene.log" -Pattern 'name: (.+?) --' | Select-Object -First 1).Matches.Groups[1].Value
+            "PROBE $label $scene exit=$($p.ExitCode) seconds=$([int]((Get-Date) - $start).TotalSeconds) device=$device"
+          }
+          foreach ($v in @(@('26.3.0', 'c505fcc77e8f63a09d7ddac086591d2f542c0698d37fc9e3094685a34d0d9991'), @('26.2.7', 'e61153fb1a8e58b9d80b403030cda619eaffbddd9ff99b34163b996ead03d596'), @('25.3.6', 'ca56d92bb2254a9a25557c95cfe27f02071a77b26daff4cbf9bc125ed3347fb5'))) {
+            Use-Mesa $v[0] $v[1]
+            Run-Scene "m$($v[0])" 'alpha_modes'
+            Run-Scene "m$($v[0])" 'sponza'
+          }
+          Use-Mesa '26.3.0' 'c505fcc77e8f63a09d7ddac086591d2f542c0698d37fc9e3094685a34d0d9991'
+          $core = 'shaders/lib/core.slang'
+          $pass = 'shaders/passes/rasm.slang'
+          (Get-Content -Raw $core).Replace('sampleMaterial(gTextures[texture], uv).a', 'sampleMaterial(gTextures[NonUniformResourceIndex(texture)], uv).a') | Set-Content -NoNewline $core
+          Run-Scene 'nonuniform' 'alpha_modes'
+          git checkout -- shaders
+          (Get-Content -Raw $pass) -replace 'if \(alpha < model->alphaCutoff\)\s+discard;', 'if (alpha < -1.0) discard;' | Set-Content -NoNewline $pass
+          Run-Scene 'killnever' 'alpha_modes'
+          git checkout -- shaders
+          (Get-Content -Raw $pass) -replace 'if \(alpha < model->alphaCutoff\)\s+discard;', '' | Set-Content -NoNewline $pass
+          Run-Scene 'nokill' 'alpha_modes'
+          Run-Scene 'nokill' 'sponza'
+          git checkout -- shaders
+          git status --short
 
       - name: Upload the probe images
         if: ${{ runner.os == 'Windows' && !cancelled() }}
