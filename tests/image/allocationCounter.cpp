@@ -8,13 +8,19 @@
 // driver's and the validation layer's allocations on the main thread are not counted either. On macOS and Linux a
 // replaced operator new also serves the shared libraries, so this file replaces nothing there and the check is off.
 // Off with AddressSanitizer too, which brings its own operator new.
-#if defined(__has_feature)
+#if defined(__SANITIZE_ADDRESS__)
+#define RASM_COUNT_ALLOCATIONS 0
+#endif
+#if defined(__has_feature) && !defined(RASM_COUNT_ALLOCATIONS)
 #if __has_feature(address_sanitizer)
 #define RASM_COUNT_ALLOCATIONS 0
 #endif
 #endif
 #if !defined(RASM_COUNT_ALLOCATIONS) && defined(_WIN32)
 #define RASM_COUNT_ALLOCATIONS 1
+#endif
+#if !defined(RASM_COUNT_ALLOCATIONS)
+#define RASM_COUNT_ALLOCATIONS 0
 #endif
 
 #if RASM_COUNT_ALLOCATIONS

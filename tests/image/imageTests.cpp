@@ -519,7 +519,10 @@ namespace
 
         rasm::RenderGraph graph = engine.createRenderGraph();
         if (!buildGraph(engine, test, *content, camera, graph))
+        {
+            engine.setDebugView(rasm::DebugView::NONE);
             return false;
+        }
         // Every load is in place before the first frame, so frame N looks the same on every run.
         engine.waitForLoads();
         for (uint32_t frame = 0; frame < test.frames; ++frame)
@@ -528,27 +531,24 @@ namespace
             graph.execute(camera);
         }
         const rasm::ReadbackHandle copy = engine.readFrame(rasm::ReadbackFormat::RGBA8_SRGB);
-        if (!copy.isValid())
-            return false;
         // The frame that copies keeps the same clock; the readback is ready once the GPU has finished it.
-        for (uint32_t extra = 0; extra < 8 && !engine.isReadbackReady(copy); ++extra)
+        for (uint32_t extra = 0; extra < 8 && copy.isValid() && !engine.isReadbackReady(copy); ++extra)
         {
             engine.setAnimationTime(test.time);
             graph.execute(camera);
         }
-        if (!engine.takeReadback(copy, image))
-            return false;
+        const bool taken = copy.isValid() && engine.takeReadback(copy, image);
         // A steady frame makes no heap allocation on the main thread.
-        for (uint32_t frame = 0; frame < SETTLE_FRAMES + STEADY_FRAMES; ++frame)
+        for (uint32_t frame = 0; taken && frame < SETTLE_FRAMES + STEADY_FRAMES; ++frame)
         {
             if (frame == SETTLE_FRAMES)
                 startCountingAllocations();
             engine.setAnimationTime(test.time);
             graph.execute(camera);
         }
-        steady = stopCountingAllocations();
+        steady = taken ? stopCountingAllocations() : AllocationCount{};
         engine.setDebugView(rasm::DebugView::NONE);
-        return true;
+        return taken;
     }
 
     std::string joinPath(const std::string &dir, const std::string &file)
@@ -583,13 +583,12 @@ namespace
             std::printf("%-14s %-6s %10s %8s %8.1f  (it did not render)\n", test.name, "FAIL", "-", "-", seconds);
             return false;
         }
-        if (steady.count > 0)
-        {
+        // A test whose steady frames allocate fails, but its image is still written or compared.
+        const bool allocated = steady.count > 0;
+        if (allocated)
             std::printf("%-14s %-6s %10s %8s %8.1f  (%llu heap allocations, %llu bytes, in %u steady frames; the first of %llu bytes)\n", test.name, "FAIL", "-", "-", seconds,
                         static_cast<unsigned long long>(steady.count), static_cast<unsigned long long>(steady.bytes), STEADY_FRAMES,
                         static_cast<unsigned long long>(steady.firstSize));
-            return false;
-        }
         if (options.update)
         {
             std::error_code error;
@@ -597,7 +596,7 @@ namespace
             const bool written = rasm::writePng(joinPath(options.goldenDir, std::string(test.name) + ".png"), actual);
             std::printf("%-14s %-6s %10s %8s %8.1f\n", test.name, written ? "update" : "FAIL", "-", "-", seconds);
             rendered.push_back({test.name, std::move(actual)});
-            return written;
+            return written && !allocated;
         }
 
         // A test that compares with another test's image of this run renders that one first when it was not selected.
@@ -640,7 +639,7 @@ namespace
         if (!pass)
             writeFailure(options, test, actual, &expected, comparison.sizeMatches ? &diff : nullptr);
         rendered.push_back({test.name, std::move(actual)});
-        return pass;
+        return pass && !allocated;
     }
 
     // One engine for every test, so the pipelines are compiled once, from source: no disk caches, so every run takes the

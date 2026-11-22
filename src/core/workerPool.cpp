@@ -80,16 +80,16 @@ namespace rasm
         completed.notify_all();
     }
 
-    // Main thread: a queued load is dropped when a worker reaches it, a running one gives its bytes back when it ends,
-    // and a finished one gives them back here.
-    void WorkerPool::dropLoad(LoadTicket &ticket)
+    // Main thread: a queued load is dropped when a worker reaches it, and a running one gives its bytes back when it
+    // ends. A finished one's bytes are returned, for the caller to give back once it has freed the result (P26).
+    uint64_t WorkerPool::dropLoad(LoadTicket &ticket)
     {
         ticket.cancelled = true;
         LoadState expected = LoadState::RUNNING;
-        if (!ticket.state.compare_exchange_strong(expected, LoadState::DROPPED, std::memory_order_acq_rel))
-            releaseBytes(ticket.bytes.exchange(0));
+        const uint64_t finished = ticket.state.compare_exchange_strong(expected, LoadState::DROPPED, std::memory_order_acq_rel) ? 0 : ticket.bytes.exchange(0);
         // A dropped load at the head of the queue may hold back the ones behind it.
         wake.notify_all();
+        return finished;
     }
 
     void WorkerPool::releaseBytes(uint64_t released)

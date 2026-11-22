@@ -379,7 +379,7 @@ moved.clear();</code></pre>
       <path d="M10,110 L80,58 L170,58 L190,90 L220,58 L310,58" class="arrow ok"/>
     </svg>
     <h4>When the free is done</h4>
-    <p>The free job frees, then gives the bytes back. The budget never counts less than what is in memory.</p>
+    <p>The free job frees, then gives the bytes back. The budget never counts data as gone while it is still in memory.</p>
   </div>
 </div>
 
@@ -407,7 +407,7 @@ moved.clear();</code></pre>
 
 <h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
 
-<p>RASM measured first, with a counting hook and Tracy (Release, headless, RTX 3060, 24 threads). Steady frames already allocated little: the render graph is built once, and the GPU tables and draw lists keep their vectors. Six call sites made every steady allocation, and the big frees of loads cost a millisecond per load frame. Those were fixed. A per-frame arena and pool allocators for the registries were <b>not needed</b>: there was no transient data left for an arena, and the registries are already <a href="generational-handles.html">handle pools</a> over vectors.</p>
+<p>RASM measured first, with a counting hook and Tracy (Release, headless, RTX 3060, 24 threads). Steady frames already allocated little: the render graph is built once, and the GPU tables and draw lists keep their vectors. Four causes made every steady allocation, and the big frees of loads cost a millisecond per load frame. Those were fixed. A per-frame arena and pool allocators for the registries were <b>not needed</b>: there was no transient data left for an arena, and the registries are already <a href="generational-handles.html">handle pools</a> over vectors.</p>
 
 <div class="table-wrap">
 <table>
@@ -465,9 +465,9 @@ moved.clear();</code></pre>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Keep the capacity</td><td>swap, then clear</td><td><code>syncGpuScene</code> swaps <code>settlingEntities</code> and <code>movedEntities</code>.</td></tr>
   <tr><td>Strings</td><td>a stack buffer</td><td><code>drawCullingSection</code> writes the "LOD draws" line into a <samp>char[160]</samp>; <code>prepareSceneView</code> builds a debug view's defines only while a pipeline is missing.</td></tr>
-  <tr><td>Copies</td><td>return a reference</td><td><code>RenderContext::getTextureDesc</code> returns a <code>const TextureDesc&amp;</code>, valid until the texture is destroyed or its render target is resized.</td></tr>
+  <tr><td>Copies</td><td>return a reference</td><td><code>RenderContext::getTextureDesc</code> returns a <code>const TextureDesc&amp;</code>, valid until the texture is destroyed, its render target is resized or the swapchain is made again.</td></tr>
   <tr><td>Arenas</td><td>for many small temporary objects</td><td>Not used: measured, nothing needs one.</td></tr>
-  <tr><td>Big frees</td><td>on a worker, bytes back after the free</td><td><code>Engine::freeOnWorker</code> pushes a child job with the last reference; it frees, then calls <code>WorkerPool::releaseBytes</code>. A stopping pool frees on the caller.</td></tr>
+  <tr><td>Big frees</td><td>on a worker, bytes back after the free</td><td><code>Engine::freeOnWorker</code> pushes a child job with the last reference; it frees, then calls <code>WorkerPool::releaseBytes</code>. A stopping pool frees on the caller. <code>WorkerPool::dropLoad</code> returns a dropped finished load's bytes, so they follow its free too. One exception: a glTF image that several textures share gives its bytes back with the first of them (<code>P26</code>).</td></tr>
   <tr><td>Guard</td><td>a test of steady frames</td><td><code>rasm_image_tests</code> renders 2 more frames after each test's readback, then counts 4 frames: any allocation on the main thread fails the test, with the count, the bytes and the size of the first. Windows only, and not with AddressSanitizer (<code>allocationCountingWorks</code>).</td></tr>
 </table>
 </div>
@@ -489,7 +489,7 @@ moved.clear();</code></pre>
   <strong>Keep these true</strong>
   <ul>
     <li>A steady frame makes no heap allocation on the main thread. A new per-frame list is a member that keeps its capacity, never a local or a moved-away one.</li>
-    <li>Do not keep a <code>getTextureDesc</code> reference across a destroy or a resize.</li>
+    <li>Do not keep a <code>getTextureDesc</code> reference across a destroy, a resize or a new swapchain.</li>
     <li>A finished load's data is freed through <code>freeOnWorker</code>, and its budget bytes go back after the free.</li>
     <li>Build an arena or a pool only when a measurement shows the need (<code>P27</code>, <code>P26</code> in the code review).</li>
   </ul>

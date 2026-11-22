@@ -722,7 +722,7 @@ float takeUploadGpuMs();</pre>
   <pre class="sig">const TextureDesc&amp; getTextureDesc(const TextureHandle&amp; texture);</pre>
   <div class="body">
     <p>The desc the texture was created with, by reference, so reading one field copies no name string (a frame that calls it allocates nothing, <a href="../guides/frame-allocations.html">heap memory in the frame</a>). An unknown handle logs an error and returns an empty desc.</p>
-    <p><span class="tag">lifetime</span> The reference is valid until the texture is destroyed, or its render target is resized (<code>resizeRenderTargets</code> makes new textures). Do not keep it across a destroy: copy the desc to keep it. A new texture does not move it.</p>
+    <p><span class="tag">lifetime</span> The reference is valid until the texture is destroyed, its render target is resized (<code>resizeRenderTargets</code> makes new textures), or, for a swapchain image, the swapchain is made again. Do not keep it across a destroy: copy the desc to keep it. A new texture does not move it.</p>
   </div>
 </div>
 

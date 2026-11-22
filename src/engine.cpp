@@ -205,14 +205,14 @@ namespace rasm
         // Loads that still run stop at their next step, queued ones are dropped, and the workers end. Jobs never touch
         // the engine, so this could come later; first, so no job outlives what it reads.
         for (PendingMeshLoad &load : pendingMeshes)
-            workers->dropLoad(load.job->ticket);
+            workers->releaseBytes(workers->dropLoad(load.job->ticket));
         for (auto &[handle, load] : pendingTextures)
         {
             if (load.job)
-                workers->dropLoad(load.job->ticket);
+                workers->releaseBytes(workers->dropLoad(load.job->ticket));
         }
         for (PendingEnvironmentLoad &load : pendingEnvironments)
-            workers->dropLoad(load.job->ticket);
+            workers->releaseBytes(workers->dropLoad(load.job->ticket));
         workers->shutdown();
         // Its graph frees what it made through the context.
         renderer.reset();
@@ -311,8 +311,9 @@ namespace rasm
     }
 
     // A finished load's decoded data is freed on a worker, and its bytes go back to the load budget once it is freed, so
-    // the budget never counts less than what is in memory. Freeing a few MiB gives their pages back to the OS, which
-    // took 0.15 to 0.3 ms each on the main thread (P26). A free that finds the pool stopping happens here, at once.
+    // the budget does not count a result as gone while it is still in memory (except a glTF image that two textures
+    // share, P26). Freeing a few MiB gives their pages back to the OS, which took 0.15 to 0.3 ms each on the main
+    // thread (P26). A free that finds the pool stopping happens here, at once.
     void Engine::freeOnWorker(std::shared_ptr<const void> result, uint64_t bytes)
     {
         if (!result)
@@ -328,12 +329,10 @@ namespace rasm
     }
 
     // A queued job never runs and a running one frees its result when it ends; a finished one's result goes to a worker
-    // like a filled one's, its bytes after it. One that finishes between the two checks gives its bytes back in dropLoad.
+    // like a filled one's, its bytes after it (dropLoad returns them, also for a load that finished just now).
     void Engine::dropPendingLoad(LoadTicket &ticket, std::shared_ptr<const void> result)
     {
-        const uint64_t held = ticket.state.load(std::memory_order_acquire) == LoadState::DONE ? ticket.bytes.exchange(0) : 0;
-        workers->dropLoad(ticket);
-        freeOnWorker(std::move(result), held);
+        freeOnWorker(std::move(result), workers->dropLoad(ticket));
     }
 
     // Returns whether loads are still pending. Textures come last: a finished glTF adds its textures, each filled on its
