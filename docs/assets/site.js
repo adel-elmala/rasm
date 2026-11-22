@@ -33,6 +33,7 @@ const SECTIONS = [
             { path: "guides/gpu-sync.html",              title: "GPU synchronization: barriers, stages, layouts", blurb: "Why GPU work needs barriers, and what they say." },
             { path: "guides/generational-handles.html",  title: "Generational handles",                blurb: "Safe references: an index plus a generation." },
             { path: "guides/resource-lifetime.html",     title: "Deferred destruction",                blurb: "Destroy what the GPU may still read: the handle now, the memory later." },
+            { path: "guides/job-system.html",            title: "Job systems and worker pools",        blurb: "A few threads, many jobs: split work, never wait inside a job, and cap the memory in flight." },
         ],
     },
     {

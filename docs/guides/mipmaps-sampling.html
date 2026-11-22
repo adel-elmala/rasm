@@ -875,7 +875,7 @@ N    = min( ceil(ρmax / ρmin), maxAnisotropy )     number of samples
     <rect x="20" y="196" width="720" height="40" rx="20" class="shader"/>
     <text x="380" y="221" class="mid">fragMain: gTextures[i].Sample(uv) · the GPU picks λ from derivatives · one of six samplers</text>
   </svg>
-  <figcaption><code>loadTexture</code>'s worker (<code>decodeTexture</code>) and a glTF import's (<code>buildImageLevels</code>) make the levels; <code>finishTextureLoad</code> copies them. A texture the app fills with one level through <code>RenderContext::fillTexture</code> gets the same filter from <code>buildMipChain</code>, in the caller's thread. A Basis KTX2 file without mips is transcoded to RGBA8 and goes through <code>buildMipChain</code> on the worker.</figcaption>
+  <figcaption><code>loadTexture</code>'s worker (<code>decodeTexture</code>) and a glTF image's job (<code>runImageWork</code>) make the levels; <code>finishTextureLoad</code> copies them. A texture the app fills with one level through <code>RenderContext::fillTexture</code> gets the same filter from <code>buildMipChain</code>, in the caller's thread. A Basis KTX2 file without mips is transcoded to RGBA8 and goes through <code>buildMipChain</code> on the worker.</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
@@ -920,7 +920,7 @@ N    = min( ceil(ρmax / ρmin), maxAnisotropy )     number of samples
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>Level count, image and view</td><td><code>VulkanDevice::createTexture</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
-  <tr><td>Mip generation</td><td><code>buildTextureLevels</code> in <code>src/rhi/mipChain.cpp</code>, called by <code>decodeTexture</code> and <code>buildImageLevels</code> on the worker; <code>buildMipChain</code>, called by <code>RenderContext::fillTexture</code> and, for KTX2 without mips, by <code>decodeKtx</code></td></tr>
+  <tr><td>Mip generation</td><td><code>buildTextureLevels</code> in <code>src/rhi/mipChain.cpp</code>, called by <code>decodeTexture</code> and <code>runImageWork</code> on the workers; <code>buildMipChain</code>, called by <code>RenderContext::fillTexture</code> and, for KTX2 without mips, by <code>decodeKtx</code></td></tr>
   <tr><td>Upload</td><td><code>RenderContext::fillTexture</code>; <code>VulkanDevice::fillTexture</code> (host copy) or <code>UploadManager::uploadTexture</code> (staging)</td></tr>
   <tr><td>Sampler objects</td><td><code>VulkanDevice::createSampler</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code>; <code>rhi::SamplerDesc</code> in <code>src/rhi/device.h</code></td></tr>
   <tr><td>The six sampler settings</td><td><code>samplerDesc</code> in <code>src/rhi/renderContext.cpp</code>; <code>SamplerType</code> in <code>include/rasm/render/resource.h</code></td></tr>
@@ -942,7 +942,7 @@ N    = min( ceil(ρmax / ρmin), maxAnisotropy )     number of samples
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>The resizer clamps at the edges also for tiling textures. A glTF's images get their mips one after another on its one worker (<code>P14</code>).</p>
+  <p>The resizer clamps at the edges also for tiling textures. Each glTF image gets its mips in a job of its own, so a model's images run on several workers at once.</p>
 </div>
 
 <h3>Further reading</h3>

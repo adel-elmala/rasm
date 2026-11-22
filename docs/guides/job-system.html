@@ -1,0 +1,645 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Job Systems · RASM</title>
+<meta name="description" content="How an engine runs many small tasks on a few threads: a worker pool and a job queue, splitting work into jobs, waiting without blocking a worker (continuations), a memory budget that holds jobs back (backpressure), order, cancel and shutdown, and results that do not depend on the schedule. The last part shows how RASM loads assets with it.">
+<meta name="rasm-sources" content="src/core/workerPool.h src/core/workerPool.cpp src/assets/loadJobs.h src/assets/mesh.cpp src/assets/texture.cpp src/assets/environment.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/material.cpp src/engine.cpp include/rasm/engine.h include/rasm/types.h src/renderer/engineUi.cpp examples/17_streaming/main.cpp examples/10_ktx2_textures/main.cpp tests/workerPoolTests.cpp tools/load_bench.py">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/job-system.js"></script>
+</head>
+<body data-root="../" data-page="guides/job-system.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Foundations</p>
+<h1>Job systems and worker pools</h1>
+<p class="lead">An engine has many small tasks that can run beside the frame: decode an image, build a mesh's LODs, transcode a texture. Starting a thread for each one does not scale. A <b>job system</b> runs them as <b>jobs</b> on a few <b>worker</b> threads that take them from a <b>queue</b>. This page explains how: the pool and its queue, splitting work into jobs, waiting without blocking a worker, holding jobs back when memory runs out, order, cancel and shutdown, and results that do not depend on the order. The <a href="#in-rasm">last part</a> shows how RASM loads assets with it.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>CPU work: a thread, a job</span>
+  <span><i class="mem"></i>memory: decoded data, results</span>
+  <span><i class="bad"></i>wrong: blocked, over the limit</span>
+</div>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>A <b>pool</b> has a fixed number of worker threads, about one per core that the program does not use for other work. A <b>queue</b> holds the jobs that wait.</li>
+    <li>A big task is split into <b>child jobs</b> (one per image, one per mesh part), so it runs on every free core at once.</li>
+    <li>A job must <b>never wait</b> for another job: with all workers waiting, nobody runs the jobs they wait for. Use a <b>counter</b>: the child that finishes last runs what comes next (a <b>continuation</b>).</li>
+    <li>Results that wait for the main thread take memory. A <b>budget</b> lets a job start only when its bytes fit: jobs wait in the queue as a few bytes, not in memory as decoded data. This is <b>backpressure</b>.</li>
+    <li>Children run before new top-level jobs, so started work ends first. A <b>priority</b> is a sort key of the queue.</li>
+    <li>A <b>ticket</b> per task lets the caller cancel it: a queued job is skipped, a running one gives its result up. <b>Shutdown</b> drops the queue and joins the threads.</li>
+    <li>Each job writes only its own output, so the result is the same in any order.</li>
+  </ul>
+</div>
+
+<h2 id="problem"><span class="n">1</span>The problem: one thread per task</h2>
+
+<p>The simple way to run a task in the background is a new thread, or a library task like <samp>std::async</samp>, per task. That is fine for three tasks. Look at 300 of them on a machine with 4 cores.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Left: 300 threads share 4 cores. Each core switches between many threads, so each thread runs a small slice of the time, and all 300 tasks hold their memory until the slow end. Right: a pool of 4 workers runs the same 300 tasks from a queue, one after another on each core; at any moment only 4 tasks hold memory.">
+    <text x="20" y="22" class="title">300 threads</text>
+    <text x="20" y="40" class="small">4 cores switch between them</text>
+    <rect x="20" y="52" width="330" height="128" class="zone"/>
+    <g>
+      <rect x="28" y="60" width="16" height="24" class="cpu"/><rect x="46" y="60" width="16" height="24" class="cpu o-50"/><rect x="64" y="60" width="16" height="24" class="cpu o-75"/><rect x="82" y="60" width="16" height="24" class="cpu o-25"/><rect x="100" y="60" width="16" height="24" class="cpu"/><rect x="118" y="60" width="16" height="24" class="cpu o-50"/><rect x="136" y="60" width="16" height="24" class="cpu o-75"/><rect x="154" y="60" width="16" height="24" class="cpu o-25"/><rect x="172" y="60" width="16" height="24" class="cpu"/><rect x="190" y="60" width="16" height="24" class="cpu o-50"/><rect x="208" y="60" width="16" height="24" class="cpu o-75"/><rect x="226" y="60" width="16" height="24" class="cpu o-25"/><rect x="244" y="60" width="16" height="24" class="cpu"/><rect x="262" y="60" width="16" height="24" class="cpu o-50"/><rect x="280" y="60" width="16" height="24" class="cpu o-75"/><rect x="298" y="60" width="16" height="24" class="cpu o-25"/><rect x="316" y="60" width="16" height="24" class="cpu"/>
+      <rect x="28" y="90" width="16" height="24" class="cpu o-75"/><rect x="46" y="90" width="16" height="24" class="cpu o-25"/><rect x="64" y="90" width="16" height="24" class="cpu"/><rect x="82" y="90" width="16" height="24" class="cpu o-50"/><rect x="100" y="90" width="16" height="24" class="cpu o-75"/><rect x="118" y="90" width="16" height="24" class="cpu o-25"/><rect x="136" y="90" width="16" height="24" class="cpu"/><rect x="154" y="90" width="16" height="24" class="cpu o-50"/><rect x="172" y="90" width="16" height="24" class="cpu o-75"/><rect x="190" y="90" width="16" height="24" class="cpu o-25"/><rect x="208" y="90" width="16" height="24" class="cpu"/><rect x="226" y="90" width="16" height="24" class="cpu o-50"/><rect x="244" y="90" width="16" height="24" class="cpu o-75"/><rect x="262" y="90" width="16" height="24" class="cpu o-25"/><rect x="280" y="90" width="16" height="24" class="cpu"/><rect x="298" y="90" width="16" height="24" class="cpu o-50"/><rect x="316" y="90" width="16" height="24" class="cpu o-75"/>
+      <rect x="28" y="120" width="16" height="24" class="cpu o-50"/><rect x="46" y="120" width="16" height="24" class="cpu"/><rect x="64" y="120" width="16" height="24" class="cpu o-25"/><rect x="82" y="120" width="16" height="24" class="cpu o-75"/><rect x="100" y="120" width="16" height="24" class="cpu o-50"/><rect x="118" y="120" width="16" height="24" class="cpu"/><rect x="136" y="120" width="16" height="24" class="cpu o-25"/><rect x="154" y="120" width="16" height="24" class="cpu o-75"/><rect x="172" y="120" width="16" height="24" class="cpu o-50"/><rect x="190" y="120" width="16" height="24" class="cpu"/><rect x="208" y="120" width="16" height="24" class="cpu o-25"/><rect x="226" y="120" width="16" height="24" class="cpu o-75"/><rect x="244" y="120" width="16" height="24" class="cpu o-50"/><rect x="262" y="120" width="16" height="24" class="cpu"/><rect x="280" y="120" width="16" height="24" class="cpu o-25"/><rect x="298" y="120" width="16" height="24" class="cpu o-75"/><rect x="316" y="120" width="16" height="24" class="cpu o-50"/>
+      <rect x="28" y="150" width="16" height="24" class="cpu o-25"/><rect x="46" y="150" width="16" height="24" class="cpu o-75"/><rect x="64" y="150" width="16" height="24" class="cpu o-50"/><rect x="82" y="150" width="16" height="24" class="cpu"/><rect x="100" y="150" width="16" height="24" class="cpu o-25"/><rect x="118" y="150" width="16" height="24" class="cpu o-75"/><rect x="136" y="150" width="16" height="24" class="cpu o-50"/><rect x="154" y="150" width="16" height="24" class="cpu"/><rect x="172" y="150" width="16" height="24" class="cpu o-25"/><rect x="190" y="150" width="16" height="24" class="cpu o-75"/><rect x="208" y="150" width="16" height="24" class="cpu o-50"/><rect x="226" y="150" width="16" height="24" class="cpu"/><rect x="244" y="150" width="16" height="24" class="cpu o-25"/><rect x="262" y="150" width="16" height="24" class="cpu o-75"/><rect x="280" y="150" width="16" height="24" class="cpu o-50"/><rect x="298" y="150" width="16" height="24" class="cpu"/><rect x="316" y="150" width="16" height="24" class="cpu o-25"/>
+    </g>
+    <rect x="20" y="196" width="330" height="18" class="bad"/>
+    <text x="185" y="209" class="mid small">all 300 hold their memory until the end</text>
+    <text x="20" y="236" class="small t-bad">each slice is another thread: switching, cold caches</text>
+
+    <text x="410" y="22" class="title">4 workers and a queue</text>
+    <text x="410" y="40" class="small">each core runs one task, then takes the next</text>
+    <rect x="410" y="52" width="330" height="128" class="zone"/>
+    <g>
+      <rect x="418" y="60" width="74" height="24" class="cpu"/><rect x="494" y="60" width="74" height="24" class="cpu"/><rect x="570" y="60" width="74" height="24" class="cpu"/><rect x="646" y="60" width="74" height="24" class="cpu"/>
+      <rect x="418" y="90" width="60" height="24" class="cpu"/><rect x="480" y="90" width="90" height="24" class="cpu"/><rect x="572" y="90" width="70" height="24" class="cpu"/><rect x="644" y="90" width="76" height="24" class="cpu"/>
+      <rect x="418" y="120" width="96" height="24" class="cpu"/><rect x="516" y="120" width="56" height="24" class="cpu"/><rect x="574" y="120" width="80" height="24" class="cpu"/><rect x="656" y="120" width="64" height="24" class="cpu"/>
+      <rect x="418" y="150" width="70" height="24" class="cpu"/><rect x="490" y="150" width="70" height="24" class="cpu"/><rect x="562" y="150" width="84" height="24" class="cpu"/><rect x="648" y="150" width="72" height="24" class="cpu"/>
+    </g>
+    <rect x="410" y="196" width="40" height="18" class="mem"/>
+    <text x="458" y="209" class="small">only the 4 running tasks hold memory</text>
+    <text x="410" y="236" class="small t-ok">same work, done in order; the rest waits as a list</text>
+  </svg>
+  <figcaption>Both sides do the same work on the same 4 cores. The left side starts all 300 tasks at once, so they all run slowly and all hold their data. The right side runs 4 at a time.</figcaption>
+</figure>
+
+<div class="vgrid">
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Many threads queue for one core.">
+      <rect x="90" y="40" width="60" height="50" rx="4" class="box"/>
+      <text x="120" y="70" class="mid small">core</text>
+      <rect x="20" y="30" width="44" height="14" class="cpu"/><rect x="20" y="50" width="44" height="14" class="cpu"/><rect x="20" y="70" width="44" height="14" class="cpu"/><rect x="20" y="90" width="44" height="14" class="cpu"/>
+      <line x1="64" y1="65" x2="88" y2="65" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <text x="196" y="70" class="mid small t-bad">switch, switch</text>
+    </svg>
+    <h4>More threads than cores</h4>
+    <p>The OS switches between them. Each switch costs time and fills the caches with another thread's data. The work does not end sooner.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Three hundred results stacked up, each a block of memory, reaching over a limit line.">
+      <rect x="40" y="30" width="160" height="80" class="zone"/>
+      <rect x="50" y="70" width="20" height="40" class="mem"/><rect x="74" y="60" width="20" height="50" class="mem"/><rect x="98" y="40" width="20" height="70" class="mem"/><rect x="122" y="22" width="20" height="88" class="mem"/><rect x="146" y="14" width="20" height="96" class="mem"/><rect x="170" y="8" width="20" height="102" class="mem"/>
+      <line x1="40" y1="44" x2="200" y2="44" class="arrow bad dashed"/>
+      <text x="206" y="48" class="small t-bad">limit</text>
+    </svg>
+    <h4>All the memory at once</h4>
+    <p>Every running task holds its file and its decoded data. 300 decoded images of 21 MiB each need over 6 GiB at the same time.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Threads with no order and no way to stop them.">
+      <rect x="30" y="34" width="40" height="22" class="cpu"/><rect x="100" y="58" width="40" height="22" class="cpu"/><rect x="170" y="34" width="40" height="22" class="cpu"/><rect x="70" y="82" width="40" height="22" class="cpu"/><rect x="140" y="82" width="40" height="22" class="cpu"/>
+      <text x="120" y="122" class="mid small t-bad">no order, no cancel</text>
+    </svg>
+    <h4>No order, no cancel</h4>
+    <p>Started threads all run. A near object cannot go first, and a task the program no longer needs still runs to the end.</p>
+  </div>
+</div>
+
+<h2 id="pool"><span class="n">2</span>A pool and a queue</h2>
+
+<p>A <b>worker pool</b> starts a fixed number of threads once. Each worker runs a loop: take a job from the queue, run it, take the next. When the queue is empty, it sleeps until a new job arrives. A <b>job</b> is just a function to call, with the data it needs copied in.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="The main thread pushes jobs a to f into a queue. Three workers take jobs from the front of the queue. Worker 1 runs job a, worker 2 runs job b, worker 3 runs job c. Jobs d, e and f wait. A worker that finishes takes job d next.">
+    <rect x="20" y="86" width="130" height="56" rx="6" class="cpu"/>
+    <text x="85" y="109" class="mid title">main thread</text>
+    <text x="85" y="128" class="mid small mono">push(job)</text>
+    <line x1="150" y1="114" x2="188" y2="114" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <text x="320" y="70" class="mid title">queue</text>
+    <rect x="190" y="90" width="260" height="48" rx="4" class="box"/>
+    <rect x="200" y="98" width="40" height="32" rx="3" class="mem"/><text x="220" y="119" class="mid mono">f</text>
+    <rect x="246" y="98" width="40" height="32" rx="3" class="mem"/><text x="266" y="119" class="mid mono">e</text>
+    <rect x="292" y="98" width="40" height="32" rx="3" class="mem"/><text x="312" y="119" class="mid mono">d</text>
+    <text x="410" y="119" class="mid small">front</text>
+    <text x="320" y="158" class="mid small">back ← new jobs   ·   front → next to run</text>
+
+    <line x1="450" y1="104" x2="528" y2="48" class="arrow" marker-end="url(#ah)"/>
+    <line x1="450" y1="114" x2="528" y2="114" class="arrow" marker-end="url(#ah)"/>
+    <line x1="450" y1="124" x2="528" y2="180" class="arrow" marker-end="url(#ah)"/>
+    <rect x="530" y="26" width="210" height="44" rx="6" class="cpu"/><text x="590" y="53" class="mid small">worker 1</text><rect x="650" y="34" width="80" height="28" rx="3" class="mem"/><text x="690" y="53" class="mid mono">a</text>
+    <rect x="530" y="92" width="210" height="44" rx="6" class="cpu"/><text x="590" y="119" class="mid small">worker 2</text><rect x="650" y="100" width="80" height="28" rx="3" class="mem"/><text x="690" y="119" class="mid mono">b</text>
+    <rect x="530" y="158" width="210" height="44" rx="6" class="cpu"/><text x="590" y="185" class="mid small">worker 3</text><rect x="650" y="166" width="80" height="28" rx="3" class="mem"/><text x="690" y="185" class="mid mono">c</text>
+    <text x="20" y="222" class="small">The queue is the only thing the main thread and the workers share, so only it needs a lock.</text>
+  </svg>
+  <figcaption>Three workers, six jobs. The first worker that finishes takes <samp>d</samp>.</figcaption>
+</figure>
+
+<p>How many workers? The pool should fill the cores that are free, and no more:</p>
+
+<div class="formula">
+  <p class="eq">workers = hardware threads − busy threads</p>
+  <dl>
+    <dt>hardware threads</dt><dd>what the OS reports (<samp>std::thread::hardware_concurrency</samp>); with hyper-threading, two per core</dd>
+    <dt>busy threads</dt><dd>at least the main thread, which records the frames; a game may add physics, audio or its own jobs</dd>
+  </dl>
+</div>
+
+<div class="callout">
+  <strong>Workers that wait on the disk</strong>
+  <p>A worker that reads a file waits for the disk part of the time, and the core is free then. Some pools have a few more workers than cores for that, or a separate thread for file reads. Decoding is pure CPU work, so for decode-heavy jobs, one worker per free core is right.</p>
+</div>
+
+<h2 id="split"><span class="n">3</span>Split big tasks into jobs</h2>
+
+<p>One task can be big: a model file with 15 images, where each image needs a decode and a mip chain. As one job, it runs on one core while the others sleep. Split it: the job reads the file, then makes one <b>child job</b> per image. The children run on every free worker.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="Top: one job reads a model, then decodes images 1 to 6 one after another on worker 1, while workers 2 to 4 sleep. It ends at 700 milliseconds. Bottom: the job reads the model, then pushes 6 child jobs. Workers 1 to 4 run them at the same time. The last child ends at 300 milliseconds and finishes the model.">
+    <text x="20" y="20" class="title">One job</text>
+    <text x="96" y="48" class="end small">worker 1</text>
+    <rect x="100" y="34" width="100" height="22" rx="3" class="cpu"/><text x="150" y="49" class="mid small">read model</text>
+    <rect x="202" y="34" width="80" height="22" rx="3" class="mem"/><text x="242" y="49" class="mid small">img 1</text>
+    <rect x="284" y="34" width="80" height="22" rx="3" class="mem"/><text x="324" y="49" class="mid small">img 2</text>
+    <rect x="366" y="34" width="80" height="22" rx="3" class="mem"/><text x="406" y="49" class="mid small">img 3</text>
+    <rect x="448" y="34" width="80" height="22" rx="3" class="mem"/><text x="488" y="49" class="mid small">img 4</text>
+    <rect x="530" y="34" width="80" height="22" rx="3" class="mem"/><text x="570" y="49" class="mid small">img 5</text>
+    <rect x="612" y="34" width="80" height="22" rx="3" class="mem"/><text x="652" y="49" class="mid small">img 6</text>
+    <text x="96" y="76" class="end small">worker 2</text><rect x="100" y="64" width="592" height="18" class="zone"/><text x="396" y="77" class="mid small t-faint">idle</text>
+    <text x="96" y="98" class="end small">workers 3, 4</text><rect x="100" y="86" width="592" height="18" class="zone"/><text x="396" y="99" class="mid small t-faint">idle</text>
+    <line x1="692" y1="28" x2="692" y2="112" class="arrow bad dashed"/><text x="700" y="49" class="small t-bad">done</text>
+
+    <text x="20" y="140" class="title">A child job per image</text>
+    <text x="96" y="168" class="end small">worker 1</text>
+    <rect x="100" y="154" width="100" height="22" rx="3" class="cpu"/><text x="150" y="169" class="mid small">read model</text>
+    <rect x="202" y="154" width="80" height="22" rx="3" class="mem"/><text x="242" y="169" class="mid small">img 1</text>
+    <rect x="284" y="154" width="80" height="22" rx="3" class="mem"/><text x="324" y="169" class="mid small">img 5</text>
+    <text x="96" y="194" class="end small">worker 2</text>
+    <rect x="202" y="180" width="80" height="22" rx="3" class="mem"/><text x="242" y="195" class="mid small">img 2</text>
+    <rect x="284" y="180" width="80" height="22" rx="3" class="mem"/><text x="324" y="195" class="mid small">img 6</text>
+    <text x="96" y="220" class="end small">worker 3</text>
+    <rect x="202" y="206" width="80" height="22" rx="3" class="mem"/><text x="242" y="221" class="mid small">img 3</text>
+    <text x="96" y="246" class="end small">worker 4</text>
+    <rect x="202" y="232" width="80" height="22" rx="3" class="mem"/><text x="242" y="247" class="mid small">img 4</text>
+    <line x1="364" y1="148" x2="364" y2="260" class="arrow ok dashed"/><text x="372" y="169" class="small t-ok">done: the last child finishes the model</text>
+    <line x1="200" y1="176" x2="200" y2="232" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="410" y="221" class="small">The read pushes 6 children. Four start at once; the</text>
+    <text x="410" y="237" class="small">two left run on the first workers that are free.</text>
+  </svg>
+  <figcaption>The same work in less than half the time on 4 workers. A child job has the same rules as any job: its data in, its result out.</figcaption>
+</figure>
+
+<p>What makes a good job? It is big enough that the queue's lock is a small part of it (a decode of 10 ms, not one pixel), and it does not touch what other running jobs write.</p>
+
+<h2 id="no-waiting"><span class="n">4</span>Never wait inside a job</h2>
+
+<p>After the children, the model still has work to do: put the results together and hand them over. The obvious code waits for the children inside the parent job. That blocks a worker. With one worker, it waits forever.</p>
+
+<div class="split">
+  <div class="bad">
+    <h4>The parent waits for its children</h4>
+    <svg viewBox="0 0 320 150" role="img" aria-label="A pool of one worker. The worker runs the parent job, which waits for child jobs. The children sit in the queue, and no worker is free to run them: a deadlock.">
+      <rect x="14" y="24" width="140" height="44" rx="6" class="cpu"/>
+      <text x="84" y="42" class="mid small">the only worker</text>
+      <rect x="24" y="48" width="120" height="16" rx="3" class="bad"/>
+      <text x="84" y="60" class="mid small">parent: wait()</text>
+      <rect x="190" y="24" width="116" height="44" rx="4" class="box"/>
+      <text x="248" y="18" class="mid small">queue</text>
+      <rect x="198" y="34" width="30" height="26" rx="3" class="mem"/><rect x="233" y="34" width="30" height="26" rx="3" class="mem"/><rect x="268" y="34" width="30" height="26" rx="3" class="mem"/>
+      <path d="M154,46 C170,46 172,46 188,46" class="arrow bad dashed" marker-end="url(#ah-bad)"/>
+      <path d="M248,68 C248,100 84,100 84,72" class="arrow bad dashed" marker-end="url(#ah-bad)"/>
+      <text x="160" y="118" class="mid small t-bad">waits for the children; they wait for a worker</text>
+      <text x="160" y="136" class="mid small t-bad">deadlock</text>
+    </svg>
+    <p>With N workers, N parents that wait at once stop the pool just the same. A bigger pool only makes it rarer.</p>
+  </div>
+  <div class="good">
+    <h4>The last child runs what comes next</h4>
+    <svg viewBox="0 0 320 150" role="img" aria-label="The parent sets a counter to 3, pushes three children and ends. Each child counts the counter down when it is done. The child that brings it to 0 runs the finish step.">
+      <rect x="14" y="20" width="96" height="30" rx="4" class="cpu"/>
+      <text x="62" y="39" class="mid small">parent: n = 3</text>
+      <rect x="130" y="20" width="50" height="30" rx="4" class="mem"/><text x="155" y="39" class="mid small">n → 2</text>
+      <rect x="190" y="20" width="50" height="30" rx="4" class="mem"/><text x="215" y="39" class="mid small">n → 1</text>
+      <rect x="250" y="20" width="56" height="30" rx="4" class="mem"/><text x="278" y="39" class="mid small">n → 0</text>
+      <line x1="110" y1="35" x2="128" y2="35" class="arrow" marker-end="url(#ah)"/>
+      <line x1="278" y1="50" x2="278" y2="78" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <rect x="200" y="80" width="106" height="30" rx="4" class="ok"/>
+      <text x="253" y="99" class="mid small">finish the model</text>
+      <text x="14" y="78" class="small">The parent ends at once.</text>
+      <text x="14" y="94" class="small">Nobody waits.</text>
+      <text x="160" y="136" class="mid small t-ok">one worker runs them all, one by one</text>
+    </svg>
+    <p>The counter is atomic. The child that sees it go from 1 to 0 is the last one, so all the others are done and their results are written.</p>
+  </div>
+</div>
+
+<p>Click through the counter on a pool of one worker.</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>1. The parent splits the work</h4>
+    <svg viewBox="0 0 760 170" role="img" aria-label="The only worker runs the parent job. It sets the counter to 3, pushes children A, B and C into the queue, and ends.">
+      <text x="20" y="40" class="title">worker</text>
+      <rect x="110" y="20" width="200" height="34" rx="4" class="cpu"/><text x="210" y="42" class="mid small">parent: read, n = 3, push A B C</text>
+      <text x="20" y="100" class="title">queue</text>
+      <rect x="110" y="80" width="56" height="30" rx="3" class="mem"/><text x="138" y="100" class="mid mono">A</text>
+      <rect x="172" y="80" width="56" height="30" rx="3" class="mem"/><text x="200" y="100" class="mid mono">B</text>
+      <rect x="234" y="80" width="56" height="30" rx="3" class="mem"/><text x="262" y="100" class="mid mono">C</text>
+      <rect x="560" y="60" width="120" height="50" rx="6" class="box"/><text x="620" y="82" class="mid small">counter n</text><text x="620" y="102" class="mid big">3</text>
+      <text x="20" y="150" class="small">The parent job ends here. The worker is free.</text>
+    </svg>
+    <p>The parent does not wait. It only leaves a counter and three jobs.</p>
+  </div>
+  <div class="step">
+    <h4>2. Children run and count down</h4>
+    <svg viewBox="0 0 760 170" role="img" aria-label="The worker runs A, then B. After each, the counter goes down: 3 to 2, then 2 to 1. Neither is the last.">
+      <text x="20" y="40" class="title">worker</text>
+      <rect x="110" y="20" width="200" height="34" rx="4" class="cpu o-25"/><text x="210" y="42" class="mid small t-faint">parent</text>
+      <rect x="316" y="20" width="80" height="34" rx="4" class="mem"/><text x="356" y="42" class="mid small">A: n 3 → 2</text>
+      <rect x="402" y="20" width="80" height="34" rx="4" class="mem"/><text x="442" y="42" class="mid small">B: n 2 → 1</text>
+      <text x="20" y="100" class="title">queue</text>
+      <rect x="110" y="80" width="56" height="30" rx="3" class="mem"/><text x="138" y="100" class="mid mono">C</text>
+      <rect x="560" y="60" width="120" height="50" rx="6" class="box"/><text x="620" y="82" class="mid small">counter n</text><text x="620" y="102" class="mid big">1</text>
+      <text x="20" y="150" class="small">A and B are not the last: they write their own result and end.</text>
+    </svg>
+    <p>Each child writes only its own result, then counts down. The order does not matter.</p>
+  </div>
+  <div class="step">
+    <h4>3. The last child finishes the task</h4>
+    <svg viewBox="0 0 760 170" role="img" aria-label="The worker runs C. The counter goes from 1 to 0, so C runs the finish step and hands the model over.">
+      <text x="20" y="40" class="title">worker</text>
+      <rect x="110" y="20" width="200" height="34" rx="4" class="cpu o-25"/><text x="210" y="42" class="mid small t-faint">parent</text>
+      <rect x="316" y="20" width="80" height="34" rx="4" class="mem o-50"/><text x="356" y="42" class="mid small">A</text>
+      <rect x="402" y="20" width="80" height="34" rx="4" class="mem o-50"/><text x="442" y="42" class="mid small">B</text>
+      <rect x="488" y="20" width="80" height="34" rx="4" class="mem"/><text x="528" y="42" class="mid small">C: n 1 → 0</text>
+      <rect x="574" y="20" width="160" height="34" rx="4" class="ok"/><text x="654" y="42" class="mid small">finish, hand over</text>
+      <rect x="560" y="80" width="120" height="50" rx="6" class="box"/><text x="620" y="102" class="mid small">counter n</text><text x="620" y="122" class="mid big">0</text>
+      <text x="20" y="150" class="small">One worker ran everything, and no job ever waited.</text>
+    </svg>
+    <p>This is a <b>continuation</b>: the next step is attached to the work it depends on, instead of a thread that waits for it.</p>
+  </div>
+</div>
+
+<p>Two other ways out are common:</p>
+
+<div class="vgrid">
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A counter that the last child brings to zero.">
+      <rect x="80" y="30" width="80" height="50" rx="6" class="box"/><text x="120" y="62" class="mid big">n → 0</text>
+      <text x="120" y="108" class="mid small">the last one runs the next step</text>
+    </svg>
+    <h4>Continuation</h4>
+    <p>A counter per task. Needs no help from the pool, and works with any number of workers.</p>
+    <p class="cost">Cost: the next step is a function, not the rest of the parent's code</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A waiting worker takes jobs from the queue and runs them while it waits.">
+      <rect x="20" y="40" width="90" height="40" rx="6" class="cpu"/><text x="65" y="64" class="mid small">wait: help</text>
+      <rect x="140" y="44" width="30" height="30" rx="3" class="mem"/><rect x="176" y="44" width="30" height="30" rx="3" class="mem"/>
+      <path d="M140,59 C125,59 125,59 112,59" class="arrow" marker-end="url(#ah)"/>
+      <text x="120" y="108" class="mid small">runs queued jobs while it waits</text>
+    </svg>
+    <h4>Help while waiting</h4>
+    <p>The wait call runs jobs from the queue until its own are done. The code reads top to bottom.</p>
+    <p class="cost">Cost: a deep call stack; it may pick up a long, unrelated job</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A job's stack is put aside, and the worker runs another job.">
+      <rect x="30" y="30" width="60" height="70" rx="4" class="mem o-50"/><text x="60" y="70" class="mid small">stack</text>
+      <rect x="140" y="30" width="70" height="70" rx="4" class="cpu"/><text x="175" y="70" class="mid small">next job</text>
+      <text x="120" y="118" class="mid small">a paused job keeps its stack</text>
+    </svg>
+    <h4>Fibers</h4>
+    <p>A waiting job's stack is parked and the worker takes another job, like Naughty Dog's engine. Waits look normal.</p>
+    <p class="cost">Cost: platform code, care with thread-local data</p>
+  </div>
+</div>
+
+<h2 id="budget"><span class="n">5</span>Backpressure: a memory budget</h2>
+
+<p>Workers decode faster than the main thread can upload. A frame uploads a few textures, but 23 workers decode 23 at once. The decoded results pile up and wait, each one many MiB. <b>Backpressure</b> pushes back on the producer: a job starts only when its bytes fit in a budget.</p>
+
+<div class="formula">
+  <p class="eq">start the next job  if  held + its bytes ≤ budget,  or  held = 0</p>
+  <dl>
+    <dt>held</dt><dd>the bytes of the jobs that run, plus the results that wait for the main thread to use them</dd>
+    <dt>its bytes</dt><dd>an estimate, from the file's header: a 2048 × 2048 RGBA image with its mips is 21.3 MiB</dd>
+    <dt>held = 0</dt><dd>a job bigger than the whole budget still runs, alone, or it would never run</dd>
+  </dl>
+</div>
+
+<p>A job that does not fit stays in the queue. There it is a file name: a few bytes, not 21 MiB. The main thread gives bytes back when it has used a result, and the next jobs start. Try it: 24 images of different sizes, decoded by the workers, uploaded by the main thread at 32 MiB per frame.</p>
+
+<figure class="lab" data-lab="pool-budget" data-title="Workers, a queue and a budget">
+  <figcaption>Turn the budget off and look at the memory curve. Then turn it on and lower it: find a budget that keeps the memory low while all 24 images are in almost as soon. Then set one worker.</figcaption>
+</figure>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A memory curve that rises high above the line.">
+      <path d="M20,110 L60,40 L100,20 L140,30 L180,80 L220,110" class="arrow bad"/>
+      <line x1="20" y1="60" x2="220" y2="60" class="arrow hot dashed"/>
+      <text x="218" y="54" class="end small t-hot">budget</text>
+    </svg>
+    <h4>No budget</h4>
+    <p>Fastest when memory is plenty. The peak is all the results that finish before the main thread takes them.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A memory curve that stays at the line.">
+      <path d="M20,110 L50,62 L200,62 L220,110" class="arrow ok"/>
+      <line x1="20" y1="60" x2="220" y2="60" class="arrow hot dashed"/>
+    </svg>
+    <h4>A budget above what one frame uploads</h4>
+    <p>The workers stay a little ahead of the main thread. The peak is the budget; the time hardly grows.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A memory curve that is low, but the work takes much longer.">
+      <path d="M20,110 L40,90 L230,90" class="arrow"/>
+      <line x1="20" y1="80" x2="230" y2="80" class="arrow hot dashed"/>
+      <text x="120" y="120" class="mid small t-bad">slow: workers idle</text>
+    </svg>
+    <h4>A budget too small</h4>
+    <p>Workers wait for the main thread most of the time. Memory is low, but the loads take longer.</p>
+  </div>
+</div>
+
+<dl class="pitfalls">
+  <div><dt>A job that waits for the budget inside the job</dt><dd>It blocks a worker, and with every worker blocked, nothing gives bytes back: the same deadlock as section 4. Check the budget in the queue, before the job starts.</dd></div>
+  <div><dt>Child jobs held back by the budget</dt><dd>A parent already holds its bytes, and its children need to run to give them back. Do not gate children; count their bytes in the parent's estimate.</dd></div>
+  <div><dt>The main thread waits for a job behind the budget</dt><dd>A loading screen that waits for one load while results sit unused never frees the budget. Before each wait, use what is ready.</dd></div>
+</dl>
+
+<h2 id="order"><span class="n">6</span>Order and priority</h2>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A queue where jobs leave in the order they came.">
+      <rect x="30" y="50" width="34" height="30" rx="3" class="mem"/><text x="47" y="70" class="mid mono">3</text>
+      <rect x="70" y="50" width="34" height="30" rx="3" class="mem"/><text x="87" y="70" class="mid mono">2</text>
+      <rect x="110" y="50" width="34" height="30" rx="3" class="mem"/><text x="127" y="70" class="mid mono">1</text>
+      <line x1="148" y1="65" x2="196" y2="65" class="arrow" marker-end="url(#ah)"/>
+      <text x="120" y="108" class="mid small">first in, first out</text>
+    </svg>
+    <h4>FIFO</h4>
+    <p>Jobs run in the order they were asked for. Simple and fair: nothing waits forever.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two queues: child jobs are taken before the new top-level jobs.">
+      <rect x="30" y="30" width="110" height="26" rx="3" class="box"/><text x="85" y="48" class="mid small">children</text>
+      <rect x="30" y="70" width="110" height="26" rx="3" class="box"/><text x="85" y="88" class="mid small">new tasks</text>
+      <line x1="140" y1="43" x2="190" y2="60" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <line x1="140" y1="83" x2="190" y2="70" class="arrow dashed" marker-end="url(#ah)"/>
+      <text x="200" y="64" class="small">1st</text><text x="200" y="84" class="small">2nd</text>
+    </svg>
+    <h4>Children first</h4>
+    <p>A started task finishes before new ones start, so its memory goes soon, and its result arrives early.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Jobs sorted by distance to the camera: the near ones first.">
+      <circle cx="40" cy="65" r="10" class="cpu"/>
+      <rect x="70" y="58" width="16" height="16" class="mem"/><rect x="120" y="58" width="16" height="16" class="mem o-75"/><rect x="180" y="58" width="16" height="16" class="mem o-50"/>
+      <text x="78" y="96" class="mid small">1</text><text x="128" y="96" class="mid small">2</text><text x="188" y="96" class="mid small">3</text>
+      <text x="120" y="118" class="mid small">near first</text>
+    </svg>
+    <h4>Priority</h4>
+    <p>A sort key per job: the distance to the camera, or "visible now". The queue becomes sorted, and the key can change while the job waits.</p>
+    <p class="cost">Watch: a low job can wait forever; age raises its key</p>
+  </div>
+</div>
+
+<h2 id="cancel"><span class="n">7</span>Cancel and shut down</h2>
+
+<p>A map viewer scrolls: tiles it asked for a second ago are off screen now. Their jobs should not run, or at least their results should not be used. Each task gets a small shared <b>ticket</b>: a "cancelled" flag, and a state that says who owns the result.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 240" role="img" aria-label="A ticket starts as running. The job sets it to done when its result is written; the main thread then owns the result. The main thread sets it to dropped when it cancels; the job then frees the result when it ends. Both changes are one atomic compare-and-exchange from running, so only one can happen.">
+    <rect x="300" y="30" width="160" height="50" rx="6" class="cpu"/>
+    <text x="380" y="52" class="mid title">RUNNING</text>
+    <text x="380" y="70" class="mid small">queued or running</text>
+    <line x1="340" y1="80" x2="200" y2="150" class="arrow ok" marker-end="url(#ah-ok)"/>
+    <line x1="420" y1="80" x2="560" y2="150" class="arrow bad" marker-end="url(#ah-bad)"/>
+    <text x="200" y="112" class="end small t-ok">job: result written</text>
+    <text x="560" y="112" class="small t-bad">main thread: cancel</text>
+    <rect x="80" y="152" width="200" height="50" rx="6" class="ok"/>
+    <text x="180" y="174" class="mid title">DONE</text>
+    <text x="180" y="192" class="mid small">the main thread uses or frees it</text>
+    <rect x="480" y="152" width="200" height="50" rx="6" class="bad"/>
+    <text x="580" y="174" class="mid title">DROPPED</text>
+    <text x="580" y="192" class="mid small">the job frees it when it ends</text>
+    <text x="20" y="228" class="small">Both arrows are a compare-and-exchange from RUNNING: if the other side got there first, it fails, and this side frees the result.</text>
+  </svg>
+  <figcaption>Exactly one side frees the result, also when the cancel and the end happen at the same moment.</figcaption>
+</figure>
+
+<div class="vgrid">
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A cancelled job in the queue is skipped when a worker reaches it.">
+      <rect x="40" y="50" width="34" height="30" rx="3" class="mem"/><rect x="80" y="50" width="34" height="30" rx="3" class="bad"/><rect x="120" y="50" width="34" height="30" rx="3" class="mem"/>
+      <path d="M86,56 L108,74 M108,56 L86,74" class="arrow"/>
+      <text x="120" y="108" class="mid small">skipped, never run</text>
+    </svg>
+    <h4>Queued</h4>
+    <p>The worker sees the flag when it reaches the job and drops it. It never started, so it holds no bytes of the budget.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A running job checks the flag between its steps and skips the rest.">
+      <rect x="30" y="50" width="50" height="30" rx="3" class="cpu"/><rect x="84" y="50" width="50" height="30" rx="3" class="cpu o-25"/><rect x="138" y="50" width="50" height="30" rx="3" class="cpu o-25"/>
+      <text x="110" y="44" class="mid small t-bad">flag set</text>
+      <text x="120" y="108" class="mid small">checks between steps</text>
+    </svg>
+    <h4>Running</h4>
+    <p>A job cannot be stopped from outside. It checks the flag between its steps and skips the rest, then ends as usual.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A finished result is freed by the main thread.">
+      <rect x="80" y="44" width="80" height="40" rx="4" class="ok"/><text x="120" y="68" class="mid small">result</text>
+      <text x="120" y="108" class="mid small">the main thread frees it</text>
+    </svg>
+    <h4>Done</h4>
+    <p>The result is already there. Cancel frees it at once and gives its bytes back.</p>
+  </div>
+</div>
+
+<p>Shutdown is a cancel of everything, in this order:</p>
+
+<ol class="flow">
+  <li class="cpu"><b>cancel</b>Set every ticket's flag, so running jobs skip their next steps.</li>
+  <li class="cpu"><b>stop</b>Set the pool's stop flag and empty the queue; jobs pushed now are dropped.</li>
+  <li class="cpu"><b>wake</b>Wake every sleeping worker, so it sees the stop flag.</li>
+  <li class="cpu"><b>join</b>Wait for each thread to end. Only then free what the jobs use.</li>
+</ol>
+
+<div class="callout warn">
+  <strong>A job must not hold the engine</strong>
+  <p>If a job keeps a pointer to the engine and the engine is destroyed first, the job writes freed memory. Give a job its own data, shared with the main thread by reference count, and join the workers before anything they read goes.</p>
+</div>
+
+<h2 id="same-result"><span class="n">8</span>The same result in any order</h2>
+
+<p>The workers finish in a different order on every run, and on every machine. The result must not change: the tests compare images to the pixel. The rule: <b>each job writes only its own output</b>, made from its own input.</p>
+
+<div class="split">
+  <div class="bad">
+    <h4>Jobs append to one list</h4>
+    <svg viewBox="0 0 320 120" role="img" aria-label="Three jobs append their results to one shared list. The order in the list depends on which job finished first.">
+      <rect x="20" y="20" width="40" height="24" rx="3" class="cpu"/><text x="40" y="37" class="mid small">A</text>
+      <rect x="20" y="50" width="40" height="24" rx="3" class="cpu"/><text x="40" y="67" class="mid small">B</text>
+      <rect x="20" y="80" width="40" height="24" rx="3" class="cpu"/><text x="40" y="97" class="mid small">C</text>
+      <line x1="60" y1="32" x2="180" y2="56" class="arrow bad"/><line x1="60" y1="62" x2="180" y2="62" class="arrow bad"/><line x1="60" y1="92" x2="180" y2="68" class="arrow bad"/>
+      <rect x="182" y="48" width="120" height="28" rx="3" class="mem"/><text x="242" y="67" class="mid small">B, A, C … or A, C, B</text>
+    </svg>
+    <p>The order follows the schedule. A shared sum of floats changes in its last bits too, since float addition depends on order.</p>
+  </div>
+  <div class="good">
+    <h4>Each job has its own slot</h4>
+    <svg viewBox="0 0 320 120" role="img" aria-label="Three jobs each write their own slot of a list made before they started. The list is the same in any order.">
+      <rect x="20" y="20" width="40" height="24" rx="3" class="cpu"/><text x="40" y="37" class="mid small">A</text>
+      <rect x="20" y="50" width="40" height="24" rx="3" class="cpu"/><text x="40" y="67" class="mid small">B</text>
+      <rect x="20" y="80" width="40" height="24" rx="3" class="cpu"/><text x="40" y="97" class="mid small">C</text>
+      <line x1="60" y1="32" x2="182" y2="32" class="arrow ok" marker-end="url(#ah-ok)"/><line x1="60" y1="62" x2="182" y2="62" class="arrow ok" marker-end="url(#ah-ok)"/><line x1="60" y1="92" x2="182" y2="92" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <rect x="184" y="20" width="60" height="24" rx="3" class="mem"/><text x="214" y="37" class="mid small">slot A</text>
+      <rect x="184" y="50" width="60" height="24" rx="3" class="mem"/><text x="214" y="67" class="mid small">slot B</text>
+      <rect x="184" y="80" width="60" height="24" rx="3" class="mem"/><text x="214" y="97" class="mid small">slot C</text>
+    </svg>
+    <p>The slots are made before the jobs start, so no job changes the list itself. The finish step reads them in a fixed order.</p>
+  </div>
+</div>
+
+<div class="callout">
+  <strong>What may still differ</strong>
+  <p>The log: two jobs that print at the same time print in any order. Timings, of course. Neither changes a pixel.</p>
+</div>
+
+<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
+
+<p>The engine owns one <code>WorkerPool</code>. Every <code>loadMesh</code>, <code>loadTexture</code> and <code>loadEnvironment</code> is a load job on it; a glTF import splits into a child job per image and per sub-mesh's LODs. The main thread picks up done loads in <code>finishLoads</code> (<a href="asset-streaming.html#in-rasm">streaming assets</a>).</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 330" role="img" aria-label="loadMesh pushes a load job with a ticket and an estimate of its bytes. A worker starts it when the bytes fit the 512 MiB budget. runMeshImport parses the file and plans the images, sets the counter to the number of children, and pushes a runImageWork job per image and a buildMeshLods job per sub-mesh. Workers take children first. The child that brings the counter to zero runs completeMeshLoad, which finishes the images and sets the ticket to done. finishLoads on the main thread uses the result and gives the bytes back.">
+    <text x="20" y="22" class="title t-cpu">main thread</text>
+    <rect x="20" y="32" width="190" height="56" rx="6" class="cpu"/>
+    <text x="115" y="55" class="mid mono">loadMesh(path)</text>
+    <text x="115" y="74" class="mid small">ticket, estimate: file size</text>
+    <line x1="210" y1="60" x2="248" y2="60" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <text x="250" y="22" class="title">WorkerPool</text>
+    <rect x="250" y="32" width="230" height="56" rx="4" class="box"/>
+    <text x="365" y="52" class="mid small">children queue (taken first)</text>
+    <text x="365" y="72" class="mid small">loads queue: starts if bytes fit</text>
+    <line x1="480" y1="60" x2="518" y2="60" class="arrow" marker-end="url(#ah)"/>
+    <rect x="520" y="32" width="220" height="56" rx="6" class="cpu"/>
+    <text x="630" y="55" class="mid mono small">runMeshImport</text>
+    <text x="630" y="74" class="mid small">parse, plan images, n = children</text>
+
+    <line x1="630" y1="88" x2="630" y2="118" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="300" y="120" width="140" height="44" rx="6" class="mem"/><text x="370" y="138" class="mid mono small">runImageWork</text><text x="370" y="155" class="mid small">image 1</text>
+    <rect x="450" y="120" width="140" height="44" rx="6" class="mem"/><text x="520" y="138" class="mid mono small">runImageWork</text><text x="520" y="155" class="mid small">image 2 …</text>
+    <rect x="600" y="120" width="140" height="44" rx="6" class="mem"/><text x="670" y="138" class="mid mono small">buildMeshLods</text><text x="670" y="155" class="mid small">per sub-mesh</text>
+    <text x="290" y="146" class="end small">each: n − 1</text>
+
+    <line x1="520" y1="164" x2="520" y2="196" class="arrow ok" marker-end="url(#ah-ok)"/>
+    <text x="530" y="186" class="small t-ok">the one that makes n = 0</text>
+    <rect x="410" y="198" width="220" height="50" rx="6" class="ok"/>
+    <text x="520" y="219" class="mid mono small">completeMeshLoad</text>
+    <text x="520" y="237" class="mid small">finishImageWork, ticket DONE</text>
+    <line x1="410" y1="223" x2="212" y2="223" class="arrow" marker-end="url(#ah)"/>
+    <rect x="20" y="198" width="190" height="50" rx="6" class="cpu"/>
+    <text x="115" y="219" class="mid mono small">finishLoads</text>
+    <text x="115" y="237" class="mid small">upload, give bytes back</text>
+    <text x="20" y="282" class="small">destroyMesh drops the ticket: a queued load never runs; a running one skips its next steps.</text>
+    <text x="20" y="300" class="small">loadTexture and loadEnvironment are one load job each, with no children.</text>
+  </svg>
+  <figcaption>No job waits for another, so the pool works with one thread. A worker thread is named <samp>RASM loader N</samp> in Tracy.</figcaption>
+</figure>
+
+<h3>Where RASM follows the page, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Workers</td><td>hardware threads minus the busy ones</td><td><code>EngineConfig::loadThreads</code>; 0 (the default) takes <code>std::thread::hardware_concurrency</code> minus one, for the main thread, at least 1. A game with threads of its own sets fewer. The pool starts first in the <code>Engine</code> constructor.</td></tr>
+  <tr><td>Queue</td><td>FIFO, children first, priority</td><td>Two FIFO queues of <code>std::function</code> jobs under one mutex: <code>pushChild</code> and <code>push</code>; children are taken first. No priority yet: it would be a sort key of the load queue.</td></tr>
+  <tr><td>Split</td><td>a child job per part</td><td><code>runMeshImport</code> pushes a <code>runImageWork</code> job per image (decode once, mips per kind of slot, or a KTX2 transcode per format) and a <code>buildMeshLods</code> job per sub-mesh.</td></tr>
+  <tr><td>Waiting</td><td>continuation, help, fibers</td><td>Continuation: <code>MeshLoadJob::remaining</code>, and the last child runs <code>completeMeshLoad</code>. The main thread's <code>waitForLoads</code> finishes what is ready, then sleeps in <code>waitForCompletion</code> until another load ends.</td></tr>
+  <tr><td>Budget</td><td>a job starts if its bytes fit, or nothing is held</td><td><code>EngineConfig::loadMemoryBudget</code>, 512 MiB. Estimates from headers; a mesh starts with its file size and corrects it after the parse (<code>setLoadBytes</code>). The main thread gives the bytes back when it uses a result; a glTF texture's levels keep their share until that texture is filled. Children are not gated.</td></tr>
+  <tr><td>Cancel</td><td>ticket: flag and state</td><td><code>LoadTicket</code>: <code>cancelled</code>, <code>state</code> (<code>RUNNING</code>, <code>DONE</code>, <code>DROPPED</code>), <code>bytes</code>. <code>destroyMesh</code>, <code>destroyTexture</code> and <code>destroyEnvironment</code> call <code>dropLoad</code> and erase the pending entry at once.</td></tr>
+  <tr><td>Shutdown</td><td>cancel, stop, wake, join</td><td><code>~Engine</code> drops every pending load, then <code>WorkerPool::shutdown</code> empties the queues and joins the threads, before anything else is destroyed.</td></tr>
+  <tr><td>Same result</td><td>each job its own slot</td><td>The plan makes every <code>GltfImageTarget</code>'s empty <code>TextureRaw</code> before the jobs start, already in <code>GLTFRaw::ktxImages</code> or <code>imageLevels</code>; a LOD job writes only its own sub-mesh. The images and examples are the same as with one thread.</td></tr>
+</table>
+</div>
+
+<h3>Measured</h3>
+
+<p><samp>python tools/load_bench.py</samp>: Release, headless, RTX 3060, i7-13700KF (24 hardware threads, so 23 workers), the median of three runs, before and after the pool.</p>
+
+<div class="stats">
+  <div><b>536 → 108 ms</b><span>Flight Helmet KTX2, whole load</span><small>15 images transcoded on several workers</small></div>
+  <div><b>931 → 188 ms</b><span>Flight Helmet PNG</span><small>decode and mips of each image in its own job</small></div>
+  <div><b>1065 → 197 ms</b><span>Sponza</span><small>69 JPEG and PNG images</small></div>
+  <div><b>3880 → 2962 MiB</b><span>300 images asked in one frame</span><small>peak private memory; at most 512 MiB decoded at once</small></div>
+</div>
+
+<p>The longest frame while a model loads does not change (5 to 9 ms): the main thread does the same work. The burst (<samp>17_streaming --burst</samp>) ends in 528 ms against 588, and its longest frame is 22.8 ms against 35.5. On Windows the old <samp>std::async</samp> used the system's thread pool, so it had 44 threads at most, not 300; libc++ on macOS starts one thread per call.</p>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The pool, tickets</td><td><code>WorkerPool</code>, <code>WorkerJob</code>, <code>LoadTicket</code> in <code>src/core/workerPool.h</code>, <code>src/core/workerPool.cpp</code></td></tr>
+  <tr><td>A load's shared data</td><td><code>MeshLoadJob</code>, <code>TextureLoadJob</code>, <code>EnvironmentLoadJob</code> in <code>src/assets/loadJobs.h</code></td></tr>
+  <tr><td>Mesh load jobs</td><td><code>runMeshImport</code>, <code>endMeshChildJob</code>, <code>completeMeshLoad</code>, <code>Engine::loadMesh</code> in <code>src/assets/mesh.cpp</code></td></tr>
+  <tr><td>Image jobs</td><td><code>parseMeshFile</code>, <code>runImageWork</code>, <code>finishImageWork</code>, <code>GltfImageWork</code> in <code>src/assets/meshImport.cpp</code></td></tr>
+  <tr><td>Texture and environment jobs</td><td><code>Engine::loadTexture</code>, <code>dropTextureLoad</code> in <code>src/assets/texture.cpp</code>; <code>Engine::loadEnvironment</code> in <code>src/assets/environment.cpp</code></td></tr>
+  <tr><td>Pick-up, budget give-back, shutdown</td><td><code>finishLoads</code>, <code>finishReadyLoads</code>, <code>getLoadStats</code>, <code>Engine::~Engine</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Settings and stats</td><td><code>EngineConfig::loadThreads</code>, <code>loadMemoryBudget</code>, <code>LoadStats</code> in <code>include/rasm/types.h</code>; the RASM window's Loads line</td></tr>
+  <tr><td>Tests</td><td><code>tests/workerPoolTests.cpp</code>: order, children first, one worker with nested children, cancel, budget, shutdown</td></tr>
+  <tr><td>Examples, numbers</td><td><code>examples/17_streaming</code> (<samp>--burst</samp>), <code>examples/10_ktx2_textures</code> (<samp>--measure</samp>), <code>tools/load_bench.py</code></td></tr>
+  <tr><td>API</td><td><a href="../api/engine.html#getLoadStats">getLoadStats</a>, <a href="../api/types.html#LoadStats">LoadStats</a>, <a href="../api/engine.html#EngineConfig">EngineConfig</a></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>No job waits for another job, or for the budget. Split, count down, and let the last one go on.</li>
+    <li>A job holds its load's data by <code>shared_ptr</code> and never the engine, the registry or the device.</li>
+    <li>Every byte a load takes from the budget goes back once: the main thread gives back what it used or dropped while <code>DONE</code>; the job gives back what it held when it ends <code>DROPPED</code>.</li>
+    <li>Each job writes only its own output, made before the jobs start; the finish step reads in a fixed order.</li>
+    <li>A running job checks its ticket between steps, and every child still counts down when it skips its work.</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <strong>Not done yet</strong>
+  <p>No priority per load: the load queue is FIFO. Files are read by the same workers that decode. A load's steps on the main thread are not split (<code>P24</code>).</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Christian Gyrling, <i>Parallelizing the Naughty Dog Engine Using Fibers</i>, GDC 2015: jobs, counters and fibers for a whole engine.</li>
+  <li>Jason Gregory, <i>Game Engine Architecture</i>, 3rd edition: the chapter on parallelism and concurrent programming.</li>
+  <li>Anthony Williams, <i>C++ Concurrency in Action</i>, 2nd edition: thread pools, atomics and memory order.</li>
+  <li>Sean Parent, <i>Better Code: Concurrency</i>, 2016: tasks without waits, and continuations.</li>
+  <li><a href="asset-streaming.html">Streaming assets in the background</a>, <a href="texture-uploads.html">Texture uploads</a>, <a href="resource-lifetime.html">Deferred destruction</a>.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

@@ -293,7 +293,7 @@
     <path d="M552,184 C640,184 650,140 650,94" class="arrow mem" marker-end="url(#ah-mem)"/>
     <text x="660" y="140" class="small t-mem">levels</text>
   </svg>
-  <figcaption>The texture exists, with its final format and mip count, from the moment <code>loadTexture</code> returns, so a material can use it at once; it draws once <code>isLoaded</code> is true. For glTF, the worker transcodes each image once per kind of slot that uses it.</figcaption>
+  <figcaption>The texture exists, with its final format and mip count, from the moment <code>loadTexture</code> returns, so a material can use it at once; it draws once <code>isLoaded</code> is true. For glTF, each image is a job of its own, which transcodes it once per format the slots that use it need.</figcaption>
 </figure>
 
 <h3>Where RASM follows the page, and where it differs</h3>

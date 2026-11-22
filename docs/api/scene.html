@@ -359,7 +359,7 @@ engine.destroyTexture(tile.texture);</code></pre>
 <div class="api" id="loadMesh">
   <pre class="sig">MeshHandle loadMesh(const std::string&amp; path);</pre>
   <div class="body">
-    <p>Starts loading a <code>.obj</code>, <code>.gltf</code> or <code>.glb</code> file and returns its handle at once. A worker thread reads and decodes the file, and builds its <a href="#MeshLod">LODs</a> when <code>EngineConfig::meshLods</code> is on. A later <code>beginFrame</code> uploads it to the geometry pool, then <code>isLoaded</code> becomes true and the entities that use it are drawn.</p>
+    <p>Starts loading a <code>.obj</code>, <code>.gltf</code> or <code>.glb</code> file and returns its handle at once. The engine's load workers read and decode the file, each of its images on a worker of its own, and build its <a href="#MeshLod">LODs</a> when <code>EngineConfig::meshLods</code> is on (<a href="../guides/job-system.html">job systems</a>). A later <code>beginFrame</code> uploads it to the geometry pool, then <code>isLoaded</code> becomes true and the entities that use it are drawn.</p>
     <dl>
       <dt>path</dt><dd>Relative to <code>EngineConfig::assetRoot</code> (see <a href="engine.html#resolveAssetPath"><code>resolveAssetPath</code></a>), or absolute. UTF-8. The extension is checked in lower case only.</dd>
     </dl>
@@ -403,7 +403,7 @@ rasm::EntityHandle entity = engine.createEntity("room", room, {}, transform); //
     <ul>
       <li><b>What its glTF import made goes with it:</b> the materials and textures <code>loadMesh</code> created for this file belong to the mesh. An entity that uses one of those materials as its own falls back as after <a href="materials.html#destroyMaterial"><code>destroyMaterial</code></a>, and a material that uses one of those textures as after <a href="engine.html#destroyTexture"><code>destroyTexture</code></a>.</li>
       <li>Entities that still use the mesh live on and draw nothing; their rows are freed. Destroy them first, and nothing has to be searched.</li>
-      <li>A load that has not finished is dropped when it ends. <code>loadMesh</code> of the same path then loads it again, as a new mesh. A mesh whose load failed can be destroyed too, which frees its index.</li>
+      <li>A load that has not finished is dropped at once: a load still in the queue never runs, and a running one gives its result up. <code>loadMesh</code> of the same path then loads it again, as a new mesh. A mesh whose load failed can be destroyed too, which frees its index.</li>
     </ul>
   </div>
 </div>
