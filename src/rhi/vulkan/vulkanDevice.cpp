@@ -1261,9 +1261,14 @@ namespace rasm::rhi
 
     CommandBuffer *VulkanDevice::createCommandBuffer(QueueType queueType, const std::string &name)
     {
-        auto *queue = static_cast<VulkanQueue *>(getQueue(queueType));
-        const QueueType onQueue = queue == computeQueue.get() ? QueueType::COMPUTE : queue == transferQueue.get() ? QueueType::TRANSFER
-                                                                                                                  : QueueType::GRAPHICS;
+        // A queue the device does not have is the graphics queue, as in getQueue.
+        QueueType onQueue = QueueType::GRAPHICS;
+        if (queueType == QueueType::COMPUTE && computeQueue != nullptr)
+            onQueue = QueueType::COMPUTE;
+        if (queueType == QueueType::TRANSFER && transferQueue != nullptr)
+            onQueue = QueueType::TRANSFER;
+        VulkanQueue *queue = onQueue == QueueType::COMPUTE ? computeQueue.get() : onQueue == QueueType::TRANSFER ? transferQueue.get()
+                                                                                                                 : graphicsQueue.get();
 
         auto *commandBuffer = new VulkanCommandBuffer(*this);
         if (!commandBuffer->initialize(queue->getFamilyIndex(), onQueue, name))

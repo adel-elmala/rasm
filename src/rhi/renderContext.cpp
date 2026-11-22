@@ -1420,8 +1420,9 @@ namespace rasm
         return fillTexture(texture, levels.data(), static_cast<uint32_t>(levels.size()));
     }
 
-    // A texture the device copies on the host has its data at once. The others are copied from the staging ring with
-    // the next submit, which comes before any frame that samples them, on the same queue (P2).
+    // A texture the device copies on the host has its data at once. The others are copied from the staging ring: an
+    // application's fill with the next submit, which comes before any frame that samples it, on the same queue (P2); a
+    // load's (between beginLoadUploads and endLoadUploads) on the transfer queue, used only once isLoadUploadDone.
     bool RenderContext::fillTexture(const TextureHandle &texture, const TextureLevel *levels, uint32_t levelCount)
     {
         TextureFillProgress progress;
@@ -1899,12 +1900,18 @@ namespace rasm
         if (!checkArgument(info.queue != QueueType::TRANSFER, __func__, "the transfer queue is the uploads' own."))
             return false;
         // They run in this order on the queue, as one submission, after the load uploads' acquires. A compute submit
-        // keeps one wait for the uploads, and every submit one for the load uploads on the transfer queue.
+        // keeps one wait for the uploads. The load uploads this submit may use are those the CPU saw done
+        // (updateLoadUploadsDone): a submit waits for them once per new value, which costs nothing and makes their copies
+        // visible here, and a graphics submit first acquires the textures they released. Without a signal there is no
+        // telling when the acquires' command buffer is free again, so they wait for a later submit.
         const bool computeQueue = info.queue == QueueType::COMPUTE && impl->device->hasAsyncCompute();
         const bool transferQueue = impl->device->hasTransferQueue();
-        if (!checkArgument(info.commandBufferCount + (transferQueue ? 1 : 0) <= rhi::MAX_SUBMIT_COMMAND_BUFFERS, __func__, "too many command buffers."))
+        const uint32_t queueSlot = computeQueue ? 1 : 0;
+        const bool waitsForLoads = transferQueue && impl->loadDone > impl->loadWaited[queueSlot];
+        const bool takesAcquires = transferQueue && !computeQueue && info.signal.fence.isValid() && impl->transferUploads.hasAcquires(impl->loadDone);
+        if (!checkArgument(info.commandBufferCount + (takesAcquires ? 1 : 0) <= rhi::MAX_SUBMIT_COMMAND_BUFFERS, __func__, "too many command buffers."))
             return false;
-        if (!checkArgument(info.waitCount + (computeQueue ? 1 : 0) + (transferQueue ? 1 : 0) <= rhi::MAX_SUBMIT_WAITS, __func__, "too many fence waits."))
+        if (!checkArgument(info.waitCount + (computeQueue ? 1 : 0) + (waitsForLoads ? 1 : 0) <= rhi::MAX_SUBMIT_WAITS, __func__, "too many fence waits."))
             return false;
         rhi::CommandBuffer *rhiCommandBuffers[rhi::MAX_SUBMIT_COMMAND_BUFFERS] = {};
         for (uint32_t i = 0; i < info.commandBufferCount; ++i)
@@ -1942,14 +1949,15 @@ namespace rasm
         if (computeQueue && uploads.value > 0)
             waits[waitCount++] = uploads;
 
-        // The load uploads this submit may use are those the CPU saw done (updateLoadUploadsDone): the wait costs nothing
-        // and makes their copies visible here, and a graphics submit first acquires the textures they released. Without
-        // a signal there is no telling when the acquires' command buffer is free again, so they wait for a later submit.
-        const uint32_t queueSlot = computeQueue ? 1 : 0;
-        const bool waitsForLoads = transferQueue && impl->loadDone > impl->loadWaited[queueSlot];
         if (waitsForLoads)
             waits[waitCount++] = {.fence = impl->transferUploads.lastSubmit().fence, .value = impl->loadDone};
-        rhi::CommandBuffer *acquires = transferQueue && !computeQueue && signalFence ? impl->transferUploads.recordAcquires(impl->loadDone) : nullptr;
+        // The frame may sample those textures, so a submit whose acquires can't be recorded fails.
+        rhi::CommandBuffer *acquires = takesAcquires ? impl->transferUploads.recordAcquires(impl->loadDone) : nullptr;
+        if (takesAcquires && !acquires)
+        {
+            spdlog::error("Failed to record the acquires of loaded textures; the submit is dropped.");
+            return false;
+        }
         if (acquires)
         {
             std::move_backward(rhiCommandBuffers, rhiCommandBuffers + commandBufferCount, rhiCommandBuffers + commandBufferCount + 1);
@@ -1984,8 +1992,8 @@ namespace rasm
 
         // Only what these command buffers recorded is on the GPU now; a frame may have more submits to go.
         impl->textureStates.submitted(rhiCommandBuffers, commandBufferCount);
-        std::erase_if(impl->recordedClears, [&rhiCommandBuffers, &info](const HistoryClear &clear)
-                      { return std::find(rhiCommandBuffers, rhiCommandBuffers + info.commandBufferCount, clear.commandBuffer) != rhiCommandBuffers + info.commandBufferCount; });
+        std::erase_if(impl->recordedClears, [&rhiCommandBuffers, commandBufferCount](const HistoryClear &clear)
+                      { return std::find(rhiCommandBuffers, rhiCommandBuffers + commandBufferCount, clear.commandBuffer) != rhiCommandBuffers + commandBufferCount; });
         return true;
     }
 

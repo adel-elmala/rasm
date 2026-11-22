@@ -279,6 +279,12 @@ namespace rasm::rhi
         return false;
     }
 
+    bool UploadManager::hasAcquires(uint64_t completed) const
+    {
+        return std::any_of(releases.begin(), releases.end(), [completed](const Release &release)
+                           { return release.value <= completed; });
+    }
+
     // The acquires of the textures released by submits up to completed, which the CPU saw done, so the graphics submit
     // that runs them waits for nothing more. Null when there is none, or when the command buffer can't be recorded:
     // they go with a later submit then. The list stays until acquiresSubmitted, so after a failed submit the next one

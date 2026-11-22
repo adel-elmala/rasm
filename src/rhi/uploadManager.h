@@ -22,6 +22,7 @@ namespace rasm::rhi
         uint64_t                    coveredValue() const;
         void                        waitFor(const FenceWait* waits, uint32_t count);
         bool                        isFilling(const Texture* texture);
+        bool                        hasAcquires(uint64_t completed) const;
         CommandBuffer*              recordAcquires(uint64_t completed);
         void                        acquiresSubmitted(Fence* fence, uint64_t value);
         uint64_t                    takeGpuNanoseconds();

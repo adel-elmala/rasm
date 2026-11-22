@@ -856,7 +856,7 @@ TEST_CASE_FIXTURE(UploadFixture, "a fill in parts copies every row once: the fir
     uint32_t parts = 0;
     while (!progress.done)
     {
-        REQUIRE(uploads.uploadTexture(&data.texture, data.levels.data(), 9, progress, 64 * 1024));
+        REQUIRE(uploads.uploadTexture(&data.texture, data.levels.data(), 9, progress, 64 * 1024ull));
         REQUIRE(uploads.flush());
         device.finishGpuWork();
         ++parts;
@@ -938,7 +938,9 @@ TEST_CASE("on the transfer queue a texture's last copy releases it, and its acqu
     CHECK(lasts == 2);
     CHECK(uploads.recordAcquires(0) == nullptr);
 
+    CHECK_FALSE(uploads.hasAcquires(0));
     device.finishGpuWork();
+    CHECK(uploads.hasAcquires(1));
     auto *acquire = static_cast<FakeCommandBuffer *>(uploads.recordAcquires(1));
     REQUIRE(acquire != nullptr);
     CHECK(acquire->acquired == std::vector<Texture *>{&exclusive.texture});
@@ -952,6 +954,7 @@ TEST_CASE("on the transfer queue a texture's last copy releases it, and its acqu
 
     FakeFence frame;
     uploads.acquiresSubmitted(&frame, 1);
+    CHECK_FALSE(uploads.hasAcquires(1));
     CHECK(uploads.recordAcquires(1) == nullptr);
     CHECK_FALSE(uploads.isFilling(&exclusive.texture));
     CHECK(exclusive.arrived());

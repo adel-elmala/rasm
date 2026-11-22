@@ -414,7 +414,11 @@ namespace rasm
             const TextureHandle handle = texture.handle;
             pendingTextures.emplace(handle, std::move(texture));
         }
-        return !pendingMeshes.empty() || !pendingEnvironments.empty() || !pendingTextures.empty() || !uploadingMeshes.empty();
+        // An environment whose image is still copied bakes later, so it is still loading too.
+        bool environmentsUploading = false;
+        for (const Environment &environment : environments->environments)
+            environmentsUploading = environmentsUploading || (environment.state == BakeState::WAITING && !ctx.isLoadUploadDone(environment.uploadValue));
+        return !pendingMeshes.empty() || !pendingEnvironments.empty() || !pendingTextures.empty() || !uploadingMeshes.empty() || environmentsUploading;
     }
 
     // A mesh and a texture are loaded once the GPU has their copies; an environment is baked then (recordEnvironmentBakes).
