@@ -5,7 +5,8 @@
 - CMake 3.23 or newer.
 - Ninja.
 - A C++20 compiler: LLVM Clang on Windows, Apple Clang on macOS. On Windows, the MSVC STL of Visual Studio 18 needs Clang 22 or newer; CI uses 22.1.8.
-- A recent Vulkan SDK (version 1.4).
+- A GPU driver with Vulkan 1.4 (it brings the Vulkan loader, 1.3 or newer).
+- The Vulkan SDK (1.4), for the validation layer and tools such as GFXReconstruct and RenderDoc captures. The build does not need it: the Vulkan headers come from vcpkg, and RASM loads the loader at run time with volk ([Vulkan loader guide](guides/vulkan-loader.html)).
 - vcpkg.
 
 ## Windows (x64)
@@ -42,7 +43,7 @@ Update enviroment variables (system-wide):
 
 #### Install `Vulkan`:
 
-Download [LunarG's Vulkan SDK](https://vulkan.lunarg.com/sdk/home).
+Download [LunarG's Vulkan SDK](https://vulkan.lunarg.com/sdk/home), for the validation layer and the tools.
 
 And update you graphics drivers to be the latest.
 
@@ -101,7 +102,7 @@ export VCPKG_ROOT="$HOME/vcpkg"
 
 #### Install `Vulkan` and `MoltenVK`:
 
-Download [LunarG's Vulkan SDK](https://vulkan.lunarg.com/sdk/home).
+Download [LunarG's Vulkan SDK](https://vulkan.lunarg.com/sdk/home), and let it install the system-global files: the loader in `/usr/local/lib` and MoltenVK's driver manifest. RASM loads the loader at run time; without the global install, run `source setup-env.sh` from the SDK first.
 
 And update you graphics drivers to be the latest.
 
@@ -221,7 +222,7 @@ Both fields need `enableValidation` and installed validation layers; without the
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on every pull request and every push to `main`. It has one job per OS: Windows builds `x64-debug` then `x64-release`, macOS builds `macOS` then `macOS-release`, examples included, and each preset runs `ctest`. The runners have no GPU, so CI does not run the examples. It still installs the Vulkan runtime on Windows, because `rasm_tests.exe` loads `vulkan-1.dll`. After the Release tests, the Windows job runs the [image tests](#image-tests) on lavapipe (about 1 minute: 5 s to restore the cached assets, 3 s to register lavapipe, 50 to 80 s for the tests; 20 s more when the cache is empty): it caches `build/test-assets/`, registers lavapipe and the validation layer in the registry (the runner's processes are elevated, and the loader of an elevated process ignores `VK_DRIVER_FILES` and `VK_LAYER_PATH`), runs `tools/image_tests.py --lavapipe`, and uploads `build/x64-release/image-tests/` as the `image-test-failures` artifact when a test fails.
+`.github/workflows/ci.yml` runs on every pull request and every push to `main`. It has one job per OS: Windows builds `x64-debug` then `x64-release`, macOS builds `macOS` then `macOS-release`, examples included, and each preset runs `ctest`. The runners have no GPU, so CI does not run the examples. Nothing links the Vulkan loader (`D24`): after the Debug tests a step checks that no executable or DLL of the build imports it (`llvm-objdump` on Windows, `otool` on macOS), and the macOS job installs no Vulkan at all, so its tests show they start without a loader. Only the Windows job installs the Vulkan SDK, for the image tests (the validation layer and `vulkaninfo`); they run on the runner's own loader (1.3), which is enough. After the Release tests, the Windows job runs the [image tests](#image-tests) on lavapipe (about 1 minute: 5 s to restore the cached assets, 3 s to register lavapipe, 50 to 80 s for the tests; 20 s more when the cache is empty): it caches `build/test-assets/`, registers lavapipe and the validation layer in the registry (the runner's processes are elevated, and the loader of an elevated process ignores `VK_DRIVER_FILES` and `VK_LAYER_PATH`), runs `tools/image_tests.py --lavapipe`, and uploads `build/x64-release/image-tests/` as the `image-test-failures` artifact when a test fails.
 
 vcpkg.json has no `builtin-baseline`, so the vcpkg commit picks the dependency versions. CI pins it in `VCPKG_COMMIT`. When you update your local vcpkg, put its commit (`git -C $VCPKG_ROOT rev-parse HEAD`) there too, so CI builds the same versions you do. Built packages are cached per OS and vcpkg commit. A run restores the newest cache and saves a new one only when it built packages, for example after a runner toolchain update. A new vcpkg commit makes the next run build all dependencies again.
 
@@ -245,7 +246,7 @@ find_package(rasm 0.1 CONFIG REQUIRED)
 target_link_libraries(my_app PRIVATE rasm::rasm)
 ```
 
-- RASM is a static library, so the project also needs RASM's link dependencies: Vulkan SDK, vk-bootstrap, VulkanMemoryAllocator, glm, SDL3, Tracy, spdlog, tinyobjloader, meshoptimizer, Slang, libktx and, with `RASM_IMGUI`, Dear ImGui. With vcpkg, add `vk-bootstrap`, `vulkan-memory-allocator`, `glm`, `sdl3` with the `vulkan` feature, `tracy` with the `on-demand` feature, `spdlog`, `tinyobjloader`, `meshoptimizer`, `shader-slang` and `ktx` to its manifest (and `imgui` with the `sdl3-binding` feature for a RASM built with `RASM_IMGUI`, the default; `find_package(rasm)` then finds it with `find_dependency`), and copy the `ktx` block of `cmake/triplets/` into its own triplets to leave out the ETC decoder.
+- RASM is a static library, so the project also needs RASM's link dependencies: volk, the Vulkan headers, vk-bootstrap, VulkanMemoryAllocator, glm, SDL3, Tracy, spdlog, tinyobjloader, meshoptimizer, Slang, libktx and, with `RASM_IMGUI`, Dear ImGui. With vcpkg, add `volk`, `vulkan-headers`, `vk-bootstrap`, `vulkan-memory-allocator`, `glm`, `sdl3` with the `vulkan` feature, `tracy` with the `on-demand` feature, `spdlog`, `tinyobjloader`, `meshoptimizer`, `shader-slang` and `ktx` to its manifest (and `imgui` with the `sdl3-binding` feature for a RASM built with `RASM_IMGUI`, the default; `find_package(rasm)` then finds it with `find_dependency`), and copy the `ktx` block of `cmake/triplets/` into its own triplets to leave out the ETC decoder.
 - Shaders are compiled at runtime, so the application needs them when it ships. By default the engine looks in a `shaders/` folder next to the executable. `find_package(rasm)` sets `rasm_SHADER_DIR` to the folder holding them, so a build step can copy them there:
 
   ```cmake

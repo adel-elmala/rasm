@@ -3,6 +3,8 @@
 
 #include "rhi/device.h"
 
+// volk first: vk_mem_alloc.h declares vmaImportVulkanFunctionsFromVolk only after it.
+#include "volk.h"
 #include "vk_mem_alloc.h"
 
 #include <cstdint>

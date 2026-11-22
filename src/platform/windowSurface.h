@@ -8,7 +8,8 @@
 namespace rasm
 {
 
-    bool createWindowSurface(const Window& window, VkInstance instance, VkSurfaceKHR* surface);
+    PFN_vkGetInstanceProcAddr   getWindowVulkanLoader();
+    bool                        createWindowSurface(const Window& window, VkInstance instance, VkSurfaceKHR* surface);
 
 }
 // clang-format on

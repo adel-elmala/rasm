@@ -123,6 +123,7 @@ Deliberate exceptions:
 
 - All Vulkan calls live under the backend (`src/rhi/vulkan/`). Only the backend and `src/rhi/device.cpp` include its headers: the rest of the engine, `RenderContext` included, talks to `rhi::Device` ([architecture.md §12](architecture.md#12-rhi)). The one exception is the Vulkan surface hook in `src/platform/`, until `D7`.
 - New GPU functionality goes into `src/rhi/device.h` in terms that every planned backend (Vulkan, D3D12, Metal, WebGPU) can implement, never as a Vulkan-only path above the RHI.
+- Vulkan functions come from volk; nothing links the loader (`D24`). Device-level calls go through the device's table (`vk.vkCmdDraw(...)`, `VulkanDevice::getVkTable`): there are no global device functions (`VOLK_NO_DEVICE_PROTOTYPES`). A library that calls Vulkan itself gets volk's pointers ([the Vulkan loader guide](guides/vulkan-loader.html)).
 - Use synchronization2 (`vkCmdPipelineBarrier2`, `VkDependencyInfo`) and dynamic rendering. Do not introduce render passes or framebuffers.
 - Every created object gets a debug name, which is a no-op when debug utils is unavailable.
 - Check every `VkResult`. Swapchain functions must handle `VK_SUBOPTIMAL_KHR` and `VK_ERROR_OUT_OF_DATE_KHR` explicitly.

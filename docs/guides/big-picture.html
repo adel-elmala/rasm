@@ -114,7 +114,7 @@
     <text x="430" y="208" class="small">layout of each texture, render targets, bindless.</text>
     <text x="430" y="270" class="small">Backend-neutral interface: resources, command</text>
     <text x="430" y="286" class="small">buffers, the queues, the swapchain, fences.</text>
-    <text x="430" y="348" class="small">Vulkan objects through vk-bootstrap and VMA.</text>
+    <text x="430" y="348" class="small">Vulkan through volk, vk-bootstrap and VMA.</text>
     <text x="430" y="364" class="small">Also VulkanCommandBuffer, Queue, Swapchain.</text>
     <text x="430" y="430" class="small">Runs what the queues submitted.</text>
   </svg>
@@ -140,7 +140,7 @@
   <tr><td><code>Engine</code></td><td>scenes, entities, meshes, materials, cameras, lights; the frame loop</td><td>any Vulkan type</td></tr>
   <tr><td><code>RenderContext</code></td><td>handles and the <code>rhi::</code> object behind each one; the layout each texture is in (<code>TextureStates</code>)</td><td>scenes, entities, the frame loop</td></tr>
   <tr><td><code>rhi::Device</code></td><td>neutral resources, command buffers, the graphics queue and an optional <a href="async-compute.html">compute queue</a>, the swapchain</td><td>handles, which backend is under it</td></tr>
-  <tr><td><code>VulkanDevice</code></td><td><code>VkDevice</code>, VMA, vk-bootstrap</td><td>handles, the engine</td></tr>
+  <tr><td><code>VulkanDevice</code></td><td><code>VkDevice</code> and its function table (volk), VMA, vk-bootstrap</td><td>handles, the engine</td></tr>
 </table>
 </div>
 
@@ -206,7 +206,7 @@
   <tr><td><code>include/rasm/</code></td><td>the public API: <code>Engine</code>, handles, plain types</td><td><code>rasm.h</code>, <code>engine.h</code>, <code>handle.h</code>, <code>types.h</code></td></tr>
   <tr><td><code>include/rasm/render/</code></td><td>the low-level public API</td><td><code>renderContext.h</code>, <code>renderGraph.h</code>, <code>resource.h</code></td></tr>
   <tr><td><code>src/core/</code></td><td>handle manager, file reading</td><td><code>handle.cpp</code>, <code>utils.cpp</code></td></tr>
-  <tr><td><code>src/platform/</code></td><td>The window and its input (SDL3, or none when headless), paths, the Vulkan surface hook</td><td><code>platform.h</code>, <code>sdlPlatform.cpp</code>, <code>headlessPlatform.cpp</code>, <code>paths.cpp</code>, <code>windowSurface.h</code></td></tr>
+  <tr><td><code>src/platform/</code></td><td>The window and its input (SDL3, or none when headless), paths, the Vulkan surface and loader hook</td><td><code>platform.h</code>, <code>sdlPlatform.cpp</code>, <code>headlessPlatform.cpp</code>, <code>paths.cpp</code>, <code>windowSurface.h</code></td></tr>
   <tr><td><code>src/assets/</code></td><td>mesh, texture and material loading, glTF and OBJ import, mesh LODs</td><td><code>mesh.cpp</code>, <code>meshImport.cpp</code>, <code>meshLod.cpp</code>, <code>texture.cpp</code>, <code>material.cpp</code></td></tr>
   <tr><td><code>src/scene/</code></td><td>scenes, entities, cameras, lights, transforms</td><td><code>scene.cpp</code>, <code>entity.cpp</code>, <code>camera.cpp</code></td></tr>
   <tr><td><code>src/renderer/</code></td><td>GPU scene tables, the scene passes, the tone-map pass, the graph behind <code>render</code>, frame stats, overlay, render graph, shader compiler, GPU structs</td><td><code>gpuScene.cpp</code>, <code>renderer.cpp</code>, <code>gpuTable.cpp</code>, <code>geometryPool.cpp</code>, <code>shaderCompiler.cpp</code></td></tr>

@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Vulkan Loader · RASM</title>
+<meta name="description" content="How a Vulkan call reaches the driver: the loader, layers and drivers, dispatchable handles and trampolines, linking against the loader or loading it at run time, the three levels of functions, a function table per device, and which version is whose.">
+<meta name="rasm-sources" content="src/rhi/vulkan/vulkanDevice.h src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.h src/rhi/vulkan/vulkanQueue.h src/rhi/vulkan/vulkanSwapchain.h src/rhi/vulkan/vulkanTypes.h src/platform/windowSurface.h src/platform/sdlPlatform.cpp src/CMakeLists.txt src/thirdparty_impl.cpp cmake/rasmConfig.cmake.in vcpkg.json .github/workflows/ci.yml">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/vulkan-loader.js"></script>
+</head>
+<body data-root="../" data-page="guides/vulkan-loader.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Foundations</p>
+<h1>The Vulkan loader</h1>
+<p class="lead">A program never calls the GPU driver by name. Each Vulkan call goes through a small library, the <b>loader</b>, which finds the driver, puts optional <b>layers</b> such as validation in between, and passes the call on. This page explains that path, the two ways a program can get the functions, and why the version of the loader and the version of the GPU are two different numbers. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>The <b>loader</b> (<samp>vulkan-1.dll</samp>, <samp>libvulkan</samp>) sits between the program and the <b>driver</b>. <b>Layers</b> can sit in between too.</li>
+    <li>A function the program gets from the loader is a <b>trampoline</b>: it reads which driver the handle belongs to, then jumps there. One extra jump per call.</li>
+    <li><b>Linked</b> against the loader, the program cannot start when the loader lacks one of its functions. <b>Loaded</b> at run time, the program starts, checks, and says what is wrong.</li>
+    <li>Functions come in three levels: <b>global</b>, <b>instance</b> and <b>device</b>. Device functions from <samp>vkGetDeviceProcAddr</samp> skip the trampoline, but they belong to one device: keep a <b>table per device</b>.</li>
+    <li>The loader's version limits instance-level features. Device commands need the <b>GPU's</b> version, and come from the driver. A 1.3 loader can run a 1.4 GPU.</li>
+  </ul>
+</div>
+
+<h2 id="path"><span class="n">1</span>From a call to the driver</h2>
+
+<p>Follow one draw call. It leaves the program, passes the loader and maybe some layers, and ends in the driver of the GPU that owns the command buffer.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Top row: the program calls vkCmdDraw. The call goes to the loader, then through optional layers, then to the driver. Bottom: a command buffer handle points to a dispatch table; the loader's trampoline reads that table and jumps to the entry for vkCmdDraw, which points into a layer or the driver.">
+    <rect x="20" y="40" width="130" height="80" rx="6" class="cpu"/>
+    <text x="85" y="72" class="mid title">your program</text>
+    <text x="85" y="94" class="mid small mono">vkCmdDraw(...)</text>
+    <line x1="150" y1="80" x2="196" y2="80" class="arrow" marker-end="url(#ah)"/>
+    <rect x="200" y="40" width="160" height="80" rx="6" class="box"/>
+    <text x="280" y="66" class="mid title">loader</text>
+    <text x="280" y="86" class="mid small mono">vulkan-1.dll</text>
+    <text x="280" y="104" class="mid small">libvulkan on macOS, Linux</text>
+    <line x1="360" y1="80" x2="406" y2="80" class="arrow" marker-end="url(#ah)"/>
+    <rect x="410" y="40" width="150" height="80" rx="6" class="zone"/>
+    <text x="485" y="72" class="mid title">layers</text>
+    <text x="485" y="94" class="mid small">validation, capture</text>
+    <text x="485" y="110" class="mid small t-faint">optional</text>
+    <line x1="560" y1="80" x2="606" y2="80" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="610" y="40" width="130" height="80" rx="6" class="gpu"/>
+    <text x="675" y="72" class="mid title">driver (ICD)</text>
+    <text x="675" y="94" class="mid small">talks to the GPU</text>
+
+    <rect x="20" y="180" width="200" height="70" rx="6" class="mem"/>
+    <text x="120" y="206" class="mid title">VkCommandBuffer</text>
+    <text x="120" y="226" class="mid small">first word: its dispatch table</text>
+    <line x1="220" y1="215" x2="276" y2="215" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="280" y="160" width="250" height="110" rx="6" class="paper"/>
+    <text x="405" y="182" class="mid small t-faint">the device's dispatch table</text>
+    <text x="296" y="206" class="small mono">vkCmdDraw      → layer or driver</text>
+    <text x="296" y="228" class="small mono">vkCmdDispatch  → layer or driver</text>
+    <text x="296" y="250" class="small mono">vkQueueSubmit2 → layer or driver</text>
+    <path d="M530,205 C620,205 660,170 668,126" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <path d="M280,130 C280,145 285,150 300,156" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+    <text x="300" y="146" class="small t-hot">trampoline reads it</text>
+  </svg>
+  <figcaption>Every <b>dispatchable</b> handle (instance, physical device, device, queue, command buffer) starts with a pointer to its dispatch table. The loader's function for <code>vkCmdDraw</code> is a <b>trampoline</b>: it reads that pointer and jumps to the table's entry. Handles of other kinds (buffers, images) are plain numbers.</figcaption>
+</figure>
+
+<p>The table belongs to one device, because each device can have another driver behind it: two GPUs from two vendors, or a GPU and a software rasterizer. The trampoline is what lets one function name serve them all.</p>
+
+<h2 id="linked-loaded"><span class="n">2</span>Linked or loaded</h2>
+
+<p>A program can get the loader's functions in two ways. The difference shows on a machine whose loader is older than the program expects.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="A program linked against the loader lists every Vulkan function in its import table. The operating system looks each one up in the loader. One is missing, so the program does not start.">
+      <rect x="10" y="12" width="130" height="110" rx="6" class="cpu"/>
+      <text x="75" y="32" class="mid small title">program.exe</text>
+      <text x="22" y="56" class="small mono">vkCreateInstance</text>
+      <text x="22" y="76" class="small mono">vkCmdDraw</text>
+      <text x="22" y="96" class="small mono t-bad">vkCopyMemory…</text>
+      <rect x="190" y="12" width="120" height="110" rx="6" class="box"/>
+      <text x="250" y="32" class="mid small title">loader 1.3</text>
+      <text x="250" y="60" class="mid small mono">vkCreateInstance</text>
+      <text x="250" y="80" class="mid small mono">vkCmdDraw</text>
+      <text x="250" y="104" class="mid small t-bad">no 1.4 names</text>
+      <line x1="140" y1="92" x2="186" y2="100" class="arrow bad dashed" marker-end="url(#ah-bad)"/>
+    </svg>
+    <h4>Linked: the OS checks first</h4>
+    <p>The import table names each function. One missing name, and the OS stops the program before <code>main</code>, with a system error. The program never gets to explain.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="A program that loads the loader at run time opens the library in main, reads its version, and asks for each function by name. It can stop with its own clear message.">
+      <rect x="10" y="12" width="130" height="110" rx="6" class="cpu"/>
+      <text x="75" y="32" class="mid small title">program.exe</text>
+      <text x="22" y="56" class="small">main():</text>
+      <text x="22" y="76" class="small">1 open the loader</text>
+      <text x="22" y="94" class="small">2 check its version</text>
+      <text x="22" y="112" class="small">3 ask for functions</text>
+      <rect x="190" y="12" width="120" height="110" rx="6" class="box"/>
+      <text x="250" y="32" class="mid small title">loader</text>
+      <text x="250" y="66" class="mid small mono">vkGetInstance-</text>
+      <text x="250" y="82" class="mid small mono">ProcAddr</text>
+      <line x1="140" y1="72" x2="186" y2="72" class="arrow ok" marker-end="url(#ah-ok)"/>
+    </svg>
+    <h4>Loaded: the program checks</h4>
+    <p>It opens the loader in <code>main</code>, asks for each function by name, and gets null for one that does not exist. It can say "update your driver", or work without that feature.</p>
+  </div>
+</div>
+
+<p>Loading also means the program starts on a machine with no Vulkan at all: tools and tests that never touch the GPU run anywhere. Libraries such as <b>volk</b> do the loading: one call opens the loader, and the functions are then plain function pointers with the usual names.</p>
+
+<h2 id="levels"><span class="n">3</span>Three levels of functions</h2>
+
+<p>Which function you can get, and from where, depends on what its first parameter is.</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Global functions need no handle. They come from the loader alone.">
+      <rect x="70" y="30" width="100" height="50" rx="6" class="box"/>
+      <text x="120" y="60" class="mid small">loader</text>
+      <text x="120" y="104" class="mid small mono">GetInstanceProcAddr(NULL)</text>
+    </svg>
+    <h4>Global</h4>
+    <p>No handle yet: <code>vkCreateInstance</code>, <code>vkEnumerateInstanceVersion</code>, the instance layers and extensions.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Instance functions take an instance or a physical device. They come from the instance and are loader trampolines.">
+      <rect x="20" y="30" width="90" height="50" rx="6" class="box"/>
+      <text x="65" y="60" class="mid small">instance</text>
+      <rect x="130" y="30" width="90" height="50" rx="6" class="gpu o-50"/>
+      <text x="175" y="52" class="mid small">physical</text>
+      <text x="175" y="68" class="mid small">device</text>
+      <text x="120" y="104" class="mid small mono">GetInstanceProcAddr(inst)</text>
+    </svg>
+    <h4>Instance</h4>
+    <p>The first parameter is an instance or a physical device: <code>vkEnumeratePhysicalDevices</code>, the properties and features of a GPU, surface queries. Trampolines.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Device functions take a device, a queue or a command buffer. From vkGetDeviceProcAddr they point into the first layer or the driver.">
+      <rect x="20" y="30" width="200" height="50" rx="6" class="gpu"/>
+      <text x="120" y="52" class="mid small">device, queue,</text>
+      <text x="120" y="68" class="mid small">command buffer</text>
+      <text x="120" y="104" class="mid small mono">GetDeviceProcAddr(dev)</text>
+    </svg>
+    <h4>Device</h4>
+    <p>Almost every call of a frame: <code>vkCmdDraw</code>, <code>vkQueueSubmit2</code>, <samp>vkCreateBuffer</samp>. From <samp>vkGetDeviceProcAddr</samp> they skip the trampoline.</p>
+  </div>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>You ask</th><th>For a device function you get</th><th>Valid for</th></tr>
+  <tr><td>the import library (linked)</td><td>the loader's trampoline</td><td>every device</td></tr>
+  <tr><td><code>vkGetInstanceProcAddr(instance, ...)</code></td><td>the loader's trampoline</td><td>every device of that instance</td></tr>
+  <tr><td><samp>vkGetDeviceProcAddr(device, ...)</samp></td><td>the first layer's function, or the driver's</td><td>that one device only</td></tr>
+</table>
+</div>
+
+<h2 id="tables"><span class="n">4</span>A table per device</h2>
+
+<p>A function from <samp>vkGetDeviceProcAddr</samp> saves a jump on every call, but it is tied to the device it came from. Where to keep it?</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two devices share one set of global trampolines. Each call takes an extra jump through the loader.">
+      <rect x="20" y="20" width="80" height="34" rx="5" class="box"/><text x="60" y="42" class="mid small">device A</text>
+      <rect x="20" y="76" width="80" height="34" rx="5" class="box"/><text x="60" y="98" class="mid small">device B</text>
+      <rect x="140" y="44" width="80" height="40" rx="5" class="hot o-50"/><text x="180" y="68" class="mid small">trampolines</text>
+      <line x1="100" y1="37" x2="136" y2="58" class="arrow" marker-end="url(#ah)"/>
+      <line x1="100" y1="93" x2="136" y2="72" class="arrow" marker-end="url(#ah)"/>
+    </svg>
+    <h4>Global trampolines</h4>
+    <p>Right for every device, one extra jump per call. What linking gives you.</p>
+    <p class="cost">correct, a little slower</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="One set of global pointers loaded from device A. Device B calls them too and reaches device A's functions.">
+      <rect x="20" y="20" width="80" height="34" rx="5" class="box"/><text x="60" y="42" class="mid small">device A</text>
+      <rect x="20" y="76" width="80" height="34" rx="5" class="box"/><text x="60" y="98" class="mid small">device B</text>
+      <rect x="140" y="44" width="80" height="40" rx="5" class="gpu o-50"/><text x="180" y="60" class="mid small">globals,</text><text x="180" y="76" class="mid small">from A</text>
+      <line x1="100" y1="37" x2="136" y2="58" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <line x1="100" y1="93" x2="136" y2="72" class="arrow bad" marker-end="url(#ah-bad)"/>
+    </svg>
+    <h4>Globals from one device</h4>
+    <p>Fast for device A. A second device calls A's functions, which may belong to another driver.</p>
+    <p class="cost">wrong with two devices</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Each device keeps its own table of function pointers, and its calls go through its own table straight to its driver.">
+      <rect x="20" y="20" width="80" height="34" rx="5" class="box"/><text x="60" y="42" class="mid small">device A</text>
+      <rect x="20" y="76" width="80" height="34" rx="5" class="box"/><text x="60" y="98" class="mid small">device B</text>
+      <rect x="140" y="20" width="80" height="34" rx="5" class="gpu o-50"/><text x="180" y="42" class="mid small">A's table</text>
+      <rect x="140" y="76" width="80" height="34" rx="5" class="gpu o-50"/><text x="180" y="98" class="mid small">B's table</text>
+      <line x1="100" y1="37" x2="136" y2="37" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <line x1="100" y1="93" x2="136" y2="93" class="arrow ok" marker-end="url(#ah-ok)"/>
+    </svg>
+    <h4>A table per device</h4>
+    <p>Each device object holds a struct of pointers and calls through it: <code class="lang-text">table.vkCmdDraw(cmd, ...)</code>.</p>
+    <p class="cost">correct and direct</p>
+  </div>
+</div>
+
+<p>How much does the jump cost? A few nanoseconds: a load, an indirect jump, and a cache line that is usually warm. A frame that records ten thousand commands pays tens of microseconds. A GPU-driven renderer records few commands per frame (one indirect draw draws thousands of objects), so there the saving is small. The table is worth having mostly for correctness with several devices.</p>
+
+<div class="callout rule">
+  <strong>Make the wrong call impossible</strong>
+  <p>With a table per device, also remove the global device functions from the build, so a call that skips the table does not compile. volk does this with <code class="lang-text">VOLK_NO_DEVICE_PROTOTYPES</code>; Vulkan's own header does it with <code class="lang-text">VK_NO_PROTOTYPES</code>.</p>
+</div>
+
+<h2 id="versions"><span class="n">5</span>Whose version?</h2>
+
+<p>"Vulkan 1.4" can mean two things. The <b>loader's version</b> (<code>vkEnumerateInstanceVersion</code>) says which instance-level features the instance has. The <b>GPU's version</b> (<code>VkPhysicalDeviceProperties::apiVersion</code>) says which device features and commands its driver has.</p>
+
+<div class="formula">
+  <p class="eq">instance features  ≤  min(loader version, apiVersion)</p>
+  <p class="eq">device features  ≤  min(GPU version, apiVersion)</p>
+  <dl>
+    <dt>apiVersion</dt><dd>the highest version the program asks for when it creates the instance</dd>
+    <dt>loader version</dt><dd>comes with the GPU driver installer, or with another program that put its own loader next to it</dd>
+    <dt>GPU version</dt><dd>what the driver of that one GPU supports; two GPUs in one machine can differ</dd>
+  </dl>
+</div>
+
+<p>Vulkan 1.4 added only device commands (host image copy, push descriptors, <samp>vkCmdBindIndexBuffer2</samp>, ...), and no new instance or physical-device commands. A device command from <samp>vkGetDeviceProcAddr</samp> comes from the driver, which knows it, even when the loader is older. So a program that loads its functions needs only the loader version of its <b>instance</b> features, and a 1.4 <b>GPU</b>. A linked program needs every name in the loader. Try both:</p>
+
+<figure class="lab" data-lab="vulkan-start" data-title="Will the program start?">
+  <figcaption>The program uses one 1.4 command, needs a 1.3 loader for its instance features, and needs a 1.4 GPU. Link it, and pick a 1.3 loader: it stops before <code>main</code>. Load it instead: it runs. Then pick a 1.3 GPU or a 1.2 loader and read what it says.</figcaption>
+</figure>
+
+<div class="callout warn">
+  <strong>A loader can arrive with another program</strong>
+  <p>Windows looks for a DLL in the program's own folder before the system folder. A browser, a game launcher or a tool may ship its own <samp>vulkan-1.dll</samp> next to its executable, and an old one there wins for that program. The system's loader comes with the GPU driver and is usually new.</p>
+</div>
+
+<h2 id="pitfalls"><span class="n">6</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>The program does not start, with a system error about an entry point</dt><dd>It is linked against the loader and uses a function this loader does not have. Load the functions at run time instead, and check the version yourself.</dd></div>
+  <div><dt>A link error for every <code>vk...</code> function</dt><dd>The header declared prototypes (no <code class="lang-text">VK_NO_PROTOTYPES</code>) and the code called them, but nothing links the loader. Call through the loaded pointers or the device table.</dd></div>
+  <div><dt>A function pointer is null</dt><dd>Its extension or version was not enabled when the instance or device was made, or the loader or driver does not have it. Enable it first, and check for null.</dd></div>
+  <div><dt>The window's surface belongs to another loader</dt><dd>A windowing library (SDL, GLFW) may open the loader itself. If the program opens another copy, by another name or path, the surface and the instance come from two libraries. Take the windowing library's <code>vkGetInstanceProcAddr</code>, or give it yours.</dd></div>
+  <div><dt>The loader is not found on macOS</dt><dd><samp>libvulkan.dylib</samp> lives in <samp>/usr/local/lib</samp> after the SDK's system install, and the dynamic linker may not search there for a plain name. Try that path too, or set <samp>DYLD_LIBRARY_PATH</samp>.</dd></div>
+  <div><dt>Calls are slow only with validation</dt><dd>With layers on, a device pointer leads to the first layer, which checks the call. That is expected; the table still skips the loader's trampoline.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">7</span>In RASM</h2>
+
+<p>Nothing in RASM links the loader. It is opened when the engine starts, by SDL with a window and by volk headless, and each <code>VulkanDevice</code> keeps its own table of device functions.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 330" role="img" aria-label="With a window, SdlPlatform loads the loader and hands its vkGetInstanceProcAddr to loadVulkan; headless, loadVulkan opens the loader with volkInitialize. loadVulkan checks the loader's version. volk's globals then hold the global and instance functions, which vk-bootstrap and VMA use. VulkanDevice loads its own VolkDeviceTable, vk, after it creates the device; VulkanCommandBuffer, VulkanQueue and VulkanSwapchain call through it, straight to the driver.">
+    <rect x="20" y="20" width="200" height="60" rx="6" class="cpu"/>
+    <text x="120" y="44" class="mid mono small">SdlPlatform::createWindow</text>
+    <text x="120" y="64" class="mid small">window: SDL opens the loader</text>
+    <rect x="20" y="100" width="200" height="50" rx="6" class="cpu o-50"/>
+    <text x="120" y="122" class="mid small">headless: no window</text>
+    <text x="120" y="140" class="mid small mono">volkInitialize()</text>
+    <line x1="220" y1="50" x2="266" y2="84" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="236" y="54" class="small t-cpu">getWindowVulkanLoader</text>
+    <line x1="220" y1="125" x2="266" y2="104" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="270" y="64" width="200" height="66" rx="6" class="box"/>
+    <text x="370" y="86" class="mid mono">loadVulkan</text>
+    <text x="370" y="104" class="mid small">no loader, or older than 1.3:</text>
+    <text x="370" y="120" class="mid small t-bad">a clear error, then stop</text>
+    <line x1="470" y1="97" x2="516" y2="97" class="arrow" marker-end="url(#ah)"/>
+    <rect x="520" y="54" width="220" height="86" rx="6" class="paper"/>
+    <text x="630" y="76" class="mid title">volk's globals</text>
+    <text x="630" y="96" class="mid small">global + instance functions</text>
+    <text x="630" y="112" class="mid small">(volkLoadInstanceOnly)</text>
+    <text x="630" y="130" class="mid small t-faint">used by vk-bootstrap and VMA</text>
+
+    <rect x="20" y="190" width="300" height="110" rx="6" class="gpu o-25"/>
+    <text x="170" y="212" class="mid title">VulkanDevice</text>
+    <text x="36" y="236" class="small mono">volkLoadDeviceTable(&amp;vk, ...)</text>
+    <text x="36" y="256" class="small">no 1.4 GPU: each GPU named with</text>
+    <text x="36" y="272" class="small">its version (logOldDevices)</text>
+    <text x="36" y="290" class="small">VMA: vmaImportVulkanFunctionsFromVolk</text>
+    <line x1="630" y1="140" x2="630" y2="186" class="arrow dashed" marker-end="url(#ah)"/>
+    <text x="640" y="168" class="small t-faint">instance level</text>
+    <line x1="320" y1="245" x2="366" y2="245" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="370" y="190" width="220" height="110" rx="6" class="box"/>
+    <text x="480" y="212" class="mid small">getVkTable(), a reference in</text>
+    <text x="480" y="236" class="mid small mono">VulkanCommandBuffer</text>
+    <text x="480" y="256" class="mid small mono">VulkanQueue</text>
+    <text x="480" y="276" class="mid small mono">VulkanSwapchain</text>
+    <line x1="590" y1="245" x2="636" y2="245" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="640" y="190" width="100" height="110" rx="6" class="gpu"/>
+    <text x="690" y="240" class="mid title">driver</text>
+    <text x="690" y="258" class="mid small">(or layer)</text>
+  </svg>
+  <figcaption>The loader comes from SDL when there is a window, so the surface and the instance come from one library; headless, volk finds it. Global and instance functions are volk's process-wide globals. Device functions live in each device's <code>VolkDeviceTable</code>.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>This page</th><th>RASM</th></tr>
+  <tr><td>Link or load</td><td>Load, with volk (vcpkg port <samp>volk</samp>). No executable imports <samp>vulkan-1.dll</samp> or <samp>libvulkan</samp>; CI checks every executable and DLL of the build with <samp>llvm-objdump</samp> and <samp>otool</samp>.</td></tr>
+  <tr><td>Which loader</td><td>With a window, SDL's (<code>getWindowVulkanLoader</code>; <code>SdlPlatform::createWindow</code> opens it before the window, and on macOS tries <samp>/usr/local/lib/libvulkan.dylib</samp> too). Headless, <code>volkInitialize</code>.</td></tr>
+  <tr><td>Versions</td><td>The loader must be 1.3 or newer and the GPU 1.4. Each check logs the version it found. A 1.3 loader runs RASM, as the image tests show on CI's runner.</td></tr>
+  <tr><td>Global and instance functions</td><td>volk's globals, one set per process, loaded with <code>volkLoadInstanceOnly</code>. They are trampolines, so a second instance does not break them.</td></tr>
+  <tr><td>A table per device</td><td><code>VulkanDevice::vk</code>, a <code>VolkDeviceTable</code>. <code class="lang-text">VOLK_NO_DEVICE_PROTOTYPES</code> leaves no global device function, so a call outside the table does not compile. <code>vkSetDebugUtilsObjectNameEXT</code> belongs to an instance extension and stays global.</td></tr>
+  <tr><td>Other libraries</td><td>vk-bootstrap gets volk's <code>vkGetInstanceProcAddr</code>; VMA gets its pointers from <code>vmaImportVulkanFunctionsFromVolk</code>. The Vulkan headers come from vcpkg at volk's version, so all of them see one header.</td></tr>
+  <tr><td>Programs with no GPU</td><td><code>rasm_tests</code> never creates a device, so it starts with no Vulkan on the machine (the macOS CI job installs none).</td></tr>
+</table>
+</div>
+
+<p>In <code>examples/05_city</code> (headless, Release, RTX 3060), the CPU time to record a frame's commands (the self time of <code>RenderGraph::execute</code>) went down a little when the device calls left the trampoline, within the run-to-run noise of 5 to 8%:</p>
+
+<div class="stats">
+  <div><b>0.204 ms</b><span>recording, through the trampoline</span><small>mean of two 9.5 s captures: 0.208 and 0.199</small></div>
+  <div><b>0.194 ms</b><span>recording, through the device table</span><small>mean of two captures: 0.195 and 0.193</small></div>
+  <div><b>1.32 ms</b><span>frame time, both ways</span><small>the frame is bound by the GPU wait, not by the calls</small></div>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Open the loader, check versions</td><td><code>loadVulkan</code>, <code>logOldDevices</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
+  <tr><td>The device table, VMA</td><td><code>VulkanDevice::initialize</code> in the same file</td></tr>
+  <tr><td>Calls through the table</td><td><code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code>, <code>src/rhi/vulkan/vulkanQueue.cpp</code>, <code>src/rhi/vulkan/vulkanSwapchain.cpp</code></td></tr>
+  <tr><td>SDL's loader</td><td><code>getWindowVulkanLoader</code> in <code>src/platform/sdlPlatform.cpp</code></td></tr>
+  <tr><td>Build</td><td><code>src/CMakeLists.txt</code>, <code>vcpkg.json</code>, <code>cmake/rasmConfig.cmake.in</code></td></tr>
+  <tr><td>CI check</td><td><samp>.github/workflows/ci.yml</samp></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Rules to keep</strong>
+  <p>Call device functions through the device's table (<code>vk.vkCmdDraw</code>, <code>getVkTable()</code>), never through a global. Do not add <code>Vulkan::Vulkan</code> or any other loader link; CI fails on it. A library that calls Vulkan itself gets volk's pointers, not its own loader.</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Khronos, "Architecture of the Vulkan Loader Interfaces" (LoaderInterfaceArchitecture.md in the Vulkan-Loader repository).</li>
+  <li>volk, "Meta loader for Vulkan API" (its README: tables, <code class="lang-text">VOLK_NO_DEVICE_PROTOTYPES</code>).</li>
+  <li><a href="graphics-apis-rhi.html">Graphics APIs and the RHI</a>, <a href="headless-readback.html">Headless rendering and readback</a>, <a href="image-tests.html">Image tests</a>.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

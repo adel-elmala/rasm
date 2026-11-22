@@ -40,6 +40,7 @@ namespace rasm::rhi
         void                        releasePendingSemaphores();
 
         VulkanDevice&               device;
+        const VolkDeviceTable&      vk;
         vkb::Swapchain              swapchain                                   = {};
         std::vector<VulkanTexture>  images                                      = {};
         std::vector<VkSemaphore>    presentSemaphores                           = {};

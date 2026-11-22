@@ -3,7 +3,7 @@
 
 #include "rhi/device.h"
 
-#include "vulkan/vulkan.h"
+#include "volk.h"
 
 #include <string>
 
@@ -44,6 +44,7 @@ namespace rasm::rhi
 
     private:
         VulkanDevice&               device;
+        const VolkDeviceTable&      vk;
         VkCommandPool               pool                    = VK_NULL_HANDLE;
         VkCommandBuffer             commandBuffer           = VK_NULL_HANDLE;
         bool                        computeQueue            = false;

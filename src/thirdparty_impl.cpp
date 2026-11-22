@@ -18,6 +18,9 @@
 #define TINYOBJLOADER_IMPLEMENTATION
 #include "tiny_obj_loader.h"
 
+// Before VMA: vk_mem_alloc.h declares vmaImportVulkanFunctionsFromVolk only after volk.h.
+#include "volk.h"
+
 // VMA_VULKAN_VERSION is deliberately left to VMA's default (derived from the Vulkan headers) so it
 // matches every other translation unit that includes vk_mem_alloc.h.
 #define VMA_IMPLEMENTATION
