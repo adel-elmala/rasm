@@ -810,10 +810,14 @@ namespace rasm
     {
         // The returned desc only points at these, so they must outlive this function. Slang counts any texture gather
         // (shadow.slang) as spvImageGatherExtended and warns when the profile lacks it; plain gathers emit no such
-        // SPIR-V capability, so naming it changes no code.
+        // SPIR-V capability, so naming it changes no code. With spvDemoteToHelperInvocation, discard becomes
+        // OpDemoteToHelperInvocation instead of OpKill: the lane stays in its 2x2 quad as a helper, so the derivatives
+        // of the samples after a cut-out's discard stay defined (B33).
         static slang::CompilerOptionEntry spirvOptions[] = {{slang::CompilerOptionName::EmitSpirvDirectly, {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}},
+                                                            {slang::CompilerOptionName::Capability, {slang::CompilerOptionValueKind::Int, 0, 0, nullptr, nullptr}},
                                                             {slang::CompilerOptionName::Capability, {slang::CompilerOptionValueKind::Int, 0, 0, nullptr, nullptr}}};
         spirvOptions[1].value.intValue0 = globalSession->findCapability("spvImageGatherExtended");
+        spirvOptions[2].value.intValue0 = globalSession->findCapability("spvDemoteToHelperInvocation");
 
         slang::TargetDesc targetDesc = {};
 
@@ -822,7 +826,7 @@ namespace rasm
         case Target::SPIRV:
             targetDesc.format = SLANG_SPIRV;
             targetDesc.profile = globalSession->findProfile("spirv_1_4");
-            targetDesc.compilerOptionEntryCount = 2;
+            targetDesc.compilerOptionEntryCount = 3;
             targetDesc.compilerOptionEntries = spirvOptions;
             break;
         case Target::MSL:

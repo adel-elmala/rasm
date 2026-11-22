@@ -134,6 +134,7 @@ Deliberate exceptions:
 - One responsibility per module: data layout (`core.slang`), BRDF terms (`brdf.slang`), lighting (`pbr.slang`), image-based lighting (`environment.slang`), unlit shading (`unlit.slang`), pass or entry shaders (`rasm.slang`).
 - Shaders output **linear** color. sRGB encoding is done by the attachment format.
 - Texture access checks `hasTexture(index)` before sampling, and glTF default values apply when a texture is absent.
+- `discard` demotes the lane to a helper (`OpDemoteToHelperInvocation`): the Slang session adds the `spvDemoteToHelperInvocation` capability, so every `discard` compiles to it. A demoted lane stays in its 2x2 quad, so samples and derivatives after a cut-out's `discard` keep defined values; after `OpKill` they would not (`B33`). Never write a `discard` that must end the invocation (a terminate) in a shader that samples or takes derivatives after it.
 - Keep backend-specific code (`spirv_asm`, `vk::` attributes, raw pointers) behind small helper functions in one module, so that other targets can provide alternatives (`D12`).
 
 ## 10. Commits
