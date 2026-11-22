@@ -169,14 +169,19 @@ jobs:
           python tools/image_tests.py --lavapipe --fetch-only
           cdb="/c/Program Files (x86)/Windows Kits/10/Debuggers/x64/cdb.exe"
           echo "PROBE cdb: $(test -f "$cdb" && echo yes || echo no)"
-          for t in $(build/x64-release/tests/rasm_image_tests.exe --list); do
+          for t in $(build/x64-release/tests/rasm_image_tests.exe --list | tr -d '\r'); do
             s=$(date +%s); rc=0
             build/x64-release/tests/rasm_image_tests.exe --update --golden-dir probe/g1 --scenes $t > probe/$t.log 2>&1 || rc=$?
-            echo "PROBE scene $t rc=$rc seconds=$(( $(date +%s) - s )) $(grep -E "^$t " probe/$t.log || true)"
+            echo "PROBE scene $t rc=$rc seconds=$(( $(date +%s) - s )) $(grep -E "^$t " probe/$t.log | tr -d '\r' || true)"
           done
           if [ -f "$cdb" ]; then
-            "$cdb" -g -G -lines -y "build/x64-debug/tests;build/x64-debug/src" -c ".lines -e; .ecxr; kn 60; !teb; q" build/x64-debug/tests/rasm_image_tests.exe --update --golden-dir probe/dbg --scenes alpha_modes > probe/cdb.log 2>&1 || true
-            grep -vE "\] \[info\]|^\s+(name|driver version):" probe/cdb.log | tail -n 120
+            curl -sSfL -o dbg.7z https://github.com/pal1000/mesa-dist-win/releases/download/26.3.0/mesa3d-26.3.0-debug-info-msvc.7z
+            echo "2f491276af43f69c22608af4ecce844fbc5c37ca5cb7c5dd520e92839adad756  dbg.7z" | sha256sum -c -
+            7z x -y -odbg dbg.7z > /dev/null
+            pdb=$(dirname "$(find dbg -iname 'vulkan_lvp.pdb' | head -n 1)")
+            echo "PROBE pdb dir: $pdb"
+            "$cdb" -g -G -lines -y "build/x64-debug/tests;build/x64-debug/src;$(cygpath -w "$pdb")" -c ".exr -1; r; u @rip-0x30 L24; ~*kn 40; q" build/x64-debug/tests/rasm_image_tests.exe --update --golden-dir probe/dbg --scenes alpha_modes > probe/cdb.log 2>&1 || true
+            grep -vE "\] \[info\]|^\s+(name|driver version):|NatVis|ModLoad" probe/cdb.log | tail -n 400
           fi
 
       - name: Upload the probe images
