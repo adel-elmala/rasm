@@ -73,6 +73,8 @@ namespace rasm
 
         // The handle is taken once the geometry is in the pool, so a mesh that does not fit uses no index.
         Mesh mesh{.state = MeshState::READY, .subMeshes = {SubMesh{.transform = glm::mat4(1.0f)}}};
+        if (!geometryPool->check(raw))
+            return {};
         if (!geometryPool->allocate(raw, mesh.subMeshes[0].geometry))
         {
             geometryPool->logFull(1);
@@ -133,7 +135,9 @@ namespace rasm
             registry.meshPaths.resize(registry.meshHandles.size());
             registry.meshPaths[handle.index] = path;
         }
-        registry.meshes[handle.index] = Mesh{};
+        // A retry keeps the count of the entities that already use the mesh.
+        const uint32_t users = registry.meshes[handle.index].users;
+        registry.meshes[handle.index] = Mesh{.users = users};
 
         // The worker reads and decodes the file and builds the LODs; beginFrame uploads the result (finishLoads).
         const bool lods = config.meshLods;
@@ -180,6 +184,14 @@ namespace rasm
         // Every sub-mesh's ranges are taken before anything is created, so a mesh that does not fit takes nothing.
         const size_t subMeshCount = raw.subGltfRaws.size();
         std::vector<MeshGeometry> geometries(subMeshCount);
+        for (const SubGLTFRaw &sub : raw.subGltfRaws)
+        {
+            if (!geometryPool->check(sub.objRaw))
+            {
+                spdlog::error("Failed to upload mesh: {}", load.path);
+                return;
+            }
+        }
         for (size_t i = 0; i < subMeshCount; ++i)
         {
             if (!geometryPool->allocate(raw.subGltfRaws[i].objRaw, geometries[i]))

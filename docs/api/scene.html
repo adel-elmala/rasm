@@ -534,8 +534,11 @@ constexpr uint32_t MAX_MORPH_TARGETS = 256;</pre>
     std::vector&lt;SubMesh&gt;       subMeshes;
     std::vector&lt;AnimationClip&gt; animations;
     std::vector&lt;std::string&gt;   morphTargetNames;
+    std::vector&lt;MaterialHandle&gt; ownedMaterials;
+    std::vector&lt;TextureHandle&gt;  ownedTextures;
+    uint32_t                   users = 0;
 };</pre>
-  <div class="body"><p>A mesh: its load state, its sub-meshes, its clips (<a href="#getAnimations"><code>getAnimations</code></a>) and the name of each morph weight of its entities (<a href="#getMorphTargetNames"><code>getMorphTargetNames</code></a>).</p></div>
+  <div class="body"><p>A mesh: its load state, its sub-meshes, its clips (<a href="#getAnimations"><code>getAnimations</code></a>) and the name of each morph weight of its entities (<a href="#getMorphTargetNames"><code>getMorphTargetNames</code></a>). <code>ownedMaterials</code> and <code>ownedTextures</code> are what its glTF import made, which <a href="#destroyMesh"><code>destroyMesh</code></a> destroys with it; <code>users</code> counts the entities made with it, so destroying a mesh no entity uses searches nothing.</p></div>
 </div>
 
 <div class="api" id="MeshState">
@@ -561,9 +564,10 @@ constexpr uint32_t MAX_MORPH_TARGETS = 256;</pre>
     uint32_t  geometryIndex    = 0;
     glm::vec3 boundsCenter     = glm::vec3(0.0f);
     float     boundsRadius     = 0.0f;
+    bool      allocated        = false;
 };</pre>
   <div class="body">
-    <p>Where a sub-mesh sits in the geometry pool, its row in the geometry table (<code>geometryIndex</code>), and its bounding sphere in mesh space, which frustum and occlusion culling test.</p>
+    <p>Where a sub-mesh sits in the geometry pool, its row in the geometry table (<code>geometryIndex</code>), and its bounding sphere in mesh space, which frustum and occlusion culling test. <code>allocated</code> is true while it holds ranges of the pool, which <a href="#destroyMesh"><code>destroyMesh</code></a> gives back.</p>
     <dl>
       <dt>firstIndex, indexCount</dt><dd>LOD 0, the full detail.</dd>
       <dt>lodIndexCount</dt><dd>The indices of LOD 1 and coarser, together. They come right after LOD 0's in the pool.</dd>

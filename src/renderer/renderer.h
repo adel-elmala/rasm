@@ -27,6 +27,7 @@ namespace rasm
         void                        render(const RenderView& view);
         // Lets go of its graph when it draws this scene or camera, so they can be destroyed.
         void                        release(SceneHandle scene, CameraHandle camera);
+        bool                        draws(SceneHandle scene, CameraHandle camera) const;     // its graph holds the views of this scene and camera
 
     private:
         Engine&                     engine;

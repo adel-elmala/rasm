@@ -71,6 +71,11 @@ namespace rasm
         graph.execute(view.camera);
     }
 
+    bool Renderer::draws(SceneHandle scene, CameraHandle camera) const
+    {
+        return built && graphView.scene == scene && graphView.camera == camera;
+    }
+
     void Renderer::release(SceneHandle scene, CameraHandle camera)
     {
         if (!built || !(graphView.scene == scene || graphView.camera == camera))

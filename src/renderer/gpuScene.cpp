@@ -634,6 +634,23 @@ namespace rasm
         }
     }
 
+    // Removing an entity only clears its scene bit, so the list is compacted where it is walked anyway: an entry stays
+    // while its entity lives and is in the scene, once (removed and added again, it may be there twice).
+    void Engine::compactSceneEntities(SceneHandle scene)
+    {
+        const auto bit = static_cast<uint16_t>(1u << scene.index);
+        const uint32_t stamp = ++gpuScene->rebuildStamp;
+        std::erase_if(registry.scenes[scene.index].entities, [this, bit, stamp](const EntityHandle &entity)
+                      {
+                          if (!isLive(entity) || entity.index >= gpuScene->entities.size())
+                              return true;
+                          EntityDrawState &state = gpuScene->entities[entity.index];
+                          if ((state.scenes & bit) == 0 || state.listStamp == stamp)
+                              return true;
+                          state.listStamp = stamp;
+                          return false; });
+    }
+
     void Engine::rebuildDrawList(SceneHandle scene)
     {
         ZoneScoped;
@@ -644,22 +661,8 @@ namespace rasm
         drawList.runs.clear();
         drawList.triangleCount = 0;
 
-        // Removing an entity only clears its scene bit, so the list is compacted here, where it is walked anyway: an
-        // entry stays while its entity lives and is in the scene, once (removed and added again, it may be there twice).
-        const auto bit = static_cast<uint16_t>(1u << scene.index);
-        const uint32_t stamp = ++gpuScene->rebuildStamp;
-        std::vector<EntityHandle> &entities = registry.scenes[scene.index].entities;
-        std::erase_if(entities, [this, bit, stamp](const EntityHandle &entity)
-                      {
-                          if (!isLive(entity) || entity.index >= gpuScene->entities.size())
-                              return true;
-                          EntityDrawState &state = gpuScene->entities[entity.index];
-                          if ((state.scenes & bit) == 0 || state.listStamp == stamp)
-                              return true;
-                          state.listStamp = stamp;
-                          return false; });
-
-        for (auto entity : entities)
+        compactSceneEntities(scene);
+        for (auto entity : registry.scenes[scene.index].entities)
         {
             const EntityDrawState &state = gpuScene->entities[entity.index];
             if (state.instanceCount == 0 || state.waitingForTextures)

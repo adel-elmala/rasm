@@ -43,6 +43,9 @@ namespace rasm
 
         auto &sceneRef = registry.scenes[scene.index];
 
+        // Destroyed and removed entities stay in the list until it is compacted, so a full list is compacted first.
+        if (sceneRef.entities.size() >= MAX_ENTITIES_PER_SCENE)
+            compactSceneEntities(scene);
         if (sceneRef.entities.size() >= MAX_ENTITIES_PER_SCENE)
         {
             spdlog::warn("Exceeded maximum entities per scene.");
@@ -95,19 +98,18 @@ namespace rasm
         gpuLights->lists[scene.index].rebuild = true;
     }
 
-    // True when a render graph holds a view of the scene or camera, which would draw it after it is gone: the caller
-    // refuses then. Engine::render's own graph lets go first.
-    bool Engine::viewHolds(SceneHandle scene, CameraHandle camera, const char *caller)
+    // True when a render graph other than Engine::render's holds a view of the scene or camera, which would draw it after
+    // it is gone: the caller refuses then. Engine::render's graph holds one count of each view of its scene and camera.
+    bool Engine::viewHolds(SceneHandle scene, CameraHandle camera, const char *caller) const
     {
-        if (renderer)
-            renderer->release(scene, camera);
         for (uint32_t i = 0; i < MAX_SCENE_VIEWS; ++i)
         {
             const SceneView &view = gpuScene->views[i];
-            if (view.graphs == 0 || !((scene.isValid() && view.scene == scene) || (camera.isValid() && view.camera == camera)))
+            const uint32_t own = renderer && renderer->draws(view.scene, view.camera) ? 1 : 0;
+            if (view.graphs <= own || !((scene.isValid() && view.scene == scene) || (camera.isValid() && view.camera == camera)))
                 continue;
-            spdlog::error("{}: {} graph(s) draw view {} (scene {}, camera {}) with it. Destroy those render graphs first, or let them go out of scope.", caller,
-                          view.graphs, i, view.scene.index, view.camera.index);
+            spdlog::error("{}: {} render graph(s) draw view {} (scene {}, camera {}) with it. Destroy those graphs first, or let them go out of scope.", caller,
+                          view.graphs - own, i, view.scene.index, view.camera.index);
             return true;
         }
         return false;
@@ -122,6 +124,8 @@ namespace rasm
         }
         if (viewHolds(scene, {}, "destroyScene"))
             return;
+        if (renderer)
+            renderer->release(scene, {});
 
         // Its index goes to the next scene, so no entity or light may keep its bit.
         const auto bit = static_cast<uint16_t>(1u << scene.index);

@@ -29,6 +29,7 @@ namespace rasm
     {
     public:
         bool                    create(RenderContext& ctx, const EngineConfig& config);
+        bool                    check(const ObjRaw& raw) const;
         bool                    allocate(const ObjRaw& raw, MeshGeometry& geometry);
         bool                    write(RenderContext& ctx, const ObjRaw& raw, const MeshGeometry& geometry);
         void                    free(const MeshGeometry& geometry);

@@ -375,6 +375,7 @@ namespace rasm
         bool                        addEntityToDrawList(SceneHandle scene, EntityHandle entity);
         void                        markDrawListsDirty(EntityHandle entity);
         void                        rebuildDrawList(SceneHandle scene);
+        void                        compactSceneEntities(SceneHandle scene);
         void                        uploadDrawList(SceneDrawList& drawList);
         bool                        createGpuLights();
         void                        writeLightRow(LightHandle light);
@@ -446,7 +447,7 @@ namespace rasm
         void                        releaseEntityAnimation(EntityHandle entity);
         void                        releaseMeshAnimation(MeshHandle mesh);
         void                        detachMaterial(MaterialHandle material);
-        bool                        viewHolds(SceneHandle scene, CameraHandle camera, const char* caller);
+        bool                        viewHolds(SceneHandle scene, CameraHandle camera, const char* caller) const;
 
         // Each object vector is indexed by handle index and holds a slot for every index its pool handed out.
         struct Registry

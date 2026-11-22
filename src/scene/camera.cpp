@@ -1,5 +1,6 @@
 #include "rasm/camera.h"
 #include "rasm/engine.h"
+#include "renderer/renderer.h"
 
 #include "spdlog/spdlog.h"
 
@@ -279,6 +280,8 @@ namespace rasm
         }
         if (viewHolds({}, camera, "destroyCamera"))
             return;
+        if (renderer)
+            renderer->release({}, camera);
         for (Scene &scene : registry.scenes)
             std::erase(scene.cameras, camera);
         registry.cameras[camera.index] = {};

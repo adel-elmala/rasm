@@ -79,14 +79,9 @@ namespace rasm
         return true;
     }
 
-    // Takes a range of each stream the sub-mesh uses and a row of the table: all of them or none, so a mesh that does not
-    // fit takes nothing. A range is free when no frame uses it: Engine::destroyMesh frees them after the GPU is done.
-    bool GeometryPool::allocate(const ObjRaw &raw, MeshGeometry &geometry)
+    // The streams of a sub-mesh that does not add up are refused before any range is taken.
+    bool GeometryPool::check(const ObjRaw &raw) const
     {
-        const size_t lodCount = std::min<size_t>(raw.lods.size() + 1, MAX_MESH_LODS);
-        size_t lodIndexCount = 0;
-        for (size_t i = 1; i < lodCount; ++i)
-            lodIndexCount += raw.lods[i - 1].indices.size();
         if (!raw.colors.empty() && raw.colors.size() != raw.vertices.size())
         {
             spdlog::error("A sub-mesh has {} colors for {} vertices.", raw.colors.size(), raw.vertices.size());
@@ -102,7 +97,18 @@ namespace rasm
             spdlog::error("A sub-mesh has {} morph deltas for {} targets of {} vertices.", raw.morphs.size(), raw.morphTargetCount, raw.vertices.size());
             return false;
         }
+        return true;
+    }
 
+    // Takes a range of each stream the sub-mesh uses and a row of the table: all of them or none, so a mesh that does not
+    // fit takes nothing. Returns false only when a stream has no free range that large. A range is free when no frame uses
+    // it: Engine::destroyMesh frees them after the GPU is done.
+    bool GeometryPool::allocate(const ObjRaw &raw, MeshGeometry &geometry)
+    {
+        const size_t lodCount = std::min<size_t>(raw.lods.size() + 1, MAX_MESH_LODS);
+        size_t lodIndexCount = 0;
+        for (size_t i = 1; i < lodCount; ++i)
+            lodIndexCount += raw.lods[i - 1].indices.size();
         geometry = {.vertexCount = static_cast<uint32_t>(raw.vertices.size()),
                     .indexCount = static_cast<uint32_t>(raw.indices.size()),
                     .lodIndexCount = static_cast<uint32_t>(lodIndexCount),
