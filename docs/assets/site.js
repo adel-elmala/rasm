@@ -25,6 +25,7 @@ const SECTIONS = [
         blurb: "Ideas every explicit-API renderer is built on.",
         pages: [
             { path: "guides/graphics-apis-rhi.html",     title: "Graphics APIs and the RHI",           blurb: "What Vulkan, D3D12, Metal and WebGPU share, and the layer on top." },
+            { path: "guides/vulkan-loader.html",         title: "The Vulkan loader",                   blurb: "How a call reaches the driver, and why RASM loads Vulkan at run time." },
             { path: "guides/frames-in-flight.html",      title: "Frames in flight",                    blurb: "The CPU and the GPU work on different frames at once." },
             { path: "guides/swapchain.html",             title: "The swapchain and presenting",        blurb: "The ring of images that reaches the screen." },
             { path: "guides/headless-readback.html",     title: "Headless rendering and readback",     blurb: "Render with no window, and copy the pixels back to the CPU without a stall." },

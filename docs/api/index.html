@@ -134,7 +134,7 @@
 <h2 id="build"><span class="n">2</span>Build RASM and link it</h2>
 
 <ol class="steps">
-  <li><b>Install the tools.</b> CMake 3.23 or newer, Ninja, Clang, the Vulkan SDK (1.4) and vcpkg, with the VCPKG_ROOT environment variable set to it. The step-by-step setup is in <code>docs/build_guide.md</code>.</li>
+  <li><b>Install the tools.</b> CMake 3.23 or newer, Ninja, Clang and vcpkg, with the VCPKG_ROOT environment variable set to it. The Vulkan SDK (1.4) gives the validation layer and the tools; the build does not need it. To run, the machine needs a GPU driver with Vulkan 1.4: RASM loads the Vulkan loader when the engine starts (<a href="../guides/vulkan-loader.html">The Vulkan loader</a>). The step-by-step setup is in <code>docs/build_guide.md</code>.</li>
   <li><b>Build and install RASM.</b> The presets use Ninja and <code>clang++</code>, and vcpkg builds the dependencies. <code>cmake --install</code> copies the library, the public headers and the shaders to <code>install/</code> in the repo. Debug and Release share that folder, so install both if your project builds both.
 <pre><code>cmake --preset x64-debug            # macOS: --preset macOS
 cmake --build --preset x64-debug
@@ -152,7 +152,7 @@ target_link_libraries(my_app PRIVATE rasm::rasm)   # adds C++20, glm
 # Shaders are compiled at runtime: copy them next to the executable.
 add_custom_command(TARGET my_app POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${rasm_SHADER_DIR}" "$&lt;TARGET_FILE_DIR:my_app&gt;/shaders")</code></pre></li>
-  <li><b>Give your project RASM's dependencies.</b> RASM is static, so your executable links its dependencies too. <code>find_package(rasm)</code> looks for them. With vcpkg, add to your manifest: <code>vk-bootstrap</code>, <code>vulkan-memory-allocator</code>, <code>glm</code>, <code>sdl3[vulkan]</code>, <code>tracy[on-demand]</code>, <code>spdlog</code>, <code>tinyobjloader</code>, <code>meshoptimizer</code> and <code>shader-slang</code>, and <code>imgui[sdl3-binding]</code> when RASM was built with <code>RASM_IMGUI</code> (the default). The Vulkan SDK provides Vulkan.</li>
+  <li><b>Give your project RASM's dependencies.</b> RASM is static, so your executable links its dependencies too. <code>find_package(rasm)</code> looks for them. With vcpkg, add to your manifest: <code>volk</code>, <code>vulkan-headers</code>, <code>vk-bootstrap</code>, <code>vulkan-memory-allocator</code>, <code>glm</code>, <code>sdl3[vulkan]</code>, <code>tracy[on-demand]</code>, <code>spdlog</code>, <code>tinyobjloader</code>, <code>meshoptimizer</code>, <code>shader-slang</code> and <code>ktx</code>, and <code>imgui[sdl3-binding]</code> when RASM was built with <code>RASM_IMGUI</code> (the default). Nothing links the Vulkan loader, so your executable runs on a machine without Vulkan until it creates an <code>Engine</code>, which then logs a clear error.</li>
 </ol>
 
 <div class="callout">

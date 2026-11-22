@@ -629,7 +629,7 @@
     <rect x="20" y="328" width="200" height="74" rx="6" class="box"/>
     <text x="120" y="350" class="mid mono">VulkanDevice ...</text>
     <text x="120" y="368" class="mid small">src/rhi/vulkan/</text>
-    <text x="120" y="386" class="mid small">Vulkan 1.4, VMA, vk-bootstrap</text>
+    <text x="120" y="386" class="mid small">volk, VMA, vk-bootstrap</text>
     <rect x="250" y="328" width="150" height="74" rx="6" class="ghost"/>
     <text x="325" y="361" class="mid mono t-faint">DX12</text>
     <text x="325" y="379" class="mid small t-faint">logs, returns null</text>
@@ -640,7 +640,7 @@
     <text x="665" y="361" class="mid mono t-faint">WEBGPU</text>
     <text x="665" y="379" class="mid small t-faint">logs, returns null</text>
   </svg>
-  <figcaption><code>EngineConfig::preferredBackend</code> picks the backend when the engine starts. Vulkan headers stay in the Vulkan files, with four exceptions: <code>src/rhi/device.cpp</code>, the surface hook (<code>src/platform/windowSurface.h</code>, made in <code>src/platform/sdlPlatform.cpp</code>), the KTX2 format constants in <code>src/assets/ktxImage.cpp</code>, and <code>src/thirdparty_impl.cpp</code>.</figcaption>
+  <figcaption><code>EngineConfig::preferredBackend</code> picks the backend when the engine starts. Vulkan headers stay in the Vulkan files, with four exceptions: <code>src/rhi/device.cpp</code>, the surface and loader hook (<code>src/platform/windowSurface.h</code>, made in <code>src/platform/sdlPlatform.cpp</code>), the KTX2 format constants in <code>src/assets/ktxImage.cpp</code>, and <code>src/thirdparty_impl.cpp</code>.</figcaption>
 </figure>
 
 <p>Here is one buffer, from creation to use. The handle lives above the line; the native buffer lives below it.</p>
@@ -699,7 +699,7 @@
   <tr><td>Swapchain sync</td><td>semaphores in the interface</td><td>None cross it. <code>VulkanSwapchain</code> owns its semaphores, and a <code>SubmitDesc</code> just names the swapchain: <code>acquireSwapchain</code> to wait for the image, <code>presentSwapchain</code> to present it. See <a href="swapchain.html#in-rasm">the swapchain</a>.</td></tr>
   <tr><td>Queues</td><td>graphics, compute, transfer</td><td>Graphics, and compute when asked. <code>QueueType</code> has <code>GRAPHICS</code> and <code>COMPUTE</code>. With <code>EngineConfig::asyncCompute</code>, <code>VulkanDevice</code> takes a compute queue from a family without graphics, and <code>hasAsyncCompute</code> says whether it found one. Without one, compute command buffers and submits use the graphics queue. With one, every buffer and image is shared by both families, so no ownership moves. No transfer queue (<b>D13</b>). See <a href="async-compute.html">async compute</a>.</td></tr>
   <tr><td>Shaders</td><td>one language, cross-compiled</td><td>Slang, compiled at runtime. <code>getShaderCompilerTarget</code> in <code>src/engine.cpp</code> maps each backend to SPIR-V, HLSL, MSL or WGSL. But the shaders use device addresses and <code>spirv_asm</code>, so only SPIR-V works today (<b>D12</b>).</td></tr>
-  <tr><td>Window</td><td>one hook per API</td><td>The window and its input are behind a private <code>Platform</code> interface (<code>src/platform/platform.h</code>), SDL or headless (<code>EngineConfig::platform</code>). The SDL one's surface hook, <code>createWindowSurface</code>, takes a <code>VkInstance</code>, so it is Vulkan-only (<b>D7</b>). A headless engine has no surface: <code>RenderContext</code> renders into an <code>OffscreenSwapchain</code>, a <code>Swapchain</code> made of plain <code>Device</code> textures, so every backend gets it for free (<a href="headless-readback.html">headless rendering</a>).</td></tr>
+  <tr><td>Window</td><td>one hook per API</td><td>The window and its input are behind a private <code>Platform</code> interface (<code>src/platform/platform.h</code>), SDL or headless (<code>EngineConfig::platform</code>). The SDL one's surface hook, <code>createWindowSurface</code>, takes a <code>VkInstance</code>, and <code>getWindowVulkanLoader</code> hands the device the Vulkan loader SDL loaded for the window, so both are Vulkan-only (<b>D7</b>). A headless engine has no surface: <code>RenderContext</code> renders into an <code>OffscreenSwapchain</code>, a <code>Swapchain</code> made of plain <code>Device</code> textures, so every backend gets it for free (<a href="headless-readback.html">headless rendering</a>).</td></tr>
   <tr><td>Checks</td><td>one place for the rules</td><td><code>RenderContext</code> checks public API misuse with <code>checkArgument</code>: an error log, an assert in debug builds, and the call does nothing. For example, no draw outside a rendering scope and no barrier or dispatch inside one.</td></tr>
   <tr><td>Tests</td><td>a fake backend</td><td><code>tests/uploadManagerTests.cpp</code> and <code>tests/textureStatesTests.cpp</code> implement a fake <code>Device</code> or <code>CommandBuffer</code>, with no GPU.</td></tr>
 </table>
@@ -716,6 +716,7 @@
   <tr><td>Handle tables, checks, caches</td><td><code>RenderContext</code> in <code>src/rhi/renderContext.cpp</code>, public header <code>include/rasm/render/renderContext.h</code></td></tr>
   <tr><td>Native structs</td><td><code>src/rhi/vulkan/vulkanTypes.h</code></td></tr>
   <tr><td>Device and resources</td><td><code>VulkanDevice</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
+  <tr><td>Loading Vulkan, the device's function table</td><td><code>loadVulkan</code> and <code>VulkanDevice::initialize</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code>; see <a href="vulkan-loader.html">the Vulkan loader</a></td></tr>
   <tr><td>Recording</td><td><code>VulkanCommandBuffer</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
   <tr><td>Queue types</td><td><code>QueueType</code>, <code>QUEUE_COUNT</code> in <code>include/rasm/render/resource.h</code>; the compute queue in <code>VulkanDevice::initialize</code></td></tr>
   <tr><td>Submit</td><td><code>SubmitInfo</code>, <code>RenderContext::submit</code> in <code>include/rasm/render/renderContext.h</code>; <code>SubmitDesc</code> in <code>src/rhi/device.h</code>; <code>VulkanQueue::submit</code> in <code>src/rhi/vulkan/vulkanQueue.cpp</code></td></tr>

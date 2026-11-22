@@ -17,7 +17,7 @@ flowchart TD
     Engine --> RC["RenderContext<br/>(handle → rhi object tables)"]
     RG --> RC
     RC --> DEV["rhi::Device<br/>(backend-neutral interface)"]
-    DEV --> VK["rhi::VulkanDevice<br/>vk-bootstrap + VMA"]
+    DEV --> VK["rhi::VulkanDevice<br/>volk + vk-bootstrap + VMA"]
     VK --> GPU[(GPU)]
 ```
 
@@ -56,9 +56,10 @@ There are two kinds of handle owner:
 ### Construction (`Engine::Engine`, `src/engine.cpp`)
 1. Create the platform for `EngineConfig::platform` (`createSdlPlatform` or `createHeadlessPlatform`) and the main window through it (`createWindow`). A headless window has no handle, and its pixel size is `windowWidth` × `windowHeight`; a headless engine runs `EngineConfig::ui` with no input (§13).
 2. `RenderContext::initialize` calls `rhi::createDevice` for `EngineConfig::preferredBackend`. For Vulkan, `VulkanDevice::initialize`:
+   - loads Vulkan (`loadVulkan`, §12): the loader SDL loaded for the window, or, headless, the one volk finds. No loader, or one older than 1.3, stops startup with an error,
    - creates the instance. `EngineConfig::enableValidation` turns on the Khronos validation layer; with it, `enableSyncValidation` and `enableGpuValidation` (copied into `DeviceDesc`) add the `validate_sync` and `gpuav_enable` layer settings through `VK_EXT_layer_settings`. Without validation (or without the layers installed) those two are ignored with a warning,
    - creates the surface from the main window (`createWindowSurface` in `src/platform/sdlPlatform.cpp`, which wraps `SDL_Vulkan_CreateSurface`). A headless engine passes no window: the instance is made with `set_headless`, there is no surface, and the device needs no `VK_KHR_swapchain`,
-   - selects a physical device with the required features (below),
+   - selects a physical device with Vulkan 1.4 and the required features (below). When none fits, each GPU older than 1.4 is named with its version,
    - creates the device, the graphics queue and the VMA allocator. With `EngineConfig::asyncCompute` (copied into `DeviceDesc`) it also takes a compute queue from a queue family without graphics, if the GPU has one whose timestamps have as many valid bits as the graphics queue's. Then every buffer and image is created `VK_SHARING_MODE_CONCURRENT` for both families, so either queue can use any resource without ownership transfers.
 
    It then creates the swapchain (`B8G8R8A8_SRGB`, with `TRANSFER_SRC` usage when the surface's `supportedUsageFlags` has it, so `readFrame` can copy it), registers its images as texture handles, and creates the shared sampler set. A headless engine gets an `OffscreenSwapchain` instead (`src/rhi/offscreenSwapchain.cpp`, backend-neutral, on `rhi::Device` textures): `MAX_FRAMES_IN_FLIGHT` readable `R8G8B8A8_SRGB` color attachments with an `R8G8B8A8_UNORM` view (`TextureDesc::encodedView`: `VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT` and a format list of the two), which the UI draws through as through a window's (§12), handed out in turn. Its `acquireNextImage` waits for the frame fence value of the last submit that drew into the image (`submitted`, called by `RenderContext::submit` for the present submit), `present` does nothing, and submits get no acquire or present swapchain.
@@ -718,6 +719,12 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 - **Placed textures.** `getTextureMemoryRequirements(desc)` returns the size, alignment and memory types a texture would need (`vkGetDeviceImageMemoryRequirements`, without creating it). `createHeap` allocates one block of device memory (`vmaAllocateMemory`, dedicated), and `createPlacedTexture(desc, heap, offset)` creates a texture inside it (`vmaCreateAliasingImage2`). The texture does not own its memory: `destroyTexture` frees only the image, and the heap must outlive every texture in it. Several textures may share bytes of a heap when they are never used at the same time.
 - `create*` logs a failure and returns null. `destroy*` releases at once, so the caller must know the GPU is done with the object: today that means the device is idle or a fence wait covered it. Deferred destruction is `D4`. Swapchain images belong to the swapchain, and `RenderContext::destroyTexture` refuses them.
 - `RenderContext` maps handles to these pointers and adds what no API provides per object: handle allocation, dedup of shaders, pipelines and layouts, render targets, bindless slot allocation and the shared sampler set.
+
+**Function loading (Vulkan, `D24`).** Nothing links `vulkan-1.dll` or `libvulkan`: volk loads every function at run time. RASM compiles with `VK_NO_PROTOTYPES` and `VOLK_NO_DEVICE_PROTOTYPES` (`src/CMakeLists.txt`), and the Vulkan headers come from vcpkg's `vulkan-headers` at volk's version, the one VMA and vk-bootstrap see too.
+- Loader and instance functions are volk's globals, one set per process. `loadVulkan` fills them from SDL's `vkGetInstanceProcAddr` with a window (`getWindowVulkanLoader` in `src/platform/sdlPlatform.cpp`; `SdlPlatform::createWindow` loads it first, and on macOS falls back to `/usr/local/lib/libvulkan.dylib`), and with `volkInitialize` headless. `volkLoadInstanceOnly` loads the instance's; they are the loader's trampolines, which work for any instance.
+- Device functions live in the device: `VulkanDevice::vk`, a `VolkDeviceTable` from `volkLoadDeviceTable` (`vkGetDeviceProcAddr`), so each call goes to the first layer or the driver without the loader's trampoline. `VulkanCommandBuffer`, `VulkanQueue` and `VulkanSwapchain` keep a reference to it (`getVkTable`). There are no global device functions, so a call that skips the table does not compile. `vkSetDebugUtilsObjectNameEXT` is an instance extension's command and stays global.
+- vk-bootstrap gets volk's `vkGetInstanceProcAddr` (`SystemInfo::get_system_info`, `InstanceBuilder`) and VMA `vmaImportVulkanFunctionsFromVolk` (`VMA_STATIC_VULKAN_FUNCTIONS` and `VMA_DYNAMIC_VULKAN_FUNCTIONS` are 0).
+- A 1.3 loader is enough: Vulkan 1.4 added only device-level commands, and they come from the driver through the table. The device must have 1.4. See the [Vulkan loader guide](guides/vulkan-loader.html).
 
 **Command buffers.** Each frame slot records one command buffer per batch (§3), on the queue the batch is for (`Device::createCommandBuffer(queueType)`). `begin` resets it, so the GPU must have finished its previous submission, which the frame fence wait guarantees. On Vulkan each command buffer owns a command pool, and `begin` resets the pool. Barriers are `TextureUsage` transitions from each texture's tracked state (§9).
 
