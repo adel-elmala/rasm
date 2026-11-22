@@ -372,6 +372,62 @@ private:
   </div>
 </div>
 
+<div class="api" id="InspectKind">
+  <pre class="sig">enum class InspectKind
+{
+    COLOR,
+    DEPTH,
+    HIZ,
+    LIGHT_CLUSTERS,
+};
+
+constexpr uint32_t  INSPECT_ALL_SAMPLES     = UINT32_MAX;
+constexpr uint32_t  INSPECT_TILES           = 24;</pre>
+  <div class="body">
+    <p>What the RASM window's Buffers section shows of a resource (<a href="engine.html#setInspection"><code>Engine::setInspection</code></a>).</p>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Kind</th><th>Reads</th><th>Shown as</th></tr>
+      <tr><td><code>COLOR</code></td><td>a color of a render target</td><td>times the exposure, clamped to 0..1, or one channel as gray; a <code>MOTION_FORMAT</code> color as a hue for its direction and a strength for its length</td></tr>
+      <tr><td><code>DEPTH</code></td><td>the depth of a target a scene view draws</td><td>view depth, white at the camera and black at <code>depthRange</code>; an orthographic view's depth as it is</td></tr>
+      <tr><td><code>HIZ</code></td><td>one level of a scene view's Hi-Z</td><td>like <code>DEPTH</code></td></tr>
+      <tr><td><code>LIGHT_CLUSTERS</code></td><td>a scene view's lights per cluster of one depth slice, or per screen tile (<code>INSPECT_TILES</code>)</td><td>heat colors on the 16 × 9 tiles</td></tr>
+    </table>
+    </div>
+    <p><code>INSPECT_ALL_SAMPLES</code> as <code>Inspection::sample</code> averages a multisampled target's samples. See <a href="../guides/inspecting-gpu-resources.html">Inspecting GPU resources</a>.</p>
+  </div>
+</div>
+
+<div class="api" id="Inspection">
+  <pre class="sig">struct Inspection
+{
+    std::string  target                  = {};
+    InspectKind  kind                    = InspectKind::COLOR;
+    uint32_t     attachment              = 0;
+    uint32_t     face                    = 0;
+    uint32_t     level                   = 0;
+    uint32_t     sample                  = 0;
+    uint32_t     channel                 = 0;
+    float        exposure                = 1.0f;
+    float        depthRange              = 50.0f;
+    EntityHandle entity                  = {};
+};</pre>
+  <div class="body">
+    <p>What the RASM window's Buffers and GPU tables sections show (<a href="engine.html#setInspection"><code>Engine::setInspection</code></a>). Each field is a control of the window.</p>
+    <dl>
+      <dt>target</dt><dd>The render target's <code>RenderTargetDesc::name</code>; for <code>HIZ</code> and <code>LIGHT_CLUSTERS</code> the name of the scene view's target. Empty: nothing is copied.</dd>
+      <dt>attachment</dt><dd><code>COLOR</code>: which color of the target.</dd>
+      <dt>face</dt><dd>A cube target's face, 0 to 5 (+X, -X, +Y, -Y, +Z, -Z); for <code>HIZ</code> and <code>LIGHT_CLUSTERS</code> the face the view draws.</dd>
+      <dt>level</dt><dd><code>HIZ</code>: the level, 0 is half the view's size. <code>LIGHT_CLUSTERS</code>: the depth slice, 0 to 23, or <code>INSPECT_TILES</code> for the screen tiles.</dd>
+      <dt>sample</dt><dd>A multisampled target's sample, or <code>INSPECT_ALL_SAMPLES</code>.</dd>
+      <dt>channel</dt><dd><code>COLOR</code>: 0 all, 1 to 4 red, green, blue or alpha alone, as gray.</dd>
+      <dt>exposure</dt><dd><code>COLOR</code>: the multiplier before the clamp; for motion, the gain (full color at 16 pixels divided by it).</dd>
+      <dt>depthRange</dt><dd><code>DEPTH</code>, <code>HIZ</code>: the view depth shown black.</dd>
+      <dt>entity</dt><dd>The GPU tables section shows this entity's rows. Invalid: none.</dd>
+    </dl>
+  </div>
+</div>
+
 <div class="api" id="FrameResources">
   <pre class="sig">struct FrameResources
 {

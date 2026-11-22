@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inspecting GPU resources · RASM</title>
+<meta name="description" content="How a renderer shows its own render targets, depth buffers, Hi-Z levels and light clusters while it runs: copy each one right after the pass that last writes it, before a later pass or an aliased target changes it, and turn its numbers into a picture (linear depth from reversed-Z, motion as a hue, counts as heat). And how GPU tables can be shown field by field from the shader compiler's reflection.">
+<meta name="rasm-sources" content="src/renderer/inspector.cpp src/renderer/inspector.h shaders/passes/inspect.slang shaders/lib/heat.slang shaders/lib/core.slang src/renderer/renderGraph.cpp include/rasm/render/renderGraph.h src/renderer/shaderCompiler.cpp src/renderer/shaderCompiler.h src/renderer/gpuTable.cpp src/renderer/gpuTable.h src/renderer/engineUi.cpp src/renderer/ui.cpp src/renderer/uberMaterialTypes.h include/rasm/types.h include/rasm/engine.h src/engine.cpp examples/09_gltf_materials/main.cpp examples/11_many_lights/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/inspecting-gpu-resources.js"></script>
+</head>
+<body data-root="../" data-page="guides/inspecting-gpu-resources.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Culling and the frame</p>
+<h1>Inspecting GPU resources</h1>
+<p class="lead">A frame is built from many buffers you never see: the HDR color before the tone map, the depth, the motion of each pixel, the bloom's small images, the shadow maps, the Hi-Z, the light lists. When the image is wrong, the fastest way to the cause is to look at them. This page explains how a renderer shows one of them while it runs: when to copy it, how to turn its numbers into a picture, and how to show a GPU table field by field. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>A resource holds what you want to see <b>only for a while</b>: a later pass can write it again, and a <b>transient</b> resource gives its memory to another one after its last use.</li>
+    <li>So the copy is a small pass placed <b>right after the pass that last writes it</b>. The render graph orders it and adds its barriers like any other pass.</li>
+    <li>The copy also <b>converts</b>: HDR color times an exposure, <b>reversed-Z depth to linear distance</b>, motion to a <b>hue</b>, counts to <b>heat</b>, one channel to gray. One multisampled sample, or their average.</li>
+    <li>A GPU table is shown <b>field by field</b>. The names, types and offsets come from the <b>shader compiler's reflection</b>, so no third copy of the struct exists. The bytes come from the CPU's copy: what was <b>uploaded</b>, not read back.</li>
+    <li>Nothing picked: no pass, no barrier, no cost.</li>
+  </ul>
+</div>
+
+<h2 id="problem"><span class="n">1</span>A resource is right only for a moment</h2>
+
+<p>The picture below is one frame on a time line. Each bar is a resource, from its first use to its last. Look at what each one holds at the end of the frame.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="A frame of seven passes on a time line. The scene color is written by passes 1 and 2, then read by passes 4 and 5. A bloom level is written in pass 3 and read in pass 4; after that its memory is aliased by a blur target written in pass 5. The depth is written in pass 1 and cleared for a second view in pass 6. At the end of the frame, the bloom level's memory holds the blur target and the depth holds the second view, so a copy made there shows the wrong thing. A copy right after each last writer shows the right one.">
+    <text x="10" y="20" class="small t-faint">passes</text>
+    <g class="small">
+      <rect x="110" y="8" width="80" height="22" rx="4" class="gpu"/><text x="150" y="24" class="mid">1 draw</text>
+      <rect x="196" y="8" width="80" height="22" rx="4" class="gpu"/><text x="236" y="24" class="mid">2 draw</text>
+      <rect x="282" y="8" width="80" height="22" rx="4" class="gpu"/><text x="322" y="24" class="mid">3 bloom</text>
+      <rect x="368" y="8" width="80" height="22" rx="4" class="gpu"/><text x="408" y="24" class="mid">4 tone map</text>
+      <rect x="454" y="8" width="80" height="22" rx="4" class="gpu"/><text x="494" y="24" class="mid">5 blur</text>
+      <rect x="540" y="8" width="80" height="22" rx="4" class="gpu"/><text x="580" y="24" class="mid">6 view 2</text>
+      <rect x="626" y="8" width="80" height="22" rx="4" class="gpu"/><text x="666" y="24" class="mid">7 end</text>
+    </g>
+    <text x="10" y="66" class="small">scene color</text>
+    <rect x="110" y="54" width="424" height="18" rx="4" class="mem"/>
+    <text x="10" y="106" class="small">bloom level</text>
+    <rect x="282" y="94" width="166" height="18" rx="4" class="mem"/>
+    <rect x="454" y="94" width="80" height="18" rx="4" class="shade"/>
+    <text x="494" y="107" class="mid small">blur</text>
+    <text x="540" y="107" class="small t-faint">same memory</text>
+    <text x="10" y="146" class="small">depth</text>
+    <rect x="110" y="134" width="80" height="18" rx="4" class="mem"/>
+    <rect x="540" y="134" width="80" height="18" rx="4" class="shade"/>
+    <text x="580" y="147" class="mid small">cleared</text>
+    <path d="M190,60 V186" class="arrow ok" marker-end="url(#ah)"/>
+    <path d="M362,100 V186" class="arrow ok" marker-end="url(#ah)"/>
+    <path d="M276,60 V186" class="arrow ok" marker-end="url(#ah)"/>
+    <text x="276" y="202" class="mid small t-ok">copy here: right after the last writer</text>
+    <path d="M706,40 V186" class="arrow bad dashed" marker-end="url(#ah)"/>
+    <text x="700" y="222" class="end small t-bad">copy at the end of the frame:</text>
+    <text x="700" y="240" class="end small t-bad">the blur's bytes, the second view's depth</text>
+  </svg>
+  <figcaption>The bloom level's memory belongs to the blur target after pass 4, and the depth is cleared for a second view. Only a copy made right after each resource's last writer sees what that resource really held.</figcaption>
+</figure>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Reading the resource at the end of the frame: the memory already holds another target, so the picture is noise.">
+      <rect x="20" y="20" width="120" height="90" class="shade"/>
+      <path d="M20,40 L60,30 L90,70 L140,50 M20,90 L70,100 L110,60 L140,95" class="arrow bad"/>
+      <text x="80" y="128" class="mid small t-bad">end of frame: noise</text>
+      <text x="170" y="50" class="small">another target owns</text>
+      <text x="170" y="68" class="small">the bytes by now, or a</text>
+      <text x="170" y="86" class="small">later pass wrote them</text>
+    </svg>
+    <p>Reading at the end of the frame, or from a capture tool's last state, shows what is left: noise, or a later pass's result.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Copying right after the last writer: the picture shows the blurred bright parts of the scene.">
+      <rect x="20" y="20" width="120" height="90" class="paper"/>
+      <circle cx="60" cy="55" r="16" class="accent o-50"/>
+      <circle cx="105" cy="75" r="12" class="accent o-50"/>
+      <text x="80" y="128" class="mid small t-ok">after the writer: right</text>
+      <text x="170" y="50" class="small">the copy runs while</text>
+      <text x="170" y="68" class="small">the resource still holds</text>
+      <text x="170" y="86" class="small">its own data</text>
+    </svg>
+    <p>A copy right after the last writer sees exactly what the readers of the resource see.</p>
+  </div>
+</div>
+
+<h2 id="copy"><span class="n">2</span>Copy it right after the writer</h2>
+
+<p>The copy is one more pass. It reads the resource and writes a picture into a texture of its own, which the UI draws later in the frame. A render graph places it like any pass, from what it reads and writes.</p>
+
+<ol class="flow">
+  <li class="gpu"><b>Last writer</b><span>the draw, the compute pass, or a cube's last face</span></li>
+  <li class="mem"><b>Barrier</b><span>from the graph: the write is visible, the image is in a read layout</span></li>
+  <li class="shader"><b>Copy pass</b><span>one thread per texel of the picture: read, convert, write</span></li>
+  <li class="mem"><b>Barrier</b><span>the picture moves from storage to sampled</span></li>
+  <li class="gpu"><b>UI pass</b><span>draws the picture in a window</span></li>
+</ol>
+
+<p>Three rules make the copy correct without hand-written barriers:</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The copy pass is declared as a reader of the resource and a writer of its picture.">
+      <rect x="20" y="40" width="70" height="44" rx="6" class="mem"/><text x="55" y="66" class="mid small">resource</text>
+      <rect x="150" y="40" width="70" height="44" rx="6" class="mem"/><text x="185" y="66" class="mid small">picture</text>
+      <path d="M90,62 H148" class="arrow shader" marker-end="url(#ah-shader)"/>
+      <text x="120" y="30" class="mid small">copy</text>
+      <text x="120" y="110" class="mid small">reads · writes</text>
+    </svg>
+    <h4>Declare both</h4>
+    <p>The copy reads the resource and writes the picture. The UI pass reads the picture. The graph's barriers follow.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Passes in order, with the copy moved to the position right after the writer.">
+      <rect x="10" y="50" width="44" height="30" rx="4" class="gpu"/><text x="32" y="70" class="mid small">W</text>
+      <rect x="60" y="50" width="44" height="30" rx="4" class="shader"/><text x="82" y="70" class="mid small">copy</text>
+      <rect x="110" y="50" width="44" height="30" rx="4" class="gpu"/><text x="132" y="70" class="mid small">B</text>
+      <rect x="160" y="50" width="44" height="30" rx="4" class="gpu"/><text x="182" y="70" class="mid small">C</text>
+      <path d="M182,40 C182,20 82,20 82,46" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="120" y="110" class="mid small">moved up to the writer</text>
+    </svg>
+    <h4>Place it early</h4>
+    <p>A sort may put the copy anywhere after the writer. Move it to just after: its only input is that writer.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A transient target's lifetime bar grows by the copy, so no other target takes its memory before the copy.">
+      <rect x="20" y="50" width="120" height="18" rx="4" class="mem"/>
+      <rect x="140" y="50" width="30" height="18" rx="4" class="shader"/>
+      <rect x="176" y="80" width="50" height="18" rx="4" class="shade"/>
+      <text x="80" y="40" class="mid small">lifetime</text>
+      <text x="155" y="40" class="mid small">+copy</text>
+      <text x="200" y="114" class="mid small">next owner</text>
+    </svg>
+    <h4>Count it as a use</h4>
+    <p>The copy is a use of a transient resource, so its lifetime covers the copy and no other resource takes the memory first.</p>
+  </div>
+</div>
+
+<div class="callout">
+  <strong>The graph changes only when the pick changes</strong>
+  <p>Adding or removing the copy pass sorts the graph again, and a new lifetime can lay the transient memory out again. That costs one slow frame when the pick changes, and nothing in the frames after it. Settings that do not change what is read (an exposure, a mip, a channel) only change the copy's parameters.</p>
+</div>
+
+<h2 id="convert"><span class="n">3</span>Turn the numbers into a picture</h2>
+
+<p>A UI image shows colors from 0 to 1. Most resources hold something else: light brighter than 1, a depth that is not a distance, a motion vector, a count. The copy converts each kind into a picture you can read.</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An HDR value of 4 times an exposure of a quarter gives 1, then it is clamped to 0 to 1.">
+      <rect x="20" y="30" width="200" height="18" class="paper"/>
+      <rect x="20" y="30" width="50" height="18" class="accent o-50"/>
+      <text x="20" y="70" class="small">value × exposure</text>
+      <text x="20" y="90" class="small">clamp to 0..1, encode sRGB</text>
+    </svg>
+    <h4>HDR color</h4>
+    <p>Times an exposure you choose, then clamped. Bright parts are white until you lower it.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Red, green, blue and alpha; one of them is shown alone as gray.">
+      <rect x="20" y="30" width="40" height="40" class="bad o-75"/><rect x="66" y="30" width="40" height="40" class="ok o-75"/>
+      <rect x="112" y="30" width="40" height="40" class="cpu"/><rect x="158" y="30" width="40" height="40" class="paper"/>
+      <text x="178" y="55" class="mid small">a</text>
+      <text x="20" y="100" class="small">one channel → gray</text>
+    </svg>
+    <h4>One channel</h4>
+    <p>Red, green, blue or alpha alone, as gray: the way to read data that is not a color.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Stored depth falls fast with distance; linear depth falls evenly.">
+      <path d="M20,100 H220 M20,20 V100" class="grid"/>
+      <path d="M24,22 C30,80 60,96 218,98" class="arrow bad"/>
+      <path d="M24,22 L218,98" class="arrow ok"/>
+      <text x="130" y="50" class="small t-ok">linear</text>
+      <text x="120" y="118" class="small t-bad">stored (reversed-Z)</text>
+    </svg>
+    <h4>Depth → distance</h4>
+    <p>The stored depth is almost 0 for anything past a few meters. Turned into a distance, it falls evenly (<a href="#depth">next section</a>).</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A color wheel: the direction of motion picks the hue, the length picks how strong it is; still pixels are white.">
+      <circle cx="70" cy="64" r="40" class="paper"/>
+      <path d="M70,64 L110,64" class="arrow bad" marker-end="url(#ah)"/>
+      <path d="M70,64 L70,26" class="arrow ok" marker-end="url(#ah)"/>
+      <path d="M70,64 L32,64" class="arrow cpu" marker-end="url(#ah)"/>
+      <text x="130" y="50" class="small">direction → hue</text>
+      <text x="130" y="70" class="small">length → strength</text>
+      <text x="130" y="90" class="small">still → white</text>
+    </svg>
+    <h4>Motion → hue</h4>
+    <p>The direction picks the hue on a color wheel; the length in pixels, times a gain, picks how far from white.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A heat ramp from dark blue for 1 through blue, cyan, green, yellow and red to white for 64.">
+      <rect x="20" y="40" width="28" height="30" class="cpu o-50"/><rect x="48" y="40" width="28" height="30" class="cpu"/>
+      <rect x="76" y="40" width="28" height="30" class="gpu o-50"/><rect x="104" y="40" width="28" height="30" class="ok"/>
+      <rect x="132" y="40" width="28" height="30" class="mem"/><rect x="160" y="40" width="28" height="30" class="bad"/>
+      <rect x="188" y="40" width="28" height="30" class="paper"/>
+      <text x="34" y="90" class="mid small">1</text><text x="118" y="90" class="mid small">8</text><text x="202" y="90" class="mid small">64</text>
+    </svg>
+    <h4>Counts → heat</h4>
+    <p>A count of lights or fragments as a heat color, one step per doubling, so 3 and 300 both read at a glance.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A pixel with four samples on an edge: half dark, half light. One sample is one side; the average is gray.">
+      <rect x="30" y="30" width="60" height="60" class="paper"/>
+      <path d="M30,90 L90,30 L90,90 Z" class="solid"/>
+      <circle cx="45" cy="45" r="5" class="accent"/><circle cx="75" cy="45" r="5" class="accent"/>
+      <circle cx="45" cy="75" r="5" class="accent"/><circle cx="75" cy="75" r="5" class="hot"/>
+      <text x="120" y="55" class="small">one sample</text>
+      <text x="120" y="75" class="small">or their average</text>
+    </svg>
+    <h4>Multisampled</h4>
+    <p>A multisampled image has several values per pixel. Show one sample, or their plain average. That average is not the engine's own resolve, so say which one is shown.</p>
+  </div>
+</div>
+
+<h2 id="depth"><span class="n">4</span>Reversed-Z depth as a distance</h2>
+
+<p>With reversed-Z and the far plane at infinity, the depth a pixel stores is the near plane's distance divided by the pixel's distance (see <a href="projection-depth.html">projection and depth</a>). Near the camera it is 1; at 10 times the near distance it is 0.1; far away it is almost 0. Shown as gray, everything past a few meters is black.</p>
+
+<div class="formula">
+  <p class="eq">d = n / z &nbsp;&nbsp;⇒&nbsp;&nbsp; z = n / d</p>
+  <p class="eq">gray = 1 − z / range, clamped to 0..1</p>
+  <dl>
+    <dt>d</dt><dd>the stored depth, 1 at the near plane, 0 at infinity (the sky)</dd>
+    <dt>n</dt><dd>the near plane's distance</dd>
+    <dt>z</dt><dd>the distance along the view direction: the view depth</dd>
+    <dt>range</dt><dd>the distance shown black; you choose it for the scene</dd>
+  </dl>
+</div>
+
+<p>For any projection without skew, the same idea is one division: the depth is (P₂₂ z + P₂₃) / (P₃₂ z + P₃₃) of the view-space z, so z comes back from four numbers of the projection matrix. An orthographic projection (a sun's shadow map) stores a depth that is already linear, so it is shown as it is.</p>
+
+<figure class="lab" data-lab="reversed-z-linear" data-title="See the distances in a depth buffer">
+  <figcaption>Posts stand at 0.5 m to 64 m. Compare the stored depth with the linear distance. Move the near plane and watch the stored row go black, then set the range so no post looks like the sky.</figcaption>
+</figure>
+
+<h2 id="fit"><span class="n">5</span>One picture for any size</h2>
+
+<p>Resources come in every size: a 2048 × 2048 shadow map, a 160 × 90 bloom level, a 16 × 9 grid of light tiles. The copy writes into one fixed texture, scaled to fit with the aspect kept, and the UI shows only the part it filled.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="Three sources scaled into one square texture: a 1280 by 720 image fills 1024 by 576 of it; a 2048 by 2048 shadow map fills all of it; a 16 by 9 grid fills 1024 by 576 with a block of 64 by 64 texels per cell. The UI draws only the filled part.">
+    <rect x="20" y="30" width="150" height="150" class="paper"/>
+    <rect x="20" y="30" width="150" height="84" class="mem o-50"/>
+    <text x="95" y="76" class="mid small">1024 × 576</text>
+    <text x="95" y="22" class="mid small">1280 × 720 color</text>
+    <rect x="300" y="30" width="150" height="150" class="mem o-50"/>
+    <text x="375" y="110" class="mid small">1024 × 1024</text>
+    <text x="375" y="22" class="mid small">2048 × 2048 shadow map</text>
+    <rect x="580" y="30" width="150" height="150" class="paper"/>
+    <rect x="580" y="30" width="150" height="84" class="mem o-50"/>
+    <path d="M580,30 V114 M589.4,30 V114 M598.8,30 V114 M608.1,30 V114 M617.5,30 V114 M626.9,30 V114 M636.3,30 V114 M645.6,30 V114 M655,30 V114 M664.4,30 V114 M673.8,30 V114 M683.1,30 V114 M692.5,30 V114 M701.9,30 V114 M711.3,30 V114 M720.6,30 V114 M730,30 V114 M580,30 H730 M580,39.3 H730 M580,48.7 H730 M580,58 H730 M580,67.3 H730 M580,76.7 H730 M580,86 H730 M580,95.3 H730 M580,104.7 H730 M580,114 H730" class="grid"/>
+    <text x="655" y="22" class="mid small">16 × 9 tiles: blocks</text>
+    <text x="95" y="196" class="mid small t-faint">UI shows the filled part</text>
+    <text x="655" y="196" class="mid small t-faint">each tile 64 × 64 texels</text>
+  </svg>
+  <figcaption>Each texel of the picture reads the source texel under it, with no filtering, so small sources show crisp blocks and large ones are thinned out.</figcaption>
+</figure>
+
+<h2 id="tables"><span class="n">6</span>GPU tables, field by field</h2>
+
+<p>A GPU table is an array of structs that shaders read through a pointer. To show a row, the tool needs each field's name, type and offset. Writing them down by hand makes a third copy of the struct, next to the C++ one and the shader one, and it goes wrong the day a field moves. The shader compiler already knows the layout: its <b>reflection</b> lists every field with its offset in the layout the shaders really read.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="A row of 160 bytes. Reflection gives the fields: worldMatrix at 0, 64 bytes, a float4x4; normalMatrix at 64, 36 bytes; geometryIndex at 100; materialIndex at 104; previousWorld at 108, 48 bytes; animationRow at 156. The tool reads each field's bytes from the CPU copy of the row and prints them by type.">
+    <text x="10" y="22" class="title">one row, 160 bytes, as reflection lays it out</text>
+    <rect x="10" y="40" width="256" height="40" class="mem"/><text x="138" y="64" class="mid small mono">worldMatrix · 0</text>
+    <rect x="266" y="40" width="144" height="40" class="mem o-75"/><text x="338" y="64" class="mid small mono">normalMatrix · 64</text>
+    <rect x="410" y="40" width="16" height="40" class="shader"/>
+    <rect x="426" y="40" width="16" height="40" class="shader o-75"/>
+    <rect x="442" y="40" width="192" height="40" class="mem"/><text x="538" y="64" class="mid small mono">previousWorld · 108</text>
+    <rect x="634" y="40" width="16" height="40" class="shader"/>
+    <path d="M418,84 V110 H300" class="arrow" marker-end="url(#ah)"/><text x="294" y="114" class="end small mono">geometryIndex · 100</text>
+    <path d="M434,84 V132 H300" class="arrow" marker-end="url(#ah)"/><text x="294" y="136" class="end small mono">materialIndex · 104</text>
+    <path d="M642,84 V120 H670" class="arrow" marker-end="url(#ah)"/><text x="674" y="124" class="small mono">animationRow · 156</text>
+    <text x="10" y="172" class="small">name, type and offset: from the shader compiler, for the struct the shaders read</text>
+    <text x="10" y="192" class="small">the bytes: from the CPU's copy of the table, the same bytes the upload sends</text>
+  </svg>
+  <figcaption>The tool never names a field itself. A field added to the shader struct shows up in the table view by itself.</figcaption>
+</figure>
+
+<div class="split">
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="The CPU copy of a table is sent to the GPU; the tool reads the CPU copy at once.">
+      <rect x="20" y="40" width="100" height="50" rx="6" class="cpu"/><text x="70" y="70" class="mid small">CPU copy</text>
+      <rect x="200" y="40" width="100" height="50" rx="6" class="gpu"/><text x="250" y="70" class="mid small">GPU table</text>
+      <path d="M120,65 H196" class="arrow mem" marker-end="url(#ah-mem)"/><text x="158" y="58" class="mid small">upload</text>
+      <text x="70" y="120" class="mid small t-ok">read here: now, free</text>
+    </svg>
+    <p><b>The uploaded copy</b>: free and immediate, and exactly what the GPU receives. It does not show what a shader wrote into the table, or a bad upload.</p>
+  </div>
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Reading the GPU table back needs a copy to a host-visible buffer and a wait of a frame or two.">
+      <rect x="20" y="40" width="100" height="50" rx="6" class="gpu"/><text x="70" y="70" class="mid small">GPU table</text>
+      <rect x="200" y="40" width="100" height="50" rx="6" class="cpu"/><text x="250" y="70" class="mid small">readback</text>
+      <path d="M120,65 H196" class="arrow bad dashed" marker-end="url(#ah)"/><text x="158" y="58" class="mid small">copy</text>
+      <text x="160" y="120" class="mid small t-bad">frames late, a copy pass, a wait</text>
+    </svg>
+    <p><b>A readback</b>: shows what the GPU holds, but needs a copy pass, a host-visible buffer and a wait for the frame to finish. The view must say which one it shows.</p>
+  </div>
+</div>
+
+<h2 id="cost"><span class="n">7</span>Free while nothing is picked</h2>
+
+<p>A debug tool must not change what it measures. While nothing is picked, or the window is closed, the copy pass is not in the graph: the passes, their order, the barriers, the transient memory layout and the GPU timers are the ones of the frame without the tool. The copy's shader compiles the first time something is picked.</p>
+
+<h2 id="pitfalls"><span class="n">8</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>The picture is noise or another image</dt><dd>The copy ran after the resource's memory changed owner, or after a later pass wrote it. Copy right after the last writer, and count the copy as a use of the resource.</dd></div>
+  <div><dt>The depth is all black</dt><dd>Reversed-Z depth is near 0 for anything past a few near-plane distances. Show the distance n / d with a range, not the stored value.</dd></div>
+  <div><dt>The picture is white</dt><dd>HDR light is far above 1. Lower the exposure, or look at one channel.</dd></div>
+  <div><dt>The multisampled image has jagged edges</dt><dd>One sample per pixel is shown. Pick the average, or the resolved target.</dd></div>
+  <div><dt>A table field shows nonsense</dt><dd>The tool's idea of the layout differs from the shader's. Take it from reflection, never from a hand-written list.</dd></div>
+  <div><dt>The timings change when the tool is open</dt><dd>That is the copy pass: measure with nothing picked.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
+
+<p>The RASM window (<kbd>F1</kbd>, with <code>EngineConfig::ui</code>) has a <b>Buffers</b> section and a <b>GPU tables</b> section. An application can pick from code with <code>Engine::setInspection</code> and an <code>Inspection</code>. <code>examples/09_gltf_materials</code> and <code>examples/11_many_lights</code> take <samp>--inspect &lt;target&gt; &lt;color|depth|hiz|clusters&gt; &lt;n&gt;</samp>, and 09 also <samp>--inspect-rows</samp>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Each frame, RenderGraph::execute first calls Engine::updateInspectPass. While the Buffers section is open it lists the graph's targets and scene views, finds the pick, and if the graph's pass is not Inspect of that resource, removes the old one and adds a compute pass that reads the resource and writes the inspect storage target, which the UI pass also reads. compile then moves the Inspect pass right after the last pass it depends on. On the GPU: the writer, the graph's barrier, Inspect with inspectMain writing the 1024 by 1024 target, a barrier, then later the UI pass draws it with ImGui::Image.">
+    <text x="10" y="20" class="title t-cpu">CPU · start of RenderGraph::execute</text>
+    <rect x="10" y="30" width="200" height="56" rx="6" class="cpu"/><text x="110" y="52" class="mid mono small">updateInspectPass</text><text x="110" y="72" class="mid small">list targets and views</text>
+    <path d="M210,58 H236" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="240" y="30" width="250" height="56" rx="6" class="cpu"/><text x="365" y="52" class="mid small">pick changed? remove the old pass,</text><text x="365" y="72" class="mid small">add "Inspect &lt;resource&gt;"</text>
+    <path d="M490,58 H516" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="520" y="30" width="230" height="56" rx="6" class="cpu"/><text x="635" y="52" class="mid mono small">compile</text><text x="635" y="72" class="mid small">sort, then move Inspect up</text>
+    <text x="10" y="120" class="title t-gpu">GPU · the frame</text>
+    <rect x="10" y="130" width="120" height="56" rx="6" class="gpu"/><text x="70" y="152" class="mid small">last writer</text><text x="70" y="172" class="mid small">e.g. Bloom Down 3</text>
+    <path d="M130,158 H166" class="arrow" marker-end="url(#ah)"/><text x="148" y="124" class="mid small t-faint">barrier</text>
+    <rect x="170" y="130" width="170" height="56" rx="6" class="shader"/><text x="255" y="152" class="mid small">Inspect bloom_down_3</text><text x="255" y="172" class="mid mono small">inspectMain</text>
+    <path d="M340,158 H376" class="arrow shader" marker-end="url(#ah-shader)"/>
+    <rect x="380" y="130" width="150" height="56" rx="6" class="mem"/><text x="455" y="152" class="mid small">inspect target</text><text x="455" y="172" class="mid small">1024², RGBA16F</text>
+    <path d="M530,158 H566" class="arrow" marker-end="url(#ah)"/><text x="548" y="124" class="mid small t-faint">barrier</text>
+    <rect x="570" y="130" width="180" height="56" rx="6" class="gpu"/><text x="660" y="152" class="mid small">UI pass</text><text x="660" y="172" class="mid mono small">ImGui::Image</text>
+    <text x="10" y="222" class="small">The Inspect pass reads the resource (read, readDepth, or the view's buffers) and writes the target; the UI pass reads it.</text>
+    <text x="10" y="242" class="small">Both barriers come from those declarations. Nothing picked, or the section closed: no Inspect pass, no read.</text>
+    <text x="10" y="270" class="small t-faint">Parameters (exposure, face, level, sample, channel, range) go to a host-visible buffer per frame slot,</text>
+    <text x="10" y="288" class="small t-faint">so changing them changes no graph.</text>
+  </svg>
+  <figcaption>The pick takes effect in the next frame: the UI is built after the graph has started its frame.</figcaption>
+</figure>
+
+<h3>What the Buffers section lists</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Entry</th><th>From</th><th>Options</th><th>Shown as</th></tr>
+  <tr><td>a target's color, e.g. <samp>scene_hdr</samp>, <samp>bloom_down_3</samp>, <samp>scene_hdr_taa</samp>, <samp>scene_hdr_resolved</samp></td><td>every render target a pass of the graph writes or reads</td><td>channel, exposure; sample or average when multisampled</td><td>color × exposure, sRGB-encoded</td></tr>
+  <tr><td><samp>scene_hdr motion</samp></td><td>a <code>MOTION_FORMAT</code> color</td><td>gain</td><td>hue and strength, full at 16 px</td></tr>
+  <tr><td><samp>scene_hdr depth</samp>, <samp>shadow_cascade_0 depth</samp>, <samp>shadow_cube_3 depth</samp></td><td>the depth of a target a scene view draws, when the graph lets a pass sample it</td><td>face of a cube, sample, range</td><td>distance; an orthographic shadow map as it is</td></tr>
+  <tr><td><samp>scene_hdr Hi-Z</samp></td><td>each scene view with occlusion culling</td><td>level, range</td><td>distance of the farthest depth</td></tr>
+  <tr><td><samp>scene_hdr light clusters</samp></td><td>each scene view with clusters</td><td>slice 0 to 23, or the tiles</td><td>heat on the 16 × 9 tiles</td></tr>
+</table>
+</div>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Copy pass</td><td>after the last writer</td><td>A compute pass added with <code>RenderGraph::addComputePass</code> by <code>Engine::updateInspectPass</code>, named <samp>Inspect</samp> and the entry's label. <code>RenderGraph::inspectPass</code> holds its index; <code>compile</code> moves it right after the last pass with an edge into it. It is always on the graphics queue, so a Hi-Z or cluster write on the async compute queue is waited for there.</td></tr>
+  <tr><td>Picture</td><td>one fixed texture</td><td>A storage render target <samp>inspect</samp>, <code>INSPECT_SIZE</code> square, <code>SCENE_COLOR_FORMAT</code>, made on the first pick and kept. The UI pass (the pass with <code>Pass::encodedSwapchain</code>) gets it in <code>Pass::inputRenderTargets</code> while the Inspect pass exists. A graph without a UI pass gets no Inspect pass.</td></tr>
+  <tr><td>Parameters</td><td>the copy's settings</td><td><code>gfx::InspectParams</code> in a host-visible buffer per frame slot, filled in <code>recordInspect</code>; <code>gfx::InspectPushConstants</code> holds its address. The shader defines <code>RASM_OWN_PUSH_CONSTANTS</code> before it includes <code>core.slang</code>, so it can reach <code>SceneData</code> with push constants of its own.</td></tr>
+  <tr><td>Depth</td><td>z from four projection numbers</td><td><code>getViewDepth</code> in <code>shaders/passes/inspect.slang</code>, with the projection of the view that drew the target (the face's view for a cube), from its <code>SceneData</code>. A projection with <code>projection[3][3] == 1</code> is orthographic: the depth is shown as it is.</td></tr>
+  <tr><td>Hi-Z, clusters</td><td>buffers, not images</td><td>Read through the view's <code>SceneData::hizPtr</code> (<code>getHizLevel</code>) and <code>SceneData::clustersPtr</code>; the Inspect pass declares the view's buffers as reads.</td></tr>
+  <tr><td>Heat</td><td>one step per doubling</td><td><code>getHeatColor</code> in <code>shaders/lib/heat.slang</code>, shared with the debug views' display.</td></tr>
+  <tr><td>Table layout</td><td>from reflection</td><td><code>ShaderCompiler::keepStructLayouts</code>, turned on with the UI, makes each later compile walk its push constants through every pointer and keep each struct's flattened fields (<code>StructField</code>); <code>findStructLayout</code> finds them. A struct no compiled shader reached yet is shown as such.</td></tr>
+  <tr><td>Table rows</td><td>the uploaded copy</td><td><code>GpuTable::row</code>, the CPU copy every slot receives; <code>GpuTable::uploadedRows</code> counts the rows the last upload sent. Instance, material, light, animated entity and morph weight tables; the geometry table has no CPU copy.</td></tr>
+</table>
+</div>
+
+<div class="stats" id="cost-numbers">
+  <div><b>0 ms</b><span>with nothing picked: the same passes and timers as without the UI</span><small>every GPU timer of 09 against main, Release</small></div>
+  <div><b>INSPECT_COST</b><span>one copy at 1920 × 1080</span><small>the Inspect pass's timer in 09, Release, RTX 3060</small></div>
+  <div><b>8 MiB</b><span>the picture target, made on the first pick</span><small>1024² × 8 B, one for both frame slots: the graph orders each frame's write after the last frame's read</small></div>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>API</td><td><code>Engine::setInspection</code>, <code>Engine::getInspection</code> in <code>src/engine.cpp</code>; <code>Inspection</code>, <code>InspectKind</code> in <code>include/rasm/types.h</code></td></tr>
+  <tr><td>Listing, the pass, the sections</td><td><code>updateInspectPass</code>, <code>recordInspect</code>, <code>drawBuffersSection</code>, <code>drawTablesSection</code> in <code>src/renderer/inspector.cpp</code></td></tr>
+  <tr><td>Placement in the graph</td><td><code>RenderGraph::compile</code>, <code>RenderGraph::removePass</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
+  <tr><td>Shader</td><td><code>shaders/passes/inspect.slang</code>, <code>shaders/lib/heat.slang</code></td></tr>
+  <tr><td>Reflection</td><td><code>collectStructLayouts</code> in <code>src/renderer/shaderCompiler.cpp</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>Nothing picked, or the section closed: no Inspect pass. The graph dump and the GPU timers equal those without the UI.</li>
+    <li>The Inspect pass declares every resource it reads, so the graph places its barriers. No hand-written barrier around it.</li>
+    <li><code>gfx::InspectParams</code> matches the shader's struct (the <code>static_assert</code>s and <code>validateRasmStructs</code>).</li>
+    <li>The table view takes no field name from C++: only from reflection.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li><a href="render-graphs.html">Render graphs</a> and <a href="memory-aliasing.html">Transient memory and aliasing</a>: why a resource is right only for a moment.</li>
+  <li><a href="projection-depth.html">Projection and depth</a>: reversed-Z and the infinite far plane.</li>
+  <li><a href="debug-views.html">Debug views</a>: values of the shading in place of the image, and the heat colors.</li>
+  <li><a href="struct-layout.html">Struct layout</a>: the scalar layout reflection reports.</li>
+  <li>RenderDoc's texture viewer does the same on a captured frame, with a range slider for depth.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Engine · RASM</title>
 <meta name="description" content="The Engine class: EngineConfig, construction and shutdown, the frame functions, loading, frame stats, paths and the window, plus an index of every Engine method.">
-<meta name="rasm-sources" content="include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h src/engine.cpp src/platform/window.cpp src/platform/paths.cpp src/renderer/frameStats.cpp src/renderer/gpuScene.cpp src/renderer/renderGraph.cpp src/renderer/renderer.cpp src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/msaaResolve.cpp src/renderer/taa.cpp src/renderer/engineUi.cpp src/renderer/debugViews.cpp src/rhi/renderContext.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.cpp src/assets/mesh.cpp src/assets/texture.cpp src/renderer/geometryPool.cpp src/renderer/gpuTable.cpp CMakeLists.txt shaders/lib/shadow.slang shaders/passes/shadow.slang examples/06_shadows/main.cpp">
+<meta name="rasm-sources" content="include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h src/engine.cpp src/platform/window.cpp src/platform/paths.cpp src/renderer/frameStats.cpp src/renderer/gpuScene.cpp src/renderer/renderGraph.cpp src/renderer/renderer.cpp src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/msaaResolve.cpp src/renderer/taa.cpp src/renderer/engineUi.cpp src/renderer/debugViews.cpp src/renderer/inspector.cpp src/rhi/renderContext.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.cpp src/assets/mesh.cpp src/assets/texture.cpp src/renderer/geometryPool.cpp src/renderer/gpuTable.cpp CMakeLists.txt shaders/lib/shadow.slang shaders/passes/shadow.slang examples/06_shadows/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -53,6 +53,7 @@
   <tr><td><a href="#getUiTexture"><code>getUiTexture</code></a></td><td>a texture as an <code>ImTextureID</code> for <code>ImGui::Image</code></td><td>this page</td></tr>
   <tr><td><a href="#setDebugView"><code>setDebugView</code></a></td><td>show normals, UVs, overdraw, LODs, culling or light counts</td><td>this page</td></tr>
   <tr><td><a href="#setCullingFrozen"><code>setCullingFrozen</code></a></td><td>keep the culling of one frame while the camera moves</td><td>this page</td></tr>
+  <tr><td><a href="#setInspection"><code>setInspection</code></a>, <a href="#getInspection"><code>getInspection</code></a></td><td>show a render target, depth, Hi-Z level, light clusters or an entity's GPU table rows in the RASM window</td><td>this page</td></tr>
   <tr><td><a href="#getCurrentFrameResources"><code>getCurrentFrameResources</code></a></td><td>this frame's command buffer and depth</td><td>this page</td></tr>
   <tr><td><a href="#recreateSwapchain"><code>recreateSwapchain</code></a></td><td>rebuild after a resize</td><td>this page</td></tr>
   <tr><td><a href="#waitForLoads"><code>waitForLoads</code></a></td><td>finish every background load now</td><td>this page</td></tr>
@@ -882,6 +883,34 @@ for (int i = 1; i + 1 &lt; argc; ++i)
       <li>What the frozen visibility never saw stays hidden until you unfreeze: an entity added after the freeze, or a mesh that finished loading after it.</li>
       <li>Freeze after a few frames of normal culling: a view's first frame has seen nothing yet.</li>
     </ul>
+  </div>
+</div>
+
+<h3>Buffers and GPU tables</h3>
+
+<p>The RASM window has two more sections. <b>Buffers</b> lists the resources of the graph that runs this frame (each render target's colors and depth, each scene view's Hi-Z and light clusters) and shows the one you pick, with a face, sample, channel, Hi-Z level or cluster slice where it has them. <b>GPU tables</b> lists the GPU scene tables (rows used, bytes, rows sent this frame) and one entity's rows field by field. How the picture is made: <a href="../guides/inspecting-gpu-resources.html">Inspecting GPU resources</a>.</p>
+
+<div class="api" id="setInspection">
+  <pre class="sig">void setInspection(const Inspection&amp; inspection);</pre>
+  <div class="body">
+    <p>Picks what the two sections show, as picking it in the window does, and opens them in the next frame (the other sections close once). A target is found by its <code>RenderTargetDesc::name</code> in the graph that runs; one the graph does not use shows "not in this frame". Needs <code>EngineConfig::ui</code>: without it the call logs a warning and only stores the value.</p>
+    <ul>
+      <li>While the Buffers section is open with a pick, the graph holds one more compute pass, <samp>Inspect &lt;resource&gt;</samp>, right after the pass that last writes the resource. It copies the resource into a 1024 × 1024 <code>R16G16B16A16_SFLOAT</code> storage target that the UI pass reads. The pass is added from the next frame on; a new pick or a closed section changes the graph again, so the first frame after it recompiles the graph (and lays its transient targets out again).</li>
+      <li>With no pick, or the section closed, nothing is added: the graph, its barriers and its GPU timers are the ones without the UI.</li>
+      <li>The graph needs a UI pass (<a href="#addUiPass"><code>addUiPass</code></a>) to show the copy.</li>
+    </ul>
+    <pre><code>// What examples/09_gltf_materials does for --inspect shadow_cascade_0 depth 0
+rasm::Inspection inspection;
+inspection.target = "shadow_cascade_0";
+inspection.kind = rasm::InspectKind::DEPTH;
+engine.setInspection(inspection);</code></pre>
+  </div>
+</div>
+
+<div class="api" id="getInspection">
+  <pre class="sig">const Inspection&amp; getInspection() const;</pre>
+  <div class="body">
+    <p>What the sections show now, with the changes made in the window.</p>
   </div>
 </div>
 

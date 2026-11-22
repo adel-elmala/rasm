@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Immediate-mode UI · RASM</title>
 <meta name="description" content="How an immediate-mode UI like Dear ImGui works: the UI is code that runs every frame, widgets append triangles to draw lists, draw commands carry a clip rectangle and a texture, one atlas holds the font, and the renderer turns it all into indexed draws with scissors. Input capture, sRGB blending of UI colors, and how RASM draws Dear ImGui through its own RHI.">
-<meta name="rasm-sources" content="src/renderer/ui.cpp src/renderer/ui.h src/renderer/engineUi.cpp src/platform/uiPlatform.cpp src/platform/uiPlatform.h shaders/passes/ui.slang src/platform/window.cpp src/engine.cpp include/rasm/engine.h include/rasm/types.h src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp examples/15_debug_ui/main.cpp">
+<meta name="rasm-sources" content="src/renderer/ui.cpp src/renderer/ui.h src/renderer/engineUi.cpp src/platform/uiPlatform.cpp src/platform/uiPlatform.h shaders/passes/ui.slang src/platform/window.cpp src/engine.cpp include/rasm/engine.h include/rasm/types.h src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp examples/15_debug_ui/main.cpp src/renderer/inspector.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -350,6 +350,7 @@
   <tr><td>Textures</td><td>an atlas, IDs for images</td><td>ImGui's texture requests (<code>ImGuiBackendFlags_RendererHasTextures</code>): a new texture for each request, in a <a href="bindless.html">bindless</a> slot; the old one is freed once the graphics fence passes the last frame submitted with it. An <code>ImTextureID</code> is the slot + 1, with a bit for sRGB textures (<code>Engine::getUiTexture</code>).</td></tr>
   <tr><td>Blending</td><td>as numbers, through a UNORM view</td><td>The swapchain's <code>B8G8R8A8_UNORM</code> view (<code>VK_KHR_swapchain_mutable_format</code>) when the device has it; else colors decoded in the shader (<code>D31</code>).</td></tr>
   <tr><td>Where it draws</td><td>last in the frame</td><td>The <code>UI</code> pass of <code>Engine::addUiPass</code>, after the tone map. A graph without it gets one from <code>endFrame</code>, at the cost of one more load and store of the image.</td></tr>
+  <tr><td>Images of the frame</td><td>any texture, by its ID</td><td>The RASM window's Buffers section shows a render target, depth, Hi-Z level or light clusters of the running frame: an Inspect pass copies it into a storage target that the <code>UI</code> pass declares as a read, so the graph moves it to <code>SAMPLED</code>. The GPU tables section lists the GPU scene tables and an entity's rows. See <a href="inspecting-gpu-resources.html">Inspecting GPU resources</a>.</td></tr>
   <tr><td>Scale</td><td>style and font by the display scale</td><td>The display's content scale, read once at startup (<code>getUiContentScale</code>).</td></tr>
 </table>
 </div>
