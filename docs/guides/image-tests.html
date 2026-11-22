@@ -355,7 +355,7 @@
 <div class="stats">
   <div><b>0</b><span>largest difference, the same job twice</span><small>15 tests, every pixel equal</small></div>
   <div><b>0</b><span>largest difference, two CI runs</span><small>and a third run with each test alone in its process</small></div>
-  <div><b>80 s</b><span>the 15 tests on lavapipe in CI</span><small>plus 20 s to fetch and register it</small></div>
+  <div><b>≈ 1 min</b><span>the 15 tests on lavapipe in CI</span><small>50 to 80 s; lavapipe from the cache takes 8 s more</small></div>
 </div>
 
 <div class="table-wrap">
@@ -367,7 +367,7 @@
   <tr><td>An asset that can't be stored</td><td>Sponza (CRYENGINE Limited License) is fetched from a pinned commit of KhronosGroup/glTF-Sample-Assets into <samp>build/test-assets/</samp>.</td></tr>
   <tr><td>Run the driver only on request</td><td><code>tools/image_tests.py</code> downloads and runs Mesa only with <code class="lang-text">--lavapipe</code>; <code>verify-change</code> calls it only with <code class="lang-text">--images</code>. The presets' <code class="lang-text">ctest</code> leaves out the label <code class="lang-text">image</code>.</td></tr>
   <tr><td>Real GPUs</td><td>Not against the goldens: <code>verify-change</code> compares every example with a baseline taken on the same machine.</td></tr>
-  <tr><td>Continuous integration</td><td>The Windows job runs the tests after the Release tests (about 1.7 minutes) and uploads <samp>actual.png</samp>, <samp>expected.png</samp> and <samp>diff.png</samp> as <samp>image-test-failures</samp> when one fails.</td></tr>
+  <tr><td>Continuous integration</td><td>The Windows job runs the tests after the Release tests (about 1 minute) and uploads <samp>actual.png</samp>, <samp>expected.png</samp> and <samp>diff.png</samp> as <samp>image-test-failures</samp> when one fails.</td></tr>
 </table>
 </div>
 
