@@ -194,7 +194,7 @@ namespace rasm
         int32_t      forcedLod               = -1;
         bool         asyncCompute            = false;
         bool         clusteredLighting       = true;     // false: every pixel shades every light of the scene
-        bool         hostImageCopy           = true;     // false: textures are copied from the staging ring, as on a device without host image copy
+        bool         hostImageCopy           = true;     // where the device copies a format on the host into video memory at full speed; false: every texture comes from the staging ring
         bool         bloom                   = false;    // Engine::render adds the bloom passes (Camera::bloomStrength)
         bool         ui                      = false;    // Dear ImGui (CMake RASM_IMGUI): the RASM window on F1 and Engine::setUiCallback
         AntiAliasing antiAliasing            = AntiAliasing::NONE; // Engine::render's scene target: MSAA draws it with several samples per pixel
@@ -237,9 +237,8 @@ namespace rasm
     {
         uint32_t                    width       = 0;
         uint32_t                    height      = 0;
-        unsigned char*              data        = nullptr;          // stb_image pixels
-        Format                      format      = Format::UNKNOWN;  // KTX2: the format of levels
-        std::vector<unsigned char>  levels;                         // KTX2: every level, one after another
+        Format                      format      = Format::UNKNOWN;  // the format of levels
+        std::vector<unsigned char>  levels;                         // every level, one after another, mips made or from the file
         std::vector<uint64_t>       levelSizes;
     };
 

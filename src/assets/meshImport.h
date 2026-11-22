@@ -13,5 +13,6 @@ namespace rasm
     int         getBasisuSource(const tinygltf::Model& model, int textureIndex);
     uint64_t    getKtxSlotKey(int image, KtxSlot slot);
     uint64_t    getKtxImageKey(int image, Format format);
+    uint64_t    getImageLevelsKey(int image, KtxSlot slot);
 }
 // clang-format on

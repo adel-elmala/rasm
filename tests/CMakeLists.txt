@@ -34,6 +34,7 @@ add_executable(rasm_tests
             "skinningTests.cpp"
             "taaTests.cpp"
             "textureStatesTests.cpp"
+            "textureUploadTests.cpp"
             "transformTests.cpp"
             "uiTests.cpp"
             "uploadManagerTests.cpp"

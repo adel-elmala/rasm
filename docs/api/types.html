@@ -493,12 +493,14 @@ struct RenderTarget
 <div class="api" id="TextureRaw">
   <pre class="sig">struct TextureRaw
 {
-    uint32_t       width  = 0;
-    uint32_t       height = 0;
-    unsigned char* data   = nullptr;
+    uint32_t                    width  = 0;
+    uint32_t                    height = 0;
+    Format                      format = Format::UNKNOWN;
+    std::vector&lt;unsigned char&gt;  levels;
+    std::vector&lt;uint64_t&gt;       levelSizes;
 };</pre>
   <div class="body">
-    <p>A decoded image: <code>loadTexture</code>'s worker thread fills it with RGBA8 pixels from stb_image, and the main thread uploads and frees it. <code>data</code> is null when decoding failed. Applications do not see it.</p>
+    <p>A decoded texture with every mip level, made on a worker thread: <code>loadTexture</code>'s worker and a glTF import fill it from a PNG or JPEG (the mips made there) or a KTX2 file, and the main thread only copies it into the texture. <code>levels</code> holds the levels one after another, level 0 first, and <code>levelSizes</code> the size of each. <code>levelSizes</code> is empty when decoding failed. Applications do not see it. See <a href="../guides/texture-uploads.html">texture uploads</a>.</p>
   </div>
 </div>
 
@@ -544,15 +546,17 @@ struct RenderTarget
 <div class="api" id="VRAMStats">
   <pre class="sig">struct VRAMStats
 {
-    uint64_t vramBudget = 0;
-    uint64_t vramUsage  = 0;
-    uint64_t hostBudget = 0;
-    uint64_t hostUsage  = 0;
+    uint64_t vramBudget    = 0;
+    uint64_t vramUsage     = 0;
+    uint64_t vramAllocated = 0;
+    uint64_t hostBudget    = 0;
+    uint64_t hostUsage     = 0;
 };</pre>
   <div class="body">
     <p>GPU memory in bytes, summed over the memory heaps, from <a href="low-level.html#queryVRAMStats">queryVRAMStats</a>, <code>Engine::queryMemoryStats</code> or <code>FrameStats::memory</code>.</p>
     <dl>
-      <dt>vramBudget, vramUsage</dt><dd>Device-local heaps (video memory): how much this process may use now, and how much it uses.</dd>
+      <dt>vramBudget, vramUsage</dt><dd>Device-local heaps (video memory): how much this process may use now, and how much it uses. The usage counts whole memory blocks, and the allocator puts many textures and buffers in one block, so it grows in steps (256 MiB on a large heap).</dd>
+      <dt>vramAllocated</dt><dd>The bytes of the resources inside those blocks: what the buffers and textures take. Use it to see what a load or a destroy changed; the stats overlay and the RASM window show it as <samp>allocated</samp>.</dd>
       <dt>hostBudget, hostUsage</dt><dd>The other heaps (system memory the GPU can reach).</dd>
     </dl>
   </div>

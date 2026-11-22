@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Streaming Assets · RASM</title>
 <meta name="description" content="How to load meshes and textures without freezing the frame: worker threads and job queues, the hand-off to the main thread, per-frame upload budgets, placeholders, caching by path, failures and freeing the CPU copy, and how RASM does it.">
-<meta name="rasm-sources" content="src/assets/environment.cpp src/assets/mesh.cpp src/assets/texture.cpp src/assets/ktxImage.cpp src/assets/material.cpp src/assets/meshImport.cpp src/engine.cpp include/rasm/engine.h include/rasm/mesh.h src/renderer/geometryPool.cpp src/renderer/gpuScene.cpp src/rhi/uploadManager.cpp">
+<meta name="rasm-sources" content="src/assets/environment.cpp src/assets/mesh.cpp src/assets/texture.cpp src/rhi/mipChain.cpp src/assets/ktxImage.cpp src/assets/material.cpp src/assets/meshImport.cpp src/engine.cpp include/rasm/engine.h include/rasm/mesh.h src/renderer/geometryPool.cpp src/renderer/gpuScene.cpp src/rhi/uploadManager.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -970,14 +970,14 @@
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Workers</td><td>a thread pool with a job queue, or one task per load</td><td>One <code>std::async</code> task per load. No pool, no priorities, no cancel.</td></tr>
-  <tr><td>Hand-off</td><td>a result slot, checked without blocking</td><td>A <code>std::future</code> in <code>PendingMeshLoad</code> or <code>PendingTextureLoad</code>. <code>finishLoads</code> checks it with <code>wait_for</code> and a zero timeout. Worker code (<code>importMeshFile</code>, <code>buildMeshLods</code>, <code>decodeTexture</code>) never touches the engine.</td></tr>
+  <tr><td>Hand-off</td><td>a result slot, checked without blocking</td><td>A <code>std::future</code> in <code>PendingMeshLoad</code> or <code>PendingTextureLoad</code>. <code>finishLoads</code> checks it with <code>wait_for</code> and a zero timeout. A glTF's textures wait in <code>PendingTextureLoad</code> with their levels already made (<code>levels</code>), so they are ready at once. Worker code (<code>importMeshFile</code>, <code>buildMeshLods</code>, <code>decodeTexture</code>, <code>buildTextureLevels</code>) never touches the engine.</td></tr>
   <tr><td>When results are picked up</td><td>one fixed point per frame</td><td>The start of <code>beginFrame</code>, before the minimized-window check, so loads also finish while the window is minimized.</td></tr>
-  <tr><td>Budget</td><td>time, bytes or count</td><td>Time: <code>LOAD_BUDGET</code> = 4 ms, checked before each result. Textures first, then meshes. All the textures of a glTF file are made inside its one <code>finishMeshLoad</code>, so one big file can go well over. <code>waitForLoads</code> takes everything, with no budget.</td></tr>
-  <tr><td>Upload</td><td>through staging memory</td><td>Geometry (vertices, indices, and the streams only some meshes have: colors, skin weights, morph deltas) and animation data: <code>fillBuffer</code> writes straight into the pool when its memory is host-visible (ReBAR, integrated GPUs). Otherwise it goes into a 64 MiB staging ring, and the copies run before the frame's work at its submit (see <a href="gpu-memory.html#in-rasm">GPU memory</a>). Textures: <code>fillTexture</code> copies on the host (host image copy) where the format allows it, or through the same staging ring. An image's mip levels are built on the CPU, on the main thread (P2); a KTX2 file is transcoded on the worker and brings its mips, so the main thread only copies (<a href="texture-compression.html#in-rasm">texture compression</a>): the Flight Helmet takes 23 ms there as KTX2 and 200 ms as PNG (Release build, RTX 3060).</td></tr>
+  <tr><td>Budget</td><td>time, bytes or count</td><td>Time: <code>LOAD_BUDGET</code> = 4 ms, checked before each result. Meshes, then environments, then textures, at least one texture per frame. A glTF file's <code>finishMeshLoad</code> creates its textures and queues their fills as texture results of their own, so a big model's copies spread over frames (<a href="texture-uploads.html#in-rasm">texture uploads</a>). One step is never split: a model's geometry goes in one <code>finishMeshLoad</code>, a texture in one fill (<code>P24</code>). <code>waitForLoads</code> takes everything, with no budget.</td></tr>
+  <tr><td>Upload</td><td>through staging memory</td><td>Geometry (vertices, indices, and the streams only some meshes have: colors, skin weights, morph deltas) and animation data: <code>fillBuffer</code> writes straight into the pool when its memory is host-visible (ReBAR, integrated GPUs). Otherwise it goes into a 64 MiB staging ring, and the copies run before the frame's work at its submit (see <a href="gpu-memory.html#in-rasm">GPU memory</a>). Textures: <code>fillTexture</code> copies through the same staging ring, or on the host (host image copy) where that costs the GPU nothing. Every level comes from the worker: an image's mips are made there (<code>buildTextureLevels</code>), a KTX2 file brings its own (<a href="texture-compression.html#in-rasm">texture compression</a>), so the main thread only copies. The longest frame while the Flight Helmet loads is 5 ms as KTX2 and 10 ms as PNG, against 28 and 206 ms when the mips were made on the main thread and a model's textures were copied in one frame (Release, RTX 3060; <a href="texture-uploads.html">texture uploads</a>).</td></tr>
   <tr><td>Placeholders</td><td>hide, placeholder, low detail first</td><td>Hide: an entity waits in <code>entitiesWaitingForMesh</code>, then in <code>entitiesWaitingForTextures</code>, until its mesh and every texture of its materials are in. No low-detail-first. A texture whose decode fails is filled white, because a material may already use it.</td></tr>
   <tr><td>Cache</td><td>normalized path → handle</td><td><code>resolveAssetPath</code> joins the path to <code>EngineConfig::assetRoot</code> and normalizes it. Meshes: <code>loadedMeshes</code>, by path. Textures: <code>loadedTextures</code>, by path and format. glTF images: <code>GltfImportCache</code>, once per image, sampler and color space, per model.</td></tr>
   <tr><td>Failures</td><td>early or late; fail fast or retry</td><td>Early (missing file, unsupported extension, out of handles): invalid handle. Late (decode fails, a pool is full): <code>MeshState::FAILED</code>. Loading a failed path again retries, on the same handle, and <code>destroyMesh</code> frees it. <code>GeometryPool::allocate</code> takes every range of every sub-mesh, and the animation pool's largest free range (<code>EngineConfig::animationPoolBytes</code>) is checked, before anything is created, so a mesh that does not fit takes nothing.</td></tr>
-  <tr><td>Freeing</td><td>free the CPU copy after upload</td><td>glTF buffers go on the worker, once every accessor is read. The vertex, index, LOD, skin and morph arrays, the animation keys and the glTF model go at the end of <code>finishMeshLoad</code>. Texture pixels go with <code>stbi_image_free</code> at the end of <code>finishTextureLoad</code> (P6). Nothing is kept for the CPU.</td></tr>
+  <tr><td>Freeing</td><td>free the CPU copy after upload</td><td>glTF buffers go on the worker, once every accessor is read. The vertex, index, LOD, skin and morph arrays, the animation keys and the glTF model go at the end of <code>finishMeshLoad</code>. The decoded pixels go on the worker once their mips are made (<code>stbi_image_free</code> in <code>decodeTexture</code>; a glTF's image data after <code>buildImageLevels</code>), and the levels when their texture is filled (P6). Nothing is kept for the CPU.</td></tr>
   <tr><td>Formats</td><td>glTF and OBJ</td><td>glTF through tinygltf, OBJ through tinyobjloader. An OBJ file becomes one sub-mesh with one vertex per face corner and no material; <code>buildMeshLods</code> merges equal vertices later. OBJ's v is flipped.</td></tr>
 </table>
 </div>
@@ -987,11 +987,11 @@
 <div class="split">
   <div>
     <h4><code>loadTexture</code></h4>
-    <p>The main thread reads only the image header (<code>stbi_info</code>) and creates the texture at full size at once, so a material can use the handle before the pixels exist. The worker runs <code>decodeTexture</code> (<code>stbi_load</code>, always 4 channels). <code>finishTextureLoad</code> fills it and sets <code>texturesFinished</code>, so <code>syncGpuScene</code> checks the waiting entities.</p>
+    <p>The main thread reads only the image header (<code>stbi_info</code>) and creates the texture at full size at once, so a material can use the handle before the pixels exist. The worker runs <code>decodeTexture</code> (<code>stbi_load</code>, always 4 channels, then every mip with <code>buildTextureLevels</code>). <code>finishTextureLoad</code> copies the levels and sets <code>texturesFinished</code>, so <code>syncGpuScene</code> checks the waiting entities.</p>
   </div>
   <div>
     <h4>Images inside a glTF file</h4>
-    <p>tinygltf decodes them on the worker, as part of the file. <code>loadMaterial</code> creates and fills each one on the main thread, inside <code>finishMeshLoad</code>, so they are ready in the same frame as the mesh. An image with fewer than 4 channels is expanded to RGBA first.</p>
+    <p>tinygltf decodes them on the worker, as part of the file, and <code>buildImageLevels</code> expands each to RGBA and makes its mips there, once per kind of slot (a normal map's are renormalized). <code>loadMaterial</code> creates each texture inside <code>finishMeshLoad</code> and queues its fill in <code>pendingTextures</code>; <code>isLoaded(mesh)</code> waits for them.</p>
   </div>
 </div>
 
@@ -1003,7 +1003,8 @@
   <tr><td>Mesh loads</td><td><code>Engine::loadMesh</code>, <code>loadGLTF</code>, <code>createMesh</code>, <code>finishMeshLoad</code>, <code>isLoaded</code> in <code>src/assets/mesh.cpp</code></td></tr>
   <tr><td>Texture loads</td><td><code>Engine::loadTexture</code>, <code>decodeTexture</code>, <code>finishTextureLoad</code> in <code>src/assets/texture.cpp</code></td></tr>
   <tr><td>Worker import</td><td><code>importMeshFile</code>, <code>importGltf</code>, <code>importObj</code> in <code>src/assets/meshImport.cpp</code>; animations, skins and morph targets in <code>src/assets/animationImport.cpp</code>, <code>src/assets/skinImport.cpp</code>, <code>src/assets/morphImport.cpp</code></td></tr>
-  <tr><td>glTF materials and images</td><td><code>Engine::loadMaterial</code> in <code>src/assets/material.cpp</code></td></tr>
+  <tr><td>glTF materials and images</td><td><code>Engine::loadMaterial</code> in <code>src/assets/material.cpp</code>; the images' mips, <code>buildImageLevels</code> in <code>src/assets/meshImport.cpp</code></td></tr>
+  <tr><td>Mips on the worker</td><td><code>buildTextureLevels</code> in <code>src/rhi/mipChain.cpp</code> (<a href="texture-uploads.html">texture uploads</a>)</td></tr>
   <tr><td>Budget and pick-up</td><td><code>finishLoads</code>, <code>waitForLoads</code>, <code>LOAD_BUDGET</code>, <code>resolveAssetPath</code> in <code>src/engine.cpp</code></td></tr>
   <tr><td>Pending loads</td><td><code>PendingMeshLoad</code>, <code>PendingTextureLoad</code>, <code>pendingMeshes</code>, <code>pendingTextures</code> in <code>include/rasm/engine.h</code></td></tr>
   <tr><td>Result types and states</td><td><code>GLTFRaw</code>, <code>ObjRaw</code>, <code>MeshState</code> in <code>include/rasm/mesh.h</code>; <code>TextureRaw</code> in <code>include/rasm/types.h</code></td></tr>
@@ -1022,13 +1023,14 @@
     <li>Check that the whole mesh fits (<code>GeometryPool::fits</code>, the animation pool) before creating any part of it.</li>
     <li>A texture a material may already use is always filled, even when its decode fails.</li>
     <li>Free the CPU copy after the upload (P6). Do not keep vertex arrays, the glTF model or pixels in the registry.</li>
-    <li>Shutdown waits for every pending load. The engine's destructor takes each pending texture result and frees its pixels.</li>
+    <li>Shutdown waits for every pending load: a pending texture's future waits for its worker when it is destroyed.</li>
+    <li>The main thread makes no mips for a load: the worker hands over every level.</li>
   </ul>
 </div>
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>No thread pool, no priorities, no cancel. Mips are built on the main thread (P2), so a big glTF file can make one long frame. A texture can be destroyed (<code>Engine::destroyTexture</code>), also while it loads: its decode is dropped when it ends. A mesh can be destroyed too, also while it loads, and its pool ranges come back (<a href="resource-lifetime.html">deferred destruction</a>).</p>
+  <p>No thread pool, no priorities, no cancel (<code>P21</code>); a glTF's images are decoded and get their mips one after another on its one task (<code>P14</code>). A model's geometry and each texture are finished in one step, however big (<code>P24</code>). A texture can be destroyed (<code>Engine::destroyTexture</code>), also while it loads: its decode is dropped when it ends. A mesh can be destroyed too, also while it loads, and its pool ranges come back (<a href="resource-lifetime.html">deferred destruction</a>).</p>
 </div>
 
 <h3>Further reading</h3>

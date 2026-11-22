@@ -317,7 +317,7 @@ engine.updateMaterial(pulse, values);</code></pre>
   </div>
   <div>
     <h4>Later</h4>
-    <p>A worker decodes the pixels to RGBA8, or reads and transcodes a <samp>.ktx2</samp> file. A later <code>beginFrame</code> uploads them: an image's mip levels are built on the CPU, a KTX2 file's come from the file. Then <code>isLoaded</code> is true and waiting entities are drawn.</p>
+    <p>A worker decodes the pixels to RGBA8 and makes their mip levels, or reads and transcodes a <samp>.ktx2</samp> file, whose levels come from the file. A later <code>beginFrame</code> copies the levels into the texture, under the per-frame load budget. Then <code>isLoaded</code> is true and waiting entities are drawn.</p>
   </div>
 </div>
 
@@ -427,7 +427,7 @@ ctx.pushConstants(commandBuffer, overlayPipeline, &amp;textureIndex, sizeof(text
 
 <h2 id="gltf"><span class="n">6</span>What glTF import creates</h2>
 
-<p><a href="scene.html#loadGLTF"><code>loadGLTF</code></a> turns each glTF material into a <code>Material</code> and each image into a texture. This runs on the main thread when the file's upload starts, in <code>beginFrame</code>.</p>
+<p><a href="scene.html#loadGLTF"><code>loadGLTF</code></a> turns each glTF material into a <code>Material</code> and each image into a texture. The worker that reads the file also makes each image's mip levels (once per kind of slot: color, data, or a normal map, whose levels are renormalized). The materials and textures are created on the main thread when the file's upload starts, in <code>beginFrame</code>, and the textures are filled a few per frame after that.</p>
 
 <div class="table-wrap">
 <table>

@@ -73,7 +73,8 @@ namespace rasm
             ImGui::Text("Lights     %s visible, %s global", formatCount(stats.lightsVisible).c_str(), formatCount(stats.lightsGlobal).c_str());
             if (stats.lightsDropped > 0)
                 ImGui::Text("Dropped    %s (full clusters)", formatCount(stats.lightsDropped).c_str());
-            ImGui::Text("VRAM       %llu / %llu MiB", static_cast<unsigned long long>(stats.memory.vramUsage >> 20), static_cast<unsigned long long>(stats.memory.vramBudget >> 20));
+            ImGui::Text("VRAM       %llu / %llu MiB, %llu allocated", static_cast<unsigned long long>(stats.memory.vramUsage >> 20), static_cast<unsigned long long>(stats.memory.vramBudget >> 20),
+                        static_cast<unsigned long long>(stats.memory.vramAllocated >> 20));
         }
 
         void drawKey(const float (*colors)[3], const char *const *labels, uint32_t count)

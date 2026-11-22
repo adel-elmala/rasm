@@ -213,11 +213,6 @@ namespace rasm::rhi
                 .dynamicRendering = VK_TRUE,
             };
 
-            VkPhysicalDeviceVulkan14Features enabledVk14Features{
-                .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES,
-                .pNext = &enabledVk13Features,
-                .hostImageCopy = VK_TRUE};
-
             VkPhysicalDeviceFeatures enabledVk10Features{
                 .multiDrawIndirect = VK_TRUE,
                 .drawIndirectFirstInstance = VK_TRUE,
@@ -226,8 +221,7 @@ namespace rasm::rhi
             };
 
             // A headless device presents nothing, so it needs no surface and no swapchain extension.
-            physDeviceSelector.set_required_features_14(enabledVk14Features)
-                .set_required_features_13(enabledVk13Features)
+            physDeviceSelector.set_required_features_13(enabledVk13Features)
                 .set_required_features_12(enabledVk12Features)
                 .set_required_features_11(enabledVk11Features)
                 .set_required_features(enabledVk10Features)
@@ -590,6 +584,8 @@ namespace rasm::rhi
         const bool astc = physicalDevice.enable_features_if_present(VkPhysicalDeviceFeatures{.textureCompressionASTC_LDR = VK_TRUE});
         const bool etc2 = physicalDevice.enable_features_if_present(VkPhysicalDeviceFeatures{.textureCompressionETC2 = VK_TRUE});
         spdlog::info("Texture compression: BC {}, ASTC {}, ETC2 {}.", bc ? "yes" : "no", astc ? "yes" : "no", etc2 ? "yes" : "no");
+        // Host image copy only saves the staging copy, so a GPU without it uses the staging ring for every texture.
+        const bool hostImageCopy = desc.hostImageCopy && physicalDevice.enable_extension_features_if_present(VkPhysicalDeviceVulkan14Features{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES, .hostImageCopy = VK_TRUE});
         // A UNORM view of the sRGB swapchain lets the UI blend on the stored sRGB numbers, as Dear ImGui is designed for.
         swapchainMutable = surface != VK_NULL_HANDLE && physicalDevice.enable_extension_if_present(VK_KHR_SWAPCHAIN_MUTABLE_FORMAT_EXTENSION_NAME);
 
@@ -603,7 +599,6 @@ namespace rasm::rhi
         // This device's functions, straight from the driver (or the first layer): no loader trampoline per call, and a
         // second device has its own table.
         volkLoadDeviceTable(&vk, device.device);
-        queryFormatSupport(desc.hostImageCopy);
         pipelineCache.load(vk, device.device, physicalDevice.properties, desc.cacheDir);
 
         auto queueRet = device.get_queue(vkb::QueueType::graphics);
@@ -650,6 +645,9 @@ namespace rasm::rhi
                 spdlog::info("No separate compute queue with matching timestamps; compute passes run on the graphics queue.");
             }
         }
+
+        // After the queues: an image's memory types are asked with the sharing it will have.
+        queryFormatSupport(hostImageCopy);
 
         VmaAllocatorCreateInfo allocatorCreateInfo = {};
         allocatorCreateInfo.flags = VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT | VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
@@ -731,26 +729,27 @@ namespace rasm::rhi
         if (!fitsDevice(desc, physicalDevice.properties.limits))
             return nullptr;
 
-        const uint32_t mipLevels = mipLevelCount(desc);
-        const bool hostCopy = usesHostCopy(desc);
-        const VkImageCreateInfo imageInfo = imageCreateInfo(desc, mipLevels, hostCopy, sharedFamilies, sharedFamilyCount);
-
-        VmaAllocationCreateInfo allocInfo = {};
-        allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
-        allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
-
-        if (hostCopy)
-        {
-            allocInfo.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                               VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT;
-        }
-
         auto *texture = new VulkanTexture();
         texture->desc = desc;
-        texture->mipLevels = mipLevels;
-        texture->hostCopy = hostCopy;
+        texture->mipLevels = mipLevelCount(desc);
 
-        auto result = vmaCreateImage(allocator, &imageInfo, &allocInfo, &texture->image, &texture->allocation, nullptr);
+        // Sampled textures share VMA's blocks, so making or freeing one is rarely a vkAllocateMemory or vkFreeMemory
+        // (P22); attachments and storage textures, few and often large, get their own. No image asks for host access: a
+        // host-copy image may use only the video-memory types queryFormatSupport found, and when those are full it is
+        // made for the staging ring instead.
+        VkResult result = VK_ERROR_UNKNOWN;
+        for (bool hostCopy = usesHostCopy(desc);; hostCopy = false)
+        {
+            const VkImageCreateInfo imageInfo = imageCreateInfo(desc, texture->mipLevels, hostCopy, sharedFamilies, sharedFamilyCount);
+            VmaAllocationCreateInfo allocInfo = {};
+            allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+            allocInfo.flags = desc.usage == TextureUsage::SAMPLED ? 0 : VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+            allocInfo.memoryTypeBits = hostCopy ? formatSupport[static_cast<uint32_t>(desc.format)].hostCopyTypes : 0;
+            texture->hostCopy = hostCopy;
+            result = vmaCreateImage(allocator, &imageInfo, &allocInfo, &texture->image, &texture->allocation, nullptr);
+            if (result == VK_SUCCESS || !hostCopy)
+                break;
+        }
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to create image '{}'. Error: {}", desc.name, toVkResultString(result));
@@ -1418,9 +1417,26 @@ namespace rasm::rhi
     }
 
     // The format table is read once: the features of a format never change while the device lives. A block format also
-    // needs its compression feature, which initialize enabled where the GPU has it.
+    // needs its compression feature, which initialize enabled where the GPU has it. A format is copied on the host only
+    // where that costs the GPU nothing when it samples the image (P2): the driver says the image keeps its optimal
+    // layout, and it can live in video memory (getHostCopyMemoryTypes). Otherwise it is filled from the staging ring.
     void VulkanDevice::queryFormatSupport(bool hostImageCopy)
     {
+        // The copy writes into SHADER_READ_ONLY_OPTIMAL, which the device must list.
+        if (hostImageCopy)
+        {
+            VkPhysicalDeviceHostImageCopyProperties copyProperties = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_PROPERTIES};
+            VkPhysicalDeviceProperties2 properties2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &copyProperties};
+            vkGetPhysicalDeviceProperties2(physicalDevice.physical_device, &properties2);
+            std::vector<VkImageLayout> layouts(copyProperties.copyDstLayoutCount);
+            copyProperties.pCopyDstLayouts = layouts.data();
+            vkGetPhysicalDeviceProperties2(physicalDevice.physical_device, &properties2);
+            hostImageCopy = std::find(layouts.begin(), layouts.end(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) != layouts.end();
+        }
+        VkPhysicalDeviceMemoryProperties memory = {};
+        vkGetPhysicalDeviceMemoryProperties(physicalDevice.physical_device, &memory);
+
+        uint32_t hostCopyFormats = 0;
         const VkPhysicalDeviceFeatures &enabled = physicalDevice.features;
         for (uint32_t value = 0; value < FORMAT_COUNT; ++value)
         {
@@ -1457,18 +1473,43 @@ namespace rasm::rhi
             VkFormatProperties2 properties = {.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2, .pNext = &properties3};
             vkGetPhysicalDeviceFormatProperties2(physicalDevice.physical_device, vkFormat, &properties);
             const VkFormatFeatureFlags2 features = properties3.optimalTilingFeatures;
-            const bool hostCopy = hostImageCopy && (features & VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT) != 0;
-            const bool filled = hostCopy || (features & VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT) != 0;
-            formatSupport[value] = {.sampled = filled && (features & VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT) != 0 &&
-                                               (features & VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0,
-                                    .hostCopy = hostCopy};
+            const bool sampled = (features & VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT) != 0 && (features & VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0 &&
+                                 (features & VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT) != 0;
+            uint32_t hostCopyTypes = 0;
+            if (sampled && hostImageCopy && (features & VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT) != 0)
+            {
+                VkHostImageCopyDevicePerformanceQuery performance = {.sType = VK_STRUCTURE_TYPE_HOST_IMAGE_COPY_DEVICE_PERFORMANCE_QUERY};
+                VkImageFormatProperties2 imageProperties = {.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2, .pNext = &performance};
+                const VkPhysicalDeviceImageFormatInfo2 imageInfo = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2,
+                                                                    .format = vkFormat,
+                                                                    .type = VK_IMAGE_TYPE_2D,
+                                                                    .tiling = VK_IMAGE_TILING_OPTIMAL,
+                                                                    .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_HOST_TRANSFER_BIT};
+                if (vkGetPhysicalDeviceImageFormatProperties2(physicalDevice.physical_device, &imageInfo, &imageProperties) == VK_SUCCESS && performance.optimalDeviceAccess)
+                {
+                    const TextureDesc desc = {.width = 256, .height = 256, .format = format, .usage = TextureUsage::SAMPLED};
+                    hostCopyTypes = getHostCopyMemoryTypes(memory, getImageMemoryTypes(desc, true), getImageMemoryTypes(desc, false));
+                }
+            }
+            formatSupport[value] = {.sampled = sampled, .hostCopyTypes = hostCopyTypes};
+            hostCopyFormats += hostCopyTypes != 0 ? 1 : 0;
         }
+        spdlog::info("Host image copy: {}.", hostCopyFormats > 0 ? std::to_string(hostCopyFormats) + " formats, in video memory" : "off, textures come from the staging ring");
+    }
+
+    uint32_t VulkanDevice::getImageMemoryTypes(const TextureDesc &desc, bool hostCopy)
+    {
+        const VkImageCreateInfo imageInfo = imageCreateInfo(desc, 1, hostCopy, sharedFamilies, sharedFamilyCount);
+        const VkDeviceImageMemoryRequirements info = {.sType = VK_STRUCTURE_TYPE_DEVICE_IMAGE_MEMORY_REQUIREMENTS, .pCreateInfo = &imageInfo};
+        VkMemoryRequirements2 requirements = {.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2};
+        vk.vkGetDeviceImageMemoryRequirements(device.device, &info, &requirements);
+        return requirements.memoryRequirements.memoryTypeBits;
     }
 
     bool VulkanDevice::usesHostCopy(const TextureDesc &desc) const
     {
         const auto value = static_cast<uint32_t>(desc.format);
-        return desc.usage == TextureUsage::SAMPLED && value < FORMAT_COUNT && formatSupport[value].hostCopy;
+        return desc.usage == TextureUsage::SAMPLED && value < FORMAT_COUNT && formatSupport[value].hostCopyTypes != 0;
     }
 
     bool VulkanDevice::supportsTextureFormat(Format format) const
@@ -1657,6 +1698,9 @@ namespace rasm::rhi
         memoryProperties2.pNext = &budgetProperties;
 
         vkGetPhysicalDeviceMemoryProperties2(physicalDevice.physical_device, &memoryProperties2);
+        // The usage counts whole memory blocks, which VMA fills with many resources; the allocated bytes are theirs.
+        VmaBudget budgets[VK_MAX_MEMORY_HEAPS] = {};
+        vmaGetHeapBudgets(allocator, budgets);
 
         for (uint32_t i = 0; i < memoryProperties2.memoryProperties.memoryHeapCount; ++i)
         {
@@ -1665,6 +1709,7 @@ namespace rasm::rhi
             {
                 vramStats.vramBudget += budgetProperties.heapBudget[i];
                 vramStats.vramUsage += budgetProperties.heapUsage[i];
+                vramStats.vramAllocated += budgets[i].statistics.allocationBytes;
             }
             else
             {

@@ -15,8 +15,8 @@ namespace rasm
     {
         constexpr uint32_t MAX_TEXT_COLUMNS = 40;
         // Frame, GPU and its timers (one is kept for culling), Draws, Culled, Triangles, two LOD lines, LOD draws
-        // (8 counts of up to 8 characters wrap at most twice), Lights, Dropped and VRAM.
-        constexpr uint32_t MAX_TEXT_ROWS = 2 + (MAX_GPU_TIMERS - 1) + 3 + 2 + 3 + 2 + 1;
+        // (8 counts of up to 8 characters wrap at most twice), Lights, Dropped, VRAM and Allocated.
+        constexpr uint32_t MAX_TEXT_ROWS = 2 + (MAX_GPU_TIMERS - 1) + 3 + 2 + 3 + 2 + 2;
         // Slow enough for the numbers to be read.
         constexpr float TEXT_REFRESH = 0.25f;
 
@@ -91,6 +91,8 @@ namespace rasm
             }
             std::snprintf(line, sizeof(line), "VRAM      %llu / %llu MiB\n", static_cast<unsigned long long>(stats.memory.vramUsage >> 20),
                           static_cast<unsigned long long>(stats.memory.vramBudget >> 20));
+            text += line;
+            std::snprintf(line, sizeof(line), "Allocated %llu MiB\n", static_cast<unsigned long long>(stats.memory.vramAllocated >> 20));
             text += line;
             return text;
         }

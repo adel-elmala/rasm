@@ -179,4 +179,20 @@ namespace rasm::rhi
     {
         return format == Format::D24_UNORM_S8_UINT || format == Format::D32_SFLOAT_S8_UINT;
     }
+
+    // The memory types an image with HOST_TRANSFER usage may use that are device-local and that an image filled by a
+    // copy may use too: there it is an ordinary texture. A driver that keeps HOST_TRANSFER images to other types puts
+    // them somewhere special: the NVIDIA driver allows only host-visible ones (system RAM, a small BAR heap, or video
+    // memory through resizable BAR), and with resizable BAR its GPU then stalls for 50 to 185 ms while a model's
+    // textures load (P2). 0 means the image is filled from the staging ring instead.
+    uint32_t getHostCopyMemoryTypes(const VkPhysicalDeviceMemoryProperties &memory, uint32_t hostTransferTypes, uint32_t copyTypes)
+    {
+        uint32_t types = 0;
+        for (uint32_t type = 0; type < memory.memoryTypeCount; ++type)
+        {
+            if ((hostTransferTypes & copyTypes & (1u << type)) != 0 && (memory.memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0)
+                types |= 1u << type;
+        }
+        return types;
+    }
 }

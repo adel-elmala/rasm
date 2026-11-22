@@ -348,7 +348,7 @@ TEST_CASE("glTF KHR_texture_basisu images are transcoded on import, once per kin
     CHECK(raw.ktxFormats.at(getKtxSlotKey(0, KtxSlot::OCCLUSION)) == Format::BC7_UNORM);
     REQUIRE(raw.ktxImages.size() == 2);
     REQUIRE(raw.ktxImages.contains(getKtxImageKey(0, Format::BC7_SRGB)));
-    checkLevels(raw.ktxImages.at(getKtxImageKey(0, Format::BC7_SRGB)), 16, 16, 5);
+    checkLevels(*raw.ktxImages.at(getKtxImageKey(0, Format::BC7_SRGB)), 16, 16, 5);
     CHECK(raw.ktxImages.contains(getKtxImageKey(0, Format::BC7_UNORM)));
     // The file bytes go once the images are transcoded.
     CHECK(raw.model->images[0].image.empty());

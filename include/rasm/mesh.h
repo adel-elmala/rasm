@@ -78,12 +78,13 @@ namespace rasm
 
     struct GLTFRaw
     {
-        std::vector<SubGLTFRaw>                         subGltfRaws;
-        std::shared_ptr<tinygltf::Model>                model;
-        std::unordered_map<uint64_t, Format>            ktxFormats;     // KHR_texture_basisu: getKtxSlotKey(image, slot) → format
-        std::unordered_map<uint64_t, TextureRaw>        ktxImages;      // getKtxImageKey(image, format) → the transcoded levels
-        AnimationRaw                                    animation;
-        bool                                            loaded          = false;
+        std::vector<SubGLTFRaw>                                         subGltfRaws;
+        std::shared_ptr<tinygltf::Model>                                model;
+        std::unordered_map<uint64_t, Format>                            ktxFormats;     // KHR_texture_basisu: getKtxSlotKey(image, slot) → format
+        std::unordered_map<uint64_t, std::shared_ptr<const TextureRaw>> ktxImages;      // getKtxImageKey(image, format) → the transcoded levels
+        std::unordered_map<uint64_t, std::shared_ptr<const TextureRaw>> imageLevels;    // PNG, JPEG: getImageLevelsKey(image, slot) → levels with mips
+        AnimationRaw                                                    animation;
+        bool                                                            loaded          = false;
     };
 
     enum class MeshState
@@ -139,7 +140,7 @@ namespace rasm
     };
 
     // Materials and textures created while importing one glTF model, so primitives that share a material
-    // (and materials that share an image) create it once. Textures are keyed by (image index << 1 | sRGB).
+    // (and materials that share an image) create it once. Textures are keyed by image, sampler and format.
     struct GltfImportCache
     {
         std::unordered_map<int, MaterialHandle>                 materials;
