@@ -3,6 +3,8 @@
 
 #include "rasm/rasm.h"
 
+#include "exampleArgs.h"
+
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -131,6 +133,7 @@ namespace
 
 int main(int argc, char **argv)
 {
+    const ExampleArgs args = parseExampleArgs(argc, argv);
     uint32_t glassCount = 1536;
     bool printGpuTimes = false;
     bool bloom = true;
@@ -293,6 +296,10 @@ int main(int argc, char **argv)
 
     std::vector<std::string> timerNames;
     std::vector<double> timerSums;
+
+    if (args.waitForLoads)
+        engine.waitForLoads();
+
     for (uint32_t frame = 0; engine.running(); ++frame)
     {
         // The lantern turns by a fixed angle per frame, so its motion (and TAA's motion vectors) is the same every run.

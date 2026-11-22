@@ -15,6 +15,7 @@ rasm_add_example(11_many_lights)
 rasm_add_example(12_animation)
 rasm_add_example(13_skinning)
 rasm_add_example(14_morph_targets)
+rasm_add_example(16_headless)
 # Calls ImGui itself, so it needs a rasm with Dear ImGui.
 if (RASM_IMGUI)
     rasm_add_example(15_debug_ui)

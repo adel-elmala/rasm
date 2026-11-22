@@ -3,6 +3,8 @@
 
 #include "rasm/rasm.h"
 
+#include "exampleArgs.h"
+
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -102,8 +104,9 @@ namespace
     }
 }
 
-int main()
+int main(int argc, char **argv)
 {
+    const ExampleArgs args = parseExampleArgs(argc, argv);
     rasm::EngineConfig config = {
         .appName = "example_8",
         .windowWidth = 1280,
@@ -184,6 +187,9 @@ int main()
 
     // The RASM window (F1) over the finished image.
     engine.addUiPass(graph);
+
+    if (args.waitForLoads)
+        engine.waitForLoads();
 
     while (engine.running())
         graph.execute(camera);

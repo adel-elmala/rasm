@@ -6,8 +6,10 @@ description: Verify a RASM code or shader change end to end. Build, unit tests, 
 # Verify change
 
 One command checks everything CLAUDE.md asks for ("a change that adds validation messages is
-not done") plus image regressions. No engine change is needed: the GFXReconstruct layer (Vulkan SDK)
-quits each example after frame N, and its replay renders that frame to PNG.
+not done") plus image regressions. The GFXReconstruct layer (Vulkan SDK) quits each example after frame N,
+and its replay renders that frame to PNG. A headless example (`HEADLESS_EXAMPLES` in the script, `16_headless`)
+presents nothing for GFXR to count, so it renders N frames itself and writes frame N through `Engine::readFrame`
+(`--frames N --out <png>`).
 
 ```sh
 V=.claude/skills/verify-change/scripts/verify.py
@@ -28,7 +30,7 @@ python $V run           # AFTER: same checks + pixel diff against the baseline
 | `--sync` | Synchronization validation: barriers, hazards. Use it for any barrier, layout, pass-order or render-graph change. |
 | `--best-practices` | Best Practices warnings. Noisy, so compare the counts against a baseline run with the same flag. |
 | `--gpu-av` | GPU-assisted validation: out-of-bounds bindless indices and buffer device address reads in shaders. Slow. |
-| `--args "--debug-view normals"` | Extra arguments for every example, after `--fixed-step` (an example ignores the ones it does not know). Compare such a run against a baseline taken with the same arguments. |
+| `--args "--debug-view normals"` | Extra arguments for every example, after `--fixed-step --wait-for-loads` (an example ignores the ones it does not know). Compare such a run against a baseline taken with the same arguments. |
 | `--keep-captures` | Keep the `.gfxr` captures (≈100 MB each) for `frame-debug`. |
 
 `diff <a.png> <b.png> [--out d.png]` compares any two PNGs.
@@ -67,7 +69,9 @@ Look at the diff and the new screenshot with Read.
 ## Determinism
 
 Frame N is pixel-exact between runs (tested: max diff 0) because the examples rotate objects by
-a fixed angle per frame, not by elapsed time, and the camera has no input. The camera eases toward its target by `deltaTime`, but snaps to it once it is within float precision (`B24`), so a camera at rest does not drift. A DIFF only on equal-depth edges, different from run to run, points at something time-based like that. If an example starts
+a fixed angle per frame, not by elapsed time, the camera has no input, and with `--wait-for-loads`
+(`examples/exampleArgs.h`) every example that loads calls `Engine::waitForLoads` before its first frame, so
+frame N does not depend on how fast the loads ran (`C16`). The camera eases toward its target by `deltaTime`, but snaps to it once it is within float precision (`B24`), so a camera at rest does not drift. A DIFF only on equal-depth edges, different from run to run, points at something time-based like that. If an example starts
 animating by time, its diffs become noise. Make the animation per-frame, or exclude that example
 with `--examples`. `05_city` animates by wall clock, but the script runs every example with `--fixed-step`, which makes it
 advance a fixed 1/60 s per frame.

@@ -3,6 +3,8 @@
 
 #include "rasm/rasm.h"
 
+#include "exampleArgs.h"
+
 #include "imgui.h"
 
 #include <cmath>
@@ -61,6 +63,7 @@ namespace
 
 int main(int argc, char **argv)
 {
+    const ExampleArgs args = parseExampleArgs(argc, argv);
     bool printGpuTimes = false;
     bool ui = true;
     bool freezeCulling = false;
@@ -170,6 +173,10 @@ int main(int argc, char **argv)
 
     std::vector<std::string> timerNames;
     std::vector<double> timerSums;
+
+    if (args.waitForLoads)
+        engine.waitForLoads();
+
     for (uint32_t frame = 0; engine.running(); ++frame)
     {
         // Culling freezes after a few frames, once it has seen the scene.

@@ -1,7 +1,10 @@
 #include "rasm/rasm.h"
 
-int main()
+#include "exampleArgs.h"
+
+int main(int argc, char **argv)
 {
+    const ExampleArgs args = parseExampleArgs(argc, argv);
     rasm::EngineConfig config = {
         .appName = "example_1",
         .windowWidth = 1920,
@@ -248,6 +251,9 @@ int main()
     // The RASM window (F1) over the finished image.
     engine.addUiPass(graph);
     graph.compile();
+
+    if (args.waitForLoads)
+        engine.waitForLoads();
 
     while (engine.running())
     {

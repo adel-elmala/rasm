@@ -3,6 +3,8 @@
 
 #include "rasm/rasm.h"
 
+#include "exampleArgs.h"
+
 #include <cstring>
 
 // --aa msaa2|msaa4|msaa8 draws the scene with several samples per pixel (EngineConfig::antiAliasing): the palm leaves
@@ -10,6 +12,7 @@
 // the turning models show with their motion.
 int main(int argc, char **argv)
 {
+    const ExampleArgs args = parseExampleArgs(argc, argv);
     // Create engine instance
     rasm::EngineConfig config = {
         .appName = "example_2",
@@ -115,6 +118,9 @@ int main(int argc, char **argv)
     engine.addLightToScene(scene, light);
     engine.addLightToScene(scene, fillLight);
     engine.addLightToScene(scene, pointLight);
+
+    if (args.waitForLoads)
+        engine.waitForLoads();
 
     // Main loop
     while (engine.running())
