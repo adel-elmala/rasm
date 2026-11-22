@@ -741,15 +741,8 @@ namespace rasm
     void Engine::render(SceneHandle scene, CameraHandle camera)
     {
         // The renderer is made last in the constructor, so an engine that failed to start has none.
-        if (!renderer)
-            return;
-        std::string dump;
-        renderer->render({.scene = scene, .camera = camera}, std::exchange(graphDumpRequested, false) ? &dump : nullptr);
-        if (dump.empty())
-            return;
-        spdlog::info("{}", dump);
-        if (ui)
-            ui->graphDump = std::move(dump);
+        if (renderer)
+            renderer->render({.scene = scene, .camera = camera});
     }
 
 #if !defined(RASM_IMGUI)

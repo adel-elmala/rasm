@@ -103,11 +103,11 @@ namespace rasm
             if (ImGui::Button("Dump (F3)"))
                 graphDumpRequested = true;
             ImGui::SameLine();
-            ImGui::TextDisabled("of Engine::render's graph");
-            if (!ui->graphDump.empty())
+            ImGui::TextDisabled("of the next graph that runs");
+            if (!graphDump.empty())
             {
                 ImGui::BeginChild("dump", ImVec2(0.0f, 240.0f * scale), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
-                ImGui::TextUnformatted(ui->graphDump.c_str());
+                ImGui::TextUnformatted(graphDump.c_str());
                 ImGui::EndChild();
             }
         }

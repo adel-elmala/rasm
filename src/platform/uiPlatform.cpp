@@ -35,6 +35,19 @@ namespace rasm
         ImGui_ImplSDL3_NewFrame();
     }
 
+    // While no UI frame is built the events are not fed, so on the next one no key is down and the mouse is where SDL
+    // says, not where it was: a click right away is tested against the windows under the cursor.
+    void resumeUiInput()
+    {
+        ImGuiIO &io = ImGui::GetIO();
+        io.ClearInputKeys();
+        io.ClearInputMouse();
+        float x = 0.0f;
+        float y = 0.0f;
+        SDL_GetMouseState(&x, &y);
+        io.AddMousePosEvent(x, y);
+    }
+
     // The display's content scale (1.5 at 150 % in Windows' settings), without the pixel density: ImGui draws in
     // points, and SDL3's backend gives it the pixels per point.
     float getUiContentScale(const Window &window)

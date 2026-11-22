@@ -6,8 +6,6 @@
 
 #include "glm/glm.hpp"
 
-#include <string>
-
 namespace rasm
 {
     class Engine;
@@ -26,7 +24,7 @@ namespace rasm
     {
     public:
         explicit                    Renderer(Engine& owner);
-        void                        render(const RenderView& view, std::string* dump);
+        void                        render(const RenderView& view);
 
     private:
         Engine&                     engine;

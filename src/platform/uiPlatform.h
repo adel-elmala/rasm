@@ -17,6 +17,7 @@ namespace rasm
     void            shutdownUiPlatform();
     void            processUiEvent(const void* event);
     void            newUiPlatformFrame();
+    void            resumeUiInput();
     float           getUiContentScale(const Window& window);
     UiInputCapture  getUiInputCapture();
 

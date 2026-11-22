@@ -57,20 +57,25 @@ namespace rasm
             return true;
         }
 
-        // A texture ImGui asks for, or one that changed: a new texture with all of its pixels in a slot nobody samples. The
-        // old one may still be drawn by a frame in flight, so it is released MAX_FRAMES_IN_FLIGHT UI frames later.
-        void updateUiTexture(Engine &engine, RenderContext &ctx, Ui &ui, ImTextureData &texture)
+        // Queues the UI texture of id for release. The frames that may draw with it are the ones submitted so far, so it
+        // can go once the graphics fence reaches releaseValue, their last value.
+        void releaseUiTexture(Ui &ui, ImTextureID id, uint64_t releaseValue)
         {
-            const ImTextureID previous = texture.GetTexID();
-            if (previous != ImTextureID_Invalid)
-            {
-                const auto slot = static_cast<uint32_t>(previous - 1);
-                ui.releases.push_back({.texture = ui.textures[slot], .slot = slot, .frame = ui.frame});
-                ui.textures.erase(slot);
-                texture.SetTexID(ImTextureID_Invalid);
-            }
+            const auto slot = static_cast<uint32_t>((id & ~SRGB_TEXTURE_ID) - 1);
+            ui.releases.push_back({.texture = ui.textures[slot], .slot = slot, .fenceValue = releaseValue});
+            ui.textures.erase(slot);
+        }
+
+        // A texture ImGui asks for, or one that changed: a new texture with all of its pixels in a slot nobody samples,
+        // and the old one released. A texture that can't be made keeps the request, so ImGui's old texture stays drawn
+        // and the next frame tries again.
+        void updateUiTexture(Engine &engine, RenderContext &ctx, Ui &ui, ImTextureData &texture, uint64_t releaseValue)
+        {
             if (texture.Status == ImTextureStatus_WantDestroy)
             {
+                if (texture.GetTexID() != ImTextureID_Invalid)
+                    releaseUiTexture(ui, texture.GetTexID(), releaseValue);
+                texture.SetTexID(ImTextureID_Invalid);
                 texture.SetStatus(ImTextureStatus_Destroyed);
                 return;
             }
@@ -96,10 +101,9 @@ namespace rasm
             const TextureLevel level{.data = pixels, .size = static_cast<uint64_t>(width) * height * 4};
             if (!handle.isValid() || !ctx.fillTexture(handle, &level, 1))
             {
-                spdlog::error("Failed to create a UI texture of {} x {}.", width, height);
+                spdlog::error("Failed to create a UI texture of {} x {}; trying again next frame.", width, height);
                 if (handle.isValid())
                     ctx.destroyTexture(handle);
-                texture.SetStatus(ImTextureStatus_OK);
                 return;
             }
             uint32_t slot = MAX_BINDLESS_TEXTURES;
@@ -114,9 +118,10 @@ namespace rasm
                 if (slot != MAX_BINDLESS_TEXTURES)
                     ui.freeSlots.push_back(slot);
                 ctx.destroyTexture(handle);
-                texture.SetStatus(ImTextureStatus_OK);
                 return;
             }
+            if (texture.GetTexID() != ImTextureID_Invalid)
+                releaseUiTexture(ui, texture.GetTexID(), releaseValue);
             ui.textures[index] = handle;
             texture.SetTexID(static_cast<ImTextureID>(index) + 1);
             texture.SetStatus(ImTextureStatus_OK);
@@ -146,11 +151,11 @@ namespace rasm
         return capacity;
     }
 
-    void takeUiReleases(std::vector<UiRelease> &releases, uint64_t frame, std::vector<UiRelease> &done)
+    void takeUiReleases(std::vector<UiRelease> &releases, uint64_t completedValue, std::vector<UiRelease> &done)
     {
         for (size_t i = 0; i < releases.size();)
         {
-            if (frame >= releases[i].frame + MAX_FRAMES_IN_FLIGHT)
+            if (completedValue >= releases[i].fenceValue)
             {
                 done.push_back(releases[i]);
                 releases[i] = releases.back();
@@ -233,9 +238,9 @@ namespace rasm
             return;
         }
         ZoneScopedN("UI");
-        // Keys pressed while the UI slept would stay down.
+        // The UI got no events while it slept: keys would stay down and the mouse would be where it was.
         if (!ui->active)
-            ImGui::GetIO().ClearInputKeys();
+            resumeUiInput();
         ui->active = true;
 
         newUiPlatformFrame();
@@ -245,11 +250,10 @@ namespace rasm
         if (ui->callback)
             ui->callback();
         ImGui::Render();
-        ++ui->frame;
 
-        // Released textures that no frame in flight draws with any more give their slot back.
+        // Released textures that no submitted frame draws with any more give their slot back.
         std::vector<UiRelease> done;
-        takeUiReleases(ui->releases, ui->frame, done);
+        takeUiReleases(ui->releases, ctx.getFenceValue(frameFence), done);
         for (const UiRelease &release : done)
         {
             registry.bindlessTextureIndexMap.erase(release.texture);
@@ -263,7 +267,7 @@ namespace rasm
             for (ImTextureData *texture : *drawData->Textures)
             {
                 if (texture->Status != ImTextureStatus_OK)
-                    updateUiTexture(*this, ctx, *ui, *texture);
+                    updateUiTexture(*this, ctx, *ui, *texture, frameFenceValue);
             }
         }
         if (drawData->TotalVtxCount == 0 || drawData->TotalIdxCount == 0)

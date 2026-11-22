@@ -60,22 +60,23 @@ TEST_CASE("UI buffers grow in powers of two from their minimum")
     CHECK(rasm::growUiCapacity(1000000, 65536) == 1048576);
 }
 
-TEST_CASE("UI textures are released MAX_FRAMES_IN_FLIGHT UI frames after their last use")
+TEST_CASE("UI textures are released once the graphics fence passed the last frame that may draw them")
 {
-    std::vector<rasm::UiRelease> releases = {{.slot = 3, .frame = 10}, {.slot = 4, .frame = 11}};
+    std::vector<rasm::UiRelease> releases = {{.slot = 3, .fenceValue = 10}, {.slot = 4, .fenceValue = 11}};
     std::vector<rasm::UiRelease> done;
 
-    rasm::takeUiReleases(releases, 10 + rasm::MAX_FRAMES_IN_FLIGHT - 1, done);
+    // A frame that was built but never submitted moves no fence, so nothing goes early.
+    rasm::takeUiReleases(releases, 9, done);
     CHECK(done.empty());
     CHECK(releases.size() == 2);
 
-    rasm::takeUiReleases(releases, 10 + rasm::MAX_FRAMES_IN_FLIGHT, done);
+    rasm::takeUiReleases(releases, 10, done);
     REQUIRE(done.size() == 1);
     CHECK(done[0].slot == 3);
     REQUIRE(releases.size() == 1);
     CHECK(releases[0].slot == 4);
 
-    rasm::takeUiReleases(releases, 11 + rasm::MAX_FRAMES_IN_FLIGHT, done);
+    rasm::takeUiReleases(releases, 12, done);
     CHECK(done.size() == 2);
     CHECK(releases.empty());
 }

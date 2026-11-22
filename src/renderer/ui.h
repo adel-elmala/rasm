@@ -22,7 +22,7 @@ namespace rasm
     {
         TextureHandle                   texture;
         uint32_t                        slot                = 0;
-        uint64_t                        frame               = 0;    // the UI frame that last drew with it
+        uint64_t                        fenceValue          = 0;    // the graphics fence value of the last frame that may draw with it
     };
 
     struct UiScissor
@@ -65,8 +65,6 @@ namespace rasm
         std::function<void()>                           callback;
         FrameStats                                      stats;                                      // what the RASM window shows, renewed every 250 ms
         std::chrono::steady_clock::time_point           statsTime                       = {};
-        std::string                                     graphDump;                                  // the last F3 dump
-        uint64_t                                        frame                           = 0;        // UI frames built so far
         uint32_t                                        displaySize                     = 0;        // width | height << 16, in points
         bool                                            active                          = false;    // this frame built a UI
         bool                                            drawn                           = false;    // a UI pass drew it
@@ -77,8 +75,8 @@ namespace rasm
     bool                                getUiScissor(const float clip[4], const float displayPos[2], const float framebufferScale[2], uint32_t width, uint32_t height, UiScissor& scissor);
     // The capacity to grow a UI buffer to: the next power of two that holds size bytes, at least minimum.
     uint64_t                            growUiCapacity(uint64_t size, uint64_t minimum);
-    // Takes the releases whose frame is MAX_FRAMES_IN_FLIGHT or more UI frames before frame out of releases, into done.
-    void                                takeUiReleases(std::vector<UiRelease>& releases, uint64_t frame, std::vector<UiRelease>& done);
+    // Moves the releases whose fence value the graphics fence has reached (completedValue) from releases into done.
+    void                                takeUiReleases(std::vector<UiRelease>& releases, uint64_t completedValue, std::vector<UiRelease>& done);
 
 }
 // clang-format on

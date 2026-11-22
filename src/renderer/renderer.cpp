@@ -34,9 +34,8 @@ namespace rasm
     // swapchain and the UI pass over it.
     // It is built for one view and built again only when the view changes. Adding the passes fails on bad handles or
     // a failed allocation, and building again every frame would make a new target each time, so such a view runs the
-    // passes it has, or an empty frame that presents the clear color. Shader errors retry inside the passes. F3 asks
-    // for the graph's dump after it runs, so it shows the compiled order.
-    void Renderer::render(const RenderView &view, std::string *dump)
+    // passes it has, or an empty frame that presents the clear color. Shader errors retry inside the passes.
+    void Renderer::render(const RenderView &view)
     {
         ZoneScoped;
 
@@ -70,7 +69,5 @@ namespace rasm
             graphView = view;
         }
         graph.execute(view.camera);
-        if (dump)
-            *dump = graph.dump();
     }
 }

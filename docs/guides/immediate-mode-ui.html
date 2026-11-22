@@ -347,7 +347,7 @@
   <tr><td>Buffers</td><td>vertex and index buffers</td><td>Host-visible <code>UI Vertices</code> and <code>UI Indices</code> per frame slot, written with <code>fillBuffer</code>. They grow to the next power of two and are never made per frame.</td></tr>
   <tr><td>Vertices</td><td>a vertex layout</td><td>No vertex input: <a href="vertex-pulling.html">vertex pulling</a> through a <a href="device-addresses.html">device address</a>. The address points at the draw's first vertex, so the base vertex works on D3D12 too.</td></tr>
   <tr><td>Clip</td><td>clip rectangle → scissor</td><td><code>getUiScissor</code>, the rule of the formula above, with <code>io.DisplayFramebufferScale</code>.</td></tr>
-  <tr><td>Textures</td><td>an atlas, IDs for images</td><td>ImGui's texture requests (<code>ImGuiBackendFlags_RendererHasTextures</code>): a new texture for each request, in a <a href="bindless.html">bindless</a> slot; the old one is freed two UI frames later. An <code>ImTextureID</code> is the slot + 1, with a bit for sRGB textures (<code>Engine::getUiTexture</code>).</td></tr>
+  <tr><td>Textures</td><td>an atlas, IDs for images</td><td>ImGui's texture requests (<code>ImGuiBackendFlags_RendererHasTextures</code>): a new texture for each request, in a <a href="bindless.html">bindless</a> slot; the old one is freed once the graphics fence passes the last frame submitted with it. An <code>ImTextureID</code> is the slot + 1, with a bit for sRGB textures (<code>Engine::getUiTexture</code>).</td></tr>
   <tr><td>Blending</td><td>as numbers, through a UNORM view</td><td>The swapchain's <code>B8G8R8A8_UNORM</code> view (<code>VK_KHR_swapchain_mutable_format</code>) when the device has it; else colors decoded in the shader (<code>D31</code>).</td></tr>
   <tr><td>Where it draws</td><td>last in the frame</td><td>The <code>UI</code> pass of <code>Engine::addUiPass</code>, after the tone map. A graph without it gets one from <code>endFrame</code>, at the cost of one more load and store of the image.</td></tr>
   <tr><td>Scale</td><td>style and font by the display scale</td><td>The display's content scale, read once at startup (<code>getUiContentScale</code>).</td></tr>
@@ -385,7 +385,7 @@
   <strong>Keep these true</strong>
   <ul>
     <li><code>gfx::UiPushConstants</code> and <code>UiPushConstants</code> in <code>ui.slang</code> change together and stay 16 bytes; <code>UiVertex</code> matches <code>ImDrawVert</code> (a <code>static_assert</code> checks the C++ side).</li>
-    <li>A UI texture is never changed in place: a change makes a new texture, and the old one is freed after <code>MAX_FRAMES_IN_FLIGHT</code> UI frames.</li>
+    <li>A UI texture is never changed in place: a change makes a new texture, and the old one is freed only when the fence says no submitted frame draws with it.</li>
     <li>Only <code>src/platform/uiPlatform.cpp</code> calls ImGui's SDL3 backend.</li>
     <li>With the UI off, nothing of it may run: no context, no pass, no buffers.</li>
   </ul>
