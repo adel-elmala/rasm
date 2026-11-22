@@ -192,13 +192,13 @@ namespace rasm::rhi
         }
     }
 
-    VulkanCommandBuffer::VulkanCommandBuffer(VulkanDevice &device) : device(device) {}
+    VulkanCommandBuffer::VulkanCommandBuffer(VulkanDevice &device) : device(device), vk(device.getVkTable()) {}
 
     VulkanCommandBuffer::~VulkanCommandBuffer()
     {
         // Frees the command buffer with it.
         if (pool != VK_NULL_HANDLE)
-            vkDestroyCommandPool(device.getVkDevice(), pool, nullptr);
+            vk.vkDestroyCommandPool(device.getVkDevice(), pool, nullptr);
     }
 
     bool VulkanCommandBuffer::initialize(uint32_t queueFamilyIndex, bool onComputeQueue, const std::string &name)
@@ -210,7 +210,7 @@ namespace rasm::rhi
             .flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
             .queueFamilyIndex = queueFamilyIndex,
         };
-        auto result = vkCreateCommandPool(device.getVkDevice(), &poolInfo, nullptr, &pool);
+        auto result = vk.vkCreateCommandPool(device.getVkDevice(), &poolInfo, nullptr, &pool);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to create command pool. Error: {}", toVkResultString(result));
@@ -223,7 +223,7 @@ namespace rasm::rhi
             .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
             .commandBufferCount = 1,
         };
-        result = vkAllocateCommandBuffers(device.getVkDevice(), &allocInfo, &commandBuffer);
+        result = vk.vkAllocateCommandBuffers(device.getVkDevice(), &allocInfo, &commandBuffer);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to allocate command buffer. Error: {}", toVkResultString(result));
@@ -237,7 +237,7 @@ namespace rasm::rhi
 
     bool VulkanCommandBuffer::begin()
     {
-        auto result = vkResetCommandPool(device.getVkDevice(), pool, 0);
+        auto result = vk.vkResetCommandPool(device.getVkDevice(), pool, 0);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to reset command pool. Error: {}", toVkResultString(result));
@@ -248,7 +248,7 @@ namespace rasm::rhi
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
             .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
         };
-        result = vkBeginCommandBuffer(commandBuffer, &beginInfo);
+        result = vk.vkBeginCommandBuffer(commandBuffer, &beginInfo);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to begin command buffer. Error: {}", toVkResultString(result));
@@ -259,7 +259,7 @@ namespace rasm::rhi
 
     bool VulkanCommandBuffer::end()
     {
-        auto result = vkEndCommandBuffer(commandBuffer);
+        auto result = vk.vkEndCommandBuffer(commandBuffer);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to end command buffer. Error: {}", toVkResultString(result));
@@ -301,7 +301,7 @@ namespace rasm::rhi
                                            .imageMemoryBarrierCount = 1,
                                            .pImageMemoryBarriers = &barrier};
 
-        vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+        vk.vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
         return true;
     }
 
@@ -355,12 +355,12 @@ namespace rasm::rhi
             .pDepthAttachment = depth ? &depthAttachmentInfo : nullptr,
             .pStencilAttachment = depth && hasStencil(depth->desc.format) ? &depthAttachmentInfo : nullptr};
 
-        vkCmdBeginRendering(commandBuffer, &renderingInfo);
+        vk.vkCmdBeginRendering(commandBuffer, &renderingInfo);
     }
 
     void VulkanCommandBuffer::endRendering()
     {
-        vkCmdEndRendering(commandBuffer);
+        vk.vkCmdEndRendering(commandBuffer);
     }
 
     void VulkanCommandBuffer::setViewport(float x, float y, float width, float height, float minDepth, float maxDepth)
@@ -374,7 +374,7 @@ namespace rasm::rhi
             .minDepth = minDepth,
             .maxDepth = maxDepth};
 
-        vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+        vk.vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
     }
 
     void VulkanCommandBuffer::setScissor(int32_t x, int32_t y, uint32_t width, uint32_t height)
@@ -383,59 +383,59 @@ namespace rasm::rhi
             .offset = {x, y},
             .extent = {width, height}};
 
-        vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+        vk.vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
     }
 
     void VulkanCommandBuffer::setCullMode(CullMode cullMode)
     {
-        vkCmdSetCullMode(commandBuffer, toVkCullMode(cullMode));
+        vk.vkCmdSetCullMode(commandBuffer, toVkCullMode(cullMode));
     }
 
     void VulkanCommandBuffer::bindPipeline(Pipeline *pipeline)
     {
         auto *vkPipeline = static_cast<VulkanPipeline *>(pipeline);
-        vkCmdBindPipeline(commandBuffer, vkPipeline->bindPoint, vkPipeline->pipeline);
+        vk.vkCmdBindPipeline(commandBuffer, vkPipeline->bindPoint, vkPipeline->pipeline);
     }
 
     void VulkanCommandBuffer::bindIndexBuffer(Buffer *buffer, uint64_t offset, Format indexType)
     {
-        vkCmdBindIndexBuffer(commandBuffer, static_cast<VulkanBuffer *>(buffer)->buffer, offset, toVkIndexType(indexType));
+        vk.vkCmdBindIndexBuffer(commandBuffer, static_cast<VulkanBuffer *>(buffer)->buffer, offset, toVkIndexType(indexType));
     }
 
     void VulkanCommandBuffer::bindDescriptorSet(Pipeline *pipeline, DescriptorSet *descriptorSet, uint32_t setIndex)
     {
         auto *vkPipeline = static_cast<VulkanPipeline *>(pipeline);
-        vkCmdBindDescriptorSets(commandBuffer, vkPipeline->bindPoint, vkPipeline->layout, setIndex, 1, &static_cast<VulkanDescriptorSet *>(descriptorSet)->set, 0, nullptr);
+        vk.vkCmdBindDescriptorSets(commandBuffer, vkPipeline->bindPoint, vkPipeline->layout, setIndex, 1, &static_cast<VulkanDescriptorSet *>(descriptorSet)->set, 0, nullptr);
     }
 
     void VulkanCommandBuffer::pushConstants(Pipeline *pipeline, ShaderType stages, const void *data, uint32_t size, uint32_t offset)
     {
-        vkCmdPushConstants(commandBuffer, static_cast<VulkanPipeline *>(pipeline)->layout, toVkShaderStageFlags(stages), offset, size, data);
+        vk.vkCmdPushConstants(commandBuffer, static_cast<VulkanPipeline *>(pipeline)->layout, toVkShaderStageFlags(stages), offset, size, data);
     }
 
     void VulkanCommandBuffer::draw(uint32_t vertexCount, uint32_t instanceCount)
     {
-        vkCmdDraw(commandBuffer, vertexCount, instanceCount, 0, 0);
+        vk.vkCmdDraw(commandBuffer, vertexCount, instanceCount, 0, 0);
     }
 
     void VulkanCommandBuffer::drawIndexed(uint32_t indexCount, uint32_t instanceCount, uint32_t vertexOffset, uint32_t firstIndex, uint32_t firstInstance)
     {
-        vkCmdDrawIndexed(commandBuffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
+        vk.vkCmdDrawIndexed(commandBuffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
     }
 
     void VulkanCommandBuffer::drawIndexedIndirect(Buffer *buffer, uint64_t offset, uint32_t drawCount, uint32_t stride)
     {
-        vkCmdDrawIndexedIndirect(commandBuffer, static_cast<VulkanBuffer *>(buffer)->buffer, offset, drawCount, stride);
+        vk.vkCmdDrawIndexedIndirect(commandBuffer, static_cast<VulkanBuffer *>(buffer)->buffer, offset, drawCount, stride);
     }
 
     void VulkanCommandBuffer::drawIndexedIndirectCount(Buffer *buffer, uint64_t offset, Buffer *countBuffer, uint64_t countOffset, uint32_t maxDrawCount, uint32_t stride)
     {
-        vkCmdDrawIndexedIndirectCount(commandBuffer, static_cast<VulkanBuffer *>(buffer)->buffer, offset, static_cast<VulkanBuffer *>(countBuffer)->buffer, countOffset, maxDrawCount, stride);
+        vk.vkCmdDrawIndexedIndirectCount(commandBuffer, static_cast<VulkanBuffer *>(buffer)->buffer, offset, static_cast<VulkanBuffer *>(countBuffer)->buffer, countOffset, maxDrawCount, stride);
     }
 
     void VulkanCommandBuffer::dispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ)
     {
-        vkCmdDispatch(commandBuffer, groupCountX, groupCountY, groupCountZ);
+        vk.vkCmdDispatch(commandBuffer, groupCountX, groupCountY, groupCountZ);
     }
 
     void VulkanCommandBuffer::memoryBarrier(PipelineStage before, PipelineStage after)
@@ -450,7 +450,7 @@ namespace rasm::rhi
         if (computeQueue)
             fitToComputeQueue(barrier.srcStageMask, barrier.srcAccessMask, barrier.dstStageMask, barrier.dstAccessMask);
         VkDependencyInfo dependencyInfo = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &barrier};
-        vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+        vk.vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
     }
 
     // Textures placed in the same memory: the next one's attachment and storage writes wait for every use of the ones there
@@ -469,7 +469,7 @@ namespace rasm::rhi
         if (computeQueue)
             fitToComputeQueue(barrier.srcStageMask, barrier.srcAccessMask, barrier.dstStageMask, barrier.dstAccessMask);
         VkDependencyInfo dependencyInfo = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &barrier};
-        vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+        vk.vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
     }
 
     void VulkanCommandBuffer::copyBuffers(Buffer *src, const BufferCopy *copies, uint32_t copyCount)
@@ -483,14 +483,14 @@ namespace rasm::rhi
                                    .dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT,
                                    .dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT};
         VkDependencyInfo dependencyInfo = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &before};
-        vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+        vk.vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
 
         auto srcBuffer = static_cast<VulkanBuffer *>(src)->buffer;
         for (uint32_t i = 0; i < copyCount; ++i)
         {
             const auto &copy = copies[i];
             VkBufferCopy region = {.srcOffset = copy.srcOffset, .dstOffset = copy.dstOffset, .size = copy.size};
-            vkCmdCopyBuffer(commandBuffer, srcBuffer, static_cast<VulkanBuffer *>(copy.dst)->buffer, 1, &region);
+            vk.vkCmdCopyBuffer(commandBuffer, srcBuffer, static_cast<VulkanBuffer *>(copy.dst)->buffer, 1, &region);
         }
 
         VkMemoryBarrier2 after = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
@@ -499,7 +499,7 @@ namespace rasm::rhi
                                   .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                                   .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT};
         dependencyInfo.pMemoryBarriers = &after;
-        vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+        vk.vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
     }
 
     // Each texture goes to TRANSFER_DST, takes its copies and goes to SHADER_READ_ONLY, the layout its bindless
@@ -534,7 +534,7 @@ namespace rasm::rhi
                                 .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = texture->mipLevels, .baseArrayLayer = 0, .layerCount = texture->desc.cube ? CUBE_FACES : 1}});
         }
         VkDependencyInfo dependencyInfo = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .imageMemoryBarrierCount = static_cast<uint32_t>(barriers.size()), .pImageMemoryBarriers = barriers.data()};
-        vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+        vk.vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
 
         auto srcBuffer = static_cast<VulkanBuffer *>(src)->buffer;
         for (uint32_t i = 0; i < copyCount; ++i)
@@ -552,7 +552,7 @@ namespace rasm::rhi
                                                    .dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                                    .regionCount = 1,
                                                    .pRegions = &region};
-            vkCmdCopyBufferToImage2(commandBuffer, &info);
+            vk.vkCmdCopyBufferToImage2(commandBuffer, &info);
         }
 
         for (auto &barrier : barriers)
@@ -564,7 +564,7 @@ namespace rasm::rhi
             barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
             barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         }
-        vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+        vk.vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
     }
 
     // The texture leaves its state for TRANSFER_SRC only around the copy, so the tracked state stays right. The buffer's
@@ -590,7 +590,7 @@ namespace rasm::rhi
         back.newLayout = toVkImageLayout(state);
 
         VkDependencyInfo dependencyInfo = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &toCopy};
-        vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+        vk.vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
 
         // A depth/stencil texture is copied one aspect at a time; the depth is the one read back.
         const VkImageAspectFlags aspect = toVkAspectMask(src->desc.format);
@@ -604,7 +604,7 @@ namespace rasm::rhi
                                                .dstBuffer = static_cast<VulkanBuffer *>(dst)->buffer,
                                                .regionCount = 1,
                                                .pRegions = &region};
-        vkCmdCopyImageToBuffer2(commandBuffer, &info);
+        vk.vkCmdCopyImageToBuffer2(commandBuffer, &info);
 
         const VkBufferMemoryBarrier2 toHost = {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
                                                .srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT,
@@ -621,14 +621,14 @@ namespace rasm::rhi
                                         .pBufferMemoryBarriers = &toHost,
                                         .imageMemoryBarrierCount = 1,
                                         .pImageMemoryBarriers = &back};
-        vkCmdPipelineBarrier2(commandBuffer, &after);
+        vk.vkCmdPipelineBarrier2(commandBuffer, &after);
     }
 
     // Written once all earlier commands are done, so the time between two timestamps covers the commands
     // between them, without overlap from earlier work.
     void VulkanCommandBuffer::writeTimestamp(QueryPool *queryPool, uint32_t index)
     {
-        vkCmdWriteTimestamp2(commandBuffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, static_cast<VulkanQueryPool *>(queryPool)->pool, index);
+        vk.vkCmdWriteTimestamp2(commandBuffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, static_cast<VulkanQueryPool *>(queryPool)->pool, index);
     }
 
     VkCommandBuffer VulkanCommandBuffer::getVkCommandBuffer() const

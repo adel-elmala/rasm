@@ -7,7 +7,7 @@
 
 namespace rasm::rhi
 {
-    VulkanQueue::VulkanQueue(VkQueue queue, uint32_t familyIndex) : queue(queue), familyIndex(familyIndex) {}
+    VulkanQueue::VulkanQueue(const VolkDeviceTable &vk, VkQueue queue, uint32_t familyIndex) : vk(vk), queue(queue), familyIndex(familyIndex) {}
 
     bool VulkanQueue::submit(const SubmitDesc &desc)
     {
@@ -80,7 +80,7 @@ namespace rasm::rhi
             .pSignalSemaphoreInfos = signals};
 
         // A failed submit leaves every semaphore as it was, so the swapchain only moves on after a success.
-        auto result = vkQueueSubmit2(queue, 1, &submitInfo, VK_NULL_HANDLE);
+        auto result = vk.vkQueueSubmit2(queue, 1, &submitInfo, VK_NULL_HANDLE);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to submit command buffer. Error: {}", toVkResultString(result));

@@ -23,18 +23,83 @@ namespace rasm::rhi
                                                                           .viewFormatCount = 2,
                                                                           .pViewFormats = ENCODED_VIEW_FORMATS};
 
+#if defined(_WIN32)
+        constexpr const char *LOADER_NAME = "vulkan-1.dll";
+#elif defined(__APPLE__)
+        constexpr const char *LOADER_NAME = "libvulkan.dylib";
+#else
+        constexpr const char *LOADER_NAME = "libvulkan.so.1";
+#endif
+
         bool hasEncodedView(const TextureDesc &desc)
         {
             return desc.encodedView && desc.format == Format::R8G8B8A8_SRGB && !desc.cube;
+        }
+
+        // The loader and volk's global functions, for the whole process (D24). With a window they come from SDL, which
+        // loaded the loader for the window, so the surface and the instance come from one library; headless, volk finds
+        // the loader. A 1.3 loader is enough: Vulkan 1.4 added only device-level commands, and those come from the
+        // driver through each device's table.
+        bool loadVulkan(bool window)
+        {
+            if (window)
+            {
+                const PFN_vkGetInstanceProcAddr getInstanceProcAddr = getWindowVulkanLoader();
+                if (getInstanceProcAddr == nullptr)
+                {
+                    spdlog::error("The window has no Vulkan loader ({}).", LOADER_NAME);
+                    return false;
+                }
+                volkInitializeCustom(getInstanceProcAddr);
+            }
+            else if (volkInitialize() != VK_SUCCESS)
+            {
+                spdlog::error("No Vulkan loader found ({}). Install a GPU driver with Vulkan 1.4.", LOADER_NAME);
+                return false;
+            }
+
+            // A 1.0 loader has no vkEnumerateInstanceVersion, and volk returns 0 for it.
+            const uint32_t version = std::max(volkGetInstanceVersion(), static_cast<uint32_t>(VK_API_VERSION_1_0));
+            if (version < VK_API_VERSION_1_3)
+            {
+                spdlog::error("The Vulkan loader ({}) is version {}.{}.{}, and RASM needs 1.3 or newer. Update the GPU driver.", LOADER_NAME,
+                              VK_API_VERSION_MAJOR(version), VK_API_VERSION_MINOR(version), VK_API_VERSION_PATCH(version));
+                return false;
+            }
+            spdlog::info("Vulkan loader {}.{}.{}.", VK_API_VERSION_MAJOR(version), VK_API_VERSION_MINOR(version), VK_API_VERSION_PATCH(version));
+            return true;
+        }
+
+        // Names each GPU that is older than Vulkan 1.4, which vk-bootstrap only lists among its other reasons.
+        void logOldDevices(VkInstance instance)
+        {
+            uint32_t count = 0;
+            if (vkEnumeratePhysicalDevices(instance, &count, nullptr) != VK_SUCCESS || count == 0)
+            {
+                spdlog::error("No GPU with Vulkan found. Install a GPU driver with Vulkan 1.4.");
+                return;
+            }
+            std::vector<VkPhysicalDevice> devices(count);
+            if (vkEnumeratePhysicalDevices(instance, &count, devices.data()) < VK_SUCCESS)
+                return;
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                VkPhysicalDeviceProperties properties = {};
+                vkGetPhysicalDeviceProperties(devices[i], &properties);
+                if (properties.apiVersion < VK_API_VERSION_1_4)
+                    spdlog::error("GPU '{}' has Vulkan {}.{}.{}, and RASM needs 1.4. Update its driver.", properties.deviceName,
+                                  VK_API_VERSION_MAJOR(properties.apiVersion), VK_API_VERSION_MINOR(properties.apiVersion), VK_API_VERSION_PATCH(properties.apiVersion));
+            }
         }
 
         vkb::Result<vkb::Instance> initInstance(const DeviceDesc &desc, bool &debugUtilsEnabled)
         {
             debugUtilsEnabled = false;
 
-            vkb::InstanceBuilder instanceBuilder;
+            // vk-bootstrap calls through volk's loader instead of loading its own.
+            vkb::InstanceBuilder instanceBuilder(vkGetInstanceProcAddr);
 
-            auto systemInfoRet = vkb::SystemInfo::get_system_info();
+            auto systemInfoRet = vkb::SystemInfo::get_system_info(vkGetInstanceProcAddr);
             if (!systemInfoRet)
             {
                 spdlog::error("Failed to get system info. Error: {}", systemInfoRet.error().message());
@@ -176,6 +241,7 @@ namespace rasm::rhi
             if (!physicalDeviceSelectorReturn)
             {
                 // If no suitable devices were found, detailed_failure_reasons() will contain a list of reasons why.
+                logOldDevices(vkbInstance.instance);
                 if (physicalDeviceSelectorReturn.error() == vkb::PhysicalDeviceError::no_suitable_device)
                 {
                     const auto &detailedReasons = physicalDeviceSelectorReturn.detailed_failure_reasons();
@@ -319,7 +385,7 @@ namespace rasm::rhi
         }
 
         // The bindless set and a PUSH_CONSTANTS_SIZE range visible to the pipeline's stages.
-        VkPipelineLayout createPipelineLayout(VkDevice device, VkShaderStageFlags stages, DescriptorSetLayout *layout)
+        VkPipelineLayout createPipelineLayout(const VolkDeviceTable &vk, VkDevice device, VkShaderStageFlags stages, DescriptorSetLayout *layout)
         {
             VkPushConstantRange pushConstantRange{
                 .stageFlags = stages,
@@ -335,7 +401,7 @@ namespace rasm::rhi
                 .pPushConstantRanges = &pushConstantRange};
 
             VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
-            auto result = vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pipelineLayout);
+            auto result = vk.vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pipelineLayout);
             if (result != VK_SUCCESS)
             {
                 spdlog::error("Failed to create pipeline layout. Error: {}", toVkResultString(result));
@@ -407,28 +473,28 @@ namespace rasm::rhi
             return imageInfo;
         }
 
-        void destroyImageViews(VkDevice device, VulkanTexture &texture)
+        void destroyImageViews(const VolkDeviceTable &vk, VkDevice device, VulkanTexture &texture)
         {
-            vkDestroyImageView(device, texture.view, nullptr);
+            vk.vkDestroyImageView(device, texture.view, nullptr);
             for (VkImageView &faceView : texture.faceViews)
             {
-                vkDestroyImageView(device, faceView, nullptr);
+                vk.vkDestroyImageView(device, faceView, nullptr);
                 faceView = VK_NULL_HANDLE;
             }
             for (VkImageView &mipView : texture.mipViews)
             {
-                vkDestroyImageView(device, mipView, nullptr);
+                vk.vkDestroyImageView(device, mipView, nullptr);
                 mipView = VK_NULL_HANDLE;
             }
             texture.view = VK_NULL_HANDLE;
-            vkDestroyImageView(device, texture.encodedView, nullptr);
+            vk.vkDestroyImageView(device, texture.encodedView, nullptr);
             texture.encodedView = VK_NULL_HANDLE;
         }
 
         // A cube gets a cube view of all its faces, for sampling, and a 2D view of each face's first mip, for drawing into
         // it. A storage texture gets a 2D array view of each mip with every layer, for compute to write: a storage view
         // holds one mip, and one view type serves a 2D texture (1 layer) and a cube (6) alike.
-        VkResult createImageViews(VkDevice device, VulkanTexture &texture)
+        VkResult createImageViews(const VolkDeviceTable &vk, VkDevice device, VulkanTexture &texture)
         {
             VkImageViewCreateInfo viewInfo = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
             viewInfo.image = texture.image;
@@ -437,14 +503,14 @@ namespace rasm::rhi
             viewInfo.subresourceRange.aspectMask = toVkAspectMask(texture.desc.format);
             viewInfo.subresourceRange.levelCount = texture.mipLevels;
             viewInfo.subresourceRange.layerCount = texture.desc.cube ? CUBE_FACES : 1;
-            VkResult result = vkCreateImageView(device, &viewInfo, nullptr, &texture.view);
+            VkResult result = vk.vkCreateImageView(device, &viewInfo, nullptr, &texture.view);
             for (uint32_t face = 0; texture.desc.cube && result == VK_SUCCESS && face < CUBE_FACES; ++face)
             {
                 viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
                 viewInfo.subresourceRange.baseArrayLayer = face;
                 viewInfo.subresourceRange.layerCount = 1;
                 viewInfo.subresourceRange.levelCount = 1;
-                result = vkCreateImageView(device, &viewInfo, nullptr, &texture.faceViews[face]);
+                result = vk.vkCreateImageView(device, &viewInfo, nullptr, &texture.faceViews[face]);
             }
             for (uint32_t mip = 0; texture.desc.usage == TextureUsage::SAMPLED_STORAGE && result == VK_SUCCESS && mip < texture.mipLevels; ++mip)
             {
@@ -453,7 +519,7 @@ namespace rasm::rhi
                 viewInfo.subresourceRange.levelCount = 1;
                 viewInfo.subresourceRange.baseArrayLayer = 0;
                 viewInfo.subresourceRange.layerCount = texture.desc.cube ? CUBE_FACES : 1;
-                result = vkCreateImageView(device, &viewInfo, nullptr, &texture.mipViews[mip]);
+                result = vk.vkCreateImageView(device, &viewInfo, nullptr, &texture.mipViews[mip]);
             }
             // An attachment view: mip 0, layer 0, as beginRendering draws.
             if (hasEncodedView(texture.desc) && result == VK_SUCCESS)
@@ -463,10 +529,10 @@ namespace rasm::rhi
                                                            .viewType = VK_IMAGE_VIEW_TYPE_2D,
                                                            .format = VK_FORMAT_R8G8B8A8_UNORM,
                                                            .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .levelCount = 1, .layerCount = 1}};
-                result = vkCreateImageView(device, &encodedInfo, nullptr, &texture.encodedView);
+                result = vk.vkCreateImageView(device, &encodedInfo, nullptr, &texture.encodedView);
             }
             if (result != VK_SUCCESS)
-                destroyImageViews(device, texture);
+                destroyImageViews(vk, device, texture);
             return result;
         }
     }
@@ -497,10 +563,14 @@ namespace rasm::rhi
 
     bool VulkanDevice::initialize(const DeviceDesc &desc)
     {
+        if (!loadVulkan(desc.window != nullptr))
+            return false;
+
         auto vkbInstance = initInstance(desc, debugUtilsEnabled);
         if (!vkbInstance)
             return false;
         instance = vkbInstance.value();
+        volkLoadInstanceOnly(instance.instance);
 
         // Headless: no window, so no surface; the frames go to an OffscreenSwapchain.
         if (desc.window != nullptr && !createWindowSurface(*desc.window, instance.instance, &surface))
@@ -527,7 +597,9 @@ namespace rasm::rhi
             return false;
         }
         device = vkbDevice.value();
-        dispatchTable = device.make_table();
+        // This device's functions, straight from the driver (or the first layer): no loader trampoline per call, and a
+        // second device has its own table.
+        volkLoadDeviceTable(&vk, device.device);
         queryFormatSupport(desc.hostImageCopy);
 
         auto queueRet = device.get_queue(vkb::QueueType::graphics);
@@ -537,7 +609,7 @@ namespace rasm::rhi
             spdlog::error("Failed to get the graphics queue.");
             return false;
         }
-        graphicsQueue = std::make_unique<VulkanQueue>(queueRet.value(), queueIndexRet.value());
+        graphicsQueue = std::make_unique<VulkanQueue>(vk, queueRet.value(), queueIndexRet.value());
 
         const uint32_t timestampBits = device.queue_families[queueIndexRet.value()].timestampValidBits;
         timestampMask = timestampBits >= 64 ? ~0ull : (1ull << timestampBits) - 1;
@@ -563,7 +635,7 @@ namespace rasm::rhi
             const bool separate = computeRet && computeIndexRet && (device.queue_families[computeIndexRet.value()].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0;
             if (separate && device.queue_families[computeIndexRet.value()].timestampValidBits == timestampBits)
             {
-                computeQueue = std::make_unique<VulkanQueue>(computeRet.value(), computeIndexRet.value());
+                computeQueue = std::make_unique<VulkanQueue>(vk, computeRet.value(), computeIndexRet.value());
                 sharedFamilies[0] = queueIndexRet.value();
                 sharedFamilies[1] = computeIndexRet.value();
                 sharedFamilyCount = 2;
@@ -575,18 +647,18 @@ namespace rasm::rhi
             }
         }
 
-        VmaVulkanFunctions vkFunctions{
-            .vkGetInstanceProcAddr = vkGetInstanceProcAddr,
-            .vkGetDeviceProcAddr = vkGetDeviceProcAddr,
-            .vkCreateImage = vkCreateImage,
-        };
-
         VmaAllocatorCreateInfo allocatorCreateInfo = {};
         allocatorCreateInfo.flags = VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT | VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
         allocatorCreateInfo.vulkanApiVersion = VK_API_VERSION_1_4;
         allocatorCreateInfo.physicalDevice = physicalDevice.physical_device;
         allocatorCreateInfo.device = device.device;
         allocatorCreateInfo.instance = instance.instance;
+        VmaVulkanFunctions vkFunctions = {};
+        if (vmaImportVulkanFunctionsFromVolk(&allocatorCreateInfo, &vkFunctions) != VK_SUCCESS)
+        {
+            spdlog::error("Failed to get VMA's Vulkan functions from volk.");
+            return false;
+        }
         allocatorCreateInfo.pVulkanFunctions = &vkFunctions;
 
         if (vmaCreateAllocator(&allocatorCreateInfo, &allocator) != VK_SUCCESS)
@@ -644,7 +716,7 @@ namespace rasm::rhi
 
         VkBufferDeviceAddressInfo bufferAddressInfo = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
         bufferAddressInfo.buffer = buffer->buffer;
-        buffer->deviceAddress = vkGetBufferDeviceAddress(device.device, &bufferAddressInfo);
+        buffer->deviceAddress = vk.vkGetBufferDeviceAddress(device.device, &bufferAddressInfo);
 
         setObjectName(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(buffer->buffer), desc.name);
         return buffer;
@@ -682,7 +754,7 @@ namespace rasm::rhi
             return nullptr;
         }
 
-        result = createImageViews(device.device, *texture);
+        result = createImageViews(vk, device.device, *texture);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to create image view for '{}'. Error: {}", desc.name, toVkResultString(result));
@@ -701,7 +773,7 @@ namespace rasm::rhi
         const VkImageCreateInfo imageInfo = imageCreateInfo(desc, mipLevelCount(desc), usesHostCopy(desc), sharedFamilies, sharedFamilyCount);
         const VkDeviceImageMemoryRequirements info = {.sType = VK_STRUCTURE_TYPE_DEVICE_IMAGE_MEMORY_REQUIREMENTS, .pCreateInfo = &imageInfo};
         VkMemoryRequirements2 requirements = {.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2};
-        vkGetDeviceImageMemoryRequirements(device.device, &info, &requirements);
+        vk.vkGetDeviceImageMemoryRequirements(device.device, &info, &requirements);
         return {.size = requirements.memoryRequirements.size,
                 .alignment = requirements.memoryRequirements.alignment,
                 .memoryTypeBits = requirements.memoryRequirements.memoryTypeBits};
@@ -751,11 +823,11 @@ namespace rasm::rhi
             return nullptr;
         }
 
-        result = createImageViews(device.device, *texture);
+        result = createImageViews(vk, device.device, *texture);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to create image view for '{}'. Error: {}", desc.name, toVkResultString(result));
-            vkDestroyImage(device.device, texture->image, nullptr);
+            vk.vkDestroyImage(device.device, texture->image, nullptr);
             delete texture;
             return nullptr;
         }
@@ -785,7 +857,7 @@ namespace rasm::rhi
         auto *sampler = new VulkanSampler();
         sampler->desc = desc;
 
-        auto result = vkCreateSampler(device.device, &samplerInfo, nullptr, &sampler->sampler);
+        auto result = vk.vkCreateSampler(device.device, &samplerInfo, nullptr, &sampler->sampler);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to create sampler '{}'. Error: {}", desc.name, toVkResultString(result));
@@ -806,7 +878,7 @@ namespace rasm::rhi
         auto *shader = new VulkanShader();
         shader->desc = desc;
 
-        auto result = vkCreateShaderModule(device.device, &shaderModuleInfo, nullptr, &shader->module);
+        auto result = vk.vkCreateShaderModule(device.device, &shaderModuleInfo, nullptr, &shader->module);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to create shader module. Error: {}", toVkResultString(result));
@@ -820,7 +892,7 @@ namespace rasm::rhi
 
     Pipeline *VulkanDevice::createGraphicsPipeline(const PipelineDesc &desc, Shader *vertexShader, Shader *fragmentShader, DescriptorSetLayout *layout)
     {
-        VkPipelineLayout pipelineLayout = createPipelineLayout(device.device, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, layout);
+        VkPipelineLayout pipelineLayout = createPipelineLayout(vk, device.device, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, layout);
         if (pipelineLayout == VK_NULL_HANDLE)
             return nullptr;
 
@@ -944,11 +1016,11 @@ namespace rasm::rhi
             .layout = pipelineLayout};
 
         VkPipeline vkPipeline;
-        auto result = vkCreateGraphicsPipelines(device.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &vkPipeline);
+        auto result = vk.vkCreateGraphicsPipelines(device.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &vkPipeline);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to create graphics pipeline. Error: {}", toVkResultString(result));
-            vkDestroyPipelineLayout(device.device, pipelineLayout, nullptr);
+            vk.vkDestroyPipelineLayout(device.device, pipelineLayout, nullptr);
             return nullptr;
         }
 
@@ -964,7 +1036,7 @@ namespace rasm::rhi
 
     Pipeline *VulkanDevice::createComputePipeline(const PipelineDesc &desc, Shader *computeShader, DescriptorSetLayout *layout)
     {
-        VkPipelineLayout pipelineLayout = createPipelineLayout(device.device, VK_SHADER_STAGE_COMPUTE_BIT, layout);
+        VkPipelineLayout pipelineLayout = createPipelineLayout(vk, device.device, VK_SHADER_STAGE_COMPUTE_BIT, layout);
         if (pipelineLayout == VK_NULL_HANDLE)
             return nullptr;
 
@@ -979,11 +1051,11 @@ namespace rasm::rhi
             .layout = pipelineLayout};
 
         VkPipeline vkPipeline;
-        auto result = vkCreateComputePipelines(device.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &vkPipeline);
+        auto result = vk.vkCreateComputePipelines(device.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &vkPipeline);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to create compute pipeline. Error: {}", toVkResultString(result));
-            vkDestroyPipelineLayout(device.device, pipelineLayout, nullptr);
+            vk.vkDestroyPipelineLayout(device.device, pipelineLayout, nullptr);
             return nullptr;
         }
 
@@ -1039,7 +1111,7 @@ namespace rasm::rhi
         auto *layout = new VulkanDescriptorSetLayout();
         layout->desc = desc;
 
-        auto result = vkCreateDescriptorSetLayout(device.device, &layoutInfo, nullptr, &layout->layout);
+        auto result = vk.vkCreateDescriptorSetLayout(device.device, &layoutInfo, nullptr, &layout->layout);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to create bindless descriptor set layout. Error: {}", toVkResultString(result));
@@ -1074,7 +1146,7 @@ namespace rasm::rhi
         auto *pool = new VulkanDescriptorPool();
         pool->desc = desc;
 
-        auto result = vkCreateDescriptorPool(device.device, &poolInfo, nullptr, &pool->pool);
+        auto result = vk.vkCreateDescriptorPool(device.device, &poolInfo, nullptr, &pool->pool);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to create descriptor pool. Error: {}", toVkResultString(result));
@@ -1107,7 +1179,7 @@ namespace rasm::rhi
         descriptorSet->name = name;
         descriptorSet->storageImageCount = vkLayout->desc.storageImageCount;
 
-        auto result = vkAllocateDescriptorSets(device.device, &allocInfo, &descriptorSet->set);
+        auto result = vk.vkAllocateDescriptorSets(device.device, &allocInfo, &descriptorSet->set);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to allocate descriptor set. Error: {}", toVkResultString(result));
@@ -1146,7 +1218,7 @@ namespace rasm::rhi
             .pNext = &typeInfo};
 
         auto *fence = new VulkanFence();
-        auto result = vkCreateSemaphore(device.device, &semaphoreInfo, nullptr, &fence->semaphore);
+        auto result = vk.vkCreateSemaphore(device.device, &semaphoreInfo, nullptr, &fence->semaphore);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to create timeline semaphore. Error: {}", toVkResultString(result));
@@ -1185,7 +1257,7 @@ namespace rasm::rhi
         VkQueryPoolCreateInfo poolInfo = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = count};
         auto *pool = new VulkanQueryPool();
         pool->count = count;
-        auto result = vkCreateQueryPool(device.device, &poolInfo, nullptr, &pool->pool);
+        auto result = vk.vkCreateQueryPool(device.device, &poolInfo, nullptr, &pool->pool);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to create query pool '{}'. Error: {}", name, toVkResultString(result));
@@ -1194,7 +1266,7 @@ namespace rasm::rhi
         }
 
         // A new pool's queries are undefined until reset.
-        vkResetQueryPool(device.device, pool->pool, 0, count);
+        vk.vkResetQueryPool(device.device, pool->pool, 0, count);
         setObjectName(VK_OBJECT_TYPE_QUERY_POOL, reinterpret_cast<uint64_t>(pool->pool), name);
         return pool;
     }
@@ -1209,7 +1281,7 @@ namespace rasm::rhi
     void VulkanDevice::destroyTexture(Texture *texture)
     {
         auto *vkTexture = static_cast<VulkanTexture *>(texture);
-        destroyImageViews(device.device, *vkTexture);
+        destroyImageViews(vk, device.device, *vkTexture);
         vmaDestroyImage(allocator, vkTexture->image, vkTexture->allocation);
         delete vkTexture;
     }
@@ -1224,36 +1296,36 @@ namespace rasm::rhi
     void VulkanDevice::destroySampler(Sampler *sampler)
     {
         auto *vkSampler = static_cast<VulkanSampler *>(sampler);
-        vkDestroySampler(device.device, vkSampler->sampler, nullptr);
+        vk.vkDestroySampler(device.device, vkSampler->sampler, nullptr);
         delete vkSampler;
     }
 
     void VulkanDevice::destroyShader(Shader *shader)
     {
         auto *vkShader = static_cast<VulkanShader *>(shader);
-        vkDestroyShaderModule(device.device, vkShader->module, nullptr);
+        vk.vkDestroyShaderModule(device.device, vkShader->module, nullptr);
         delete vkShader;
     }
 
     void VulkanDevice::destroyPipeline(Pipeline *pipeline)
     {
         auto *vkPipeline = static_cast<VulkanPipeline *>(pipeline);
-        vkDestroyPipeline(device.device, vkPipeline->pipeline, nullptr);
-        vkDestroyPipelineLayout(device.device, vkPipeline->layout, nullptr);
+        vk.vkDestroyPipeline(device.device, vkPipeline->pipeline, nullptr);
+        vk.vkDestroyPipelineLayout(device.device, vkPipeline->layout, nullptr);
         delete vkPipeline;
     }
 
     void VulkanDevice::destroyDescriptorSetLayout(DescriptorSetLayout *layout)
     {
         auto *vkLayout = static_cast<VulkanDescriptorSetLayout *>(layout);
-        vkDestroyDescriptorSetLayout(device.device, vkLayout->layout, nullptr);
+        vk.vkDestroyDescriptorSetLayout(device.device, vkLayout->layout, nullptr);
         delete vkLayout;
     }
 
     void VulkanDevice::destroyDescriptorPool(DescriptorPool *pool)
     {
         auto *vkPool = static_cast<VulkanDescriptorPool *>(pool);
-        vkDestroyDescriptorPool(device.device, vkPool->pool, nullptr);
+        vk.vkDestroyDescriptorPool(device.device, vkPool->pool, nullptr);
         delete vkPool;
     }
 
@@ -1271,7 +1343,7 @@ namespace rasm::rhi
     void VulkanDevice::destroyFence(Fence *fence)
     {
         auto *vkFence = static_cast<VulkanFence *>(fence);
-        vkDestroySemaphore(device.device, vkFence->semaphore, nullptr);
+        vk.vkDestroySemaphore(device.device, vkFence->semaphore, nullptr);
         delete vkFence;
     }
 
@@ -1283,7 +1355,7 @@ namespace rasm::rhi
     void VulkanDevice::destroyQueryPool(QueryPool *pool)
     {
         auto *vkPool = static_cast<VulkanQueryPool *>(pool);
-        vkDestroyQueryPool(device.device, vkPool->pool, nullptr);
+        vk.vkDestroyQueryPool(device.device, vkPool->pool, nullptr);
         delete vkPool;
     }
 
@@ -1424,7 +1496,7 @@ namespace rasm::rhi
                                            .baseArrayLayer = 0,
                                            .layerCount = 1};
 
-        auto result = vkTransitionImageLayout(device.device, 1, &transitionInfo);
+        auto result = vk.vkTransitionImageLayout(device.device, 1, &transitionInfo);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to transition image layout. Error: {}", toVkResultString(result));
@@ -1449,7 +1521,7 @@ namespace rasm::rhi
         copyInfo.regionCount = levelCount;
         copyInfo.pRegions = regions.data();
 
-        result = vkCopyMemoryToImage(device.device, &copyInfo);
+        result = vk.vkCopyMemoryToImage(device.device, &copyInfo);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to copy memory to image. Error: {}", toVkResultString(result));
@@ -1476,7 +1548,7 @@ namespace rasm::rhi
             .pImageInfo = &imageInfo,
         };
 
-        vkUpdateDescriptorSets(device.device, 1, &descriptorWrite, 0, nullptr);
+        vk.vkUpdateDescriptorSets(device.device, 1, &descriptorWrite, 0, nullptr);
     }
 
     // Storage images are written in GENERAL, the layout the STORAGE state transitions to.
@@ -1499,7 +1571,7 @@ namespace rasm::rhi
             .pImageInfo = &imageInfo,
         };
 
-        vkUpdateDescriptorSets(device.device, 1, &descriptorWrite, 0, nullptr);
+        vk.vkUpdateDescriptorSets(device.device, 1, &descriptorWrite, 0, nullptr);
     }
 
     bool VulkanDevice::waitForFence(Fence *fence, uint64_t value, uint64_t timeout)
@@ -1511,7 +1583,7 @@ namespace rasm::rhi
             .pValues = &value,
         };
 
-        auto result = vkWaitSemaphores(device.device, &waitInfo, timeout);
+        auto result = vk.vkWaitSemaphores(device.device, &waitInfo, timeout);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to wait for fence. Error: {}", toVkResultString(result));
@@ -1523,7 +1595,7 @@ namespace rasm::rhi
     uint64_t VulkanDevice::getFenceValue(Fence *fence)
     {
         uint64_t value = 0;
-        auto result = vkGetSemaphoreCounterValue(device.device, static_cast<VulkanFence *>(fence)->semaphore, &value);
+        auto result = vk.vkGetSemaphoreCounterValue(device.device, static_cast<VulkanFence *>(fence)->semaphore, &value);
         if (result != VK_SUCCESS)
             spdlog::error("Failed to read fence value. Error: {}", toVkResultString(result));
         return value;
@@ -1532,7 +1604,7 @@ namespace rasm::rhi
     // The GPU must be done with the pool: today that means a fence wait covered its last submit.
     void VulkanDevice::resetQueries(QueryPool *pool)
     {
-        vkResetQueryPool(device.device, static_cast<VulkanQueryPool *>(pool)->pool, 0, pool->count);
+        vk.vkResetQueryPool(device.device, static_cast<VulkanQueryPool *>(pool)->pool, 0, pool->count);
     }
 
     // Nanoseconds since the first of the queries; one before it reads 0. False when any of them has not been
@@ -1543,8 +1615,8 @@ namespace rasm::rhi
         if (count == 0)
             return true;
 
-        auto result = vkGetQueryPoolResults(device.device, static_cast<VulkanQueryPool *>(pool)->pool, firstQuery, count, count * sizeof(uint64_t),
-                                            nanoseconds, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
+        auto result = vk.vkGetQueryPoolResults(device.device, static_cast<VulkanQueryPool *>(pool)->pool, firstQuery, count, count * sizeof(uint64_t),
+                                               nanoseconds, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
         if (result != VK_SUCCESS)
         {
             if (result != VK_NOT_READY)
@@ -1601,12 +1673,17 @@ namespace rasm::rhi
     void VulkanDevice::waitIdle()
     {
         if (device.device != VK_NULL_HANDLE)
-            vkDeviceWaitIdle(device.device);
+            vk.vkDeviceWaitIdle(device.device);
     }
 
     VkDevice VulkanDevice::getVkDevice() const
     {
         return device.device;
+    }
+
+    const VolkDeviceTable &VulkanDevice::getVkTable() const
+    {
+        return vk;
     }
 
     const vkb::Device &VulkanDevice::getVkbDevice() const
@@ -1632,7 +1709,7 @@ namespace rasm::rhi
     void VulkanDevice::setObjectName(VkObjectType type, uint64_t handle, const std::string &name)
     {
         // Skip naming when the extension is not enabled; the function pointer is null or invalid then (B3)
-        if (!debugUtilsEnabled || !dispatchTable.fp_vkSetDebugUtilsObjectNameEXT || name.empty())
+        if (!debugUtilsEnabled || !vkSetDebugUtilsObjectNameEXT || name.empty())
             return;
 
         VkDebugUtilsObjectNameInfoEXT nameInfo = {VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT};
@@ -1640,6 +1717,6 @@ namespace rasm::rhi
         nameInfo.objectHandle = handle;
         nameInfo.pObjectName = name.c_str();
 
-        dispatchTable.setDebugUtilsObjectNameEXT(&nameInfo);
+        vkSetDebugUtilsObjectNameEXT(device.device, &nameInfo);
     }
 }

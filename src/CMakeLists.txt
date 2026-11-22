@@ -1,5 +1,10 @@
 # required external libs
-find_package(Vulkan REQUIRED)
+# The Vulkan headers come from vcpkg, at the version volk is generated for, so volk, VMA, vk-bootstrap and RASM see one
+# header version. Nothing links the Vulkan loader: volk loads it at run time (D24), so the SDK is not needed to build.
+find_package(VulkanHeaders CONFIG REQUIRED)
+# Without this, volk's config adds the SDK's headers (VULKAN_SDK) to its targets.
+set(VOLK_PULL_IN_VULKAN OFF)
+find_package(volk CONFIG REQUIRED)
 find_package(vk-bootstrap CONFIG REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
@@ -102,7 +107,7 @@ set_target_properties(rasm PROPERTIES DEBUG_POSTFIX "d")
 target_compile_features(rasm PUBLIC cxx_std_20)
 
 target_link_libraries(rasm PUBLIC glm::glm)
-target_link_libraries(rasm PRIVATE Vulkan::Vulkan GPUOpen::VulkanMemoryAllocator)
+target_link_libraries(rasm PRIVATE Vulkan::Headers volk::volk GPUOpen::VulkanMemoryAllocator)
 target_link_libraries(rasm PRIVATE vk-bootstrap::vk-bootstrap)
 target_link_libraries(rasm PRIVATE slang::slang)
 target_link_libraries(rasm PRIVATE Tracy::TracyClient)
@@ -117,10 +122,15 @@ target_link_libraries(rasm PRIVATE KTX::ktx)
 target_compile_definitions(rasm PUBLIC GLM_FORCE_DEPTH_ZERO_TO_ONE)
 target_compile_definitions(rasm PRIVATE RASM_SHADER_DIR="${RASM_SHADER_DIR}")
 target_compile_definitions(rasm PRIVATE STBI_WINDOWS_UTF8)
+# Every Vulkan function comes from volk (D24): no prototypes from vulkan.h, no global device functions (each VulkanDevice
+# calls through its own table), and VMA takes its pointers from vmaImportVulkanFunctionsFromVolk.
+# volk::volk is built without VK_USE_PLATFORM_* defines, and the VolkDeviceTable it fills must have RASM's layout, so
+# RASM never defines them (a platform's functions would need volk::volk_headers and VOLK_IMPLEMENTATION instead).
+target_compile_definitions(rasm PRIVATE VK_NO_PROTOTYPES VOLK_NO_DEVICE_PROTOTYPES VMA_STATIC_VULKAN_FUNCTIONS=0 VMA_DYNAMIC_VULKAN_FUNCTIONS=0)
 
 target_include_directories(rasm PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 # SYSTEM, like the imported targets' directories, so RASM_WARNINGS does not report warnings inside these headers.
-target_include_directories(rasm SYSTEM PRIVATE ${Stb_INCLUDE_DIR} ${TINYGLTF_INCLUDE_DIRS} ${Vulkan_INCLUDE_DIRS})
+target_include_directories(rasm SYSTEM PRIVATE ${Stb_INCLUDE_DIR} ${TINYGLTF_INCLUDE_DIRS})
 
 # Holds only the third-party *_IMPLEMENTATION code, so clang-tidy has nothing of RASM's to check there.
 set_source_files_properties("thirdparty_impl.cpp" PROPERTIES SKIP_LINTING ON)

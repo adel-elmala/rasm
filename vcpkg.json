@@ -2,6 +2,8 @@
     "name": "rasm",
     "version": "0.1.0",
     "dependencies": [
+        "volk",
+        "vulkan-headers",
         "vk-bootstrap",
         "vulkan-memory-allocator",
         "glm",

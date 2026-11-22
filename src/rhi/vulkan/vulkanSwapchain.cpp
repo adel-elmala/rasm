@@ -81,7 +81,7 @@ namespace rasm::rhi
             VkSemaphoreTypeCreateInfo typeInfo = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO, .semaphoreType = type, .initialValue = 0};
             VkSemaphoreCreateInfo semaphoreInfo = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, .pNext = &typeInfo};
             VkSemaphore semaphore = VK_NULL_HANDLE;
-            auto result = vkCreateSemaphore(device.getVkDevice(), &semaphoreInfo, nullptr, &semaphore);
+            auto result = device.getVkTable().vkCreateSemaphore(device.getVkDevice(), &semaphoreInfo, nullptr, &semaphore);
             if (result != VK_SUCCESS)
             {
                 spdlog::error("Failed to create semaphore. Error: {}", toVkResultString(result));
@@ -92,7 +92,7 @@ namespace rasm::rhi
         }
     }
 
-    VulkanSwapchain::VulkanSwapchain(VulkanDevice &device) : device(device) {}
+    VulkanSwapchain::VulkanSwapchain(VulkanDevice &device) : device(device), vk(device.getVkTable()) {}
 
     VulkanSwapchain::~VulkanSwapchain()
     {
@@ -101,14 +101,14 @@ namespace rasm::rhi
         destroySwapchain();
 
         for (auto semaphore : presentSemaphores)
-            vkDestroySemaphore(device.getVkDevice(), semaphore, nullptr);
+            vk.vkDestroySemaphore(device.getVkDevice(), semaphore, nullptr);
         for (auto semaphore : acquireSemaphores)
         {
             if (semaphore != VK_NULL_HANDLE)
-                vkDestroySemaphore(device.getVkDevice(), semaphore, nullptr);
+                vk.vkDestroySemaphore(device.getVkDevice(), semaphore, nullptr);
         }
         if (releaseTimeline != VK_NULL_HANDLE)
-            vkDestroySemaphore(device.getVkDevice(), releaseTimeline, nullptr);
+            vk.vkDestroySemaphore(device.getVkDevice(), releaseTimeline, nullptr);
     }
 
     bool VulkanSwapchain::initialize(const SwapchainDesc &desc)
@@ -173,7 +173,7 @@ namespace rasm::rhi
                                                     .viewType = VK_IMAGE_VIEW_TYPE_2D,
                                                     .format = VK_FORMAT_B8G8R8A8_UNORM,
                                                     .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .levelCount = 1, .layerCount = 1}};
-            const VkResult result = vkCreateImageView(device.getVkDevice(), &viewInfo, nullptr, &image.encodedView);
+            const VkResult result = vk.vkCreateImageView(device.getVkDevice(), &viewInfo, nullptr, &image.encodedView);
             if (result != VK_SUCCESS)
             {
                 spdlog::error("Failed to create the swapchain's UNORM view. Error: {}", toVkResultString(result));
@@ -200,9 +200,9 @@ namespace rasm::rhi
         for (const auto &image : images)
         {
             if (image.view != VK_NULL_HANDLE)
-                vkDestroyImageView(device.getVkDevice(), image.view, nullptr);
+                vk.vkDestroyImageView(device.getVkDevice(), image.view, nullptr);
             if (image.encodedView != VK_NULL_HANDLE)
-                vkDestroyImageView(device.getVkDevice(), image.encodedView, nullptr);
+                vk.vkDestroyImageView(device.getVkDevice(), image.encodedView, nullptr);
         }
         images.clear();
     }
@@ -240,7 +240,7 @@ namespace rasm::rhi
             return;
 
         VkSubmitInfo2 submitInfo = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2, .waitSemaphoreInfoCount = waitCount, .pWaitSemaphoreInfos = waits};
-        auto result = vkQueueSubmit2(device.getGraphicsQueue()->getVkQueue(), 1, &submitInfo, VK_NULL_HANDLE);
+        auto result = vk.vkQueueSubmit2(device.getGraphicsQueue()->getVkQueue(), 1, &submitInfo, VK_NULL_HANDLE);
         if (result != VK_SUCCESS)
             spdlog::error("Failed to release the swapchain semaphores. Error: {}", toVkResultString(result));
     }
@@ -272,7 +272,7 @@ namespace rasm::rhi
                                             .semaphoreCount = 1,
                                             .pSemaphores = &releaseTimeline,
                                             .pValues = &acquireReleaseValues[slot]};
-            auto waitResult = vkWaitSemaphores(device.getVkDevice(), &waitInfo, UINT64_MAX);
+            auto waitResult = vk.vkWaitSemaphores(device.getVkDevice(), &waitInfo, UINT64_MAX);
             if (waitResult != VK_SUCCESS)
             {
                 spdlog::error("Failed to wait for a swapchain acquire semaphore. Error: {}", toVkResultString(waitResult));
@@ -281,7 +281,7 @@ namespace rasm::rhi
         }
 
         uint32_t acquiredIndex = 0;
-        auto result = vkAcquireNextImageKHR(device.getVkDevice(), swapchain.swapchain, UINT64_MAX, acquireSemaphores[slot], VK_NULL_HANDLE, &acquiredIndex);
+        auto result = vk.vkAcquireNextImageKHR(device.getVkDevice(), swapchain.swapchain, UINT64_MAX, acquireSemaphores[slot], VK_NULL_HANDLE, &acquiredIndex);
         auto status = toSwapchainStatus(result);
         if (status == SwapchainStatus::FAILURE)
             spdlog::error("Failed to acquire next image. Error: {}", toVkResultString(result));
@@ -372,7 +372,7 @@ namespace rasm::rhi
             .pSwapchains = &swapchain.swapchain,
             .pImageIndices = &imageIndex};
 
-        auto result = vkQueuePresentKHR(device.getGraphicsQueue()->getVkQueue(), &presentInfo);
+        auto result = vk.vkQueuePresentKHR(device.getGraphicsQueue()->getVkQueue(), &presentInfo);
         auto status = toSwapchainStatus(result);
         if (status == SwapchainStatus::FAILURE)
             spdlog::error("Failed to present swapchain image. Error: {}", toVkResultString(result));

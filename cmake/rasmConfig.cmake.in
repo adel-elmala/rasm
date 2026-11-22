@@ -7,7 +7,8 @@ include(CMakeFindDependencyMacro)
 
 # rasm is a static library, so its PRIVATE dependencies are link requirements for consumers too.
 # Stb and tinygltf are absent because rasm only uses their headers.
-find_dependency(Vulkan)
+find_dependency(VulkanHeaders CONFIG)
+find_dependency(volk CONFIG)
 find_dependency(vk-bootstrap CONFIG)
 find_dependency(VulkanMemoryAllocator CONFIG)
 find_dependency(glm CONFIG)

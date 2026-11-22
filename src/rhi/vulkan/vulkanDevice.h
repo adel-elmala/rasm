@@ -63,6 +63,7 @@ namespace rasm::rhi
         VRAMStats                   queryVRAMStats() override;
         void                        waitIdle() override;
         VkDevice                    getVkDevice() const;
+        const VolkDeviceTable&      getVkTable() const;
         const vkb::Device&          getVkbDevice() const;
         VkPhysicalDevice            getVkPhysicalDevice() const;
         VkSurfaceKHR                getSurface() const;
@@ -88,7 +89,7 @@ namespace rasm::rhi
         vkb::Instance                   instance            = {};
         vkb::PhysicalDevice             physicalDevice      = {};
         vkb::Device                     device              = {};
-        vkb::DispatchTable              dispatchTable       = {};
+        VolkDeviceTable                 vk                  = {};
         std::unique_ptr<VulkanQueue>    graphicsQueue       = {};
         std::unique_ptr<VulkanQueue>    computeQueue        = {};
         uint32_t                        sharedFamilies[2]   = {};

@@ -23,6 +23,20 @@ namespace rasm
             return glm::vec2(x, y);
         }
 
+        // SDL loads the Vulkan loader for its windows, and the device takes it from SDL (getWindowVulkanLoader). volk
+        // does the same fallback: dlopen may not search /usr/local/lib, where the Vulkan SDK installs the loader on macOS.
+        bool loadVulkanLoader()
+        {
+            if (SDL_Vulkan_LoadLibrary(nullptr))
+                return true;
+#if defined(__APPLE__)
+            if (SDL_Vulkan_LoadLibrary("/usr/local/lib/libvulkan.dylib"))
+                return true;
+#endif
+            spdlog::error("No Vulkan loader found ({}). Install a GPU driver with Vulkan 1.4.", SDL_GetError());
+            return false;
+        }
+
         class SdlPlatform final : public Platform
         {
         public:
@@ -34,10 +48,17 @@ namespace rasm
                     return Window{};
                 }
 
+                if (!loadVulkanLoader())
+                {
+                    SDL_Quit();
+                    return Window{};
+                }
+
                 auto wind = SDL_CreateWindow("RASM Engine", width, height, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
                 if (!wind)
                 {
                     spdlog::error("Failed to create SDL window: {}", SDL_GetError());
+                    SDL_Vulkan_UnloadLibrary();
                     SDL_Quit();
                     return Window{};
                 }
@@ -65,6 +86,7 @@ namespace rasm
                 if (window.handle.isValid())
                 {
                     SDL_DestroyWindow(reinterpret_cast<SDL_Window *>(window.handle.index));
+                    SDL_Vulkan_UnloadLibrary();
                     SDL_Quit();
                 }
             }
@@ -213,6 +235,11 @@ namespace rasm
     std::unique_ptr<Platform> createSdlPlatform()
     {
         return std::make_unique<SdlPlatform>();
+    }
+
+    PFN_vkGetInstanceProcAddr getWindowVulkanLoader()
+    {
+        return reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr());
     }
 
     bool createWindowSurface(const Window &window, VkInstance instance, VkSurfaceKHR *surface)

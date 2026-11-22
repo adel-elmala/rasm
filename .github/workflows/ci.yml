@@ -40,25 +40,14 @@ jobs:
 
       - uses: lukka/get-cmake@v4.4.5
 
-      # The tests need no GPU, but rasm_tests.exe still loads vulkan-1.dll, so the runtime is installed too.
+      # Only the image tests need the SDK, for the validation layer and vulkaninfo. The build takes the Vulkan headers from
+      # vcpkg, and volk loads the loader at run time (D24), so the unit tests start on a machine without Vulkan, as on
+      # macOS here. The image tests use the runner's own loader (1.3): RASM needs a 1.3 loader and a 1.4 device.
       - uses: jakoch/install-vulkan-sdk-action@v1
+        if: runner.os == 'Windows'
         with:
-          install_runtime: true
           cache: true
           stripdown: true
-
-      # rasm imports Vulkan 1.4 functions (vkCopyMemoryToImage), and Windows finds vulkan-1.dll in System32 before PATH.
-      # The runner's System32 loader is older, so the SDK's loader replaces it, as a current GPU driver would.
-      - name: Install the Vulkan loader
-        if: runner.os == 'Windows'
-        run: |
-          sdk=$(cygpath -u "$VULKAN_SDK")/runtime/x64/vulkan-1.dll
-          sys=/c/Windows/System32/vulkan-1.dll
-          version() { powershell -NoProfile -Command "(Get-Item '$(cygpath -w "$1")').VersionInfo.FileVersion"; }
-          echo "System32 before: $(version $sys 2>/dev/null || echo none)"
-          cp -f "$sdk" "$sys"
-          echo "System32 now:    $(version $sys)"
-          test "$(version $sys)" = "$(version $sdk)"
 
       # The runner's MSVC STL needs a newer clang than the LLVM it ships, so a pinned one replaces it.
       - name: Install LLVM ${{ env.LLVM_VERSION }}
@@ -112,6 +101,26 @@ jobs:
 
       - name: Test ${{ matrix.debug }}
         run: ctest --preset ${{ matrix.debug }}
+
+      # volk loads the Vulkan loader at run time (D24), so no executable or DLL of the build may import it.
+      - name: Check that nothing links the Vulkan loader
+        run: |
+          dir=build/${{ matrix.debug }}
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            files=$(ls $dir/tests/*.exe $dir/tests/*.dll $dir/examples/*.exe $dir/examples/*.dll)
+            imports() { llvm-objdump -p "$1" | grep 'DLL Name'; }
+          else
+            files=$(find $dir/tests $dir/examples -maxdepth 1 -type f -perm -u+x)
+            imports() { otool -L "$1"; }
+          fi
+          count=0
+          bad=0
+          for f in $files; do
+            count=$((count + 1))
+            if imports "$f" | grep -i vulkan > /dev/null; then echo "$f links the Vulkan loader"; bad=1; fi
+          done
+          echo "checked $count files"
+          test "$count" -gt 0 && test "$bad" = 0
 
       # Release runs even when a debug step failed.
       - name: Configure ${{ matrix.release }}
