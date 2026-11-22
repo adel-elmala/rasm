@@ -145,7 +145,7 @@ int main(int argc, char **argv)
             // The graph puts barriers around the pass, so the previous frame's draw is done reading the
             // buffer (both frame slots share it) and this frame's draw sees the new positions.
             ctx.bindPipeline(commandBuffer, animatePipeline);
-            ctx.pushConstants(commandBuffer, animatePipeline, rasm::ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants));
+            ctx.pushConstants(commandBuffer, animatePipeline, &pushConstants, sizeof(pushConstants));
             ctx.dispatch(commandBuffer, (PARTICLE_COUNT + GROUP_SIZE - 1) / GROUP_SIZE);
         });
 
@@ -166,7 +166,7 @@ int main(int argc, char **argv)
                                                      .count = PARTICLE_COUNT};
 
             ctx.bindPipeline(commandBuffer, drawPipeline);
-            ctx.pushConstants(commandBuffer, drawPipeline, rasm::ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants));
+            ctx.pushConstants(commandBuffer, drawPipeline, &pushConstants, sizeof(pushConstants));
             ctx.draw(commandBuffer, PARTICLE_COUNT * 3);
         });
 

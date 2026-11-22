@@ -408,9 +408,9 @@ namespace rasm::rhi
         vk.vkCmdBindDescriptorSets(commandBuffer, vkPipeline->bindPoint, vkPipeline->layout, setIndex, 1, &static_cast<VulkanDescriptorSet *>(descriptorSet)->set, 0, nullptr);
     }
 
-    void VulkanCommandBuffer::pushConstants(Pipeline *pipeline, ShaderType stages, const void *data, uint32_t size, uint32_t offset)
+    void VulkanCommandBuffer::pushConstants(Pipeline *pipeline, const void *data, uint32_t size, uint32_t offset)
     {
-        vk.vkCmdPushConstants(commandBuffer, static_cast<VulkanPipeline *>(pipeline)->layout, toVkShaderStageFlags(stages), offset, size, data);
+        vk.vkCmdPushConstants(commandBuffer, static_cast<VulkanPipeline *>(pipeline)->layout, PUSH_CONSTANT_STAGES, offset, size, data);
     }
 
     void VulkanCommandBuffer::draw(uint32_t vertexCount, uint32_t instanceCount)

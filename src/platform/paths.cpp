@@ -4,7 +4,15 @@
 #include "SDL3/SDL_filesystem.h"
 #include "spdlog/spdlog.h"
 
+#include <cstdlib>
+#include <fstream>
 #include <system_error>
+
+#if defined(_WIN32)
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 
 namespace rasm
 {
@@ -20,6 +28,66 @@ namespace rasm
                 return {};
             }
             return pathFromUtf8(basePath);
+        }
+
+        std::string getExecutableName()
+        {
+#if defined(_WIN32)
+            wchar_t buffer[MAX_PATH] = {};
+            const DWORD length = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
+            const std::filesystem::path path = length > 0 && length < MAX_PATH ? std::filesystem::path(buffer) : std::filesystem::path();
+#elif defined(__APPLE__)
+            char buffer[4096] = {};
+            uint32_t size = sizeof(buffer);
+            const std::filesystem::path path = _NSGetExecutablePath(buffer, &size) == 0 ? std::filesystem::path(buffer) : std::filesystem::path();
+#else
+            std::error_code error;
+            const std::filesystem::path path = std::filesystem::read_symlink("/proc/self/exe", error);
+#endif
+            const std::string name = pathToUtf8(path.stem());
+            return name.empty() ? "app" : name;
+        }
+
+        // The user's folder for local data an application can rebuild: not roamed, not backed up.
+        std::filesystem::path getUserCacheDir()
+        {
+#if defined(_WIN32)
+            wchar_t *localAppData = nullptr;
+            size_t length = 0;
+            std::filesystem::path folder;
+            if (_wdupenv_s(&localAppData, &length, L"LOCALAPPDATA") == 0 && localAppData != nullptr && localAppData[0] != 0)
+                folder = localAppData;
+            std::free(localAppData);
+            return folder;
+#else
+            const char *xdgCache = std::getenv("XDG_CACHE_HOME"); // NOLINT(concurrency-mt-unsafe): read once, at startup
+            const char *home = std::getenv("HOME");               // NOLINT(concurrency-mt-unsafe): read once, at startup
+#if defined(__APPLE__)
+            xdgCache = nullptr;
+#endif
+            if (xdgCache != nullptr && pathFromUtf8(xdgCache).is_absolute())
+                return pathFromUtf8(xdgCache);
+            if (home == nullptr || home[0] == 0)
+                return {};
+#if defined(__APPLE__)
+            return pathFromUtf8(home) / "Library" / "Caches";
+#else
+            return pathFromUtf8(home) / ".cache";
+#endif
+#endif
+        }
+
+        // The folder exists, or was made, and a file can be written in it.
+        bool isWritableFolder(const std::filesystem::path &folder)
+        {
+            std::error_code error;
+            std::filesystem::create_directories(folder, error);
+            if (error || !std::filesystem::is_directory(folder, error))
+                return false;
+            const std::filesystem::path probe = folder / ".rasm-write-test";
+            const bool written = static_cast<bool>(std::ofstream(probe, std::ios::binary) << 'x');
+            std::filesystem::remove(probe, error);
+            return written;
         }
     }
 
@@ -57,6 +125,26 @@ namespace rasm
     {
         // operator/ keeps an absolute right-hand side as it is.
         return pathToUtf8((getExecutableDir() / pathFromUtf8(path)).lexically_normal());
+    }
+
+    std::string resolveCacheDir(const std::string &cacheDir)
+    {
+        if (cacheDir.empty())
+            return {};
+        const std::filesystem::path configured = pathFromUtf8(cacheDir);
+        const std::filesystem::path folder = (getExecutableDir() / configured).lexically_normal();
+        if (isWritableFolder(folder))
+            return pathToUtf8(folder);
+        // An installed application's folder is often read-only; a relative folder then goes to the user's cache folder.
+        const std::filesystem::path userDir = getUserCacheDir();
+        const std::filesystem::path fallback = userDir.empty() ? std::filesystem::path() : userDir / "rasm" / pathFromUtf8(getExecutableName());
+        if (!configured.is_absolute() && !fallback.empty() && isWritableFolder(fallback))
+        {
+            spdlog::info("Cannot write {}, so the shader and pipeline caches are in {}.", pathToUtf8(folder), pathToUtf8(fallback));
+            return pathToUtf8(fallback);
+        }
+        spdlog::warn("Cannot write the cache folder {}; shaders and pipelines are built without disk caches.", pathToUtf8(folder));
+        return {};
     }
 
     std::FILE *openFileForReading(const std::string &path)

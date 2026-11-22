@@ -1,6 +1,7 @@
 #include "renderer/shaderCompiler.h"
 #include "rasm/types.h"
 #include "platform/paths.h"
+#include "renderer/shaderCache.h"
 #include "renderer/uberMaterialTypes.h"
 
 #include "slang.h"
@@ -8,11 +9,16 @@
 #include "slang-com-ptr.h"
 
 #include "spdlog/spdlog.h"
+#include "tracy/Tracy.hpp"
 
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <fstream>
+#include <iterator>
+#include <sstream>
 #include <string>
 #include <filesystem>
 #include <unordered_map>
@@ -26,6 +32,9 @@ namespace rasm
             const char *name;
             size_t offset;
         };
+
+        // A new layout of the cache's key or files: every old entry misses.
+        constexpr uint32_t SHADER_CACHE_KEY_VERSION = 1;
     }
 
     namespace
@@ -52,31 +61,24 @@ namespace rasm
             return buffer.str();
         }
 
-        slang::VariableLayoutReflection *findField(slang::TypeLayoutReflection *structLayout, const char *name)
+        const StructMember *findMember(const StructLayout *layout, const char *name)
         {
-            for (unsigned int i = 0; i < structLayout->getFieldCount(); ++i)
-            {
-                auto field = structLayout->getFieldByIndex(i);
-                if (std::strcmp(field->getName(), name) == 0)
-                {
-                    return field;
-                }
-            }
-
+            if (!layout)
+                return nullptr;
+            for (const StructMember &member : layout->members)
+                if (member.name == name)
+                    return &member;
             return nullptr;
         }
 
         // The struct a field holds, looking through a pointer or an array.
-        slang::TypeLayoutReflection *fieldStruct(slang::TypeLayoutReflection *structLayout, const char *name)
+        const StructLayout *fieldStruct(const StructLayouts &layouts, const StructLayout *structLayout, const char *name)
         {
-            auto field = structLayout ? findField(structLayout, name) : nullptr;
-            if (!field)
-            {
+            const StructMember *member = findMember(structLayout, name);
+            if (!member)
                 return nullptr;
-            }
-
-            auto fieldType = field->getTypeLayout();
-            return fieldType->getKind() == slang::TypeReflection::Kind::Struct ? fieldType : fieldType->getElementTypeLayout();
+            const auto found = layouts.find(member->structName);
+            return found != layouts.end() ? &found->second : nullptr;
         }
 
         // A vector's or a matrix's scalar type, through its element types.
@@ -164,9 +166,18 @@ namespace rasm
             fields.push_back(field);
         }
 
+        // The struct a member holds, directly or through a pointer or an array, like the checks look it up.
+        std::string memberStructName(slang::TypeLayoutReflection *type)
+        {
+            using Kind = slang::TypeReflection::Kind;
+            slang::TypeLayoutReflection *held = type->getKind() == Kind::Struct ? type : type->getElementTypeLayout();
+            const char *name = held && held->getKind() == Kind::Struct ? held->getName() : nullptr;
+            return name ? name : "";
+        }
+
         // Every struct the layout reaches, through fields, arrays and pointers, by name. A struct seen before is
         // skipped, which also ends pointer cycles.
-        void collectStructLayouts(slang::TypeLayoutReflection *layout, std::unordered_map<std::string, std::vector<StructField>> &layouts)
+        void collectStructLayouts(slang::TypeLayoutReflection *layout, StructLayouts &layouts)
         {
             using Kind = slang::TypeReflection::Kind;
             if (!layout)
@@ -179,12 +190,21 @@ namespace rasm
             const char *name = layout->getName();
             if (layout->getKind() != Kind::Struct || !name || layouts.count(name) > 0)
                 return;
-            flattenFields(layout, "", 0, layouts[name]);
+            StructLayout &structLayout = layouts[name];
+            structLayout.size = static_cast<uint32_t>(layout->getSize());
+            for (unsigned int i = 0; i < layout->getFieldCount(); ++i)
+            {
+                auto member = layout->getFieldByIndex(i);
+                structLayout.members.push_back({.name = member->getName(),
+                                                .offset = static_cast<uint32_t>(member->getOffset(slang::ParameterCategory::Uniform)),
+                                                .structName = memberStructName(member->getTypeLayout())});
+            }
+            flattenFields(layout, "", 0, structLayout.fields);
             for (unsigned int i = 0; i < layout->getFieldCount(); ++i)
                 collectStructLayouts(layout->getFieldByIndex(i)->getTypeLayout(), layouts);
         }
 
-        bool validateStruct(slang::TypeLayoutReflection *structLayout, const char *name, size_t expectedSize, const std::vector<FieldOffset> &expectedFields)
+        bool validateStruct(const StructLayout *structLayout, const char *name, size_t expectedSize, const std::vector<FieldOffset> &expectedFields)
         {
             if (!structLayout)
             {
@@ -194,26 +214,25 @@ namespace rasm
 
             bool valid = true;
 
-            if (structLayout->getSize() != expectedSize)
+            if (structLayout->size != expectedSize)
             {
-                spdlog::error("Size mismatch for {}: C++ {}, shader {}", name, expectedSize, structLayout->getSize());
+                spdlog::error("Size mismatch for {}: C++ {}, shader {}", name, expectedSize, structLayout->size);
                 valid = false;
             }
 
             for (const auto &expected : expectedFields)
             {
-                auto field = findField(structLayout, expected.name);
-                if (!field)
+                const StructMember *member = findMember(structLayout, expected.name);
+                if (!member)
                 {
                     spdlog::error("Field {}.{} not found in shader program.", name, expected.name);
                     valid = false;
                     continue;
                 }
 
-                auto offset = field->getOffset(slang::ParameterCategory::Uniform);
-                if (offset != expected.offset)
+                if (member->offset != expected.offset)
                 {
-                    spdlog::error("Offset mismatch for {}.{}: C++ {}, shader {}", name, expected.name, expected.offset, offset);
+                    spdlog::error("Offset mismatch for {}.{}: C++ {}, shader {}", name, expected.name, expected.offset, member->offset);
                     valid = false;
                 }
             }
@@ -221,7 +240,53 @@ namespace rasm
             return valid;
         }
 
-        bool validateInstanceTransform(slang::TypeLayoutReflection *transform)
+        void hashOptions(CacheKey &key, const slang::CompilerOptionEntry *options, uint32_t count)
+        {
+            hashNumber(key, count);
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                const slang::CompilerOptionEntry &option = options[i];
+                hashNumber(key, static_cast<uint64_t>(option.name));
+                hashNumber(key, static_cast<uint64_t>(option.value.kind));
+                hashNumber(key, static_cast<uint64_t>(static_cast<int64_t>(option.value.intValue0)));
+                hashNumber(key, static_cast<uint64_t>(static_cast<int64_t>(option.value.intValue1)));
+                hashString(key, option.value.stringValue0 ? option.value.stringValue0 : "");
+                hashString(key, option.value.stringValue1 ? option.value.stringValue1 : "");
+            }
+        }
+
+        // Every file of the folder, by its path in the folder and its bytes, in path order. The shaders include these
+        // files, so an edit of any of them gives every shader a new key.
+        bool hashFolder(CacheKey &key, const std::filesystem::path &folder)
+        {
+            std::error_code error;
+            std::vector<std::filesystem::path> files;
+            for (const auto &entry : std::filesystem::recursive_directory_iterator(folder, error))
+                if (entry.is_regular_file(error))
+                    files.push_back(entry.path());
+            if (error)
+                return false;
+            std::sort(files.begin(), files.end());
+            for (const auto &file : files)
+            {
+                std::ifstream stream(file, std::ios::binary);
+                if (!stream)
+                    return false;
+                const std::string bytes((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+                hashString(key, pathToUtf8(file.lexically_relative(folder)));
+                hashString(key, bytes);
+            }
+            return true;
+        }
+
+        bool isInside(const std::filesystem::path &path, const std::filesystem::path &folder)
+        {
+            std::error_code error;
+            const std::filesystem::path relative = std::filesystem::weakly_canonical(path, error).lexically_relative(folder);
+            return !error && !relative.empty() && *relative.begin() != "..";
+        }
+
+        bool validateInstanceTransform(const StructLayout *transform)
         {
             return validateStruct(transform, "InstanceTransform", sizeof(gfx::InstanceTransform),
                                   {{"worldMatrix", offsetof(gfx::InstanceTransform, worldMatrix)},
@@ -233,7 +298,7 @@ namespace rasm
                                    {"skinnedMotion", offsetof(gfx::InstanceTransform, skinnedMotion)}});
         }
 
-        bool validateGeometryData(slang::TypeLayoutReflection *geometry)
+        bool validateGeometryData(const StructLayout *geometry)
         {
             return validateStruct(geometry, "GeometryData", sizeof(gfx::GeometryData),
                                   {{"vertexOffset", offsetof(gfx::GeometryData, vertexOffset)},
@@ -249,11 +314,11 @@ namespace rasm
 
         // The Animate and Skin passes: pc -> frame -> the table, the mesh data in the pool, the transforms and the
         // geometry pool.
-        bool validateAnimationStructs(slang::TypeLayoutReflection *pushConstants)
+        bool validateAnimationStructs(const StructLayouts &layouts, const StructLayout *pushConstants)
         {
-            auto frame = fieldStruct(pushConstants, "frame");
-            auto entity = fieldStruct(frame, "entities");
-            auto mesh = fieldStruct(entity, "mesh");
+            auto frame = fieldStruct(layouts, pushConstants, "frame");
+            auto entity = fieldStruct(layouts, frame, "entities");
+            auto mesh = fieldStruct(layouts, entity, "mesh");
             bool valid = validateStruct(pushConstants, "AnimatePushConstants", sizeof(gfx::AnimatePushConstants),
                                         {{"frame", offsetof(gfx::AnimatePushConstants, frame)},
                                          {"padding", offsetof(gfx::AnimatePushConstants, padding)}});
@@ -305,7 +370,7 @@ namespace rasm
                                      {"skinnedVertexCount", offsetof(gfx::AnimationMeshData, skinnedVertexCount)},
                                      {"weightCount", offsetof(gfx::AnimationMeshData, weightCount)},
                                      {"padding", offsetof(gfx::AnimationMeshData, padding)}});
-            valid &= validateStruct(fieldStruct(mesh, "subMeshes"), "AnimationSubMeshData", sizeof(gfx::AnimationSubMeshData),
+            valid &= validateStruct(fieldStruct(layouts, mesh, "subMeshes"), "AnimationSubMeshData", sizeof(gfx::AnimationSubMeshData),
                                     {{"node", offsetof(gfx::AnimationSubMeshData, node)},
                                      {"jointCount", offsetof(gfx::AnimationSubMeshData, jointCount)},
                                      {"firstJoint", offsetof(gfx::AnimationSubMeshData, firstJoint)},
@@ -315,49 +380,42 @@ namespace rasm
                                      {"firstSkinnedVertex", offsetof(gfx::AnimationSubMeshData, firstSkinnedVertex)},
                                      {"firstWeight", offsetof(gfx::AnimationSubMeshData, firstWeight)},
                                      {"firstMorphRadius", offsetof(gfx::AnimationSubMeshData, firstMorphRadius)}});
-            valid &= validateStruct(fieldStruct(mesh, "joints"), "AnimationJointData", sizeof(gfx::AnimationJointData),
+            valid &= validateStruct(fieldStruct(layouts, mesh, "joints"), "AnimationJointData", sizeof(gfx::AnimationJointData),
                                     {{"inverseBind", offsetof(gfx::AnimationJointData, inverseBind)},
                                      {"node", offsetof(gfx::AnimationJointData, node)}});
-            valid &= validateStruct(fieldStruct(frame, "skins"), "SkinVertex", sizeof(gfx::SkinVertex),
+            valid &= validateStruct(fieldStruct(layouts, frame, "skins"), "SkinVertex", sizeof(gfx::SkinVertex),
                                     {{"joints", offsetof(gfx::SkinVertex, joints)},
                                      {"weights", offsetof(gfx::SkinVertex, weights)}});
-            valid &= validateStruct(fieldStruct(frame, "morphs"), "MorphDelta", sizeof(gfx::MorphDelta),
+            valid &= validateStruct(fieldStruct(layouts, frame, "morphs"), "MorphDelta", sizeof(gfx::MorphDelta),
                                     {{"position", offsetof(gfx::MorphDelta, position)},
                                      {"normalTangent", offsetof(gfx::MorphDelta, normalTangent)}});
-            valid &= validateGeometryData(fieldStruct(frame, "geometry"));
-            valid &= validateStruct(fieldStruct(mesh, "nodes"), "AnimationNodeData", sizeof(gfx::AnimationNodeData),
+            valid &= validateGeometryData(fieldStruct(layouts, frame, "geometry"));
+            valid &= validateStruct(fieldStruct(layouts, mesh, "nodes"), "AnimationNodeData", sizeof(gfx::AnimationNodeData),
                                     {{"rest", offsetof(gfx::AnimationNodeData, rest)},
                                      {"translation", offsetof(gfx::AnimationNodeData, translation)},
                                      {"parent", offsetof(gfx::AnimationNodeData, parent)},
                                      {"rotation", offsetof(gfx::AnimationNodeData, rotation)},
                                      {"scale", offsetof(gfx::AnimationNodeData, scale)},
                                      {"padding", offsetof(gfx::AnimationNodeData, padding)}});
-            valid &= validateStruct(fieldStruct(mesh, "samplers"), "AnimationSamplerData", sizeof(gfx::AnimationSamplerData),
+            valid &= validateStruct(fieldStruct(layouts, mesh, "samplers"), "AnimationSamplerData", sizeof(gfx::AnimationSamplerData),
                                     {{"firstTime", offsetof(gfx::AnimationSamplerData, firstTime)},
                                      {"firstValue", offsetof(gfx::AnimationSamplerData, firstValue)},
                                      {"keyCount", offsetof(gfx::AnimationSamplerData, keyCount)},
                                      {"interpolation", offsetof(gfx::AnimationSamplerData, interpolation)}});
-            valid &= validateInstanceTransform(fieldStruct(frame, "transforms"));
+            valid &= validateInstanceTransform(fieldStruct(layouts, frame, "transforms"));
             return valid;
         }
 
-        // Walks pc -> scene -> pointers because only that reports the layout the shaders read. ProgramLayout::getTypeLayout
-        // has no LayoutRules value for data behind a pointer, so it adds std140/std430 padding.
-        bool validateRasmStructs(slang::ProgramLayout *programLayout)
+        // pushConstants names the struct of the program's pc, and layouts has every struct pc reaches, as Slang laid them
+        // out (collectStructLayouts), from this compile or from the cache.
+        bool validateRasmStructs(const std::string &pcName, const StructLayouts &layouts)
         {
-            slang::TypeLayoutReflection *pushConstants = nullptr;
-            for (unsigned int i = 0; i < programLayout->getParameterCount(); ++i)
-            {
-                auto parameter = programLayout->getParameterByIndex(i);
-                if (std::strcmp(parameter->getName(), "pc") == 0)
-                {
-                    pushConstants = parameter->getTypeLayout()->getElementTypeLayout();
-                }
-            }
+            const auto found = layouts.find(pcName);
+            const StructLayout *pushConstants = found != layouts.end() ? &found->second : nullptr;
 
             // The tone-map pass, the MSAA resolve, TAA, the bloom passes, the environment bake, the UI pass and the Inspect
             // pass have their own push constants.
-            if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "ToneMapPushConstants") == 0)
+            if (pcName == "ToneMapPushConstants")
             {
                 return validateStruct(pushConstants, "ToneMapPushConstants", sizeof(gfx::ToneMapPushConstants),
                                       {{"source", offsetof(gfx::ToneMapPushConstants, source)},
@@ -365,7 +423,7 @@ namespace rasm
                                        {"bloom", offsetof(gfx::ToneMapPushConstants, bloom)},
                                        {"bloomStrength", offsetof(gfx::ToneMapPushConstants, bloomStrength)}});
             }
-            if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "ResolvePushConstants") == 0)
+            if (pcName == "ResolvePushConstants")
             {
                 return validateStruct(pushConstants, "ResolvePushConstants", sizeof(gfx::ResolvePushConstants),
                                       {{"source", offsetof(gfx::ResolvePushConstants, source)},
@@ -373,7 +431,7 @@ namespace rasm
                                        {"samples", offsetof(gfx::ResolvePushConstants, samples)},
                                        {"exposure", offsetof(gfx::ResolvePushConstants, exposure)}});
             }
-            if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "TaaPushConstants") == 0)
+            if (pcName == "TaaPushConstants")
             {
                 return validateStruct(pushConstants, "TaaPushConstants", sizeof(gfx::TaaPushConstants),
                                       {{"colorAndMotion", offsetof(gfx::TaaPushConstants, colorAndMotion)},
@@ -381,7 +439,7 @@ namespace rasm
                                        {"targetAndReset", offsetof(gfx::TaaPushConstants, targetAndReset)},
                                        {"exposure", offsetof(gfx::TaaPushConstants, exposure)}});
             }
-            if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "BloomPushConstants") == 0)
+            if (pcName == "BloomPushConstants")
             {
                 return validateStruct(pushConstants, "BloomPushConstants", sizeof(gfx::BloomPushConstants),
                                       {{"source", offsetof(gfx::BloomPushConstants, source)},
@@ -389,19 +447,19 @@ namespace rasm
                                        {"base", offsetof(gfx::BloomPushConstants, base)},
                                        {"scale", offsetof(gfx::BloomPushConstants, scale)}});
             }
-            if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "UiPushConstants") == 0)
+            if (pcName == "UiPushConstants")
             {
                 return validateStruct(pushConstants, "UiPushConstants", sizeof(gfx::UiPushConstants),
                                       {{"vertices", offsetof(gfx::UiPushConstants, vertices)},
                                        {"texture", offsetof(gfx::UiPushConstants, texture)},
                                        {"displaySize", offsetof(gfx::UiPushConstants, displaySize)}});
             }
-            if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "InspectPushConstants") == 0)
+            if (pcName == "InspectPushConstants")
             {
                 bool valid = validateStruct(pushConstants, "InspectPushConstants", sizeof(gfx::InspectPushConstants),
                                             {{"params", offsetof(gfx::InspectPushConstants, params)},
                                              {"padding", offsetof(gfx::InspectPushConstants, padding)}});
-                return validateStruct(fieldStruct(pushConstants, "params"), "InspectParams", sizeof(gfx::InspectParams),
+                return validateStruct(fieldStruct(layouts, pushConstants, "params"), "InspectParams", sizeof(gfx::InspectParams),
                                       {{"scene", offsetof(gfx::InspectParams, scene)},
                                        {"mode", offsetof(gfx::InspectParams, mode)},
                                        {"source", offsetof(gfx::InspectParams, source)},
@@ -419,7 +477,7 @@ namespace rasm
                                        {"depthRange", offsetof(gfx::InspectParams, depthRange)}}) &&
                        valid;
             }
-            if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "EnvironmentPushConstants") == 0)
+            if (pcName == "EnvironmentPushConstants")
             {
                 return validateStruct(pushConstants, "EnvironmentPushConstants", sizeof(gfx::EnvironmentPushConstants),
                                       {{"source", offsetof(gfx::EnvironmentPushConstants, source)},
@@ -428,20 +486,21 @@ namespace rasm
                                        {"size", offsetof(gfx::EnvironmentPushConstants, size)}});
             }
 
-            if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "AnimatePushConstants") == 0)
+            if (pcName == "AnimatePushConstants")
             {
-                return validateAnimationStructs(pushConstants);
+                return validateAnimationStructs(layouts, pushConstants);
             }
 
             // Custom pipelines bring their own push constants and do not share core.slang.
-            auto scene = fieldStruct(pushConstants, "scene");
-            if (!scene || std::strcmp(scene->getName(), "SceneData") != 0)
+            const StructMember *sceneMember = findMember(pushConstants, "scene");
+            if (!sceneMember || sceneMember->structName != "SceneData")
             {
                 return true;
             }
+            auto scene = fieldStruct(layouts, pushConstants, "scene");
 
-            auto materialData = fieldStruct(scene, "materialsPtr");
-            auto material = fieldStruct(materialData, "material");
+            auto materialData = fieldStruct(layouts, scene, "materialsPtr");
+            auto material = fieldStruct(layouts, materialData, "material");
 
             bool valid = true;
 
@@ -508,14 +567,14 @@ namespace rasm
                                      {"skinnedVertsPtr", offsetof(gfx::SceneData, skinnedVertsPtr)},
                                      {"previousSkinnedVertsPtr", offsetof(gfx::SceneData, previousSkinnedVertsPtr)}});
 
-            valid &= validateInstanceTransform(fieldStruct(scene, "animatedTransformsPtr"));
+            valid &= validateInstanceTransform(fieldStruct(layouts, scene, "animatedTransformsPtr"));
 
-            valid &= validateStruct(fieldStruct(scene, "shadowedLights"), "ShadowedLight", sizeof(gfx::ShadowedLight),
+            valid &= validateStruct(fieldStruct(layouts, scene, "shadowedLights"), "ShadowedLight", sizeof(gfx::ShadowedLight),
                                     {{"light", offsetof(gfx::ShadowedLight, light)},
                                      {"firstMap", offsetof(gfx::ShadowedLight, firstMap)},
                                      {"mapCount", offsetof(gfx::ShadowedLight, mapCount)}});
 
-            valid &= validateStruct(fieldStruct(scene, "lightsPtr"), "Light", sizeof(gfx::Light),
+            valid &= validateStruct(fieldStruct(layouts, scene, "lightsPtr"), "Light", sizeof(gfx::Light),
                                     {{"position", offsetof(gfx::Light, position)},
                                      {"intensity", offsetof(gfx::Light, intensity)},
                                      {"color", offsetof(gfx::Light, color)},
@@ -525,25 +584,25 @@ namespace rasm
                                      {"spotScale", offsetof(gfx::Light, spotScale)},
                                      {"spotOffset", offsetof(gfx::Light, spotOffset)}});
 
-            valid &= validateStruct(fieldStruct(scene, "shadowMaps"), "ShadowMap", sizeof(gfx::ShadowMap),
+            valid &= validateStruct(fieldStruct(layouts, scene, "shadowMaps"), "ShadowMap", sizeof(gfx::ShadowMap),
                                     {{"matrix", offsetof(gfx::ShadowMap, matrix)},
                                      {"texture", offsetof(gfx::ShadowMap, texture)},
                                      {"split", offsetof(gfx::ShadowMap, split)}});
 
-            valid &= validateStruct(fieldStruct(scene, "vertsPtr"), "VertexFull", sizeof(gfx::VertexFull),
+            valid &= validateStruct(fieldStruct(layouts, scene, "vertsPtr"), "VertexFull", sizeof(gfx::VertexFull),
                                     {{"pos", offsetof(gfx::VertexFull, pos)},
                                      {"normal", offsetof(gfx::VertexFull, normal)},
                                      {"uv", offsetof(gfx::VertexFull, uv)},
                                      {"tangent", offsetof(gfx::VertexFull, tangent)}});
 
-            valid &= validateStruct(fieldStruct(scene, "drawInfoPtr"), "DrawInfo", sizeof(gfx::DrawInfo),
+            valid &= validateStruct(fieldStruct(layouts, scene, "drawInfoPtr"), "DrawInfo", sizeof(gfx::DrawInfo),
                                     {{"indexCount", offsetof(gfx::DrawInfo, indexCount)},
                                      {"instanceCount", offsetof(gfx::DrawInfo, instanceCount)},
                                      {"firstIndex", offsetof(gfx::DrawInfo, firstIndex)},
                                      {"vertexOffset", offsetof(gfx::DrawInfo, vertexOffset)},
                                      {"firstInstance", offsetof(gfx::DrawInfo, firstInstance)}});
 
-            valid &= validateStruct(fieldStruct(scene, "instancesPtr"), "InstanceData", sizeof(gfx::InstanceData),
+            valid &= validateStruct(fieldStruct(layouts, scene, "instancesPtr"), "InstanceData", sizeof(gfx::InstanceData),
                                     {{"worldMatrix", offsetof(gfx::InstanceData, worldMatrix)},
                                      {"normalMatrix", offsetof(gfx::InstanceData, normalMatrix)},
                                      {"geometryIndex", offsetof(gfx::InstanceData, geometryIndex)},
@@ -551,9 +610,9 @@ namespace rasm
                                      {"previousWorld", offsetof(gfx::InstanceData, previousWorld)},
                                      {"animationRow", offsetof(gfx::InstanceData, animationRow)}});
 
-            valid &= validateGeometryData(fieldStruct(scene, "geometryPtr"));
+            valid &= validateGeometryData(fieldStruct(layouts, scene, "geometryPtr"));
 
-            valid &= validateStruct(fieldStruct(fieldStruct(scene, "geometryPtr"), "lods"), "GeometryLod", sizeof(gfx::GeometryLod),
+            valid &= validateStruct(fieldStruct(layouts, fieldStruct(layouts, scene, "geometryPtr"), "lods"), "GeometryLod", sizeof(gfx::GeometryLod),
                                     {{"firstIndex", offsetof(gfx::GeometryLod, firstIndex)},
                                      {"indexCount", offsetof(gfx::GeometryLod, indexCount)},
                                      {"error", offsetof(gfx::GeometryLod, error)}});
@@ -572,11 +631,11 @@ namespace rasm
                                      {"occlusion", offsetof(gfx::Material, occlusion)},
                                      {"emissive", offsetof(gfx::Material, emissive)}});
 
-            valid &= validateStruct(fieldStruct(materialData, "textureTransforms"), "TextureTransform", sizeof(gfx::TextureTransform),
+            valid &= validateStruct(fieldStruct(layouts, materialData, "textureTransforms"), "TextureTransform", sizeof(gfx::TextureTransform),
                                     {{"matrix", offsetof(gfx::TextureTransform, matrix)},
                                      {"offset", offsetof(gfx::TextureTransform, offset)}});
 
-            valid &= validateStruct(fieldStruct(material, "metallicRoughness"), "MetallicRoughnessMaterial", sizeof(gfx::MetallicRoughnessMaterial),
+            valid &= validateStruct(fieldStruct(layouts, material, "metallicRoughness"), "MetallicRoughnessMaterial", sizeof(gfx::MetallicRoughnessMaterial),
                                     {{"baseColorFactor", offsetof(gfx::MetallicRoughnessMaterial, baseColorFactor)},
                                      {"baseColorTextureIndex", offsetof(gfx::MetallicRoughnessMaterial, baseColorTextureIndex)},
                                      {"baseColorTextureCoordinate", offsetof(gfx::MetallicRoughnessMaterial, baseColorTextureCoordinate)},
@@ -585,17 +644,17 @@ namespace rasm
                                      {"metallicFactor", offsetof(gfx::MetallicRoughnessMaterial, metallicFactor)},
                                      {"roughnessFactor", offsetof(gfx::MetallicRoughnessMaterial, roughnessFactor)}});
 
-            valid &= validateStruct(fieldStruct(material, "normal"), "NormalMaterial", sizeof(gfx::NormalMaterial),
+            valid &= validateStruct(fieldStruct(layouts, material, "normal"), "NormalMaterial", sizeof(gfx::NormalMaterial),
                                     {{"normalTextureIndex", offsetof(gfx::NormalMaterial, normalTextureIndex)},
                                      {"normalTextureCoordinate", offsetof(gfx::NormalMaterial, normalTextureCoordinate)},
                                      {"scale", offsetof(gfx::NormalMaterial, scale)}});
 
-            valid &= validateStruct(fieldStruct(material, "occlusion"), "OcclusionMaterial", sizeof(gfx::OcclusionMaterial),
+            valid &= validateStruct(fieldStruct(layouts, material, "occlusion"), "OcclusionMaterial", sizeof(gfx::OcclusionMaterial),
                                     {{"occlusionTextureIndex", offsetof(gfx::OcclusionMaterial, occlusionTextureIndex)},
                                      {"occlusionTextureCoordinate", offsetof(gfx::OcclusionMaterial, occlusionTextureCoordinate)},
                                      {"strength", offsetof(gfx::OcclusionMaterial, strength)}});
 
-            valid &= validateStruct(fieldStruct(material, "emissive"), "EmissiveMaterial", sizeof(gfx::EmissiveMaterial),
+            valid &= validateStruct(fieldStruct(layouts, material, "emissive"), "EmissiveMaterial", sizeof(gfx::EmissiveMaterial),
                                     {{"emissiveTextureIndex", offsetof(gfx::EmissiveMaterial, emissiveTextureIndex)},
                                      {"emissiveTextureCoordinate", offsetof(gfx::EmissiveMaterial, emissiveTextureCoordinate)},
                                      {"emissiveFactor", offsetof(gfx::EmissiveMaterial, emissiveFactor)}});
@@ -604,17 +663,18 @@ namespace rasm
         }
     }
 
-    bool ShaderCompiler::initialize(Target target, const std::string &shaderDir)
+    bool ShaderCompiler::initialize(Target target, const std::string &shaderDir, const std::string &cacheDir)
     {
-        const std::filesystem::path libDir = pathFromUtf8(shaderDir) / "lib";
+        const std::filesystem::path libFolder = pathFromUtf8(shaderDir) / "lib";
         const std::filesystem::path uberShader = pathFromUtf8(shaderDir) / "passes/rasm.slang";
         std::error_code errorCode;
-        if (!std::filesystem::is_directory(libDir, errorCode) || !std::filesystem::is_regular_file(uberShader, errorCode))
+        if (!std::filesystem::is_directory(libFolder, errorCode) || !std::filesystem::is_regular_file(uberShader, errorCode))
         {
             spdlog::error("Shaders not found in {}. Copy them there, or set EngineConfig::shaderDir.", shaderDir);
             return false;
         }
         spdlog::info("Loading shaders from {}", shaderDir);
+        libDir = std::filesystem::weakly_canonical(libFolder, errorCode);
 
         // Create Slang Global Session
         auto result = createGlobalSession(globalSession.writeRef());
@@ -627,7 +687,7 @@ namespace rasm
 
         slang::TargetDesc targetDesc = getTargetDesc(target);
 
-        const std::string pathLib = pathToUtf8(libDir);
+        const std::string pathLib = pathToUtf8(libFolder);
 
         const char *searchPaths[] = {pathLib.c_str()};
 
@@ -657,10 +717,32 @@ namespace rasm
             return false;
         }
 
+        // The key starts with every input all shaders share: the compiler, its target and options, and the included files.
+        if (cacheDir.empty())
+            return true;
+        hashNumber(baseKey, SHADER_CACHE_KEY_VERSION);
+        hashString(baseKey, globalSession->getBuildTagString());
+        hashNumber(baseKey, static_cast<uint64_t>(targetDesc.format));
+        hashNumber(baseKey, static_cast<uint64_t>(targetDesc.profile));
+        hashOptions(baseKey, targetDesc.compilerOptionEntries, targetDesc.compilerOptionEntryCount);
+        hashOptions(baseKey, sessionDesc.compilerOptionEntries, sessionDesc.compilerOptionEntryCount);
+        const std::filesystem::path folder = pathFromUtf8(cacheDir) / "shaders";
+        std::filesystem::create_directories(folder, errorCode);
+        if (!hashFolder(baseKey, libDir) || errorCode)
+        {
+            spdlog::warn("Shaders are compiled without the cache: cannot read {} or make {}.", pathToUtf8(libDir), pathToUtf8(folder));
+            return true;
+        }
+        cacheFolder = folder;
+        pruneCacheFolder(cacheFolder, MAX_SHADER_CACHE_BYTES);
         return true;
     }
 
-    void ShaderCompiler::shutdown() {}
+    void ShaderCompiler::shutdown()
+    {
+        if (stats.cacheHits + stats.compiles > 0)
+            spdlog::info("Shaders: {} from the cache, {} compiled in {:.0f} ms.", stats.cacheHits, stats.compiles, stats.compileSeconds * 1000.0);
+    }
 
     ShaderCompiler::CompiledShader ShaderCompiler::compile(const std::string &sourcePath, const std::string &outputPath, const std::string &entryPointName)
     {
@@ -676,37 +758,95 @@ namespace rasm
 
     ShaderCompiler::CompiledShader ShaderCompiler::compileFromString(const std::string &sourceCode, const std::string &outputPath, const std::string &entryPointName)
     {
+        ZoneScoped;
+
+        // The source has the variant's #define lines, so with the base key this is every input of the SPIR-V.
+        CacheKey key = baseKey;
+        hashString(key, outputPath);
+        hashString(key, entryPointName);
+        hashString(key, sourceCode);
+        const std::filesystem::path entryPath = cacheFolder.empty() ? std::filesystem::path() : cacheFolder / (toHex(key) + ".shader");
+
+        CachedShader shader;
+        if (!entryPath.empty() && readCachedShader(entryPath, key, shader))
+        {
+            ++stats.cacheHits;
+        }
+        else
+        {
+            const auto start = std::chrono::steady_clock::now();
+            CompiledShader compiled;
+            bool cacheable = true;
+            if (!compileWithSlang(sourceCode, outputPath, entryPointName, compiled, shader.pushConstants, shader.layouts, cacheable))
+                return {};
+            stats.compileSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+            ++stats.compiles;
+            shader.code = std::move(compiled.code);
+            if (!entryPath.empty() && cacheable)
+                writeCachedShader(entryPath, key, shader);
+        }
+
+        // Every build checks, since a Release build with a mismatch would read shifted data on the GPU (B23). The
+        // layouts are Slang's, from this compile or the one the cache kept, so a changed C++ struct is caught either way.
+        if (!validateRasmStructs(shader.pushConstants, shader.layouts))
+        {
+            spdlog::error("The C++ structs do not match shaders/lib/core.slang; '{}' is not compiled.", outputPath);
+            return {};
+        }
+        structLayouts.merge(shader.layouts);
+
+        CompiledShader result;
+        result.code = std::move(shader.code);
+        return result;
+    }
+
+    bool ShaderCompiler::compileWithSlang(const std::string &sourceCode, const std::string &outputPath, const std::string &entryPointName, CompiledShader &shader,
+                                          std::string &pushConstants, StructLayouts &layouts, bool &cacheable)
+    {
+        ZoneScoped;
+
         // The session keeps every module and rejects a second one with the same name and different source,
         // so hash the source into the name.
         const auto moduleName = outputPath + "." + std::to_string(std::hash<std::string>{}(sourceCode));
+        const std::string modulePath = buildPath + moduleName;
 
         // Load module
         Slang::ComPtr<slang::IModule> slangModule;
         {
             Slang::ComPtr<slang::IBlob> diagnosticsBlob;
 
-            slangModule = activeSession->loadModuleFromSourceString(moduleName.c_str(),               // Module name
-                                                                    (buildPath + moduleName).c_str(), // Module path
-                                                                    sourceCode.c_str(),               // Shader source code
-                                                                    diagnosticsBlob.writeRef());      // Optional diagnostic container
+            slangModule = activeSession->loadModuleFromSourceString(moduleName.c_str(),          // Module name
+                                                                    modulePath.c_str(),          // Module path
+                                                                    sourceCode.c_str(),          // Shader source code
+                                                                    diagnosticsBlob.writeRef()); // Optional diagnostic container
 
             diagnoseIfNeeded(diagnosticsBlob);
 
             if (!slangModule)
             {
-                return {};
+                return false;
+            }
+        }
+
+        // The key holds the files of lib/ only, so a module that read any other file is not cached.
+        for (SlangInt32 i = 0; i < slangModule->getDependencyFileCount(); ++i)
+        {
+            const char *dependency = slangModule->getDependencyFilePath(i);
+            if (dependency && modulePath != dependency && !isInside(pathFromUtf8(dependency), libDir))
+            {
+                spdlog::info("'{}' includes {}, outside {}, so it is not cached.", outputPath, dependency, pathToUtf8(libDir));
+                cacheable = false;
             }
         }
 
         // Query Entry Points
         Slang::ComPtr<slang::IEntryPoint> entryPoint;
         {
-            // Slang::ComPtr<slang::IBlob> diagnosticsBlob;
             slangModule->findEntryPointByName(entryPointName.c_str(), entryPoint.writeRef());
             if (!entryPoint)
             {
                 spdlog::error("Error getting entry point: {}", entryPointName);
-                return {};
+                return false;
             }
         }
 
@@ -726,7 +866,7 @@ namespace rasm
             if (SLANG_FAILED(result))
             {
                 spdlog::error("Error creating composite component type");
-                return {};
+                return false;
             }
         }
 
@@ -741,27 +881,21 @@ namespace rasm
             if (SLANG_FAILED(result))
             {
                 spdlog::error("Error linking component type");
-                return {};
+                return false;
             }
         }
 
-        // Every build checks, since a Release build with a mismatch would read shifted data on the GPU (B23).
-        // validateRasmStructs logged each mismatch.
-        if (!validateRasmStructs(linkedProgram->getLayout()))
+        // Walks pc through its pointers because only that reports the layout the shaders read: ProgramLayout::getTypeLayout
+        // has no LayoutRules value for data behind a pointer, so it adds std140/std430 padding.
+        slang::ProgramLayout *programLayout = linkedProgram->getLayout();
+        for (unsigned int i = 0; i < programLayout->getParameterCount(); ++i)
         {
-            spdlog::error("The C++ structs do not match shaders/lib/core.slang; '{}' is not compiled.", outputPath);
-            return {};
-        }
-        // The same walk as the check's: only pc's pointers report the scalar layout the shaders read.
-        if (keepLayouts)
-        {
-            slang::ProgramLayout *programLayout = linkedProgram->getLayout();
-            for (unsigned int i = 0; i < programLayout->getParameterCount(); ++i)
-            {
-                auto parameter = programLayout->getParameterByIndex(i);
-                if (std::strcmp(parameter->getName(), "pc") == 0)
-                    collectStructLayouts(parameter->getTypeLayout()->getElementTypeLayout(), structLayouts);
-            }
+            auto parameter = programLayout->getParameterByIndex(i);
+            if (std::strcmp(parameter->getName(), "pc") != 0)
+                continue;
+            slang::TypeLayoutReflection *pcLayout = parameter->getTypeLayout()->getElementTypeLayout();
+            pushConstants = pcLayout && pcLayout->getName() ? pcLayout->getName() : "";
+            collectStructLayouts(pcLayout, layouts);
         }
 
         constexpr SlangInt TARGET_INDEX = 0;
@@ -779,31 +913,24 @@ namespace rasm
             if (SLANG_FAILED(result))
             {
                 spdlog::error("Error getting entry point code");
-                return {};
+                return false;
             }
         }
 
-        auto pBlob = compiledBlob->getBufferPointer();
-        auto blobSize = compiledBlob->getBufferSize();
-
-        std::vector<uint8_t> code(blobSize);
-        std::memcpy(code.data(), pBlob, blobSize);
-
-        ShaderCompiler::CompiledShader result;
-        result.code = std::move(code);
-
-        return result;
+        const auto *code = static_cast<const uint8_t *>(compiledBlob->getBufferPointer());
+        shader.code.assign(code, code + compiledBlob->getBufferSize());
+        return true;
     }
 
-    void ShaderCompiler::keepStructLayouts()
+    const ShaderCompiler::Stats &ShaderCompiler::getStats() const
     {
-        keepLayouts = true;
+        return stats;
     }
 
     const std::vector<StructField> *ShaderCompiler::findStructLayout(const std::string &name) const
     {
         const auto it = structLayouts.find(name);
-        return it != structLayouts.end() ? &it->second : nullptr;
+        return it != structLayouts.end() ? &it->second.fields : nullptr;
     }
 
     slang::TargetDesc ShaderCompiler::getTargetDesc(Target target)

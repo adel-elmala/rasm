@@ -31,6 +31,7 @@ target_sources(rasm PUBLIC FILE_SET HEADERS BASE_DIRS "${PROJECT_SOURCE_DIR}/inc
 target_sources(rasm PRIVATE
     "engine.cpp"
     "thirdparty_impl.cpp"
+    "core/cacheFile.cpp"
     "core/handle.cpp"
     "core/rangeAllocator.cpp"
     "core/utils.cpp"
@@ -65,6 +66,7 @@ target_sources(rasm PRIVATE
     "renderer/gpuTable.cpp"
     "renderer/renderGraph.cpp"
     "renderer/renderer.cpp"
+    "renderer/shaderCache.cpp"
     "renderer/shaderCompiler.cpp"
     "renderer/localShadows.cpp"
     "renderer/msaaResolve.cpp"
@@ -85,6 +87,7 @@ target_sources(rasm PRIVATE
     "rhi/uploadManager.cpp"
     "rhi/vulkan/vulkanCommandBuffer.cpp"
     "rhi/vulkan/vulkanDevice.cpp"
+    "rhi/vulkan/vulkanPipelineCache.cpp"
     "rhi/vulkan/vulkanQueue.cpp"
     "rhi/vulkan/vulkanSwapchain.cpp"
     "rhi/vulkan/vulkanUtils.cpp"

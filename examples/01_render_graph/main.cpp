@@ -142,7 +142,7 @@ int main(int argc, char **argv)
         const uint32_t indices[2] = {first, second};
         ctx.bindPipeline(commandBuffer, pipeline);
         ctx.bindDescriptorSet(commandBuffer, pipeline, engine.getBindlessDescriptorSet(), 0);
-        ctx.pushConstants(commandBuffer, pipeline, rasm::ShaderType::VERTEX_FRAGMENT, indices, sizeof(indices), 0);
+        ctx.pushConstants(commandBuffer, pipeline, indices, sizeof(indices), 0);
         ctx.draw(commandBuffer, 3);
     };
 

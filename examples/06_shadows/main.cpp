@@ -223,7 +223,7 @@ int main(int argc, char **argv)
             const uint32_t sceneColor = engine.getBindlessTextureIndex(engine.getRenderTargetTexture(sceneTarget));
             ctx.bindPipeline(commandBuffer, postPipeline);
             ctx.bindDescriptorSet(commandBuffer, postPipeline, engine.getBindlessDescriptorSet(), 0);
-            ctx.pushConstants(commandBuffer, postPipeline, rasm::ShaderType::VERTEX_FRAGMENT, &sceneColor, sizeof(sceneColor), 0);
+            ctx.pushConstants(commandBuffer, postPipeline, &sceneColor, sizeof(sceneColor), 0);
             ctx.draw(commandBuffer, 3);
         });
 
@@ -295,7 +295,7 @@ int main(int argc, char **argv)
                 pushConstants.cascades[i] = engine.getBindlessTextureIndex(engine.getRenderTargetDepthTexture(shadow.maps[i]));
             ctx.bindPipeline(commandBuffer, insetPipeline);
             ctx.bindDescriptorSet(commandBuffer, insetPipeline, engine.getBindlessDescriptorSet(), 0);
-            ctx.pushConstants(commandBuffer, insetPipeline, rasm::ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
+            ctx.pushConstants(commandBuffer, insetPipeline, &pushConstants, sizeof(pushConstants), 0);
             ctx.draw(commandBuffer, 3);
         });
 

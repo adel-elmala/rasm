@@ -406,7 +406,7 @@ namespace rasm
         const gfx::InspectPushConstants pushConstants{.params = ctx.getBufferDeviceAddress(state.params[frame])};
         ctx.bindPipeline(commandBuffer, state.pipeline);
         ctx.bindDescriptorSet(commandBuffer, state.pipeline, bindlessDescriptorSet, 0);
-        ctx.pushConstants(commandBuffer, state.pipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
+        ctx.pushConstants(commandBuffer, state.pipeline, &pushConstants, sizeof(pushConstants), 0);
         ctx.dispatch(commandBuffer, (region.x + INSPECT_GROUP_SIZE - 1) / INSPECT_GROUP_SIZE, (region.y + INSPECT_GROUP_SIZE - 1) / INSPECT_GROUP_SIZE);
     }
 

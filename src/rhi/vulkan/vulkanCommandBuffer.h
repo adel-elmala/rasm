@@ -28,7 +28,7 @@ namespace rasm::rhi
         void                        bindPipeline(Pipeline* pipeline) override;
         void                        bindIndexBuffer(Buffer* buffer, uint64_t offset, Format indexType) override;
         void                        bindDescriptorSet(Pipeline* pipeline, DescriptorSet* descriptorSet, uint32_t setIndex) override;
-        void                        pushConstants(Pipeline* pipeline, ShaderType stages, const void* data, uint32_t size, uint32_t offset) override;
+        void                        pushConstants(Pipeline* pipeline, const void* data, uint32_t size, uint32_t offset) override;
         void                        draw(uint32_t vertexCount, uint32_t instanceCount) override;
         void                        drawIndexed(uint32_t indexCount, uint32_t instanceCount, uint32_t vertexOffset, uint32_t firstIndex, uint32_t firstInstance) override;
         void                        drawIndexedIndirect(Buffer* buffer, uint64_t offset, uint32_t drawCount, uint32_t stride) override;

@@ -33,7 +33,7 @@ namespace rasm
         {
             ctx.bindPipeline(commandBuffer, pipeline);
             ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessSet, 0);
-            ctx.pushConstants(commandBuffer, pipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
+            ctx.pushConstants(commandBuffer, pipeline, &pushConstants, sizeof(pushConstants), 0);
             ctx.dispatch(commandBuffer, (target.width + BLOOM_GROUP_SIZE - 1) / BLOOM_GROUP_SIZE, (target.height + BLOOM_GROUP_SIZE - 1) / BLOOM_GROUP_SIZE);
         }
     }

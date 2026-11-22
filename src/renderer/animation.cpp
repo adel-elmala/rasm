@@ -999,7 +999,7 @@ namespace rasm
         const auto commandBuffer = frameResources[frame].commandBuffer;
         const gfx::AnimatePushConstants pushConstants{.frame = ctx.getBufferDeviceAddress(animation.frames[frame]), .padding = {0, 0}};
         ctx.bindPipeline(commandBuffer, animation.pipeline);
-        ctx.pushConstants(commandBuffer, animation.pipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
+        ctx.pushConstants(commandBuffer, animation.pipeline, &pushConstants, sizeof(pushConstants), 0);
         ctx.dispatch(commandBuffer, animation.entityRows);
     }
 
@@ -1015,7 +1015,7 @@ namespace rasm
         const auto commandBuffer = frameResources[frame].commandBuffer;
         const gfx::AnimatePushConstants pushConstants{.frame = ctx.getBufferDeviceAddress(animation.frames[frame]), .padding = {0, 0}};
         ctx.bindPipeline(commandBuffer, animation.skinPipeline);
-        ctx.pushConstants(commandBuffer, animation.skinPipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
+        ctx.pushConstants(commandBuffer, animation.skinPipeline, &pushConstants, sizeof(pushConstants), 0);
         ctx.dispatch(commandBuffer, animation.entityRows, (animation.maxSkinnedVertices + SKIN_GROUP_SIZE - 1) / SKIN_GROUP_SIZE);
     }
 }

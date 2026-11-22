@@ -185,7 +185,7 @@ namespace rasm
         ctx.setScissor(commandBuffer, 0, 0, swapchain.width, swapchain.height);
         ctx.setCullMode(commandBuffer, CullMode::NONE);
         ctx.bindPipeline(commandBuffer, statsOverlay->pipeline);
-        ctx.pushConstants(commandBuffer, statsOverlay->pipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
+        ctx.pushConstants(commandBuffer, statsOverlay->pipeline, &pushConstants, sizeof(pushConstants), 0);
         ctx.draw(commandBuffer, 6);
         ctx.endRendering(commandBuffer);
     }

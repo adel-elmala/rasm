@@ -54,7 +54,7 @@ namespace rasm
             const uint32_t groups = (pushConstants.size + BAKE_GROUP_SIZE - 1) / BAKE_GROUP_SIZE;
             ctx.bindPipeline(commandBuffer, pipeline);
             ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessSet, 0);
-            ctx.pushConstants(commandBuffer, pipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
+            ctx.pushConstants(commandBuffer, pipeline, &pushConstants, sizeof(pushConstants), 0);
             ctx.dispatch(commandBuffer, groups, groups, layers);
         }
 

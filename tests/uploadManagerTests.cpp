@@ -54,7 +54,7 @@ namespace
         void bindPipeline(Pipeline *) override {}
         void bindIndexBuffer(Buffer *, uint64_t, Format) override {}
         void bindDescriptorSet(Pipeline *, DescriptorSet *, uint32_t) override {}
-        void pushConstants(Pipeline *, ShaderType, const void *, uint32_t, uint32_t) override {}
+        void pushConstants(Pipeline *, const void *, uint32_t, uint32_t) override {}
         void draw(uint32_t, uint32_t) override {}
         void drawIndexed(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) override {}
         void drawIndexedIndirect(Buffer *, uint64_t, uint32_t, uint32_t) override {}

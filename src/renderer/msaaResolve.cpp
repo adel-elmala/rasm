@@ -69,7 +69,7 @@ namespace rasm
                 const auto commandBuffer = frameResources[frameCount].commandBuffer;
                 ctx.bindPipeline(commandBuffer, msaaResolvePipeline);
                 ctx.bindDescriptorSet(commandBuffer, msaaResolvePipeline, bindlessDescriptorSet, 0);
-                ctx.pushConstants(commandBuffer, msaaResolvePipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
+                ctx.pushConstants(commandBuffer, msaaResolvePipeline, &pushConstants, sizeof(pushConstants), 0);
                 ctx.dispatch(commandBuffer, (target.width + RESOLVE_GROUP_SIZE - 1) / RESOLVE_GROUP_SIZE, (target.height + RESOLVE_GROUP_SIZE - 1) / RESOLVE_GROUP_SIZE);
             });
         return resolved;

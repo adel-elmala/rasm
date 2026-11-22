@@ -23,7 +23,7 @@ is the working reference (forward pass into a render target, then an overlay pas
 
 | Limit | Value | Where |
 |---|---|---|
-| Push constants | **16 bytes total** (`PUSH_CONSTANTS_SIZE`), `ShaderType::VERTEX_FRAGMENT` (graphics) or `ShaderType::COMPUTE` | `createPipelineLayout` in `vulkanDevice.cpp`; `RenderContext::pushConstants` rejects more |
+| Push constants | **16 bytes total** (`PUSH_CONSTANTS_SIZE`), one range every stage sees, in the pipeline layout all pipelines share | `createPipelineLayout` in `vulkanDevice.cpp`; `RenderContext::pushConstants` rejects more |
 | Entry points | `vertMain` + `fragMain` in **one source string** | `Engine::createPipeline` |
 | Attachments | 1 color (swapchain format) + `D32_SFLOAT` (reversed-Z) | `Engine::createPipeline` |
 | Fixed state | depth test + write `GREATER_OR_EQUAL` (reversed-Z, cleared to 0: a pass that writes its own depth puts the far plane at 0, not `z = w`), no blending, triangle list, no vertex input, front face counter-clockwise | `createGraphicsPipeline` |
@@ -88,7 +88,7 @@ graph.addPass(
             engine.getBindlessTextureIndex(engine.getRenderTargetTexture(sceneTarget)), 0.8f};
         ctx.bindPipeline(commandBuffer, pipeline);
         ctx.bindDescriptorSet(commandBuffer, pipeline, engine.getBindlessDescriptorSet(), 0);
-        ctx.pushConstants(commandBuffer, pipeline, rasm::ShaderType::VERTEX_FRAGMENT, &push, sizeof(push), 0);
+        ctx.pushConstants(commandBuffer, pipeline, &push, sizeof(push), 0);
         ctx.draw(commandBuffer, 3);
     });
 ```

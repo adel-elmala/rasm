@@ -176,7 +176,7 @@ namespace rasm
                 const auto commandBuffer = frameResources[frameCount].commandBuffer;
                 ctx.bindPipeline(commandBuffer, taaPipeline);
                 ctx.bindDescriptorSet(commandBuffer, taaPipeline, bindlessDescriptorSet, 0);
-                ctx.pushConstants(commandBuffer, taaPipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
+                ctx.pushConstants(commandBuffer, taaPipeline, &pushConstants, sizeof(pushConstants), 0);
                 ctx.dispatch(commandBuffer, (size.x + TAA_GROUP_SIZE - 1) / TAA_GROUP_SIZE, (size.y + TAA_GROUP_SIZE - 1) / TAA_GROUP_SIZE);
             });
         return history;

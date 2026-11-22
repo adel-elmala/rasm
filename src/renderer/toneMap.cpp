@@ -84,7 +84,7 @@ namespace rasm
                                                               .bloomStrength = cameraData.bloomStrength};
                 ctx.bindPipeline(commandBuffer, pipeline);
                 ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet, 0);
-                ctx.pushConstants(commandBuffer, pipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
+                ctx.pushConstants(commandBuffer, pipeline, &pushConstants, sizeof(pushConstants), 0);
                 ctx.draw(commandBuffer, 3);
             });
         return true;
