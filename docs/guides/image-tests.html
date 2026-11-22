@@ -380,7 +380,7 @@
 
 <div class="callout rule">
   <strong>Rules to keep</strong>
-  <p>A golden changes only in a change that says why, with the old and new image. Look at every new golden before you store it. Set T or F per test only from measured noise, and write the reason next to it.</p>
+  <p>A golden changes only in a change that says why, with the old and new image. Look at every new golden before you store it. Set T or F per test only from measured noise, and write the reason next to it. All the tests share one engine, so their materials add up: the 15 tests make 73 of the 255 an engine can hold (<code>D34</code>). Past that, a glTF primitive falls back to the default material with only a warning, and the image test fails as if the rendering were wrong.</p>
 </div>
 
 <h3>Further reading</h3>

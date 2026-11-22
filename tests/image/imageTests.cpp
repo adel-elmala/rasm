@@ -412,6 +412,12 @@ namespace
         return options.scenes.empty() || std::find(options.scenes.begin(), options.scenes.end(), name) != options.scenes.end();
     }
 
+    // --update writes no golden for a test that compares with another test's image.
+    bool isRun(const Options &options, const ImageTest &test)
+    {
+        return isSelected(options, test.name) && !(options.update && test.sameAs);
+    }
+
     const ImageTest *findTest(const char *name)
     {
         for (const ImageTest &test : TESTS)
@@ -636,7 +642,7 @@ namespace
         std::vector<Rendered> rendered;
         for (const ImageTest &test : TESTS)
         {
-            if (!isSelected(options, test.name) || (options.update && test.sameAs))
+            if (!isRun(options, test))
                 continue;
             ++run;
             failed += runTest(engine, assets, camera, options, test, built, rendered) ? 0 : 1;
@@ -661,7 +667,9 @@ int main(int argc, char **argv)
     uint32_t run = 0;
     uint32_t failed = 0;
     std::printf("%-14s %-6s %10s %8s %8s\n", "test", "result", "differing", "max diff", "seconds");
-    if (!runTests(options, run, failed))
+    const bool any = std::any_of(std::begin(TESTS), std::end(TESTS), [&](const ImageTest &test)
+                                 { return isRun(options, test); });
+    if (any && !runTests(options, run, failed))
         return 2;
     std::printf("%u of %u tests passed.%s\n", run - failed, run, failed > 0 ? (" Failures are in " + options.outDir + ".").c_str() : "");
     return failed > 0 ? 1 : 0;
