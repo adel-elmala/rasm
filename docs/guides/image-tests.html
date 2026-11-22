@@ -57,12 +57,12 @@
     <rect x="30" y="98" width="100" height="10" class="surface"/>
     <text x="80" y="140" class="mid small">fixed scene, fixed time</text>
     <line x1="140" y1="80" x2="186" y2="80" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <text x="163" y="70" class="mid small t-gpu">render</text>
+    <text x="163" y="32" class="mid small t-gpu">render</text>
     <rect x="190" y="40" width="120" height="80" rx="6" class="gpu"/>
     <circle cx="250" cy="76" r="20" class="solid"/>
     <text x="250" y="140" class="mid small">the frame, on the GPU</text>
     <line x1="310" y1="80" x2="356" y2="80" class="arrow mem" marker-end="url(#ah-mem)"/>
-    <text x="333" y="70" class="mid small t-mem">read back</text>
+    <text x="333" y="32" class="mid small t-mem">read back</text>
     <rect x="360" y="40" width="120" height="80" rx="6" class="cpu"/>
     <circle cx="420" cy="76" r="20" class="solid"/>
     <text x="420" y="140" class="mid small">actual, on the CPU</text>
@@ -205,7 +205,7 @@
     <circle cx="120" cy="76" r="28" class="solid"/><rect x="40" y="112" width="160" height="12" class="surface"/>
     <text x="120" y="22" class="mid title">software rasterizer</text>
     <text x="120" y="162" class="mid small">same pixels on any CPU</text>
-    <text x="120" y="180" class="mid small t-ok">matches its golden: max diff 0 or 1</text>
+    <text x="120" y="180" class="mid small t-ok">matches its golden: max diff 0</text>
     <rect x="280" y="30" width="200" height="110" rx="6" class="gpu"/>
     <circle cx="380" cy="76" r="28" class="solid"/><rect x="300" y="112" width="160" height="12" class="surface"/>
     <rect x="352" y="48" width="8" height="8" class="hot"/><rect x="404" y="86" width="8" height="8" class="hot"/>
@@ -222,7 +222,7 @@
   <figcaption>A golden is a contract with one driver at one version. Change the driver version, and the goldens are rendered again on purpose, in a change of their own.</figcaption>
 </figure>
 
-<p>A <b>software rasterizer</b> is a Vulkan driver that runs on the CPU: Mesa's <b>lavapipe</b> is one, and SwiftShader and WARP (for Direct3D) are others. It is slow, but it gives the same result on any CPU with the same build and settings, and continuous integration machines have no GPU anyway. Two of its settings change pixels, so a test pins them:</p>
+<p>A <b>software rasterizer</b> is a Vulkan driver that runs on the CPU: Mesa's <b>lavapipe</b> is one, and SwiftShader and WARP (for Direct3D) are others. It is slow, but it gives the same result on any CPU with the same build and settings, and continuous integration machines have no GPU anyway. Three things decide its pixels, so a test pins them, or measures that they do not matter:</p>
 
 <div class="vgrid">
   <div class="vcard">
@@ -288,7 +288,115 @@
 
 <h2 id="in-rasm"><span class="n">8</span>In RASM</h2>
 
-<p>@@IN_RASM@@</p>
+<p>RASM's image tests are one executable, <code>rasm_image_tests</code> (<code>tests/image/imageTests.cpp</code>), and one script that runs it on lavapipe, <code>tools/image_tests.py</code>. Each test renders a scene headless at 512 × 288 and compares the frame with its golden in <code>tests/golden/lavapipe/</code>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 290" role="img" aria-label="tools/image_tests.py fetches lavapipe and Sponza, checks their SHA-256, and runs rasm_image_tests with VK_DRIVER_FILES pointing at lavapipe. The runner makes three engines in turn, one per group of tests, because an engine holds at most 7 meshes. Each test waits for all loads, renders a fixed number of frames at a fixed animation time, reads the frame back and compares it with its golden. A failure writes actual, expected and diff images.">
+    <rect x="20" y="20" width="190" height="64" rx="6" class="cpu"/>
+    <text x="115" y="44" class="mid mono small">tools/image_tests.py</text>
+    <text x="115" y="62" class="mid small">--lavapipe: fetch, check,</text>
+    <text x="115" y="76" class="mid small">set VK_DRIVER_FILES</text>
+    <rect x="20" y="110" width="90" height="44" rx="6" class="mem"/>
+    <text x="65" y="129" class="mid small">Mesa 26.3.0</text><text x="65" y="145" class="mid small">sha256</text>
+    <rect x="120" y="110" width="90" height="44" rx="6" class="mem"/>
+    <text x="165" y="129" class="mid small">Sponza</text><text x="165" y="145" class="mid small">sha256</text>
+    <line x1="210" y1="52" x2="256" y2="52" class="arrow" marker-end="url(#ah)"/>
+    <rect x="260" y="20" width="480" height="200" rx="8" class="zone"/>
+    <text x="500" y="40" class="mid mono">rasm_image_tests</text>
+    <rect x="276" y="54" width="140" height="150" rx="6" class="gpu"/>
+    <text x="346" y="74" class="mid small title">engine 1</text>
+    <text x="346" y="94" class="mid small">helmet, sponza,</text>
+    <text x="346" y="110" class="mid small">alpha modes, msaa4,</text>
+    <text x="346" y="126" class="mid small">taa, bloom, lights,</text>
+    <text x="346" y="142" class="mid small">local shadows, ktx2,</text>
+    <text x="346" y="158" class="mid small">debug normals,</text>
+    <text x="346" y="174" class="mid small">determinism</text>
+    <rect x="430" y="54" width="140" height="70" rx="6" class="gpu"/>
+    <text x="500" y="74" class="mid small title">engine 2</text>
+    <text x="500" y="94" class="mid small">skinning, morph,</text>
+    <text x="500" y="110" class="mid small">node animation</text>
+    <rect x="430" y="134" width="140" height="70" rx="6" class="gpu"/>
+    <text x="500" y="154" class="mid small title">engine 3</text>
+    <text x="500" y="174" class="mid small">materials</text>
+    <rect x="586" y="54" width="140" height="150" rx="6" class="paper"/>
+    <text x="656" y="74" class="mid small title">each test</text>
+    <text x="656" y="96" class="mid small">waitForLoads</text>
+    <text x="656" y="116" class="mid small">N frames, fixed time</text>
+    <text x="656" y="136" class="mid small">readFrame</text>
+    <text x="656" y="156" class="mid small">compare: T, F</text>
+    <text x="656" y="176" class="mid small">fail: actual, diff</text>
+    <line x1="500" y1="220" x2="500" y2="250" class="arrow ok" marker-end="url(#ah-ok)"/>
+    <text x="500" y="270" class="mid small">a table: test, result, share over T, largest difference, seconds</text>
+  </svg>
+  <figcaption>One engine runs many tests, so lavapipe compiles each pipeline once. There are three engines because one engine holds at most 7 meshes (<code>D33</code>).</figcaption>
+</figure>
+
+<h3>The tests</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>Test</th><th>What it guards</th></tr>
+  <tr><td><samp>helmet_ibl</samp></td><td>DamagedHelmet: image-based lighting (venice sunset), four shadow cascades, emissive</td></tr>
+  <tr><td><samp>sponza</samp></td><td>Sponza (fetched): many materials, MASK foliage, cascades in a large scene. The sky's light is not shadowed (<code>D23</code>), so the atrium is lit everywhere.</td></tr>
+  <tr><td><samp>alpha_modes</samp>, <samp>msaa4</samp></td><td>AlphaBlendModeTest: opaque, MASK with <code class="lang-text">discard</code>, BLEND sorted; the same at 4 samples with alpha-to-coverage</td></tr>
+  <tr><td><samp>taa</samp></td><td>the helmet after 16 jittered frames</td></tr>
+  <tr><td><samp>bloom</samp></td><td>EmissiveStrengthTest with the bloom passes</td></tr>
+  <tr><td><samp>skinning</samp>, <samp>morph</samp>, <samp>node_anim</samp></td><td>CesiumMan and two foxes at 1.25 s; MorphStressTest at fixed weights; AnimatedCube at 0.3 s</td></tr>
+  <tr><td><samp>many_lights</samp>, <samp>local_shadows</samp></td><td>1024 point lights in clusters; a spot light's shadow map and a point light's cube</td></tr>
+  <tr><td><samp>ktx2</samp>, <samp>materials</samp></td><td>FlightHelmet's Basis textures; texture transforms, vertex colors, a quantized mesh</td></tr>
+  <tr><td><samp>debug_normals</samp></td><td>the normals debug view</td></tr>
+  <tr><td><samp>determinism</samp></td><td>the helmet again in the same process: it must equal <samp>helmet_ibl</samp> exactly (T = 0, F = 0)</td></tr>
+</table>
+</div>
+
+<h3>The numbers</h3>
+
+<p>Every test uses T = 3/255 and F = 0.1% (147 of the 147,456 pixels), except <samp>determinism</samp>. They come from the noise measured on lavapipe, which was none: all runs were on one CPU model (AMD EPYC 7763), so T and F are a margin for a runner with another CPU, not for noise seen so far.</p>
+
+<div class="stats">
+  <div><b>0</b><span>largest difference, the same job twice</span><small>15 tests, every pixel equal</small></div>
+  <div><b>0</b><span>largest difference, two CI runs</span><small>and a third run with each test alone in its process</small></div>
+  <div><b>80 s</b><span>the 15 tests on lavapipe in CI</span><small>plus 20 s to fetch and register it</small></div>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>This page</th><th>RASM</th></tr>
+  <tr><td>A fixed scene and time</td><td>Each test waits for its loads (<code>Engine::waitForLoads</code>), renders <code>ImageTest::frames</code> frames (4, or 16 for TAA) with <code>setAnimationTime</code> at its fixed time, then <code>readFrame</code>. No UI, no stats.</td></tr>
+  <tr><td>The compare</td><td><code>compareImages</code>: the largest channel difference per pixel; red over T, orange at or under T, gray where equal. <code>readPng</code> reads the golden.</td></tr>
+  <tr><td>A software rasterizer, pinned</td><td>lavapipe from mesa-dist-win 26.3.0, SHA-256 checked, with <code class="lang-text">LP_NATIVE_VECTOR_WIDTH=256</code>. The thread count did not change a pixel (<code class="lang-text">LP_NUM_THREADS=1</code> against the default gave the same PNG), so it is not pinned.</td></tr>
+  <tr><td>An asset that can't be stored</td><td>Sponza (CRYENGINE Limited License) is fetched from a pinned commit of KhronosGroup/glTF-Sample-Assets into <samp>build/test-assets/</samp>.</td></tr>
+  <tr><td>Run the driver only on request</td><td><code>tools/image_tests.py</code> downloads and runs Mesa only with <code class="lang-text">--lavapipe</code>; <code>verify-change</code> calls it only with <code class="lang-text">--images</code>. The presets' <code class="lang-text">ctest</code> leaves out the label <code class="lang-text">image</code>.</td></tr>
+  <tr><td>Real GPUs</td><td>Not against the goldens: <code>verify-change</code> compares every example with a baseline taken on the same machine.</td></tr>
+  <tr><td>Continuous integration</td><td>The Windows job runs the tests after the Release tests (about 1.7 minutes) and uploads <samp>actual.png</samp>, <samp>expected.png</samp> and <samp>diff.png</samp> as <samp>image-test-failures</samp> when one fails.</td></tr>
+</table>
+</div>
+
+<p>The tests found a real bug on their first run. The MASK shader sampled textures after a <code class="lang-text">discard</code> that killed the pixel, so those samples had undefined derivatives. Real GPUs drew a plausible image; lavapipe crashed. Now <code class="lang-text">discard</code> demotes the pixel to a helper (<code>B33</code>).</p>
+
+<h3>Code map</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The tests, scenes and compare</td><td><code>tests/image/imageTests.cpp</code>: the <code>TESTS</code> table, <code>buildGraph</code>, <code>renderTest</code>, <code>compareImages</code>, <code>runGroup</code></td></tr>
+  <tr><td>The goldens</td><td><code>tests/golden/lavapipe/</code></td></tr>
+  <tr><td>Fetch, run, report</td><td><code>tools/image_tests.py</code> (<code class="lang-text">--lavapipe</code>, <code class="lang-text">--update</code>, <code class="lang-text">--scenes</code>, <code class="lang-text">--fetch-only</code>)</td></tr>
+  <tr><td>Registration and presets</td><td><code>tests/CMakeLists.txt</code> (label <code class="lang-text">image</code>), <code>CMakePresets.json</code> (the default test presets leave it out)</td></tr>
+  <tr><td>CI</td><td><samp>.github/workflows/ci.yml</samp>: the steps <samp>Install lavapipe</samp> and <samp>Image tests</samp></td></tr>
+  <tr><td>Reading a PNG</td><td><code>readPng</code> in <code>src/renderer/readback.cpp</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Rules to keep</strong>
+  <p>A golden changes only in a change that says why, with the old and new image. Look at every new golden before you store it. Set T or F per test only from measured noise, and write the reason next to it. A new test that would need an eighth mesh in an engine goes into another group.</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>NVIDIA, "FLIP: A Difference Evaluator for Alternating Images" (Andersson et al., 2020).</li>
+  <li>Mesa documentation, "LLVMpipe" (its environment variables).</li>
+  <li><a href="headless-readback.html">Headless rendering and readback</a>, <a href="mipmaps-sampling.html">Mipmaps and sampling</a>, <a href="transparency.html">Transparency</a>.</li>
+</ul>
 
 </main>
 </div>

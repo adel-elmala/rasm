@@ -202,5 +202,7 @@ Plan: <phase and item>. Review IDs: <IDs or none>.
 
 Leave out "Before / after" when the image does not change.
 
+A PR that changes a golden image (`tests/golden/lavapipe/`, `tools/image_tests.py --lavapipe --update --scenes ...`) says why in its body and shows each changed golden before and after, side by side. Update only the tests the change meant to move ([docs/guides/image-tests.html](../../../docs/guides/image-tests.html)).
+
 Give the user the PR link and a short final report: what changed, the check results, the review table, and
 anything left open.
