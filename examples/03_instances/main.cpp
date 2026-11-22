@@ -75,7 +75,8 @@ int main()
         .shaderDir = RASM_EXAMPLE_SHADER_DIR,
         .showStats = true,
         // Culling and Hi-Z on the compute queue, so the examples run that path under validation too.
-        .asyncCompute = true};
+        .asyncCompute = true,
+        .ui = true};
 
     rasm::Engine engine(config);
     if (!engine.running())

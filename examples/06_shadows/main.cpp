@@ -77,7 +77,8 @@ int main()
         .enableValidation = true,
         .preferredBackend = rasm::Backend::VULKAN,
         .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
-        .shaderDir = RASM_EXAMPLE_SHADER_DIR};
+        .shaderDir = RASM_EXAMPLE_SHADER_DIR,
+        .ui = true};
 
     rasm::Engine engine(config);
     if (!engine.running())
@@ -294,6 +295,8 @@ int main()
             ctx.draw(commandBuffer, 3);
         });
 
+    // The RASM window (F1) over the finished image.
+    engine.addUiPass(graph);
     graph.compile();
 
     // Animation advances per frame, not per second, so a given frame renders the same on every run.

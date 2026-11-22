@@ -47,7 +47,8 @@ int main(int argc, char **argv)
         .preferredBackend = rasm::Backend::VULKAN,
         .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
         .shaderDir = RASM_EXAMPLE_SHADER_DIR,
-        .showStats = true};
+        .showStats = true,
+        .ui = true};
 
     rasm::Engine engine(config);
     if (!engine.running())

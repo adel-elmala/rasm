@@ -9,7 +9,8 @@ int main()
         .enableValidation = true,
         .preferredBackend = rasm::Backend::VULKAN,
         .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
-        .shaderDir = RASM_EXAMPLE_SHADER_DIR};
+        .shaderDir = RASM_EXAMPLE_SHADER_DIR,
+        .ui = true};
 
     rasm::Engine engine(config);
     if (!engine.running())
@@ -244,6 +245,8 @@ int main()
                            engine.getBindlessTextureIndex(engine.getRenderTargetTexture(compositeHandle, 1)));
         });
 
+    // The RASM window (F1) over the finished image.
+    engine.addUiPass(graph);
     graph.compile();
 
     while (engine.running())

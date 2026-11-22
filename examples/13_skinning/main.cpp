@@ -133,7 +133,7 @@ int main(int argc, char **argv)
         .preferredBackend = rasm::Backend::VULKAN,
         .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
         .shaderDir = RASM_EXAMPLE_SHADER_DIR,
-    };
+        .ui = true};
 
     rasm::Engine engine(config);
     if (!engine.running())
@@ -207,6 +207,8 @@ int main(int argc, char **argv)
     const rasm::RenderTargetHandle resolved = taa ? engine.addTaaPass(graph, sceneTarget, camera) : sceneTarget;
     if (!resolved.isValid() || !engine.addToneMapPass(graph, resolved, camera))
         return 1;
+    // The RASM window (F1) over the finished image.
+    engine.addUiPass(graph);
 
     std::vector<std::string> timerNames;
     std::vector<double> timerSums;

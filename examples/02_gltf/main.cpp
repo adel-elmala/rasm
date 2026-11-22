@@ -18,9 +18,8 @@ int main(int argc, char **argv)
         .enableValidation = true,
         .preferredBackend = rasm::Backend::VULKAN,
         .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
-        .shaderDir = RASM_EXAMPLE_SHADER_DIR
-
-    };
+        .shaderDir = RASM_EXAMPLE_SHADER_DIR,
+        .ui = true};
 
     for (int i = 1; i + 1 < argc; ++i)
     {

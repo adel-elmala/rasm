@@ -111,7 +111,8 @@ int main()
         .enableValidation = true,
         .preferredBackend = rasm::Backend::VULKAN,
         .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
-        .shaderDir = RASM_EXAMPLE_SHADER_DIR};
+        .shaderDir = RASM_EXAMPLE_SHADER_DIR,
+        .ui = true};
 
     rasm::Engine engine(config);
     if (!engine.running())
@@ -180,6 +181,9 @@ int main()
     const rasm::SceneShadow shadow = engine.addShadowPasses(graph, scene, camera, rasm::ShadowDesc{.light = sun, .cascadeCount = CASCADE_COUNT, .size = 2048, .distance = 40.0f, .splitLambda = 0.7f});
     if (shadow.mapCount == 0 || !engine.addScenePasses(graph, scene, camera, sceneTarget, &shadow, 1) || !engine.addToneMapPass(graph, sceneTarget, camera))
         return 1;
+
+    // The RASM window (F1) over the finished image.
+    engine.addUiPass(graph);
 
     while (engine.running())
         graph.execute(camera);
