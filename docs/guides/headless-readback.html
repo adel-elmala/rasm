@@ -395,6 +395,7 @@
   <tr><td>A temporary target needs memory of its own</td><td>A graph makes a readable target outside the shared transient memory, as it does a history target.</td></tr>
   <tr><td>Convert on the CPU</td><td><code>convertReadback</code>, when the image is taken: <code>ReadbackFormat::RGBA8_SRGB</code> or <code>RGBA32_FLOAT</code>.</td></tr>
   <tr><td>Wait for all loads</td><td><code>Engine::waitForLoads</code>; the examples call it with <code>--wait-for-loads</code> (<code>C16</code>), which <code>verify-change</code> passes.</td></tr>
+  <tr><td>Compare with a stored image, with a tolerance</td><td><code>readPng</code> reads a stored PNG back as an <code>RGBA8_SRGB</code> image, the format <code>writePng</code> writes. The golden-image tests compare frames this way (<a href="image-tests.html">Image tests</a>).</td></tr>
   <tr><td>A fixed GPU order</td><td>Culling compacts draws with prefix sums, the light clusters use integer atomics whose result does not depend on order, and the blend sort is a fixed bitonic network, so a frame does not depend on thread timing.</td></tr>
   <tr><td>Bring your own window</td><td>Not yet: the private <code>Platform</code> interface is its first step (<code>D7</code>).</td></tr>
 </table>
@@ -408,9 +409,9 @@
   <tr><td>A device without a surface</td><td><code>VulkanDevice::initialize</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
   <tr><td>The offscreen images</td><td><code>src/rhi/offscreenSwapchain.cpp</code>; made in <code>RenderContext::initialize</code> (<code>src/rhi/renderContext.cpp</code>)</td></tr>
   <tr><td>The copy</td><td><code>VulkanCommandBuffer::copyFromTexture</code>, <code>RenderContext::copyTextureToBuffer</code></td></tr>
-  <tr><td>Readbacks and conversion</td><td><code>src/renderer/readback.cpp</code>: <code>Engine::readFrame</code>, <code>readTexture</code>, <code>isReadbackReady</code>, <code>takeReadback</code>, <code>recordReadbacks</code>, <code>convertReadback</code>, <code>writePng</code></td></tr>
+  <tr><td>Readbacks and conversion</td><td><code>src/renderer/readback.cpp</code>: <code>Engine::readFrame</code>, <code>readTexture</code>, <code>isReadbackReady</code>, <code>takeReadback</code>, <code>recordReadbacks</code>, <code>convertReadback</code>, <code>writePng</code>, <code>readPng</code></td></tr>
   <tr><td>The example</td><td><code>examples/16_headless/main.cpp</code>: a PNG of the frame and the HDR target's brightest and mean values</td></tr>
-  <tr><td>Tests</td><td><code>tests/readbackTests.cpp</code>: every conversion, and a PNG written and read again</td></tr>
+  <tr><td>Tests</td><td><code>tests/readbackTests.cpp</code>: every conversion, and a PNG written with <code>writePng</code> and read again with <code>readPng</code></td></tr>
 </table>
 </div>
 

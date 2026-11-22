@@ -412,7 +412,7 @@
 <div class="stats" id="cost-numbers">
   <div><b>0 ms</b><span>with <code>DebugView::NONE</code>: the same pipelines and passes as before</span><small>every GPU timer of 09 and 15 against main, Release, within ±2% run to run</small></div>
   <div><b>1</b><span>compare per draw run on the CPU</span><small><code>SceneView::debugView</code></small></div>
-  <div><b>0 B</b><span>more <code>SceneData</code></span><small>the view uses a padding word</small></div>
+  <div><b>0 B</b><span>more <code>SceneData</code></span><small>the view fills the word before <code>animatedTransformsPtr</code></small></div>
 </div>
 
 <div class="stats">

@@ -5,7 +5,7 @@
 <meta name="viewport" content="src/renderer/environmentBake.cpp width=device-width, initial-scale=1">
 <title>One Frame · RASM</title>
 <meta name="description" content="Engine::render, beginFrame, the scene passes and endFrame step by step: two frame slots, the timeline fences, swapchain acquire, one command buffer or a few batches with async compute, submit and present, skipped frames, resize, and where loads, scene sync, stats and culling run.">
-<meta name="rasm-sources" content="src/engine.cpp src/renderer/environmentBake.cpp include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/renderContext.h src/rhi/renderContext.cpp src/rhi/uploadManager.cpp src/renderer/toneMap.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanSwapchain.h src/rhi/vulkan/vulkanQueue.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/renderer/readback.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/renderer.h src/renderer/renderer.cpp src/renderer/frameStats.cpp src/renderer/frameStats.h src/renderer/statsOverlay.cpp src/renderer/renderGraph.cpp include/rasm/render/renderGraph.h src/rhi/textureStates.h src/rhi/textureStates.cpp src/rhi/device.h">
+<meta name="rasm-sources" content="src/renderer/ui.cpp src/engine.cpp src/renderer/environmentBake.cpp include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/renderContext.h src/rhi/renderContext.cpp src/rhi/uploadManager.cpp src/renderer/toneMap.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanSwapchain.h src/rhi/vulkan/vulkanQueue.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/renderer/readback.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/renderer.h src/renderer/renderer.cpp src/renderer/frameStats.cpp src/renderer/frameStats.h src/renderer/statsOverlay.cpp src/renderer/renderGraph.cpp include/rasm/render/renderGraph.h src/rhi/textureStates.h src/rhi/textureStates.cpp src/rhi/device.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -828,13 +828,13 @@
 <h2 id="jobs"><span class="n">6</span>Where each job runs in the frame</h2>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 244" role="img" aria-label="The jobs of a frame in order. In beginFrame: finishLoads, the fence wait, updateFrameStats, updateStatsOverlay, syncGpuScene, acquire. In RenderGraph::execute, for each pass: graph barriers and queue waits, then the pass: prepareSceneView and recordSceneCulling in a Cull pass, drawSceneView in a Scene pass, recordHiz in the Hi-Z pass, the tone-map draw in the Tone Map pass. In endFrame: the cull stats barrier, submitBatches, the upload flush inside RenderContext::submit, present.">
+  <svg viewBox="0 0 760 244" role="img" aria-label="The jobs of a frame in order. In beginFrame: finishLoads, the fence wait, updateFrameStats, updateStatsOverlay or, with the UI, buildUi, syncGpuScene, acquire. In RenderGraph::execute, for each pass: graph barriers and queue waits, then the pass: prepareSceneView and recordSceneCulling in a Cull pass, drawSceneView in a Scene pass, recordHiz in the Hi-Z pass, the tone-map draw in the Tone Map pass. In endFrame: the cull stats barrier, submitBatches, the upload flush inside RenderContext::submit, present.">
     <rect x="20" y="14" width="220" height="220" rx="8" class="zone"/>
     <text x="36" y="36" class="title mono">beginFrame</text>
     <rect x="36" y="46"  width="188" height="24" rx="4" class="cpu"/><text x="130" y="63"  class="mid mono">finishLoads</text>
     <rect x="36" y="76"  width="188" height="24" rx="4" class="box"/><text x="130" y="93"  class="mid">fence wait for the slot</text>
     <rect x="36" y="106" width="188" height="24" rx="4" class="cpu"/><text x="130" y="123" class="mid mono">updateFrameStats</text>
-    <rect x="36" y="136" width="188" height="24" rx="4" class="cpu"/><text x="130" y="153" class="mid mono">updateStatsOverlay</text>
+    <rect x="36" y="136" width="188" height="24" rx="4" class="cpu"/><text x="130" y="153" class="mid">stats overlay, or buildUi</text>
     <rect x="36" y="166" width="188" height="24" rx="4" class="cpu"/><text x="130" y="183" class="mid mono">syncGpuScene</text>
     <rect x="36" y="196" width="188" height="24" rx="4" class="cpu"/><text x="130" y="213" class="mid">acquire the image</text>
 
@@ -868,7 +868,8 @@
   <tr><th>Job</th><th>When</th><th>Why there</th></tr>
   <tr><td><code>finishLoads</code></td><td>start of <code>beginFrame</code></td><td>before anything binds the bindless set or the geometry pool</td></tr>
   <tr><td><code>updateFrameStats</code></td><td>after the fence wait</td><td>reads what the slot's last frame measured, then resets the slot</td></tr>
-  <tr><td><code>updateStatsOverlay</code></td><td>after <code>updateFrameStats</code></td><td>writes the slot's text buffer, which the GPU no longer reads</td></tr>
+  <tr><td><code>updateStatsOverlay</code></td><td>after <code>updateFrameStats</code>, without the UI</td><td>writes the slot's text buffer, which the GPU no longer reads</td></tr>
+  <tr><td><code>buildUi</code></td><td>after <code>updateFrameStats</code>, with <code>EngineConfig::ui</code></td><td>builds the RASM window and runs the UI callback before <code>syncGpuScene</code>, so what the UI changes reaches this frame; the UI pass draws it</td></tr>
   <tr><td><code>syncGpuScene</code></td><td>after the fence wait, before acquire</td><td>writes the slot's tables and draw lists</td></tr>
   <tr><td>graph barriers and queue waits</td><td><code>RenderGraph::execute</code>, before each pass begins</td><td>barriers are not allowed inside a render pass, and a wait closes the other queue's batch</td></tr>
   <tr><td><code>prepareSceneView</code></td><td>start of the <code>Cull</code> pass, on the CPU</td><td>writes the view's <code>SceneData</code> slot, which the GPU reads after the whole frame is recorded</td></tr>

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Color Spaces: sRGB and Linear · RASM</title>
 <meta name="description" content="How sRGB and linear color work: the sRGB transfer function, why lighting, filtering and blending must happen in linear light, which textures are color and which are data, how _SRGB formats convert in hardware, tone mapping, and how RASM does it.">
-<meta name="rasm-sources" content="src/assets/material.cpp src/assets/texture.cpp src/assets/ktxImage.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/engine.cpp include/rasm/types.h include/rasm/engine.h shaders/lib/pbr.slang shaders/lib/unlit.slang shaders/lib/core.slang shaders/passes/rasm.slang shaders/passes/statsOverlay.slang shaders/passes/toneMap.slang src/renderer/toneMap.cpp src/renderer/renderer.cpp examples/05_city/main.cpp">
+<meta name="rasm-sources" content="src/assets/material.cpp src/assets/texture.cpp src/assets/ktxImage.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/offscreenSwapchain.h src/engine.cpp include/rasm/types.h include/rasm/engine.h shaders/lib/pbr.slang shaders/lib/unlit.slang shaders/lib/core.slang shaders/passes/rasm.slang shaders/passes/statsOverlay.slang shaders/passes/toneMap.slang src/renderer/toneMap.cpp src/renderer/renderer.cpp examples/05_city/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -863,7 +863,7 @@ encode (linear light L → sRGB code s):
     <text x="690" y="274" class="mid mono small">B8G8R8A8_SRGB</text>
     <text x="614" y="264" class="end small">encodes on write</text>
   </svg>
-  <figcaption>glTF factors (base color, emissive, metallic, roughness) are linear in the file and are copied as they are. No scene shader applies the sRGB curve: the formats do it. The see-through materials blend in the float scene target, so in linear. Only the UI's shader converts, by hand (the last row below).</figcaption>
+  <figcaption>glTF factors (base color, emissive, metallic, roughness) are linear in the file and are copied as they are. No scene shader applies the sRGB curve: the formats do it. The see-through materials blend in the float scene target, so in linear. Only the UI's shader and the debug views' display convert, by hand (rows below). A headless engine's swapchain is <code>R8G8B8A8_SRGB</code>, which encodes the same way.</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
@@ -878,9 +878,10 @@ encode (linear light L → sRGB code s):
   <tr><td>Lighting</td><td>linear</td><td>Yes: <code>shadePBR</code> in <code>shaders/lib/pbr.slang</code>.</td></tr>
   <tr><td>HDR target</td><td>16-bit float, tone map in a final pass</td><td>The same: the scene passes draw into a <code>SCENE_COLOR_FORMAT</code> (<code>R16G16B16A16_SFLOAT</code>) target, and <code>Engine::addToneMapPass</code> maps it to the swapchain in a pass of its own.</td></tr>
   <tr><td>Tone mapping</td><td>exposure + a curve, before the encode</td><td>The camera's <code>exposure</code>, then AgX (<a href="tone-mapping.html#in-rasm">tone mapping</a>). Unlit materials and the clear color go through the same curve, so an unlit texture does not show its exact colors.</td></tr>
-  <tr><td>Output and encode</td><td>an _SRGB target encodes</td><td>The swapchain asks for <code>VK_FORMAT_B8G8R8A8_SRGB</code> with <code>VK_COLOR_SPACE_SRGB_NONLINEAR_KHR</code>. The scene targets are float, with no curve; only the swapchain encodes.</td></tr>
+  <tr><td>Output and encode</td><td>an _SRGB target encodes</td><td>The swapchain asks for <code>VK_FORMAT_B8G8R8A8_SRGB</code> with <code>VK_COLOR_SPACE_SRGB_NONLINEAR_KHR</code>. The scene targets are float, with no curve; only the swapchain encodes. A headless engine draws into an <code>OffscreenSwapchain</code> of <code>R8G8B8A8_SRGB</code> images instead (<a href="headless-readback.html#in-rasm">headless rendering</a>).</td></tr>
   <tr><td>Blending</td><td>in linear, by the _SRGB target</td><td>The <code>Transparent</code> pass blends in the float scene target, so in linear light.</td></tr>
-  <tr><td>UI colors</td><td>codes, meant to be blended as codes</td><td>Dear ImGui's colors are sRGB codes. The UI pass draws through the swapchain's <code>B8G8R8A8_UNORM</code> view, which stores and blends the codes as they are; an sRGB texture in an image is encoded back to codes in <code>ui.slang</code>. Without the view (<code>D31</code>) the shader decodes the colors and the blend is in linear light. See <a href="immediate-mode-ui.html#blending">Immediate-mode UI</a>.</td></tr>
+  <tr><td>UI colors</td><td>codes, meant to be blended as codes</td><td>Dear ImGui's colors are sRGB codes. The UI pass draws through the swapchain's <code>B8G8R8A8_UNORM</code> view, which stores and blends the codes as they are; an sRGB texture in an image is encoded back to codes in <code>ui.slang</code>. Without the view (<code>D31</code>, and always headless: the <code>OffscreenSwapchain</code> has none) the shader decodes the colors and the blend is in linear light. See <a href="immediate-mode-ui.html#blending">Immediate-mode UI</a>.</td></tr>
+  <tr><td>Debug views</td><td>show values, not light</td><td>A debug view (<code>Engine::setDebugView</code>) writes display values (a normal as a color, a count) into <code>scene_hdr</code>. The tone map then draws <code>fragDebug</code> or <code>fragDebugHeat</code> in <code>shaders/passes/toneMap.slang</code>: no exposure, no curve, and <code>decodeSrgb</code> first, so the swapchain's encode gives back the value as it is.</td></tr>
   <tr><td>Linear constants</td><td>clear colors are linear</td><td><code>Engine::render</code> clears <code>scene_hdr</code> to <code>BACKGROUND_COLOR</code>, 0.018 linear, which then goes through the tone map. The same constant clears passes that draw straight to the swapchain, not tone mapped; the encode turns it into byte 36. The stats overlay's colors in <code>statsOverlay.slang</code> are linear too, and are not tone mapped.</td></tr>
 </table>
 </div>
@@ -894,9 +895,9 @@ encode (linear light L → sRGB code s):
   <tr><td>glTF color vs data</td><td><code>Engine::loadMaterial</code> (its texture upload, with an sRGB flag per texture) in <code>src/assets/material.cpp</code></td></tr>
   <tr><td>Loading a texture file</td><td><code>Engine::loadTexture</code> in <code>src/assets/texture.cpp</code>; its default format in <code>include/rasm/engine.h</code></td></tr>
   <tr><td>sRGB-correct mips</td><td><code>VulkanDevice::fillTexture</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
-  <tr><td>Swapchain format</td><td><code>buildSwapchain</code> in <code>src/rhi/vulkan/vulkanSwapchain.cpp</code></td></tr>
+  <tr><td>Swapchain format</td><td><code>buildSwapchain</code> in <code>src/rhi/vulkan/vulkanSwapchain.cpp</code>; headless, <code>OffscreenSwapchain::FORMAT</code> in <code>src/rhi/offscreenSwapchain.h</code></td></tr>
   <tr><td>Lighting</td><td><code>shadePBR</code> in <code>shaders/lib/pbr.slang</code>; <code>shadeUnlit</code> in <code>shaders/lib/unlit.slang</code></td></tr>
-  <tr><td>Tone mapping</td><td><code>Engine::addToneMapPass</code> in <code>src/renderer/toneMap.cpp</code>; the curve in <code>shaders/passes/toneMap.slang</code></td></tr>
+  <tr><td>Tone mapping</td><td><code>Engine::addToneMapPass</code> in <code>src/renderer/toneMap.cpp</code>; the curve and the debug views' display (<code>fragDebug</code>) in <code>shaders/passes/toneMap.slang</code></td></tr>
   <tr><td>Hand-made textures, both kinds</td><td><code>createFilledTexture</code> calls in <code>examples/05_city/main.cpp</code></td></tr>
 </table>
 </div>

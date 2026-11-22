@@ -717,8 +717,9 @@ depth = (f − D) / (f − n)       reversed: again, swap n and f</code></pre>
   <tr><td>Field of view</td><td>an angle</td><td><code>fovY</code> is in <b>degrees</b>; <code>toProjectionMatrix</code> converts it.</td></tr>
   <tr><td>Depth format</td><td>32-bit float</td><td><code>D32_SFLOAT</code> (<code>DEPTH_FORMAT</code>), no stencil. Render targets that <code>Engine::addScenePasses</code> draws into must use it too.</td></tr>
   <tr><td>Clear value</td><td>0</td><td>0.0 in <code>VulkanCommandBuffer::beginRendering</code>, for every pass that clears.</td></tr>
-  <tr><td>Depth test</td><td>GREATER</td><td><code>VK_COMPARE_OP_GREATER_OR_EQUAL</code>, depth test and write on, in <code>createGraphicsPipeline</code>, for every graphics pipeline. Equal depths pass.</td></tr>
+  <tr><td>Depth test</td><td>GREATER</td><td><code>VK_COMPARE_OP_GREATER_OR_EQUAL</code> in <code>createGraphicsPipeline</code>, for every graphics pipeline with a depth format. Equal depths pass. <code>PipelineDesc::depthTest</code> and <code>depthWrite</code> are on by default; the see-through draws write no depth, and the culling debug view's boxes test none (<a href="debug-views.html">debug views</a>).</td></tr>
   <tr><td>Validation</td><td>—</td><td><code>isValidProjection</code> refuses a perspective <code>nearZ</code> that is not finite and &gt; 0, a finite <code>farZ</code> not &gt; <code>nearZ</code>, and an orthographic camera without finite <code>nearZ</code> &lt; <code>farZ</code>. NaN fails every check. <code>createCamera</code> then returns an invalid handle; <code>setCameraProjection</code> keeps the old projection.</td></tr>
+  <tr><td>Jitter</td><td>—</td><td>With <a href="taa.html#in-rasm">TAA</a>, <code>writeViewMotion</code> adds a sub-pixel offset to the view's projection, a translation of clip <var>x</var> and <var>y</var>. Depth does not change.</td></tr>
   <tr><td>Aspect ratio</td><td>update on resize</td><td><code>updateCameraAspectRatio</code> runs after the swapchain is (re)created. <code>Engine::prepareSceneView</code> also fits a copy to each scene view's target size with <code>getProjectionMatrix(camera, aspect)</code>. An orthographic camera keeps its center and width; its height becomes width / aspect.</td></tr>
   <tr><td>Depth bias, depth clamp</td><td>—</td><td>Neither is used. The shadow pass biases in the shader instead (<a href="shadow-mapping.html#in-rasm">Shadow mapping</a>).</td></tr>
 </table>
@@ -737,7 +738,7 @@ depth = (f − D) / (f − n)       reversed: again, swap n and f</code></pre>
   <tr><td>Clear to 0</td><td><code>VulkanCommandBuffer::beginRendering</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
   <tr><td>Compare op</td><td><code>VulkanDevice::createGraphicsPipeline</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
   <tr><td>glm's 0..1 range</td><td><code>GLM_FORCE_DEPTH_ZERO_TO_ONE</code> in <code>src/CMakeLists.txt</code></td></tr>
-  <tr><td>Readers of depth</td><td><code>isOccluded</code> in <code>shaders/lib/occlusionCulling.slang</code>; <code>vertMain</code> in <code>shaders/passes/statsOverlay.slang</code></td></tr>
+  <tr><td>Readers of depth</td><td><code>isOccluded</code> in <code>shaders/lib/occlusionCulling.slang</code>; <code>vertMain</code> in <code>shaders/passes/statsOverlay.slang</code>; <code>getViewDepth</code> in <code>shaders/passes/inspect.slang</code>, which turns a reversed-Z depth back into view depth for the <a href="inspecting-gpu-resources.html#in-rasm">Buffers section</a></td></tr>
   <tr><td>Tests</td><td><code>tests/cameraTests.cpp</code>: reversed [1, 0] ranges, the infinite limit, rejected projections</td></tr>
 </table>
 </div>

@@ -793,6 +793,7 @@
   <tr><td>Hierarchy, plane masks</td><td>section 11</td><td>None. Every draw is tested against all 6 planes, flat, one GPU thread each.</td></tr>
   <tr><td>Corner false positives</td><td>accept, or add a second test</td><td>Accepted. Many of them are then removed by <a href="occlusion-culling.html">occlusion culling</a>, which runs the frustum test first.</td></tr>
   <tr><td>Planes per view</td><td>one set per camera</td><td>One set per scene view, in that view's <code>SceneData</code> slot. Two cameras are two views, and cull separately.</td></tr>
+  <tr><td>Seeing the test</td><td>–</td><td><code>Engine::setCullingFrozen</code> keeps a shaded view's planes (and its LOD camera) of the frame it froze in, while the camera moves on; shadow views keep following the camera. The culling debug view (<code>DebugView::CULLING</code>) draws what the planes cull as blue ghosts (<a href="debug-views.html">Debug views</a>).</td></tr>
 </table>
 </div>
 

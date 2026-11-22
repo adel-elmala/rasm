@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Load and store ops · RASM</title>
 <meta name="description" content="What a render pass does with its attachments at the start and at the end: load ops (LOAD, CLEAR, DONT_CARE) and store ops (STORE, DONT_CARE, NONE), why they matter on tile-based GPUs, how to choose them, how a render graph infers them, and how RASM does it.">
-<meta name="rasm-sources" content="include/rasm/render/resource.h include/rasm/render/renderGraph.h include/rasm/engine.h src/rhi/vulkan/vulkanCommandBuffer.cpp src/renderer/renderGraph.cpp src/engine.cpp src/renderer/gpuScene.cpp src/renderer/statsOverlay.cpp src/rhi/renderContext.cpp src/rhi/textureStates.cpp examples/01_render_graph/main.cpp">
+<meta name="rasm-sources" content="include/rasm/render/resource.h include/rasm/render/renderGraph.h include/rasm/engine.h src/rhi/vulkan/vulkanCommandBuffer.cpp src/renderer/renderGraph.cpp src/engine.cpp src/renderer/gpuScene.cpp src/renderer/statsOverlay.cpp src/renderer/ui.cpp src/renderer/taa.cpp src/rhi/renderContext.cpp src/rhi/textureStates.cpp examples/01_render_graph/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -637,10 +637,10 @@
 
 <h2 id="in-rasm"><span class="n">8</span>In RASM</h2>
 
-<p>RASM uses Vulkan dynamic rendering, so the ops go into <code>VulkanCommandBuffer::beginRendering</code>. A pass describes them with three flags, <code>AttachmentOps</code>: <code>loadColor</code>, <code>loadDepth</code> and <code>storeDepth</code>. The render graph sets them for each pass in <code>RenderGraph::assignAttachmentOps</code>, when it compiles. A frame written by hand passes them to <code>Engine::beginPass</code>.</p>
+<p>RASM uses Vulkan dynamic rendering, so the ops go into <code>VulkanCommandBuffer::beginRendering</code>. A pass describes them with three flags of <code>AttachmentOps</code>: <code>loadColor</code>, <code>loadDepth</code> and <code>storeDepth</code>. Its two other flags are not ops: <code>firstWrite</code> says a cube's other faces may be dropped, and <code>encodedColor</code> draws the swapchain through its UNORM view, for the UI. The render graph sets them for each pass in <code>RenderGraph::assignAttachmentOps</code>, when it compiles. A frame written by hand passes them to <code>Engine::beginPass</code>.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 330" role="img" aria-label="Top: three graph passes on one target, in add order. The first clears color and depth and stores depth, because the second loads it. The second loads both and stores depth, because the third loads it. The third loads both and does not store depth. Color is always stored. Middle: with occlusion culling, Scene 1 clears and stores color and depth, the Hi-Z compute pass reads the depth with readDepth, Cull 2 culls, and Scene 2 loads color and depth. Bottom: endFrame runs a Clear pass if no pass drew the swapchain, then the stats overlay, which loads color and has no depth, then presents.">
+  <svg viewBox="0 0 760 344" role="img" aria-label="Top: three graph passes on one target, in add order. The first clears color and depth and stores depth, because the second loads it. The second loads both and stores depth, because the third loads it. The third loads both and does not store depth. Color is always stored. Middle: with occlusion culling, Scene 1 clears and stores color and depth, the Hi-Z compute pass reads the depth with readDepth, Cull 2 culls, Scene 2 loads color and depth and stores depth, and Transparent loads both and stores depth only when TAA reads it. Bottom: endFrame runs a Clear pass if no pass drew the swapchain, then the UI if no graph pass drew it, or the stats overlay without a UI, which loads color and has no depth, then presents.">
     <text x="20" y="22" class="title">Render graph: passes on one target run in add order</text>
     <rect x="20" y="34" width="220" height="64" rx="6" class="gpu"/>
     <text x="130" y="54" class="mid title">1st pass</text>
@@ -659,35 +659,42 @@
     <text x="20" y="116" class="small">Depth is stored only when a later pass on the target loads it, or a pass reads it (readDepth). The swapchain has no depth.</text>
 
     <text x="20" y="150" class="title">The scene passes with occlusion culling: a depth read between two passes</text>
-    <rect x="20" y="166" width="200" height="56" rx="6" class="gpu"/>
-    <text x="120" y="184" class="mid title">Scene 1</text>
-    <text x="120" y="200" class="mid small">color <tspan class="t-gpu">CLEAR</tspan> → <tspan class="t-mem">STORE</tspan></text>
-    <text x="120" y="214" class="mid small">depth <tspan class="t-gpu">CLEAR</tspan> → <tspan class="t-mem">STORE</tspan></text>
-    <line x1="220" y1="194" x2="238" y2="194" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <rect x="240" y="166" width="150" height="56" rx="20" class="shader"/>
-    <text x="315" y="190" class="mid">Hi-Z, compute</text>
-    <text x="315" y="208" class="mid small">readDepth: depth SAMPLED</text>
-    <line x1="390" y1="194" x2="408" y2="194" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <rect x="410" y="166" width="100" height="56" rx="20" class="shader"/>
-    <text x="460" y="190" class="mid">Cull 2</text>
-    <text x="460" y="208" class="mid small">compute</text>
-    <line x1="510" y1="194" x2="528" y2="194" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <rect x="530" y="166" width="210" height="56" rx="6" class="gpu"/>
-    <text x="635" y="184" class="mid title">Scene 2</text>
-    <text x="635" y="200" class="mid small">color <tspan class="t-mem">LOAD</tspan> → <tspan class="t-mem">STORE</tspan></text>
-    <text x="635" y="214" class="mid small">depth <tspan class="t-mem">LOAD</tspan> → <tspan class="t-gpu">DONT_CARE</tspan></text>
+    <rect x="20" y="166" width="134" height="56" rx="6" class="gpu"/>
+    <text x="87" y="184" class="mid title">Scene 1</text>
+    <text x="87" y="200" class="mid small">color <tspan class="t-gpu">CLEAR</tspan> → <tspan class="t-mem">STORE</tspan></text>
+    <text x="87" y="214" class="mid small">depth <tspan class="t-gpu">CLEAR</tspan> → <tspan class="t-mem">STORE</tspan></text>
+    <line x1="154" y1="194" x2="170" y2="194" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="172" y="166" width="146" height="56" rx="20" class="shader"/>
+    <text x="245" y="190" class="mid">Hi-Z, compute</text>
+    <text x="245" y="208" class="mid small">readDepth: depth SAMPLED</text>
+    <line x1="318" y1="194" x2="334" y2="194" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="336" y="166" width="66" height="56" rx="20" class="shader"/>
+    <text x="369" y="190" class="mid">Cull 2</text>
+    <text x="369" y="208" class="mid small">compute</text>
+    <line x1="402" y1="194" x2="418" y2="194" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="420" y="166" width="144" height="56" rx="6" class="gpu"/>
+    <text x="492" y="184" class="mid title">Scene 2</text>
+    <text x="492" y="200" class="mid small">color <tspan class="t-mem">LOAD</tspan> → <tspan class="t-mem">STORE</tspan></text>
+    <text x="492" y="214" class="mid small">depth <tspan class="t-mem">LOAD</tspan> → <tspan class="t-mem">STORE</tspan></text>
+    <line x1="564" y1="194" x2="580" y2="194" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="582" y="166" width="158" height="56" rx="6" class="gpu"/>
+    <text x="661" y="184" class="mid title">Transparent</text>
+    <text x="661" y="200" class="mid small">color <tspan class="t-mem">LOAD</tspan> → <tspan class="t-mem">STORE</tspan></text>
+    <text x="661" y="214" class="mid small">depth <tspan class="t-mem">LOAD</tspan> → <tspan class="t-gpu">DONT_CARE</tspan></text>
+    <text x="20" y="242" class="small">With TAA, Transparent stores depth too: the TAA pass reads it (readDepth).</text>
 
-    <text x="20" y="256" class="title">endFrame, on the swapchain</text>
-    <rect x="20" y="266" width="230" height="52" rx="6" class="gpu"/>
-    <text x="135" y="287" class="mid">"Clear" pass</text>
-    <text x="135" y="306" class="mid small">only if no pass drew it: <tspan class="t-gpu">CLEAR</tspan></text>
-    <line x1="250" y1="292" x2="278" y2="292" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <rect x="280" y="266" width="250" height="52" rx="6" class="gpu"/>
-    <text x="405" y="287" class="mid">stats overlay, if shown</text>
-    <text x="405" y="306" class="mid small">color <tspan class="t-mem">LOAD</tspan> → <tspan class="t-mem">STORE</tspan>, no depth</text>
-    <line x1="530" y1="292" x2="558" y2="292" class="arrow" marker-end="url(#ah)"/>
-    <rect x="560" y="266" width="180" height="52" rx="6" class="box"/>
-    <text x="650" y="296" class="mid">present</text>
+    <text x="20" y="270" class="title">endFrame, on the swapchain</text>
+    <rect x="20" y="280" width="230" height="52" rx="6" class="gpu"/>
+    <text x="135" y="301" class="mid">"Clear" pass</text>
+    <text x="135" y="320" class="mid small">only if no pass drew it: <tspan class="t-gpu">CLEAR</tspan></text>
+    <line x1="250" y1="306" x2="278" y2="306" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="280" y="280" width="250" height="52" rx="6" class="gpu"/>
+    <text x="405" y="301" class="mid">UI, or the stats overlay</text>
+    <text x="405" y="320" class="mid small">color <tspan class="t-mem">LOAD</tspan> → <tspan class="t-mem">STORE</tspan>, no depth</text>
+    <line x1="530" y1="306" x2="558" y2="306" class="arrow" marker-end="url(#ah)"/>
+    <rect x="560" y="280" width="180" height="52" rx="6" class="box"/>
+    <text x="650" y="301" class="mid">present</text>
+    <text x="650" y="320" class="mid small">none when headless</text>
   </svg>
   <figcaption>The graph never clears a target twice in a frame, and never loads one that nothing drew. A depth read between two passes on one target makes the pass before it store depth, and the pass after it loads depth.</figcaption>
 </figure>
@@ -715,7 +722,7 @@ engine.endPass();</code></pre>
   <tr><td>Clear values</td><td>any, per attachment</td><td>Color: the target's <code>clearColor</code>, or <code>BACKGROUND_COLOR</code> for the swapchain. Depth: always 0, the far plane in <a href="projection-depth.html#reversed">reversed-Z</a>.</td></tr>
   <tr><td>Who picks the ops</td><td>the graph, from writers before and readers after</td><td>The graph, from the writers before and the depth reads after (<code>RenderGraph::assignAttachmentOps</code>, review item <code>D9</code>). The first pass on a target clears it; you cannot ask it to load or to not care.</td></tr>
   <tr><td>Store of color</td><td>only if read later</td><td>Always. The graph does not check readers: <code>endPass</code> leaves a render target's color sampled for any later pass (<code>B10</code>).</td></tr>
-  <tr><td>Store of depth</td><td>only if read later</td><td>Only if a later pass on the target loads it or reads it. With <code>EngineConfig::occlusionCulling</code> (the default) the scene's <code>Hi-Z</code> pass reads it, so <code>Scene 1</code> stores it (<a href="occlusion-culling.html#in-rasm">occlusion culling</a>).</td></tr>
+  <tr><td>Store of depth</td><td>only if read later</td><td>Only if a later pass on the target loads it or reads it. With <code>EngineConfig::occlusionCulling</code> (the default) the scene's <code>Hi-Z</code> pass reads it, so <code>Scene 1</code> stores it (<a href="occlusion-culling.html#in-rasm">occlusion culling</a>). <code>Transparent</code> loads it after <code>Scene 2</code>, and the TAA pass reads it after <code>Transparent</code>.</td></tr>
   <tr><td>Discard in the barrier</td><td>UNDEFINED when not loading</td><td>The same: <code>beginPass</code> transitions with <code>discard</code> when the pass clears. A cube target is the exception: a pass draws one face, which counts as a target of its own for the ops, but the barrier covers all six, so only the cube's first pass of the frame, which gets <code>firstWrite</code>, may discard; the later ones keep the faces drawn before (<a href="local-light-shadows.html">Spot and point light shadows</a>).</td></tr>
   <tr><td>Memoryless attachments</td><td>transient, lazily allocated</td><td>None. <code>TextureUsage::TRANSIENT_ATTACHMENT</code> exists but nothing uses it. Transient render targets share memory instead (<a href="memory-aliasing.html">memory aliasing</a>); their first pass always clears.</td></tr>
   <tr><td>MSAA resolve</td><td>a store variant</td><td>Not a store op: a multisampled scene is resolved by a compute pass, <code>MSAA Resolve</code>, which weights each sample by its brightness, something a resolve attachment can't do (<a href="msaa.html#resolve">MSAA</a>).</td></tr>
@@ -738,6 +745,7 @@ engine.endPass();</code></pre>
   <tr><td>The depth read between the scene passes</td><td><code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code>; <code>PassBuilder::readDepth</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
   <tr><td>The "Clear" pass</td><td><code>Engine::endFrame</code> in <code>src/engine.cpp</code></td></tr>
   <tr><td>Stats overlay pass</td><td><code>Engine::drawStatsOverlay</code> in <code>src/renderer/statsOverlay.cpp</code></td></tr>
+  <tr><td>UI pass, and the one endFrame adds</td><td><code>Engine::addUiPass</code>, <code>Engine::drawUiFallback</code> in <code>src/renderer/ui.cpp</code></td></tr>
   <tr><td>Clearing new history copies</td><td><code>RenderContext::clearNewHistory</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
   <tr><td>A frame that uses the graph</td><td><code>examples/01_render_graph/main.cpp</code>: each pass draws its own target once, so every pass clears</td></tr>
 </table>

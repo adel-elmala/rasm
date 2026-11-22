@@ -325,12 +325,12 @@
 
 <h2 id="sync"><span class="n">3</span><code>syncGpuScene</code>, step by step</h2>
 
-<p>It runs in <code>beginFrame</code>, after <code>finishLoads</code>, the fence wait, <code>updateFrameStats</code> and <code>updateStatsOverlay</code>:</p>
+<p>It runs in <code>beginFrame</code>, after <code>finishLoads</code>, the fence wait, <code>updateFrameStats</code>, and <code>updateStatsOverlay</code> or, with <code>EngineConfig::ui</code>, <code>buildUi</code>:</p>
 
 <ol class="flow">
   <li><b>loads</b><span>finishLoads</span></li>
   <li><b>fence wait</b><span>for this slot</span></li>
-  <li><b>stats</b><span>updateFrameStats, updateStatsOverlay</span></li>
+  <li><b>stats, UI</b><span>updateFrameStats; updateStatsOverlay or buildUi</span></li>
   <li class="cpu"><b>scene sync</b><span>syncGpuScene: this section</span></li>
 </ol>
 

@@ -335,7 +335,7 @@
 <div class="callout rule">
   <strong>Keep these true</strong>
   <ul>
-    <li>A new <code>Format</code> gets its block in <code>getFormatBlock</code>, its Vulkan format in <code>toVkFormat</code>, and, if it is a compressed one, its feature check in <code>VulkanDevice::queryFormatSupport</code>. <code>EAC_R11G11_UNORM</code> is the last value; the Vulkan format table ends there.</li>
+    <li>A new <code>Format</code> gets its block in <code>getFormatBlock</code>, its Vulkan format in <code>toVkFormat</code>, and, if it is a compressed one, its feature check in <code>VulkanDevice::queryFormatSupport</code>. <code>R16G16_SFLOAT</code> is the last value; the Vulkan format table ends there (<code>VulkanDevice::FORMAT_COUNT</code>).</li>
     <li>The format lists in <code>ktxImage.cpp</code> and the lab of this page are the same lists.</li>
     <li>Color slots are sRGB and data slots UNORM, for KTX2 files too: the slot decides, not the file.</li>
   </ul>
