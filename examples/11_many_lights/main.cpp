@@ -3,6 +3,8 @@
 
 #include "rasm/rasm.h"
 
+#include "exampleArgs.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -223,6 +225,7 @@ namespace
 int main(int argc, char **argv)
 {
     const Options options = parseOptions(argc, argv);
+    ExampleArgs args = parseExampleArgs(argc, argv);
     rasm::EngineConfig config = {
         .appName = "example_11",
         .windowWidth = options.bench ? 1920 : 1280,
@@ -236,6 +239,7 @@ int main(int argc, char **argv)
         .clusteredLighting = !options.allLights,
         .ui = true};
 
+    applyExampleArgs(args, config);
     rasm::Engine engine(config);
     if (!engine.running())
         return 1;
@@ -347,7 +351,7 @@ int main(int argc, char **argv)
     if (options.bench)
         engine.getFrameStats();
     uint32_t frame = 0;
-    while (engine.running())
+    while (exampleRunning(engine, args))
     {
         ++frame;
         for (const MovingLight &moving : lights)

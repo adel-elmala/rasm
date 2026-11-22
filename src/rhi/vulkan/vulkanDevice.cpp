@@ -17,6 +17,17 @@ namespace rasm::rhi
 {
     namespace
     {
+        // The formats of a texture with an encoded view (TextureDesc::encodedView): the image may be viewed as either.
+        constexpr VkFormat ENCODED_VIEW_FORMATS[2] = {VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_R8G8B8A8_UNORM};
+        constexpr VkImageFormatListCreateInfo ENCODED_VIEW_FORMAT_LIST = {.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO,
+                                                                          .viewFormatCount = 2,
+                                                                          .pViewFormats = ENCODED_VIEW_FORMATS};
+
+        bool hasEncodedView(const TextureDesc &desc)
+        {
+            return desc.encodedView && desc.format == Format::R8G8B8A8_SRGB;
+        }
+
         vkb::Result<vkb::Instance> initInstance(const DeviceDesc &desc, bool &debugUtilsEnabled)
         {
             debugUtilsEnabled = false;
@@ -376,6 +387,11 @@ namespace rasm::rhi
             imageInfo.mipLevels = mipLevels;
             imageInfo.arrayLayers = desc.cube ? CUBE_FACES : 1;
             imageInfo.flags = desc.cube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
+            if (hasEncodedView(desc))
+            {
+                imageInfo.flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+                imageInfo.pNext = &ENCODED_VIEW_FORMAT_LIST;
+            }
             imageInfo.format = toVkFormat(desc.format);
             imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
             imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -405,6 +421,8 @@ namespace rasm::rhi
                 mipView = VK_NULL_HANDLE;
             }
             texture.view = VK_NULL_HANDLE;
+            vkDestroyImageView(device, texture.encodedView, nullptr);
+            texture.encodedView = VK_NULL_HANDLE;
         }
 
         // A cube gets a cube view of all its faces, for sampling, and a 2D view of each face's first mip, for drawing into
@@ -436,6 +454,11 @@ namespace rasm::rhi
                 viewInfo.subresourceRange.baseArrayLayer = 0;
                 viewInfo.subresourceRange.layerCount = texture.desc.cube ? CUBE_FACES : 1;
                 result = vkCreateImageView(device, &viewInfo, nullptr, &texture.mipViews[mip]);
+            }
+            if (hasEncodedView(texture.desc) && result == VK_SUCCESS)
+            {
+                viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+                result = vkCreateImageView(device, &viewInfo, nullptr, &texture.encodedView);
             }
             if (result != VK_SUCCESS)
                 destroyImageViews(device, texture);

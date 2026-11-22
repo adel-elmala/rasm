@@ -33,6 +33,10 @@ addresses, and GFXR only dumps buffers bound through descriptors.
 
 Put captures and dumps in the scratchpad directory, never in the repo (`.rdc` ≈ 200 MB, `.gfxr` ≈ 100 MB).
 
+Captures need a window. RenderDoc and GFXR cut frames at `vkQueuePresentKHR`, and a headless run (`--headless`) never
+presents, so capture the example windowed (it opens a window until frame N). To only look at frame N, or to check
+validation, run it headless instead: `<exe> --fixed-step --wait-for-loads --headless --frames 60 --out shot.png`.
+
 Before capturing, make sure the build is current: a stale exe against newer shaders
 fails `validateRasmStructs` at startup (assert in `shaderCompiler.cpp`), before any frame.
 

@@ -4,7 +4,6 @@
 #include "rasm/handle.h"
 #include "rasm/types.h"
 
-#include <chrono>
 #include <cstdint>
 #include <string>
 
@@ -25,7 +24,7 @@ namespace rasm
         std::string                             grid;
         uint32_t                                columns             = 0;
         uint32_t                                rows                = 0;
-        std::chrono::steady_clock::time_point   gridTime            = {};
+        float                                   gridAge             = 0.0f;     // seconds of frame time since the grid was built
     };
 
 }

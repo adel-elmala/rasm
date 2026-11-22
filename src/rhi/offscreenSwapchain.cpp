@@ -19,7 +19,7 @@ namespace rasm::rhi
         return createImages(desc.width, desc.height);
     }
 
-    // Readable, so Engine::readFrame can copy any frame.
+    // Readable, so Engine::readFrame can copy any frame, and with a UNORM view, which the UI draws through as on a window.
     bool OffscreenSwapchain::createImages(uint32_t width, uint32_t height)
     {
         for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
@@ -29,7 +29,8 @@ namespace rasm::rhi
                                               .height = height,
                                               .format = FORMAT,
                                               .usage = TextureUsage::COLOR_ATTACHMENT,
-                                              .readable = true});
+                                              .readable = true,
+                                              .encodedView = true});
             if (images[i] == nullptr)
             {
                 spdlog::error("Failed to create the offscreen swapchain's images ({} x {}).", width, height);
@@ -103,7 +104,7 @@ namespace rasm::rhi
 
     Format OffscreenSwapchain::getEncodedFormat() const
     {
-        return Format::UNKNOWN;
+        return Format::R8G8B8A8_UNORM;
     }
 
     glm::uvec2 OffscreenSwapchain::getExtent() const

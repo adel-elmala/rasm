@@ -18,7 +18,7 @@ namespace rasm
         // (8 counts of up to 8 characters wrap at most twice), Lights, Dropped and VRAM.
         constexpr uint32_t MAX_TEXT_ROWS = 2 + (MAX_GPU_TIMERS - 1) + 3 + 2 + 3 + 2 + 1;
         // Slow enough for the numbers to be read.
-        constexpr std::chrono::milliseconds TEXT_REFRESH(250);
+        constexpr float TEXT_REFRESH = 0.25f;
 
         // Must match PushConstants in shaders/passes/statsOverlay.slang.
         struct OverlayPushConstants
@@ -149,10 +149,11 @@ namespace rasm
         if (!config.showStats || !statsOverlay->pipeline.isValid())
             return;
 
-        const auto now = std::chrono::steady_clock::now();
-        if (statsOverlay->grid.empty() || now - statsOverlay->gridTime >= TEXT_REFRESH)
+        // Counted in frame time, so with EngineConfig::fixedDeltaTime the same frames renew the text in every run (C15).
+        statsOverlay->gridAge += deltaTime;
+        if (statsOverlay->grid.empty() || statsOverlay->gridAge >= TEXT_REFRESH)
         {
-            statsOverlay->gridTime = now;
+            statsOverlay->gridAge = 0.0f;
             buildGrid(buildText(frameStats->stats, config.forcedLod), statsOverlay->grid, statsOverlay->columns, statsOverlay->rows);
         }
         if (ctx.fillBuffer(slot.text, statsOverlay->grid.data(), statsOverlay->grid.size()))

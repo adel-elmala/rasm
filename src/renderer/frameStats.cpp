@@ -140,7 +140,7 @@ namespace rasm
             }
         }
         slot.readFenceValue = fenceValue;
-        stats.cpuFrameMs = deltaTime * 1000.0f;
+        stats.cpuFrameMs = frameTime * 1000.0f;
 
         slot.timerCount = 0;
         gpuScene->drawTotals[frame] = {};

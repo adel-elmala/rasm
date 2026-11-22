@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Headless Rendering and Readback · RASM</title>
 <meta name="description" content="Rendering without a window into images of your own, and copying pixels back from the GPU to the CPU: the staging copy, waiting on the right fence so nothing stalls, converting formats, getting the same pixels on every run, and how RASM does it.">
-<meta name="rasm-sources" content="src/platform/platform.h src/platform/headlessPlatform.cpp src/platform/sdlPlatform.cpp src/rhi/offscreenSwapchain.h src/rhi/offscreenSwapchain.cpp src/rhi/device.h src/rhi/vulkan/vulkanCommandBuffer.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/renderContext.cpp src/renderer/readback.h src/renderer/readback.cpp src/renderer/renderGraph.cpp src/engine.cpp include/rasm/readback.h include/rasm/engine.h include/rasm/types.h include/rasm/render/resource.h examples/16_headless/main.cpp examples/exampleArgs.h tests/readbackTests.cpp">
+<meta name="rasm-sources" content="src/platform/platform.h src/platform/headlessPlatform.cpp src/platform/sdlPlatform.cpp src/rhi/offscreenSwapchain.h src/rhi/offscreenSwapchain.cpp src/rhi/device.h src/rhi/vulkan/vulkanCommandBuffer.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/renderContext.cpp src/renderer/readback.h src/renderer/readback.cpp src/renderer/renderGraph.cpp src/engine.cpp include/rasm/readback.h include/rasm/engine.h include/rasm/types.h include/rasm/render/resource.h examples/16_headless/main.cpp examples/exampleArgs.h src/platform/uiPlatform.cpp tests/readbackTests.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -395,11 +395,40 @@
   <tr><td>A temporary target needs memory of its own</td><td>A graph makes a readable target outside the shared transient memory, as it does a history target.</td></tr>
   <tr><td>Convert on the CPU</td><td><code>convertReadback</code>, when the image is taken: <code>ReadbackFormat::RGBA8_SRGB</code> or <code>RGBA32_FLOAT</code>.</td></tr>
   <tr><td>Wait for all loads</td><td><code>Engine::waitForLoads</code>; the examples call it with <code>--wait-for-loads</code> (<code>C16</code>), which <code>verify-change</code> passes.</td></tr>
+  <tr><td>A fixed time step</td><td><code>EngineConfig::fixedDeltaTime</code>: the cameras' easing, Dear ImGui and the stats' refresh step by it instead of the measured frame time (<code>C15</code>). The examples set 1/60 s with <code>--fixed-step</code>.</td></tr>
+  <tr><td>The UI without a window</td><td>Dear ImGui runs with no input and no SDL: the display is the window's pixel size (<code>newUiPlatformFrame</code>), and the UI draws through the offscreen images' <code>R8G8B8A8_UNORM</code> view (<code>TextureDesc::encodedView</code>), so it looks as on a window.</td></tr>
   <tr><td>Compare with a stored image, with a tolerance</td><td><code>readPng</code> reads a stored PNG back as an <code>RGBA8_SRGB</code> image, the format <code>writePng</code> writes. The golden-image tests compare frames this way (<a href="image-tests.html">Image tests</a>).</td></tr>
   <tr><td>A fixed GPU order</td><td>Culling compacts draws with prefix sums, the light clusters use integer atomics whose result does not depend on order, and the blend sort is a fixed bitonic network, so a frame does not depend on thread timing.</td></tr>
   <tr><td>Bring your own window</td><td>Not yet: the private <code>Platform</code> interface is its first step (<code>D7</code>).</td></tr>
 </table>
 </div>
+
+<h3>Every example runs headless</h3>
+
+<p>Each example takes <code class="lang-text">--headless --frames N --out file.png</code> (<code>examples/exampleArgs.h</code>). <code>applyExampleArgs</code> sets <code>PlatformType::HEADLESS</code>, and the frame loop runs on <code>exampleRunning</code> instead of <code>Engine::running</code>: it asks for the copy right before frame N, takes it after frame N, writes the PNG and ends the loop. So a run opens no window, and <code>verify-change</code> checks every example this way.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 190" role="img" aria-label="exampleRunning runs before each frame. Frames 1 to N minus 1 render as usual. Before frame N it calls readFrame, so frame N's endFrame records the copy. Before the next frame it calls takeReadback, which waits for frame N's fence, then writePng to the out file, and returns false, so the example exits after N frames.">
+    <text x="10" y="44" class="small t-cpu">frames</text>
+    <rect x="70" y="26" width="70" height="28" rx="4" class="cpu"/><text x="105" y="45" class="mid small">1</text>
+    <rect x="146" y="26" width="70" height="28" rx="4" class="cpu"/><text x="181" y="45" class="mid small">2</text>
+    <text x="250" y="45" class="mid small">…</text>
+    <rect x="284" y="26" width="80" height="28" rx="4" class="cpu"/><text x="324" y="45" class="mid small">N − 1</text>
+    <rect x="400" y="26" width="110" height="28" rx="4" class="mem"/><text x="455" y="45" class="mid small">N + copy</text>
+    <line x1="388" y1="100" x2="388" y2="58" class="arrow" marker-end="url(#ah)"/>
+    <text x="388" y="118" class="mid mono small">readFrame()</text>
+    <text x="388" y="134" class="mid small">before frame N</text>
+    <line x1="530" y1="100" x2="530" y2="58" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="530" y="118" class="mid mono small">takeReadback</text>
+    <text x="530" y="134" class="mid small">waits for N's fence</text>
+    <line x1="580" y1="40" x2="618" y2="40" class="arrow" marker-end="url(#ah)"/>
+    <rect x="620" y="26" width="130" height="28" rx="4" class="box"/><text x="685" y="45" class="mid mono small">writePng(--out)</text>
+    <text x="685" y="80" class="mid small">exampleRunning returns</text>
+    <text x="685" y="96" class="mid small">false: the example exits</text>
+    <text x="380" y="174" class="mid small">The UI is drawn too, with no input: the RASM window and an example's own windows are in the PNG.</text>
+  </svg>
+  <figcaption>Frame N is the same frame a windowed capture of frame N shows (the N-th present). With <code class="lang-text">--fixed-step</code>, <code>EngineConfig::fixedDeltaTime</code> is 1/60 s, so the cameras, the UI and the stats step the same way in every run.</figcaption>
+</figure>
 
 <h3>Code map</h3>
 <div class="table-wrap">
@@ -411,6 +440,8 @@
   <tr><td>The copy</td><td><code>VulkanCommandBuffer::copyFromTexture</code>, <code>RenderContext::copyTextureToBuffer</code></td></tr>
   <tr><td>Readbacks and conversion</td><td><code>src/renderer/readback.cpp</code>: <code>Engine::readFrame</code>, <code>readTexture</code>, <code>isReadbackReady</code>, <code>takeReadback</code>, <code>recordReadbacks</code>, <code>convertReadback</code>, <code>writePng</code>, <code>readPng</code></td></tr>
   <tr><td>The example</td><td><code>examples/16_headless/main.cpp</code>: a PNG of the frame and the HDR target's brightest and mean values</td></tr>
+  <tr><td>Every example's flags</td><td><code>parseExampleArgs</code>, <code>applyExampleArgs</code>, <code>exampleRunning</code> in <code>examples/exampleArgs.h</code></td></tr>
+  <tr><td>The UI without a window</td><td><code>src/platform/uiPlatform.cpp</code></td></tr>
   <tr><td>Tests</td><td><code>tests/readbackTests.cpp</code>: every conversion, and a PNG written with <code>writePng</code> and read again with <code>readPng</code></td></tr>
 </table>
 </div>

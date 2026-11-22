@@ -185,6 +185,7 @@ namespace rasm
         uint32_t     animationPoolBytes      = 16u << 20; // the nodes, key times and values of every loaded animation
         uint32_t     maxMorphWeights         = 1u << 16; // the morph weights of every posed entity, 4 B each, four times
         bool         showStats               = false;
+        float        fixedDeltaTime          = 0.0f;     // seconds per frame for the cameras, the UI and the stats' refresh; 0: the measured frame time
         bool         occlusionCulling        = true;     // two-pass Hi-Z culling in the scene passes; false keeps frustum culling only
         bool         meshLods                = true;
         float        lodErrorPixels          = 1.0f;

@@ -576,7 +576,8 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
     bool         cube      = false;
     uint32_t     mipLevels = 0;
     uint32_t     samples   = 1;
-    bool         readable  = false;
+    bool         readable    = false;
+    bool         encodedView = false;
 
     bool operator==(const TextureDesc&amp;) const = default;
 };</pre>
@@ -589,6 +590,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
       <dt>mipLevels</dt><dd>0: the rule above. Any other count makes that many levels, at most the full chain down to 1 × 1. Only a <code>SAMPLED_STORAGE</code> texture (compute writes its mips) or a <code>SAMPLED</code> one (<code>fillTexture</code> copies them, or makes them for RGBA8) may ask for more than 1: <code>createTexture</code> refuses any other with an error, since an attachment is drawn into one mip.</dd>
       <dt>samples</dt><dd>Samples per pixel: 1, or 2, 4 or 8 for a color or depth attachment of one mip, not a cube, in a count the device has (<a href="#supportsSampleCount"><code>supportsSampleCount</code></a>); <code>createTexture</code> refuses anything else with an error. A render target sets it from <code>RenderTargetDesc::samples</code>. A shader reads such a texture sample by sample, as a <var>Sampler2DMS</var>.</dd>
       <dt>readable</dt><dd><code>true</code> adds copy-source usage (<code>VK_IMAGE_USAGE_TRANSFER_SRC_BIT</code>), so <a href="#copyTextureToBuffer"><code>copyTextureToBuffer</code></a> and <a href="engine.html#readTexture"><code>Engine::readTexture</code></a> can copy it. <code>RenderTargetDesc::readable</code> sets it on a target's textures.</dd>
+      <dt>encodedView</dt><dd>For an <code>R8G8B8A8_SRGB</code> attachment: the texture also gets an <code>R8G8B8A8_UNORM</code> view, which a pass with <code>AttachmentOps::encodedColor</code> draws through, so blending works on the stored sRGB codes. A headless engine's offscreen swapchain images have it, so the UI blends as on a window. Other formats ignore it.</dd>
     </dl>
   </div>
 </div>

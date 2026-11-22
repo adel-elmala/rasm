@@ -10,8 +10,6 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
-#include <string>
 #include <vector>
 
 // Headless rendering: no window, no events. The engine renders the DamagedHelmet under image-based lighting with a
@@ -20,9 +18,8 @@
 // - the HDR scene color (readTexture of a readable render target), as RGBA32 float, whose brightest and mean values
 //   it prints.
 // The copies are asynchronous: they are recorded at the end of a frame and ready once the GPU has finished it, so the
-// example keeps rendering and polls isReadbackReady instead of waiting.
-//   --out <file.png>   where the frame goes (default headless.png in the working directory)
-//   --frames <n>       frames rendered before the copies (default 16)
+// example keeps rendering and polls isReadbackReady instead of waiting. It always runs headless, and takes the
+// flags of exampleArgs.h: --frames N (60) is the frame it copies, --out <file.png> (frame.png) where that frame goes.
 
 namespace
 {
@@ -52,16 +49,6 @@ namespace
 int main(int argc, char **argv)
 {
     const ExampleArgs args = parseExampleArgs(argc, argv);
-    std::string outPath = "headless.png";
-    uint32_t frames = 16;
-    for (int i = 1; i + 1 < argc; ++i)
-    {
-        if (std::strcmp(argv[i], "--out") == 0)
-            outPath = argv[++i];
-        else if (std::strcmp(argv[i], "--frames") == 0)
-            frames = static_cast<uint32_t>(std::max(1, std::atoi(argv[++i])));
-    }
-    (void)args; // a headless run always waits for its loads below
 
     rasm::EngineConfig config = {
         .appName = "example_16",
@@ -119,24 +106,25 @@ int main(int argc, char **argv)
 
     // Every load is in place before the first frame, so frame N looks the same on every run.
     engine.waitForLoads();
-    for (uint32_t frame = 0; frame < frames; ++frame)
+    for (uint32_t frame = 1; frame < args.frames; ++frame)
         graph.execute(camera);
 
-    // Both copies go into the next frame. The scene target's texture is the one of that frame's slot.
+    // Both copies go into the next frame, frame N. The scene target's texture is the one of that frame's slot.
     const rasm::ReadbackHandle frameCopy = engine.readFrame(rasm::ReadbackFormat::RGBA8_SRGB);
     const rasm::ReadbackHandle hdrCopy = engine.readTexture(engine.getRenderTargetTexture(sceneTarget), rasm::ReadbackFormat::RGBA32_FLOAT);
     if (!frameCopy.isValid() || !hdrCopy.isValid())
         return 1;
     uint32_t extraFrames = 0;
-    do
+    graph.execute(camera);
+    while (!(engine.isReadbackReady(frameCopy) && engine.isReadbackReady(hdrCopy)) && extraFrames < 8)
     {
         graph.execute(camera);
         ++extraFrames;
-    } while (!(engine.isReadbackReady(frameCopy) && engine.isReadbackReady(hdrCopy)) && extraFrames < 8);
+    }
 
     rasm::ReadbackImage image;
     rasm::ReadbackImage hdr;
-    if (!engine.takeReadback(frameCopy, image) || !engine.takeReadback(hdrCopy, hdr) || !rasm::writePng(outPath, image))
+    if (!engine.takeReadback(frameCopy, image) || !engine.takeReadback(hdrCopy, hdr) || !rasm::writePng(args.out, image))
         return 1;
 
     float brightest = 0.0f;
@@ -150,7 +138,7 @@ int main(int argc, char **argv)
         sum += value;
     }
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-    std::printf("Wrote %s (%u x %u) after %u + %u frames, %.2f s in all.\n", outPath.c_str(), image.width, image.height, frames, extraFrames, seconds);
+    std::printf("Wrote frame %u to %s (%u x %u), ready %u frames later, %.2f s in all.\n", args.frames, args.out, image.width, image.height, extraFrames, seconds);
     std::printf("HDR scene color: mean luminance %.3f, brightest %.3f.\n", sum / static_cast<double>(count), brightest);
     return 0;
 }

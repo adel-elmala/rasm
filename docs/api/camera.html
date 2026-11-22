@@ -477,7 +477,7 @@ engine.resetCameraHistory(camera);</code></pre>
     <dl>
       <dt>mouseStart, mouseEnd</dt><dd>The drag of this frame, in NDC with +Y up. Both axes are divided by the smaller window side, so the short axis spans [−1, 1] and the long one is wider. Equal values mean no drag.</dd>
       <dt>wheelDelta</dt><dd>Wheel steps this frame (positive = away from you).</dd>
-      <dt>deltaTime</dt><dd>Seconds since the last frame. Used for free-fly movement and easing.</dd>
+      <dt>deltaTime</dt><dd>Seconds since the last frame, or <code>EngineConfig::fixedDeltaTime</code> when it is set. Used for free-fly movement and easing.</dd>
       <dt>forward … right</dt><dd>Held keys (W, S, A, D in <code>pollEvents</code>).</dd>
     </dl>
   </div>

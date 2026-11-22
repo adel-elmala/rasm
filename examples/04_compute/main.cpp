@@ -1,5 +1,7 @@
 #include "rasm/rasm.h"
 
+#include "exampleArgs.h"
+
 #include <cstdint>
 
 namespace
@@ -23,8 +25,9 @@ namespace
     };
 }
 
-int main()
+int main(int argc, char **argv)
 {
+    ExampleArgs args = parseExampleArgs(argc, argv);
     rasm::EngineConfig config = {
         .appName = "example_4",
         .windowWidth = 1280,
@@ -35,6 +38,7 @@ int main()
         .shaderDir = RASM_EXAMPLE_SHADER_DIR,
         .ui = true};
 
+    applyExampleArgs(args, config);
     rasm::Engine engine(config);
     if (!engine.running())
         return 1;
@@ -170,7 +174,7 @@ int main()
     engine.addUiPass(graph);
     graph.compile();
 
-    while (engine.running())
+    while (exampleRunning(engine, args))
     {
         graph.execute(camera);
         ++frame;

@@ -117,6 +117,7 @@ namespace rasm
         uint32_t                    mipLevels                       = 0;        // 0: one, or the full chain for a sampled RGBA8 texture; at most the full chain
         uint32_t                    samples                         = 1;        // per pixel: 1, 2, 4 or 8; above 1 an attachment with one mip
         bool                        readable                        = false;    // a copy source, for Engine::readTexture
+        bool                        encodedView                     = false;    // R8G8B8A8_SRGB: also an R8G8B8A8_UNORM view, which AttachmentOps::encodedColor draws through
 
         bool                        operator==(const TextureDesc&) const = default;
     };

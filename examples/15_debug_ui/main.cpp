@@ -63,7 +63,7 @@ namespace
 
 int main(int argc, char **argv)
 {
-    const ExampleArgs args = parseExampleArgs(argc, argv);
+    ExampleArgs args = parseExampleArgs(argc, argv);
     bool printGpuTimes = false;
     bool ui = true;
     bool freezeCulling = false;
@@ -85,6 +85,7 @@ int main(int argc, char **argv)
         .showStats = true,
         .ui = ui};
 
+    applyExampleArgs(args, config);
     rasm::Engine engine(config);
     if (!engine.running())
         return 1;
@@ -177,7 +178,7 @@ int main(int argc, char **argv)
     if (args.waitForLoads)
         engine.waitForLoads();
 
-    for (uint32_t frame = 0; engine.running(); ++frame)
+    for (uint32_t frame = 0; exampleRunning(engine, args); ++frame)
     {
         // Culling freezes after a few frames, once it has seen the scene.
         if (freezeCulling && frame == 30)

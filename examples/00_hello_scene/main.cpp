@@ -7,7 +7,7 @@
 
 int main(int argc, char **argv)
 {
-    const ExampleArgs args = parseExampleArgs(argc, argv);
+    ExampleArgs args = parseExampleArgs(argc, argv);
     // 1. Create engine instance
     rasm::EngineConfig config = {
         .appName = "example_0",
@@ -19,6 +19,7 @@ int main(int argc, char **argv)
         .shaderDir = RASM_EXAMPLE_SHADER_DIR,
         .ui = true};
 
+    applyExampleArgs(args, config);
     rasm::Engine engine(config);
     if (!engine.running())
         return 1;
@@ -104,7 +105,7 @@ int main(int argc, char **argv)
         engine.waitForLoads();
 
     // 8. Main loop
-    while (engine.running())
+    while (exampleRunning(engine, args))
     {
         // Update transforms, animations, etc.
         engine.updateTransform(bunny, engine.getTransform(bunny).rotate(glm::vec3(0.0f, 1.0f, 0.0f), glm::radians(0.01f)));

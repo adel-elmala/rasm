@@ -6,13 +6,15 @@ collect validation messages, screenshot frame N and diff it against a baseline.
   python verify.py diff <a.png> <b.png> [--out diff.png] [--tolerance T]
 
 options: --preset x64-debug  --examples 00_hello_scene,02_gltf  --frame 60  --tolerance 2
-         --no-build  --no-tests  --keep-captures
+         --no-build  --no-tests  --windowed  --keep-captures
          --sync (synchronization validation)  --best-practices  --gpu-av (GPU-assisted validation)
          --images (also runs tools/image_tests.py --lavapipe: downloads and runs a third-party Mesa build)
 
 Output goes to build/verify/<preset>/ (screens/, diffs/, logs/, baseline/).
-Screenshots come from GFXReconstruct (Vulkan SDK): its layer quits the app after frame N,
-and gfxrecon-replay renders that frame to PNG. No engine change needed.
+Every example runs headless (--headless, examples/exampleArgs.h): no window, it renders N frames and
+writes frame N through Engine::readFrame. --windowed runs them in a window under GFXReconstruct
+(Vulkan SDK) instead: its layer quits the app after frame N, and gfxrecon-replay renders that frame
+to PNG; --keep-captures keeps those captures for frame-debug.
 """
 
 import glob
@@ -207,8 +209,8 @@ def message_key(text):
     return m.group(0) if m else text[:120]
 
 
-# Examples that render without a window: they present nothing for GFXR to count, so they render the frames
-# themselves and write the screenshot through Engine::readFrame (--frames N --out file.png).
+# Examples that only render without a window: they present nothing for GFXR to count, so even with --windowed
+# they run headless.
 HEADLESS_EXAMPLES = ("16_headless",)
 # Every example gets these (exampleArgs.h): a fixed time step, and every load in place before frame 1 (C16).
 RUN_ARGS = ["--fixed-step", "--wait-for-loads"]
@@ -230,7 +232,7 @@ def run_headless_example(name, exe, frame, out_dir, extra_args):
     if os.path.exists(shot):
         os.remove(shot)
     try:
-        proc = subprocess.run([exe] + RUN_ARGS + ["--frames", str(frame), "--out", shot] + extra_args, cwd=os.path.dirname(exe),
+        proc = subprocess.run([exe] + RUN_ARGS + ["--headless", "--frames", str(frame), "--out", shot] + extra_args, cwd=os.path.dirname(exe),
                               env=layer_path_env(), capture_output=True, text=True, errors="replace", timeout=300)
         log, code = proc.stdout + proc.stderr, proc.returncode
     except subprocess.TimeoutExpired as e:
@@ -245,11 +247,11 @@ def run_headless_example(name, exe, frame, out_dir, extra_args):
     return result
 
 
-def run_example(name, preset, frame, out_dir, keep, extra_args):
+def run_example(name, preset, frame, out_dir, windowed, keep, extra_args):
     exe = os.path.join(REPO, "build", preset, "examples", name + (".exe" if os.name == "nt" else ""))
     if not os.path.isfile(exe):
         return {"error": "not built: %s" % exe}
-    if name in HEADLESS_EXAMPLES:
+    if not windowed or name in HEADLESS_EXAMPLES:
         return run_headless_example(name, exe, frame, out_dir, extra_args)
     cap_dir = os.path.join(out_dir, "captures")
     os.makedirs(cap_dir, exist_ok=True)
@@ -306,6 +308,9 @@ def cmd_check(args, make_baseline):
     no_build = take_flag(args, "--no-build")
     no_tests = take_flag(args, "--no-tests")
     keep = take_flag(args, "--keep-captures")
+    windowed = take_flag(args, "--windowed")
+    if keep and not windowed:
+        sys.exit("error: --keep-captures needs --windowed (only a windowed run is captured)")
     images = take_flag(args, "--images")
     extra_args = shlex.split(take_opt(args, "--args", ""))
     layer_env = {}
@@ -349,9 +354,9 @@ def cmd_check(args, make_baseline):
     names = example_names()
     if only:
         names = [n for n in names if n in only.split(",")]
-    print("examples at frame %d, preset %s:" % (frame, preset))
+    print("examples at frame %d, preset %s, %s:" % (frame, preset, "windowed under GFXR" if windowed else "headless"))
     for name in names:
-        r = run_example(name, preset, frame, out_dir, keep, extra_args)
+        r = run_example(name, preset, frame, out_dir, windowed, keep, extra_args)
         errs = [m for m in r.get("messages", []) if m[0] == "ERROR"]
         warns = [m for m in r.get("messages", []) if m[0] == "WARNING"]
         verdict = "OK"

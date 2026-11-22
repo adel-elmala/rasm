@@ -4,7 +4,7 @@
 
 int main(int argc, char **argv)
 {
-    const ExampleArgs args = parseExampleArgs(argc, argv);
+    ExampleArgs args = parseExampleArgs(argc, argv);
     rasm::EngineConfig config = {
         .appName = "example_1",
         .windowWidth = 1920,
@@ -15,6 +15,7 @@ int main(int argc, char **argv)
         .shaderDir = RASM_EXAMPLE_SHADER_DIR,
         .ui = true};
 
+    applyExampleArgs(args, config);
     rasm::Engine engine(config);
     if (!engine.running())
         return 1;
@@ -255,7 +256,7 @@ int main(int argc, char **argv)
     if (args.waitForLoads)
         engine.waitForLoads();
 
-    while (engine.running())
+    while (exampleRunning(engine, args))
     {
         graph.execute(camera);
     }

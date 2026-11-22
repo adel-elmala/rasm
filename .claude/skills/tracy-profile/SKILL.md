@@ -23,7 +23,7 @@ It uses the same vcpkg checkout as the engine, so the tools always match the cli
 
 | Command | What you get |
 |---|---|
-| `capture <exe> [--seconds 10] [--out f.tracy] [-- app args]` | A trace of the first N seconds after connect, startup included. The app is killed after. Fails fast if port 8086 is already taken. |
+| `capture <exe> [--seconds 10] [--out f.tracy] [-- app args]` | A trace of the first N seconds after connect, startup included. The app is killed after. Fails fast if port 8086 is already taken. Pass `-- --headless --frames 100000` to profile with no window (see below). |
 | `zones <trace> [--from S] [--to S] [--self] [--sort total\|mean\|p95\|max\|count] [--filter txt] [--top N]` | Per zone: count, total, % of time span, mean, p95, max, threads, source line. `--self` subtracts child zones, which is the one to use for "where does the time go". |
 | `frames <trace> [--from S] [--spikes N] [--anchor zone]` | Frame times (from successive `Engine::beginFrame` starts): mean/fps, p50/p95/p99/max, count over 2× median, and the slowest frames broken into the self time of their zones plus untracked time. |
 | `compare <a> <b> [--from S]` | Frame stats of both, then the self time per frame of each zone, sorted by change. Use it for before/after an optimization. |
@@ -47,7 +47,7 @@ Put traces in the scratchpad directory. `zones`/`frames` cache CSVs next to the 
 - **Thread 1 is the main thread.** Other threads are `std::async` loaders (`importMeshFile`, `decodeTexture`).
 - **Frame zones**: `Renderer::render` → `RenderGraph::execute` → `beginFrame` (contains `waitForFence`, `UI` with `EngineConfig::ui` while the RASM window or a UI callback is on (ImGui's frame, the windows, the vertex copies), `syncGpuScene` with `rebuildDrawList` and `GpuTable::upload` when something changed, `acquireNextImage`) → the passes (`prepareSceneView` in the first scene pass, `createPipeline` on first use; the draws and dispatches have no zones, so they count as `execute`'s self time) → `endFrame` (`submitBatches` with one `submit` per batch: one without async compute, four for a scene view with it; then `present` and `FrameMark`).
 - **`waitForFence` big = GPU bound.** The CPU waits for the frame-in-flight slot. Tracy has **no GPU zones** in RASM yet (`D16` in `docs/code_review.md`), so GPU cost only shows up as this wait. GPU time per pass is in the stats overlay (`EngineConfig::showStats`, F1) and `Engine::getFrameStats()`. For deeper GPU-side questions use the `frame-debug` skill, or propose adding Tracy Vulkan GPU zones (ask first, it is a new subsystem).
-- **Present mode matters**: with vsync, `waitForFence`/`acquireNextImage` include waiting for the display, so frame time is capped (16.7 ms at 60 Hz).
+- **Present mode matters**: with vsync, `waitForFence`/`acquireNextImage` include waiting for the display, so frame time is capped (16.7 ms at 60 Hz). A headless run (`-- --headless --frames 100000`, `examples/exampleArgs.h`) opens no window and presents nothing, so it has no vsync cap: frame time is the CPU or the GPU work alone. Use it by default; use a window only to measure what presenting costs.
 - **Noise**: two runs of the same build differ by about 5-8% on sub-0.1 ms zones. Before calling a change faster, repeat the capture, or only trust differences clearly above that.
 - **Untracked time** in `frames` = main-thread time inside the frame not covered by any zone. If it is large, add zones there.
 

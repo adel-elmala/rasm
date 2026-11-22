@@ -14,10 +14,10 @@ namespace rasm
     };
 
     bool            initUiPlatform(const Window& window);
-    void            shutdownUiPlatform();
+    void            shutdownUiPlatform(const Window& window);
     void            processUiEvent(const void* event);
-    void            newUiPlatformFrame();
-    void            resumeUiInput();
+    void            newUiPlatformFrame(const Window& window, float deltaTime);
+    void            resumeUiInput(const Window& window);
     float           getUiContentScale(const Window& window);
     UiInputCapture  getUiInputCapture();
 
