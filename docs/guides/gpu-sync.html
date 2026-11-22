@@ -921,7 +921,7 @@ vkCmdPipelineBarrier2(commandBuffer, &dependency);</code></pre>
   <tr><td>Split barriers, events</td><td>possible</td><td>None.</td></tr>
   <tr><td>Queues</td><td>semaphores, ownership transfers</td><td>A graphics queue, and a compute queue when <code>EngineConfig::asyncCompute</code> is on and the GPU has one. Timeline fence waits between them, and concurrent sharing instead of ownership transfers (<b>P11</b>). Uploads go on the graphics queue and need no semaphore there: <code>copyBuffers</code> brackets them with all-commands barriers. No transfer queue (<b>D13</b>).</td></tr>
   <tr><td>Host reads</td><td>barrier to host, fence, invalidate</td><td>All three: <code>COMPUTE</code> → <code>HOST</code> at the end of the frame, or of its last compute batch with async compute, the slot's fences, and <code>readBuffer</code> invalidates the range. A readback has its own copy → host barrier, and <code>takeReadback</code> waits for the fence of the frame that copied it (<a href="headless-readback.html">readbacks</a>).</td></tr>
-  <tr><td>Host-side layout change</td><td>—</td><td>Loaded textures use host image copy where their format has it: <code>fillTexture</code> transitions and fills them on the CPU, with no GPU barrier. The others go through the staging ring, with the barriers of <code>copyToTextures</code>.</td></tr>
+  <tr><td>Host-side layout change</td><td>—</td><td>Loaded textures use host image copy where it costs the GPU nothing for their format (on lavapipe, not on the RTX 3060): <code>fillTexture</code> transitions and fills them on the CPU, with no GPU barrier. The others go through the staging ring, with the barriers of <code>copyToTextures</code>.</td></tr>
 </table>
 </div>
 

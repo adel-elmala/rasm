@@ -392,7 +392,7 @@ rasm::EntityHandle entity = engine.createEntity("room", room, {}, transform); //
 <div class="api" id="isLoaded-mesh">
   <pre class="sig">bool isLoaded(MeshHandle mesh) const;</pre>
   <div class="body">
-    <p>True when the mesh is uploaded and ready to draw. False while it loads, after it failed, and for an invalid handle. A mesh from <code>createMesh</code> is loaded at once. You do not need to wait for it before creating entities.</p>
+    <p>True when the mesh is uploaded and ready to draw, with every texture its glTF import made filled. Those textures are filled a few per frame after the mesh is ready, so a big model is loaded a few frames after its geometry. False while it loads, after it failed, and for an invalid handle. A mesh from <code>createMesh</code> is loaded at once. You do not need to wait for it before creating entities.</p>
   </div>
 </div>
 

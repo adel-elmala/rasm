@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Texture uploads · RASM</title>
+<meta name="description" content="How a texture gets from a file into video memory: decode, mips, the GPU's tiled layout, a staging copy or host image copy, the memory types each may use, where to make the mips (offline, a CPU worker, GPU blits or compute), filtering color, data and normal maps, and sub-allocating textures.">
+<meta name="rasm-sources" content="src/rhi/mipChain.h src/rhi/mipChain.cpp src/rhi/vulkan/vulkanUtils.h src/rhi/vulkan/vulkanUtils.cpp src/rhi/vulkan/vulkanDevice.h src/rhi/vulkan/vulkanDevice.cpp src/rhi/uploadManager.cpp src/rhi/renderContext.cpp src/assets/texture.cpp src/assets/material.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/mesh.cpp src/engine.cpp include/rasm/types.h include/rasm/mesh.h include/rasm/engine.h include/rasm/render/resource.h examples/10_ktx2_textures/main.cpp tests/textureUploadTests.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/texture-uploads.js"></script>
+</head>
+<body data-root="../" data-page="guides/texture-uploads.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">GPU data</p>
+<h1>Texture uploads</h1>
+<p class="lead">A PNG on disk is a few megabytes. In video memory the same texture is a chain of mip levels, in a tiled order only the GPU knows. This page follows a texture through the four steps that get it there: decode, make the mips, reorder the texels, place them in memory. It compares the two ways to do the copy (a staging buffer, or host image copy), the places a program can make the mips, and how many textures share memory. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>Four steps: <b>decode</b> the file, make the <b>mips</b>, <b>reorder</b> the texels into the GPU's tiling, put them in <b>video memory</b>. Only the last two need the GPU or its driver.</li>
+    <li><b>Staging</b>: the CPU writes rows into a buffer, and a GPU copy command tiles them into the image. It works everywhere.</li>
+    <li><b>Host image copy</b> (Vulkan 1.4): the driver tiles on the CPU, with no command buffer. It is good only where the image can live in the same memory as any other texture, and keeps the GPU's best layout. Ask the device both.</li>
+    <li>Mips can come from the file, a CPU worker, GPU blits or a GPU compute pass. Filter color in <b>linear light</b>, weight it by <b>alpha</b>, and make <b>normals</b> unit length again.</li>
+    <li>Thousands of textures should share a few large memory blocks (<b>sub-allocation</b>): a separate allocation per texture is slow to make and slow to free.</li>
+    <li>A model's textures are many megabytes: copy them <b>a few per frame</b>, not all in one frame.</li>
+  </ul>
+</div>
+
+<h2 id="steps"><span class="n">1</span>Four steps from file to GPU</h2>
+
+<p>Follow one 2048 × 2048 color texture. Two steps are plain CPU work on bytes; two need to know the GPU.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 240" role="img" aria-label="A 3 MB PNG is decoded into 16 MiB of RGBA8 rows. Making the mips adds a third: 21.3 MiB. Then the rows are reordered into the GPU's tiled layout and placed in video memory. The first two steps are plain CPU work any thread can do; the last two need the GPU or its driver.">
+    <text x="20" y="22" class="title t-cpu">plain CPU work · any thread</text>
+    <text x="440" y="22" class="title t-gpu">needs the GPU or its driver</text>
+    <rect x="20" y="40" width="120" height="90" rx="6" class="paper"/>
+    <text x="80" y="66" class="mid title">file</text>
+    <text x="80" y="88" class="mid small">PNG, JPEG</text>
+    <text x="80" y="106" class="mid small">3 MB</text>
+    <line x1="140" y1="85" x2="168" y2="85" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="154" y="150" class="mid small t-cpu">1 decode</text>
+
+    <rect x="170" y="40" width="110" height="90" rx="4" class="mem"/>
+    <path d="M178,52 H272 M178,62 H272 M178,72 H272 M178,82 H272 M178,92 H272 M178,102 H272 M178,112 H272 M178,122 H272" class="grid"/>
+    <text x="225" y="150" class="mid small">rows, 16 MiB</text>
+    <line x1="280" y1="85" x2="298" y2="85" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="300" y="168" class="mid small t-cpu">2 mips</text>
+
+    <rect x="300" y="40" width="80" height="80" rx="3" class="mem"/>
+    <rect x="384" y="40" width="40" height="40" rx="2" class="mem"/>
+    <rect x="384" y="84" width="20" height="20" rx="2" class="mem"/>
+    <rect x="408" y="84" width="10" height="10" rx="1" class="mem"/>
+    <text x="362" y="150" class="mid small">+ a third: 21.3 MiB</text>
+    <line x1="430" y1="85" x2="468" y2="85" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="450" y="168" class="mid small t-gpu">3 reorder</text>
+
+    <rect x="470" y="40" width="110" height="90" rx="4" class="gpu"/>
+    <path d="M497,40 V130 M525,40 V130 M552,40 V130 M470,62 H580 M470,85 H580 M470,108 H580" class="grid"/>
+    <text x="525" y="150" class="mid small">tiles, not rows</text>
+    <line x1="580" y1="85" x2="608" y2="85" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="610" y="168" class="mid small t-gpu">4 place</text>
+
+    <rect x="610" y="40" width="130" height="90" rx="6" class="gpu"/>
+    <text x="675" y="70" class="mid title">video memory</text>
+    <text x="675" y="92" class="mid small">sampled by shaders</text>
+    <text x="675" y="110" class="mid small">for many frames</text>
+
+    <rect x="20" y="190" width="720" height="36" rx="6" class="zone"/>
+    <text x="380" y="213" class="mid small">The texture is read every frame for minutes; it is written once. Any cost at load time is fine, a slower read is not.</text>
+  </svg>
+  <figcaption>Steps 1 and 2 need no GPU, so a worker thread can do them. Steps 3 and 4 are the upload: a copy command, or the driver on the CPU. A block-compressed file (KTX2) skips step 2: it stores its mips.</figcaption>
+</figure>
+
+<h2 id="two-paths"><span class="n">2</span>Two ways to reorder and place</h2>
+
+<p>The CPU cannot write the tiled order itself: it is the vendor's secret. Two paths hand the rows to someone who knows it.</p>
+
+<div class="split">
+  <div class="good">
+    <h4>Staging copy</h4>
+    <svg viewBox="0 0 320 150" role="img" aria-label="The CPU writes rows into a staging buffer in host memory. A copy command on the GPU reads them and writes tiles into the image in video memory.">
+      <rect x="10" y="20" width="90" height="50" rx="5" class="cpu"/>
+      <text x="55" y="42" class="mid small">CPU writes</text>
+      <text x="55" y="58" class="mid small">rows</text>
+      <line x1="100" y1="45" x2="128" y2="45" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <rect x="130" y="20" width="80" height="50" rx="5" class="mem"/>
+      <text x="170" y="42" class="mid small">staging</text>
+      <text x="170" y="58" class="mid small">buffer</text>
+      <line x1="210" y1="45" x2="238" y2="45" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <rect x="240" y="20" width="70" height="50" rx="5" class="gpu"/>
+      <text x="275" y="42" class="mid small">image</text>
+      <text x="275" y="58" class="mid small">tiles</text>
+      <text x="225" y="94" class="mid small t-gpu">copy command</text>
+      <text x="160" y="124" class="mid small">barrier, copy, barrier: in a command buffer</text>
+      <text x="160" y="140" class="mid small">the buffer is reused once the GPU is done</text>
+    </svg>
+    <p>Works on every GPU and every format. Costs a command buffer, barriers, a fence before the buffer is reused, and a little GPU copy time.</p>
+  </div>
+  <div class="good">
+    <h4>Host image copy</h4>
+    <svg viewBox="0 0 320 150" role="img" aria-label="The CPU calls the driver, which writes tiles straight into the image's memory. No buffer and no command buffer.">
+      <rect x="10" y="20" width="90" height="50" rx="5" class="cpu"/>
+      <text x="55" y="42" class="mid small">CPU calls</text>
+      <text x="55" y="58" class="mid small">the driver</text>
+      <line x1="100" y1="45" x2="238" y2="45" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <text x="170" y="38" class="mid small t-cpu">tiles on the CPU</text>
+      <rect x="240" y="20" width="70" height="50" rx="5" class="gpu"/>
+      <text x="275" y="42" class="mid small">image</text>
+      <text x="275" y="58" class="mid small">tiles</text>
+      <text x="160" y="124" class="mid small">layout change and copy: host calls</text>
+      <text x="160" y="140" class="mid small">ready when the call returns</text>
+    </svg>
+    <p>Vulkan 1.4 (<samp>VK_EXT_host_image_copy</samp> before). No staging memory, no commands. The CPU must be able to write the image's memory, which is the catch (next section).</p>
+  </div>
+</div>
+
+<h2 id="memory"><span class="n">3</span>Where a host-copied image may live</h2>
+
+<p>The CPU writes a host-copied image directly. So the driver may allow such an image only in memory the CPU can reach. Each image asks for a set of <b>memory types</b> (a bit mask). Compare the set of an image filled by a copy with the set of the same image made for host copy. This is a real discrete GPU with resizable BAR:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Six memory types in two heaps. Video memory heap: type 1 and 2 device-local, type 5 device-local and host-visible through resizable BAR. System RAM heap: types 0, 3 and 4. An image filled by a copy may use types 1 and 2. The same image made for host copy may use only types 3, 4 and 5. The two sets share no type.">
+    <text x="20" y="24" class="title t-gpu">heap 0 · video memory, 12 GiB</text>
+    <text x="440" y="24" class="title t-cpu">heap 1 · system RAM, 16 GiB</text>
+    <rect x="20" y="36" width="390" height="130" rx="8" class="zone"/>
+    <rect x="440" y="36" width="300" height="130" rx="8" class="zone"/>
+
+    <rect x="36" y="56" width="110" height="56" rx="5" class="gpu"/>
+    <text x="91" y="78" class="mid title">type 1</text>
+    <text x="91" y="96" class="mid small">device-local</text>
+    <rect x="160" y="56" width="110" height="56" rx="5" class="gpu"/>
+    <text x="215" y="78" class="mid title">type 2</text>
+    <text x="215" y="96" class="mid small">device-local</text>
+    <rect x="284" y="56" width="110" height="56" rx="5" class="gpu"/>
+    <rect x="284" y="56" width="110" height="56" rx="5" class="hot"/>
+    <text x="339" y="78" class="mid title">type 5</text>
+    <text x="339" y="96" class="mid small">+ host-visible (BAR)</text>
+
+    <rect x="456" y="56" width="80" height="56" rx="5" class="paper"/>
+    <text x="496" y="78" class="mid title">type 0</text>
+    <text x="496" y="96" class="mid small">none</text>
+    <rect x="548" y="56" width="80" height="56" rx="5" class="cpu"/>
+    <text x="588" y="78" class="mid title">type 3</text>
+    <text x="588" y="96" class="mid small">host</text>
+    <rect x="640" y="56" width="86" height="56" rx="5" class="cpu"/>
+    <text x="683" y="78" class="mid title">type 4</text>
+    <text x="683" y="96" class="mid small">host, cached</text>
+
+    <path d="M36,128 H270" class="arrow ok thick"/>
+    <text x="153" y="150" class="mid small t-ok">image filled by a copy: 1, 2</text>
+    <path d="M284,128 H394 M548,128 H726" class="arrow bad thick"/>
+    <text x="560" y="150" class="mid small t-bad">made for host copy: 3, 4, 5</text>
+
+    <rect x="20" y="186" width="720" height="98" rx="8" class="paper"/>
+    <text x="40" y="212" class="title">The two sets share no type.</text>
+    <text x="40" y="236" class="small">A host-copy image goes to type 5 (video memory, reached through the BAR) or to system RAM. Without resizable BAR,</text>
+    <text x="40" y="254" class="small">type 5 is a 256 MiB heap of its own, which fills fast. Measured on this GPU with BAR: while a model's textures load</text>
+    <text x="40" y="272" class="small">by host copy, the GPU stalls for 50 to 185 ms. The same textures through staging: no stall.</text>
+  </svg>
+  <figcaption>An RTX 3060 (driver 610), from <code>vkGetDeviceImageMemoryRequirements</code> with and without the host-transfer usage. On lavapipe there is one memory type, and both sets are that type.</figcaption>
+</figure>
+
+<p>So a program should ask the device, per format, before it picks host copy:</p>
+
+<ol class="flow">
+  <li class="gpu"><b>Feature</b><span>the device has host image copy</span></li>
+  <li class="gpu"><b>Format</b><span>it lists host image transfer</span></li>
+  <li class="gpu"><b>Best layout</b><span>the GPU reads it as fast as any image</span></li>
+  <li class="gpu"><b>Copy layout</b><span>the shader-read layout is allowed</span></li>
+  <li class="mem"><b>Memory</b><span>a device-local type both sets share</span></li>
+</ol>
+
+<p>If any answer is no, the format uses staging. A device without the feature then still starts and draws: it only loses a shortcut. In Vulkan the checks are the <samp>hostImageCopy</samp> feature, the format's host-image-transfer feature bit, <samp>optimalDeviceAccess</samp> in <code>VkHostImageCopyDevicePerformanceQuery</code>, <samp>pCopyDstLayouts</samp>, and the memory type bits.</p>
+
+<figure class="lab" data-lab="host-copy-rule" data-title="Host copy or staging?">
+  <figcaption>Pick a kind of GPU and see which memory types each image may use. Turn off "keeps its best layout" to see the second check. Find a device where host copy is safe, and one where it would cost the GPU.</figcaption>
+</figure>
+
+<h2 id="mips"><span class="n">4</span>Where to make the mips</h2>
+
+<p>A full mip chain adds a third to the texture. Each level is the one above, half the size, filtered. Four places can make it:</p>
+
+<div class="vgrid two">
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A file that already holds every level: the loader only copies them.">
+      <rect x="20" y="20" width="60" height="60" rx="3" class="mem"/>
+      <rect x="86" y="20" width="30" height="30" rx="2" class="mem"/>
+      <rect x="86" y="56" width="15" height="15" rx="1" class="mem"/>
+      <rect x="140" y="20" width="80" height="60" rx="6" class="paper"/>
+      <text x="180" y="46" class="mid small">.ktx2</text>
+      <text x="180" y="64" class="mid small">every level</text>
+      <text x="120" y="110" class="mid small">made by a tool, once</text>
+    </svg>
+    <h4>In the file</h4>
+    <p>KTX2 and DDS store the levels, already block-compressed. Best quality and no load-time work.</p>
+    <p class="cost">Needs an offline tool step.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A worker thread resizes each level from the one before, while the main thread keeps drawing frames.">
+      <text x="10" y="24" class="small t-cpu">worker</text>
+      <rect x="60" y="12" width="170" height="18" rx="3" class="cpu"/>
+      <text x="145" y="25" class="mid small">decode → level 1 → 2 → …</text>
+      <text x="10" y="58" class="small t-cpu">main</text>
+      <path d="M60,46 h24 v18 h-24 z M90,46 h24 v18 h-24 z M120,46 h24 v18 h-24 z M150,46 h24 v18 h-24 z M180,46 h24 v18 h-24 z" class="cpu o-50"/>
+      <text x="145" y="84" class="mid small">frames keep their pace</text>
+      <text x="120" y="112" class="mid small">any filter, exact control</text>
+    </svg>
+    <h4>A CPU worker</h4>
+    <p>Same code on every GPU and API. Any filter: linear light, alpha weighting, renormalized normals.</p>
+    <p class="cost">About 10 ms of CPU per 2048² texture; a third more bytes to copy.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Blit commands copy level 0 to level 1 with a linear filter, then level 1 to level 2, inside the image.">
+      <rect x="20" y="20" width="60" height="60" rx="3" class="gpu"/>
+      <rect x="110" y="20" width="30" height="30" rx="2" class="gpu"/>
+      <rect x="170" y="20" width="15" height="15" rx="1" class="gpu"/>
+      <path d="M80,40 H108 M140,30 H168" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <text x="120" y="100" class="mid small">blit, linear filter</text>
+      <text x="120" y="116" class="mid small">a 2 × 2 box per level</text>
+    </svg>
+    <h4>GPU blits</h4>
+    <p>A few commands, almost no GPU time. The filter is a fixed box; colors are not weighted by alpha, and normals are not renormalized.</p>
+    <p class="cost">Vulkan and Metal have blits; D3D12 and WebGPU do not.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A compute shader reads level 0 and writes level 1 through a storage view of the image.">
+      <rect x="20" y="20" width="60" height="60" rx="3" class="gpu"/>
+      <rect x="170" y="20" width="30" height="30" rx="2" class="gpu"/>
+      <rect x="92" y="26" width="62" height="28" rx="4" class="shader"/>
+      <text x="123" y="44" class="mid small">compute</text>
+      <path d="M80,40 H90" class="arrow shader"/>
+      <path d="M154,40 H168" class="arrow shader" marker-end="url(#ah-shader)"/>
+      <text x="120" y="100" class="mid small">any filter, on the GPU</text>
+      <text x="120" y="116" class="mid small">needs a storage view</text>
+    </svg>
+    <h4>GPU compute</h4>
+    <p>Fast and any filter. The image needs storage usage, and an sRGB image a second, UNORM view.</p>
+    <p class="cost">Storage usage can turn off the GPU's texture compression (AFBC, DCC): slower reads for the texture's life.</p>
+  </div>
+</div>
+
+<h3>Filter what the numbers mean</h3>
+
+<p>A mip is an average. What to average depends on the texture:</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Black and white texels. Averaged as stored numbers they give 128, which shows too dark. Averaged as light they give half the light, stored as 188.">
+      <rect x="20" y="20" width="30" height="30" class="solid"/>
+      <rect x="50" y="20" width="30" height="30" class="paper"/>
+      <line x1="85" y1="35" x2="113" y2="35" class="arrow" marker-end="url(#ah)"/>
+      <rect x="118" y="20" width="30" height="30" class="bad o-50"/>
+      <text x="133" y="66" class="mid small t-bad">128</text>
+      <rect x="180" y="20" width="30" height="30" class="ok o-50"/>
+      <text x="195" y="66" class="mid small t-ok">188</text>
+      <text x="120" y="96" class="mid small">sRGB numbers are not light:</text>
+      <text x="120" y="112" class="mid small">decode, average, encode</text>
+    </svg>
+    <h4>Color: linear light</h4>
+    <p>Decode sRGB to light, average, encode again. Averaging the stored numbers darkens every edge.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A leaf texel next to a transparent texel whose hidden color is black. A plain average makes a dark half-transparent texel; weighting by alpha keeps the leaf's color.">
+      <rect x="20" y="20" width="30" height="30" class="ok"/>
+      <rect x="50" y="20" width="30" height="30" class="solid o-25"/>
+      <line x1="85" y1="35" x2="113" y2="35" class="arrow" marker-end="url(#ah)"/>
+      <rect x="118" y="20" width="30" height="30" class="bad o-50"/>
+      <text x="133" y="66" class="mid small t-bad">dark rim</text>
+      <rect x="180" y="20" width="30" height="30" class="ok o-50"/>
+      <text x="195" y="66" class="mid small t-ok">leaf</text>
+      <text x="120" y="96" class="mid small">a transparent texel has no color:</text>
+      <text x="120" y="112" class="mid small">weight colors by alpha</text>
+    </svg>
+    <h4>Cut-outs: weight by alpha</h4>
+    <p>A transparent texel's color is never seen, so it must not count. Without the weight, leaves get dark rims far away.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two unit normals at 90 degrees. Their average is shorter, 0.71 long. Renormalized it is unit length again, pointing halfway.">
+      <circle cx="70" cy="80" r="50" class="zone"/>
+      <line x1="70" y1="80" x2="120" y2="80" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <line x1="70" y1="80" x2="70" y2="30" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <line x1="70" y1="80" x2="95" y2="55" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <line x1="70" y1="80" x2="105" y2="45" class="arrow ok dashed" marker-end="url(#ah-ok)"/>
+      <text x="150" y="40" class="small t-bad">mean: 0.71 long</text>
+      <text x="150" y="58" class="small t-ok">renormalized: 1</text>
+      <text x="150" y="96" class="small">x, y, z each from</text>
+      <text x="150" y="112" class="small">0..255 → −1..1</text>
+    </svg>
+    <h4>Normal maps: renormalize</h4>
+    <p>Average the directions, then make each unit length again, so every level stores a direction. A two-channel map (z rebuilt from x and y) needs it most.</p>
+  </div>
+</div>
+
+<h2 id="suballocation"><span class="n">5</span>Many textures, few allocations</h2>
+
+<p>A scene has hundreds of textures; a streaming map has thousands over its life. Giving each its own device allocation is simple, but each allocation is an OS call, drivers limit how many exist, and freeing one can take milliseconds.</p>
+
+<div class="split">
+  <div class="bad">
+    <h4>One allocation per texture</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="Each texture has its own allocation from the driver: many separate blocks, each made and freed with an OS call.">
+      <rect x="10" y="20" width="60" height="40" rx="4" class="mem"/>
+      <rect x="80" y="20" width="30" height="40" rx="4" class="mem"/>
+      <rect x="120" y="20" width="80" height="40" rx="4" class="mem"/>
+      <rect x="210" y="20" width="20" height="40" rx="4" class="mem"/>
+      <rect x="240" y="20" width="70" height="40" rx="4" class="mem"/>
+      <text x="160" y="90" class="mid small">vkAllocateMemory per texture</text>
+      <text x="160" y="108" class="mid small t-bad">a free can take ms; a count limit</text>
+    </svg>
+  </div>
+  <div class="good">
+    <h4>Sub-allocated</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="Textures placed side by side in one large block, at aligned offsets. A free returns the range to the block.">
+      <rect x="10" y="20" width="300" height="40" rx="6" class="zone"/>
+      <rect x="14" y="24" width="60" height="32" rx="3" class="mem"/>
+      <rect x="78" y="24" width="30" height="32" rx="3" class="mem"/>
+      <rect x="112" y="24" width="80" height="32" rx="3" class="mem"/>
+      <rect x="196" y="24" width="20" height="32" rx="3" class="mem o-25"/>
+      <rect x="220" y="24" width="70" height="32" rx="3" class="mem"/>
+      <text x="160" y="90" class="mid small">one block, many textures</text>
+      <text x="160" y="108" class="mid small t-ok">make and free: a range in a list</text>
+    </svg>
+  </div>
+</div>
+
+<p>Keep a dedicated allocation for the few large render targets that a driver asks to have one. The block size also changes what "memory in use" means: the OS counts whole blocks, so count the bytes of the textures inside them too.</p>
+
+<h2 id="pitfalls"><span class="n">6</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>Far textures look too dark, edges have dark lines</dt><dd>The mips averaged sRGB numbers, not light. Filter sRGB textures in linear light.</dd></div>
+  <div><dt>Leaves and fences get dark or bright rims in the distance</dt><dd>The mips averaged the hidden color of transparent texels. Weight color by alpha.</dd></div>
+  <div><dt>Bumps look flat or bright far away</dt><dd>Averaged normals are shorter than 1; a two-channel map rebuilds a wrong z from them. Renormalize each mip.</dd></div>
+  <div><dt>Loading a level freezes one frame for 200 ms</dt><dd>Mips are made on the main thread, or all of a model's textures are copied in one frame. Make mips on a worker, and copy a few textures per frame.</dd></div>
+  <div><dt>Frames drop while textures load, the CPU is idle</dt><dd>The GPU stalls on host-copied images in special memory. Use host copy only where the image can use the same memory types as a copied one.</dd></div>
+  <div><dt>A GPU without host image copy cannot start the program</dt><dd>The feature was required. Make it optional: the staging path serves every device.</dd></div>
+  <div><dt>Destroying a big model makes one long frame</dt><dd>Each texture had its own allocation, and each free is an OS call. Sub-allocate.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">7</span>In RASM</h2>
+
+<p>The worker decodes and makes every level; the main thread only creates the texture and copies the levels, a few textures per frame; the device copies through the staging ring unless host copy is safe for the format.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 330" role="img" aria-label="Worker: loadTexture's decodeTexture, or the glTF import's buildImageLevels, decodes and calls buildTextureLevels, which makes every mip in linear light for sRGB, weighted by alpha, and renormalized for normal maps. It returns a TextureRaw with all levels. Main thread: the texture is created and waits in pendingTextures. finishLoads fills them one by one until the 4 ms LOAD_BUDGET is used. fillTexture copies through the staging ring, or by host copy where queryFormatSupport allowed it. The texture lives in a VMA block shared with other textures.">
+    <text x="20" y="22" class="title t-cpu">worker thread</text>
+    <rect x="20" y="32" width="220" height="60" rx="6" class="cpu"/>
+    <text x="130" y="50" class="mid small mono">decodeTexture</text>
+    <text x="130" y="66" class="mid small mono">or buildImageLevels</text>
+    <text x="130" y="84" class="mid small">PNG, JPEG → RGBA8 rows</text>
+    <line x1="240" y1="62" x2="268" y2="62" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="270" y="32" width="230" height="60" rx="6" class="cpu"/>
+    <text x="385" y="54" class="mid small mono">buildTextureLevels</text>
+    <text x="385" y="74" class="mid small">sRGB, alpha weights, normals</text>
+    <line x1="500" y1="62" x2="528" y2="62" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="530" y="32" width="210" height="60" rx="6" class="mem"/>
+    <text x="635" y="54" class="mid small mono">TextureRaw</text>
+    <text x="635" y="74" class="mid small">every level in one block</text>
+    <line x1="635" y1="92" x2="635" y2="128" class="arrow" marker-end="url(#ah)"/>
+
+    <text x="20" y="124" class="title t-cpu">main thread · finishLoads, every frame</text>
+    <rect x="20" y="132" width="720" height="70" rx="8" class="zone"/>
+    <text x="34" y="152" class="small">pendingTextures, filled one at a time until LOAD_BUDGET (4 ms):</text>
+    <rect x="34" y="162" width="70" height="28" rx="4" class="cpu"/><text x="69" y="181" class="mid small">tex 1</text>
+    <rect x="108" y="162" width="70" height="28" rx="4" class="cpu"/><text x="143" y="181" class="mid small">tex 2</text>
+    <line x1="186" y1="156" x2="186" y2="198" class="arrow hot dashed"/>
+    <text x="192" y="181" class="small t-hot">4 ms: next frame</text>
+    <rect x="300" y="162" width="70" height="28" rx="4" class="cpu o-50"/><text x="335" y="181" class="mid small">tex 3</text>
+    <rect x="374" y="162" width="70" height="28" rx="4" class="cpu o-50"/><text x="409" y="181" class="mid small">tex 4</text>
+    <text x="600" y="181" class="mid small">fillTexture copies only</text>
+
+    <line x1="250" y1="202" x2="160" y2="236" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="500" y1="202" x2="590" y2="236" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="20" y="238" width="300" height="60" rx="6" class="gpu"/>
+    <text x="170" y="260" class="mid small">staging ring → copy command</text>
+    <text x="170" y="280" class="mid small">UploadManager::uploadTexture</text>
+    <rect x="440" y="238" width="300" height="60" rx="6" class="gpu"/>
+    <text x="590" y="260" class="mid small">host copy, where it is safe</text>
+    <text x="590" y="280" class="mid small">VulkanDevice::fillTexture</text>
+    <text x="380" y="320" class="mid small">either way into a VMA block shared with other textures</text>
+  </svg>
+  <figcaption>A glTF's textures are created with its mesh in <code>finishMeshLoad</code> and wait in <code>pendingTextures</code> with their levels; <code>loadTexture</code>'s wait for their worker. <code>finishLoads</code> fills both kinds after the meshes, under the same budget.</figcaption>
+</figure>
+
+<h3>Where RASM follows the page, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Decode</td><td>a worker</td><td><code>decodeTexture</code> (stb_image) for <code>loadTexture</code>; tinygltf inside <code>importMeshFile</code> for a glTF's images. One <code>std::async</code> task per load (<code>P21</code>); a glTF's images are processed one after another on its task (<code>P14</code>).</td></tr>
+  <tr><td>Mips</td><td>file, CPU worker, GPU blits or compute</td><td>KTX2: from the file (or made on the worker for a Basis file without them). PNG and JPEG: <code>buildTextureLevels</code> on the worker, with stb_image_resize2's default filter (Mitchell), each level from the one above. GPU mip generation is not used: it would need storage usage on every texture, and blits have no alpha weighting.</td></tr>
+  <tr><td>Filtering</td><td>linear light, alpha, renormalize</td><td><code>R8G8B8A8_SRGB</code>: linear light, alpha-weighted. <code>R8G8B8A8_UNORM</code>: the stored numbers. A glTF normal texture (<code>KtxSlot::NORMAL</code>): renormalized; <code>loadTexture</code> does not know the slot, so it does not renormalize.</td></tr>
+  <tr><td>Copy</td><td>staging or host copy</td><td>Host copy only for a format where <code>VulkanDevice::queryFormatSupport</code> found the feature, host transfer, <code>optimalDeviceAccess</code>, <code>SHADER_READ_ONLY_OPTIMAL</code> among the copy layouts, and a device-local type in both sets (<code>getHostCopyMemoryTypes</code>); the image is then made with only those types. Every other format, and every format with <code>EngineConfig::hostImageCopy</code> false, goes through the staging ring. The log says which: <samp>Host image copy: off</samp> on the RTX 3060, and on for 13 formats on lavapipe.</td></tr>
+  <tr><td>Per frame</td><td>a few textures per frame</td><td>Each texture is its own entry in <code>pendingTextures</code>, filled after the meshes inside <code>LOAD_BUDGET</code>. One texture is never split: a 8192² RGBA8 texture copies in one frame (<code>P24</code>). <code>isLoaded(mesh)</code> is true once its glTF's textures are filled.</td></tr>
+  <tr><td>Memory</td><td>sub-allocate, dedicated for big targets</td><td>Sampled textures are sub-allocated by VMA, with no host-access flags. Attachments and storage textures keep a dedicated allocation. <code>VRAMStats::vramAllocated</code> counts the bytes of the allocations, <code>vramUsage</code> the whole blocks.</td></tr>
+  <tr><td>App-filled textures</td><td>—</td><td><code>RenderContext::fillTexture(texture, data)</code> with one RGBA8 level still makes the mips in the caller's thread (<code>buildMipChain</code>), as the application asked for.</td></tr>
+</table>
+</div>
+
+<h3>Measured</h3>
+
+<p><samp>examples/10_ktx2_textures --measure --model &lt;file&gt;</samp>, Release, headless, RTX 3060, the median of three runs. "Longest frame" is the longest frame while the model loads.</p>
+
+<div class="stats">
+  <div><b>206 → 10 ms</b><span>Flight Helmet PNG, longest frame</span><small>15 textures; mips on the worker, fills spread over frames</small></div>
+  <div><b>280 → 6 ms</b><span>Sponza, longest frame</span><small>69 JPEG and PNG textures</small></div>
+  <div><b>28 → 5 ms</b><span>Flight Helmet KTX2, longest frame</span><small>no mips to make; the copy is spread</small></div>
+  <div><b>0.61 → 0.02 ms</b><span>17_streaming, freeing per frame</span><small>mean of collectReleases; the max 1.42 → 0.15 ms</small></div>
+</div>
+
+<p>The whole load takes longer, because the worker makes the mips after the decode, one image after another: the PNG helmet 0.92 → 1.00 s, Sponza 0.97 → 1.06 s. Running the images of one model on several workers is <code>P14</code> and <code>P21</code>.</p>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Mips</td><td><code>buildTextureLevels</code>, <code>buildMipChain</code>, <code>getFullMipCount</code> in <code>src/rhi/mipChain.cpp</code></td></tr>
+  <tr><td>Worker: textures</td><td><code>decodeTexture</code>, <code>Engine::loadTexture</code>, <code>finishTextureLoad</code> in <code>src/assets/texture.cpp</code></td></tr>
+  <tr><td>Worker: glTF images</td><td><code>buildImageLevels</code>, <code>getImageLevelsKey</code> in <code>src/assets/meshImport.cpp</code>; <code>GLTFRaw::imageLevels</code> in <code>include/rasm/mesh.h</code></td></tr>
+  <tr><td>Queued fills</td><td><code>Engine::loadMaterial</code> in <code>src/assets/material.cpp</code>; <code>PendingTextureLoad</code> in <code>include/rasm/engine.h</code>; <code>finishLoads</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Host copy or staging</td><td><code>VulkanDevice::queryFormatSupport</code>, <code>createTexture</code>, <code>fillTexture</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code>; <code>getHostCopyMemoryTypes</code> in <code>src/rhi/vulkan/vulkanUtils.cpp</code>; <code>UploadManager::uploadTexture</code> in <code>src/rhi/uploadManager.cpp</code></td></tr>
+  <tr><td>Measure</td><td><samp>examples/10_ktx2_textures</samp> (<samp>--measure</samp>, <samp>--staging</samp>, <samp>--model</samp>)</td></tr>
+  <tr><td>Tests</td><td><samp>tests/textureUploadTests.cpp</samp></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Rules to keep</strong>
+  <ul>
+    <li>No image asks VMA for host access: a host-copied image uses only the memory types <code>queryFormatSupport</code> found.</li>
+    <li>The main thread never makes mips for a load. A worker hands over every level.</li>
+    <li>Every texture fill of a load goes through <code>pendingTextures</code>, so the budget sees it.</li>
+    <li>The worker's level count is the texture's mip count (<code>getFullMipCount</code>), or <code>fillTexture</code> refuses the levels.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Khronos, the Vulkan specification, "Host Image Copies" (<code>vkCopyMemoryToImage</code>, <code>VkHostImageCopyDevicePerformanceQuery</code>, <samp>identicalMemoryTypeRequirements</samp>).</li>
+  <li>AMD GPUOpen, "Vulkan Memory Allocator" documentation: choosing memory types, dedicated allocations.</li>
+  <li><a href="gpu-memory.html">GPU memory and uploads</a>, <a href="mipmaps-sampling.html">Mipmaps and texture sampling</a>, <a href="color-spaces.html">Color spaces</a>, <a href="asset-streaming.html">Streaming assets in the background</a>, <a href="texture-compression.html">Texture compression</a>.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>
