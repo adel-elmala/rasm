@@ -70,7 +70,6 @@ namespace
     {
         const char *name;
         BuildContent build;   // tests with the same build share one scene
-        uint32_t group = 0;   // the engine it runs in
         uint32_t samples = 1; // MSAA
         bool taa = false;
         bool bloom = false;
@@ -340,23 +339,22 @@ namespace
     }
 
     // clang-format off
-    // Group 0 holds 6 meshes with the cube, group 1 5 and group 2 4.
     const ImageTest TESTS[] = {
         {.name = "helmet_ibl",    .build = buildHelmet},
         {.name = "sponza",        .build = buildSponza},
         {.name = "alpha_modes",   .build = buildAlphaModes},
-        {.name = "msaa4",         .build = buildAlphaModes,                 .samples = 4},
-        {.name = "taa",           .build = buildHelmet,                     .taa = true, .frames = 16},
-        {.name = "bloom",         .build = buildEmissive,                   .bloom = true},
+        {.name = "msaa4",         .build = buildAlphaModes,    .samples = 4},
+        {.name = "taa",           .build = buildHelmet,        .taa = true, .frames = 16},
+        {.name = "bloom",         .build = buildEmissive,      .bloom = true},
         {.name = "many_lights",   .build = buildManyLights},
         {.name = "local_shadows", .build = buildLocalShadows},
         {.name = "ktx2",          .build = buildKtx2},
-        {.name = "debug_normals", .build = buildHelmet,                     .view = rasm::DebugView::NORMALS},
-        {.name = "determinism",   .build = buildHelmet,                     .threshold = 0, .fraction = 0.0, .sameAs = "helmet_ibl"},
-        {.name = "skinning",      .build = buildSkinning,      .group = 1,  .time = 1.25},
-        {.name = "morph",         .build = buildMorph,         .group = 1},
-        {.name = "node_anim",     .build = buildNodeAnimation, .group = 1,  .time = 0.3},
-        {.name = "materials",     .build = buildMaterials,     .group = 2},
+        {.name = "debug_normals", .build = buildHelmet,        .view = rasm::DebugView::NORMALS},
+        {.name = "determinism",   .build = buildHelmet,        .threshold = 0, .fraction = 0.0, .sameAs = "helmet_ibl"},
+        {.name = "skinning",      .build = buildSkinning,      .time = 1.25},
+        {.name = "morph",         .build = buildMorph},
+        {.name = "node_anim",     .build = buildNodeAnimation, .time = 0.3},
+        {.name = "materials",     .build = buildMaterials},
     };
     // clang-format on
 
@@ -612,9 +610,8 @@ namespace
         return pass;
     }
 
-    // One engine for the tests of a group, so their pipelines are compiled once. Groups exist because an engine holds
-    // at most 7 meshes (MAX_MESHES). Counts the tests that ran and failed.
-    bool runGroup(uint32_t group, const Options &options, uint32_t &run, uint32_t &failed)
+    // One engine for every test, so the pipelines are compiled once. Counts the tests that ran and failed.
+    bool runTests(const Options &options, uint32_t &run, uint32_t &failed)
     {
         const rasm::EngineConfig config = {
             .appName = "rasm_image_tests",
@@ -639,7 +636,7 @@ namespace
         std::vector<Rendered> rendered;
         for (const ImageTest &test : TESTS)
         {
-            if (test.group != group || !isSelected(options, test.name) || (options.update && test.sameAs))
+            if (!isSelected(options, test.name) || (options.update && test.sameAs))
                 continue;
             ++run;
             failed += runTest(engine, assets, camera, options, test, built, rendered) ? 0 : 1;
@@ -661,19 +658,11 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    uint32_t groups = 0;
-    for (const ImageTest &test : TESTS)
-        groups = std::max(groups, test.group + 1);
     uint32_t run = 0;
     uint32_t failed = 0;
     std::printf("%-14s %-6s %10s %8s %8s\n", "test", "result", "differing", "max diff", "seconds");
-    for (uint32_t group = 0; group < groups; ++group)
-    {
-        const bool used = std::any_of(std::begin(TESTS), std::end(TESTS), [&](const ImageTest &test)
-                                      { return test.group == group && isSelected(options, test.name) && !(options.update && test.sameAs); });
-        if (used && !runGroup(group, options, run, failed))
-            return 2;
-    }
+    if (!runTests(options, run, failed))
+        return 2;
     std::printf("%u of %u tests passed.%s\n", run - failed, run, failed > 0 ? (" Failures are in " + options.outDir + ".").c_str() : "");
     return failed > 0 ? 1 : 0;
 }
