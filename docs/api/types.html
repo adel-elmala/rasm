@@ -238,7 +238,7 @@ public:
 <div class="api" id="ShaderType">
   <pre class="sig">enum class ShaderType { VERTEX, FRAGMENT, VERTEX_FRAGMENT, COMPUTE, ALL };</pre>
   <div class="body">
-    <p>A shader stage. <code>ShaderDesc::type</code> is <code>VERTEX</code>, <code>FRAGMENT</code> or <code>COMPUTE</code>. <code>pushConstants</code> takes <code>VERTEX_FRAGMENT</code> for graphics pipelines and <code>COMPUTE</code> for compute pipelines. <code>ALL</code> is every stage, for descriptor set layouts: the engine's bindless layout uses it, so compute shaders can sample textures too.</p>
+    <p>A shader stage. <code>ShaderDesc::type</code> is <code>VERTEX</code>, <code>FRAGMENT</code> or <code>COMPUTE</code>. <code>ALL</code> is every stage, for descriptor set layouts: the engine's bindless layout uses it, so compute shaders can sample textures too.</p>
   </div>
 </div>
 
@@ -308,6 +308,7 @@ public:
     Backend      preferredBackend      = Backend::VULKAN;
     std::string  assetRoot             = {};
     std::string  shaderDir             = {};
+    std::string  cacheDir              = "cache";
     uint32_t     geometryPoolVertices  = 1u &lt;&lt; 21;
     uint32_t     geometryPoolColors    = 1u &lt;&lt; 20;
     uint32_t     geometryPoolSkins     = 1u &lt;&lt; 20;

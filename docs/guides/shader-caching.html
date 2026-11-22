@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shader and pipeline caches · RASM</title>
+<meta name="description" content="Keep compiled shaders and pipelines on disk: the two compiles before a first frame, a cache key made of every input, hash width and collisions, what a cache file holds, the driver's pipeline cache and its header, safe writes, size limits, and how RASM does it.">
+<meta name="rasm-sources" content="src/core/cacheFile.h src/core/cacheFile.cpp src/renderer/shaderCache.h src/renderer/shaderCache.cpp src/renderer/shaderCompiler.h src/renderer/shaderCompiler.cpp src/rhi/vulkan/vulkanPipelineCache.h src/rhi/vulkan/vulkanPipelineCache.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanTypes.h src/rhi/device.h src/platform/paths.h src/platform/paths.cpp src/engine.cpp include/rasm/types.h examples/exampleArgs.h">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/shader-caching.js"></script>
+</head>
+<body data-root="../" data-page="guides/shader-caching.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Foundations</p>
+<h1>Shader and pipeline caches</h1>
+<p class="lead">Before the first frame, every shader is compiled twice: once from its source language to a GPU-neutral code, and once more by the driver to the GPU's own machine code. Both results depend only on their inputs, so a program can keep them on disk and skip the work on the next start. This page explains what such a cache must get right: a key that sees every input, files that cannot be half written, and data from a driver that must be checked before use. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>Two compiles: the <b>shader compiler</b> turns source into SPIR-V (or DXIL, or Metal IR), and the <b>driver</b> turns that into GPU code when a pipeline is made. Each has its own cache.</li>
+    <li>A cache entry is found by its <b>key</b>, a hash of <b>every input</b> of the result: the source, every included file, every define, the entry point, the compiler's version and options. One input left out, and an edit returns old code.</li>
+    <li>The key is the only thing that tells two inputs apart, so it must be <b>wide</b> (128 bits) and stored in the file, to be compared on read.</li>
+    <li>Whatever else the program needs from the compiler (reflection: struct layouts, offsets) goes into the same entry.</li>
+    <li>The driver's <b>pipeline cache</b> is opaque bytes for one GPU and one driver. Check its header before you hand it back, and start empty when anything differs.</li>
+    <li>Write through a <b>temporary file and a rename</b>, so a crash or a second program never sees half a file. Keep the folder under a size limit.</li>
+  </ul>
+</div>
+
+<h2 id="two-compiles"><span class="n">1</span>Two compiles before the first frame</h2>
+
+<p>Follow one shader from its text file to the GPU. The program's compiler runs first; the driver runs when the program makes a pipeline with it.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Source files and defines go into the shader compiler, which gives SPIR-V. SPIR-V and the pipeline state go into the driver, which gives GPU machine code. Under each compile, a cache: the shader cache keyed by the compiler's inputs, the pipeline cache keyed by the driver.">
+    <rect x="20" y="30" width="150" height="90" rx="6" class="paper"/>
+    <text x="95" y="52" class="mid title">source</text>
+    <text x="95" y="74" class="mid small mono">pass.slang</text>
+    <text x="95" y="92" class="mid small">+ included files</text>
+    <text x="95" y="110" class="mid small">+ defines, entry point</text>
+    <line x1="170" y1="75" x2="216" y2="75" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="220" y="40" width="140" height="70" rx="6" class="cpu"/>
+    <text x="290" y="68" class="mid title">shader compiler</text>
+    <text x="290" y="90" class="mid small">parse, check, optimize</text>
+    <line x1="360" y1="75" x2="406" y2="75" class="arrow shader" marker-end="url(#ah-shader)"/>
+    <rect x="410" y="40" width="100" height="70" rx="6" class="shader"/>
+    <text x="460" y="70" class="mid title">SPIR-V</text>
+    <text x="460" y="90" class="mid small">GPU-neutral</text>
+    <line x1="510" y1="75" x2="556" y2="75" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="560" y="40" width="180" height="70" rx="6" class="gpu"/>
+    <text x="650" y="64" class="mid title">driver</text>
+    <text x="650" y="84" class="mid small">+ blend, formats, samples</text>
+    <text x="650" y="100" class="mid small">→ GPU machine code</text>
+
+    <rect x="220" y="160" width="140" height="56" rx="6" class="mem"/>
+    <text x="290" y="184" class="mid title">shader cache</text>
+    <text x="290" y="204" class="mid small">a file per key</text>
+    <line x1="290" y1="110" x2="290" y2="156" class="arrow mem dashed" marker-end="url(#ah-mem)"/>
+    <rect x="560" y="160" width="180" height="56" rx="6" class="mem"/>
+    <text x="650" y="184" class="mid title">pipeline cache</text>
+    <text x="650" y="204" class="mid small">the driver's bytes, one file</text>
+    <line x1="650" y1="110" x2="650" y2="156" class="arrow mem dashed" marker-end="url(#ah-mem)"/>
+    <text x="40" y="190" class="small t-faint">tens to hundreds of ms</text>
+    <text x="40" y="206" class="small t-faint">per big shader</text>
+    <text x="400" y="190" class="small t-faint">a few ms per pipeline,</text>
+    <text x="400" y="206" class="small t-faint">more on some drivers</text>
+  </svg>
+  <figcaption>The program owns the first cache and decides its key. The driver owns what is in the second one; the program only stores its bytes and hands them back.</figcaption>
+</figure>
+
+<p>Both steps are <b>pure</b>: the same inputs always give the same output. That is what makes a cache safe. The whole difficulty is to know every input.</p>
+
+<h2 id="key"><span class="n">2</span>A key made of every input</h2>
+
+<p>A shader cache looks up a result by a key. The key is a hash of the inputs. If an input is not in the key, a change to it gives the same key, and the cache returns the code of the old input.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Key made of the top file only. The included lighting file changes, the key stays the same, and the cache returns the old code: the edit does not show.">
+      <rect x="10" y="14" width="110" height="34" rx="5" class="paper"/>
+      <text x="65" y="36" class="mid small mono">pass.slang</text>
+      <rect x="10" y="60" width="110" height="34" rx="5" class="hot o-50"/>
+      <text x="65" y="82" class="mid small mono">lighting.slang</text>
+      <text x="65" y="114" class="mid small t-bad">edited, not in the key</text>
+      <line x1="120" y1="31" x2="176" y2="60" class="arrow" marker-end="url(#ah)"/>
+      <rect x="180" y="44" width="130" height="50" rx="5" class="box"/>
+      <text x="245" y="66" class="mid small">same key</text>
+      <text x="245" y="84" class="mid small t-bad">old code returned</text>
+    </svg>
+    <h4>The top file only</h4>
+    <p>An edit of an included file, a new define for a variant or a new compiler version gives the same key. The program runs with stale code and nobody sees why.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Key made of every input: the top file, every included file, the defines, the entry point, the compiler version and its options. The included file changes, so the key changes and the shader is compiled again.">
+      <text x="10" y="22" class="small mono">pass.slang</text>
+      <text x="10" y="40" class="small mono t-hot">lighting.slang</text>
+      <text x="10" y="58" class="small mono">#define MASK 1</text>
+      <text x="10" y="76" class="small mono">fragMain</text>
+      <text x="10" y="94" class="small">compiler version</text>
+      <text x="10" y="112" class="small">target, options</text>
+      <line x1="130" y1="66" x2="176" y2="66" class="arrow" marker-end="url(#ah)"/>
+      <rect x="180" y="40" width="130" height="54" rx="5" class="box"/>
+      <text x="245" y="62" class="mid small">new key</text>
+      <text x="245" y="80" class="mid small t-ok">compiled again</text>
+    </svg>
+    <h4>Every input</h4>
+    <p>Anything that can change the output is hashed: each included file's bytes, each define, the entry point, the compiler's version, target and options.</p>
+  </div>
+</div>
+
+<p>Two ways to know the included files. A <b>manifest</b> stores, with each entry, the list of files the compiler read and their hashes, and checks them on the next start. Or hash <b>the whole include folder</b> once at startup: simpler and always right, but an edit of any shared file misses every entry. Since most shaders include the same core file, the two usually miss the same entries anyway.</p>
+
+<p>Hash each input with its <b>length</b> first. Without it, "ab" then "c" and "a" then "bc" give the same bytes, and so the same key.</p>
+
+<p>Try it. Each row below is one cache entry: a shader, its entry point and its defines. Change one input and see which entries the next start compiles, and which it reads. With the top file as the key, some entries come back <b>stale</b>.</p>
+
+<figure class="lab" data-lab="cache-keys" data-title="Which entries miss?">
+  <figcaption>Pick a change, then switch the key between "top file only" and "every input". A stale row is a cache hit that returns old code: the bug a missing input causes.</figcaption>
+</figure>
+
+<h2 id="width"><span class="n">3</span>How wide the key must be</h2>
+
+<p>Two different inputs can hash to the same key by chance. Then the cache returns another shader's code, with no error. The chance grows with the square of the number of entries ever made:</p>
+
+<div class="formula">
+  <p class="eq">p ≈ n² / 2<sup>b + 1</sup></p>
+  <dl>
+    <dt>n</dt><dd>how many different inputs were ever hashed (every edit makes new ones)</dd>
+    <dt>b</dt><dd>the key's width in bits</dd>
+    <dt>p</dt><dd>the chance that any two of them share a key</dd>
+  </dl>
+</div>
+
+<div class="stats">
+  <div><b>3 × 10<sup>−8</sup></b><span>64-bit key, a million inputs</span><small>10<sup>12</sup> / 2<sup>65</sup>: small, but over many users and years not zero</small></div>
+  <div><b>1.5 × 10<sup>−27</sup></b><span>128-bit key, a million inputs</span><small>10<sup>12</sup> / 2<sup>129</sup>: never in practice</small></div>
+</div>
+
+<div class="callout rule">
+  <strong>Store the key, compare it on read</strong>
+  <p>Name the file after the key, and also write the full key into the file's header. A read compares it. Then a short file name, a copied file or a bug in the naming can only cause a miss, never a wrong hit. The hash does not need to be cryptographic: nobody attacks a local cache, it only has to spread accidental inputs well.</p>
+</div>
+
+<h2 id="entry"><span class="n">4</span>What an entry holds</h2>
+
+<p>The compiled code is not always all the program needs. An engine that checks its CPU structs against the shader's structs, or shows a GPU buffer's fields in a debug tool, reads the compiler's <b>reflection</b>. On a cache hit the compiler does not run, so the reflection must be in the entry too.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 150" role="img" aria-label="A cache entry as bytes: a 40-byte header with the magic number, the version, the 16-byte key, the payload size and its checksum, then the payload: the SPIR-V words, then the reflection data with each struct's size, members and offsets.">
+    <rect x="20" y="40" width="60" height="50" class="mem"/>
+    <text x="50" y="62" class="mid small">magic</text>
+    <text x="50" y="80" class="mid small t-faint">4 B</text>
+    <rect x="80" y="40" width="60" height="50" class="mem"/>
+    <text x="110" y="62" class="mid small">version</text>
+    <text x="110" y="80" class="mid small t-faint">4 B</text>
+    <rect x="140" y="40" width="110" height="50" class="mem"/>
+    <text x="195" y="62" class="mid small">key</text>
+    <text x="195" y="80" class="mid small t-faint">16 B</text>
+    <rect x="250" y="40" width="70" height="50" class="mem"/>
+    <text x="285" y="62" class="mid small">size</text>
+    <text x="285" y="80" class="mid small t-faint">8 B</text>
+    <rect x="320" y="40" width="80" height="50" class="mem"/>
+    <text x="360" y="62" class="mid small">checksum</text>
+    <text x="360" y="80" class="mid small t-faint">8 B</text>
+    <rect x="400" y="40" width="190" height="50" class="shader"/>
+    <text x="495" y="62" class="mid small">SPIR-V</text>
+    <text x="495" y="80" class="mid small t-faint">10 to 300 KiB</text>
+    <rect x="590" y="40" width="150" height="50" class="cpu o-50"/>
+    <text x="665" y="62" class="mid small">reflection</text>
+    <text x="665" y="80" class="mid small t-faint">struct sizes, offsets</text>
+    <path d="M20,104 V112 H400 V104" class="arrow"/>
+    <text x="210" y="130" class="mid small">header, 40 bytes: checked before the payload is used</text>
+    <path d="M400,104 V112 H740 V104" class="arrow"/>
+    <text x="570" y="130" class="mid small">payload: its size and checksum are in the header</text>
+    <text x="20" y="26" class="small t-faint">one file per key</text>
+  </svg>
+  <figcaption>A wrong magic, a short file or a wrong checksum is a damaged file. A good file with another version or key is stale. Both are a miss: compile, and write the entry again.</figcaption>
+</figure>
+
+<p>Checking the CPU structs against the stored reflection on every start, hit or miss, keeps that check as strong as without a cache. A CPU struct that changed is caught, and rebuilding the program does not throw the cache away.</p>
+
+<h2 id="pipeline-cache"><span class="n">5</span>The driver's pipeline cache</h2>
+
+<p>The second compile belongs to the driver. Vulkan gives the program a <code>VkPipelineCache</code>: pass it when making pipelines, read its bytes before exit with <code>vkGetPipelineCacheData</code>, and pass them back on the next start. D3D12 has pipeline libraries and Metal binary archives for the same job. The bytes are the driver's own format, valid only for that GPU and that driver.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 190" role="img" aria-label="A pipeline cache file: the program's header with vendor ID, device ID, driver version, pipeline cache UUID, size and checksum, then the driver's data, which starts with Vulkan's own header with header size, header version, vendor ID, device ID and UUID. On load each field is compared with the GPU; any difference means start empty.">
+    <rect x="20" y="30" width="330" height="60" rx="6" class="cpu o-50"/>
+    <text x="185" y="54" class="mid title">the program's header</text>
+    <text x="185" y="76" class="mid small">vendor, device, driver version, UUID, size, checksum</text>
+    <rect x="350" y="30" width="250" height="60" rx="6" class="gpu o-50"/>
+    <text x="475" y="54" class="mid title">Vulkan's header</text>
+    <text x="475" y="76" class="mid small">size, version, vendor, device, UUID</text>
+    <rect x="600" y="30" width="140" height="60" rx="6" class="gpu"/>
+    <text x="670" y="58" class="mid title">driver data</text>
+    <text x="670" y="76" class="mid small">opaque</text>
+    <line x1="185" y1="90" x2="185" y2="126" class="arrow" marker-end="url(#ah)"/>
+    <line x1="475" y1="90" x2="475" y2="126" class="arrow" marker-end="url(#ah)"/>
+    <rect x="100" y="130" width="460" height="44" rx="6" class="box"/>
+    <text x="330" y="150" class="mid small">all equal to this GPU and driver? → hand the data to vkCreatePipelineCache</text>
+    <text x="330" y="166" class="mid small t-bad">anything else → log one line, start with an empty cache</text>
+  </svg>
+  <figcaption>The driver checks its own header too, but some drivers crash on data from another device instead of refusing it. A new driver version usually brings a new UUID; checking the version as well costs nothing.</figcaption>
+</figure>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two GPUs in one machine, each with its own file named after its vendor and device IDs.">
+      <rect x="20" y="20" width="90" height="40" rx="5" class="gpu"/>
+      <text x="65" y="45" class="mid small">GPU A</text>
+      <rect x="130" y="20" width="90" height="40" rx="5" class="gpu o-50"/>
+      <text x="175" y="45" class="mid small">GPU B</text>
+      <rect x="20" y="80" width="90" height="34" rx="5" class="mem"/>
+      <text x="65" y="101" class="mid small mono">a.pipelines</text>
+      <rect x="130" y="80" width="90" height="34" rx="5" class="mem"/>
+      <text x="175" y="101" class="mid small mono">b.pipelines</text>
+      <line x1="65" y1="60" x2="65" y2="76" class="arrow" marker-end="url(#ah)"/>
+      <line x1="175" y1="60" x2="175" y2="76" class="arrow" marker-end="url(#ah)"/>
+    </svg>
+    <h4>One file per GPU</h4>
+    <p>Name the file after the vendor and device IDs, so a machine with two GPUs does not throw one cache away each time it switches.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Before writing, the program reads the file again. Another run wrote it in the meantime, so the program merges that data into its own cache and writes the union.">
+      <rect x="20" y="20" width="80" height="40" rx="5" class="cpu"/>
+      <text x="60" y="45" class="mid small">this run</text>
+      <rect x="140" y="20" width="80" height="40" rx="5" class="cpu o-50"/>
+      <text x="180" y="45" class="mid small">other run</text>
+      <rect x="70" y="84" width="100" height="34" rx="5" class="mem"/>
+      <text x="120" y="105" class="mid small">merged file</text>
+      <line x1="60" y1="60" x2="100" y2="80" class="arrow" marker-end="url(#ah)"/>
+      <line x1="180" y1="60" x2="140" y2="80" class="arrow" marker-end="url(#ah)"/>
+    </svg>
+    <h4>Merge on save</h4>
+    <p>Two programs started together each loaded the old file. Before writing, read the file again and merge what the other one saved (<code>vkMergePipelineCaches</code>).</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Data that did not change since it was loaded is not written again.">
+      <rect x="20" y="40" width="90" height="44" rx="5" class="mem"/>
+      <text x="65" y="66" class="mid small">loaded</text>
+      <text x="120" y="66" class="mid">=</text>
+      <rect x="130" y="40" width="90" height="44" rx="5" class="mem"/>
+      <text x="175" y="66" class="mid small">at exit</text>
+      <text x="120" y="112" class="mid small t-ok">no write</text>
+    </svg>
+    <h4>Write only changes</h4>
+    <p>Compare a checksum of the data at exit with the one loaded. A start that made no new pipeline writes nothing.</p>
+  </div>
+</div>
+
+<h2 id="safe-writes"><span class="n">6</span>Writing a file that is never half written</h2>
+
+<p>A program can crash while it writes, and another program can read the file at the same moment. Writing in place lets both of them see half a file.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Writing over the file in place: the program stops halfway, and the file holds half new bytes and half nothing.">
+      <rect x="20" y="40" width="280" height="40" rx="5" class="box"/>
+      <rect x="20" y="40" width="130" height="40" rx="5" class="mem"/>
+      <text x="85" y="64" class="mid small">new bytes</text>
+      <text x="225" y="64" class="mid small t-bad">missing</text>
+      <text x="160" y="110" class="mid small t-bad">crash here: a damaged file</text>
+      <line x1="150" y1="30" x2="150" y2="90" class="arrow bad dashed"/>
+    </svg>
+    <h4>In place</h4>
+    <p>The next start reads a damaged file. With checks it is only a miss; without them, the driver may crash on it.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Writing a temporary file with a name of its own, then renaming it over the old file. A reader sees the old file or the whole new one.">
+      <rect x="20" y="20" width="130" height="36" rx="5" class="mem"/>
+      <text x="85" y="43" class="mid small mono">x.1a2b.tmp</text>
+      <line x1="150" y1="38" x2="196" y2="70" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <text x="175" y="40" class="small t-ok">rename</text>
+      <rect x="200" y="56" width="100" height="36" rx="5" class="mem"/>
+      <text x="250" y="79" class="mid small mono">x</text>
+      <text x="160" y="122" class="mid small">old file or whole new file</text>
+    </svg>
+    <h4>Temporary file, then rename</h4>
+    <p>A rename replaces the file in one step. A name of its own per write lets two programs write the same entry at once.</p>
+  </div>
+</div>
+
+<h2 id="size"><span class="n">7</span>Keeping the folder small</h2>
+
+<p>Every edit makes new keys, and the old entries stay. Two limits keep the disk use bounded:</p>
+
+<ol class="flow">
+  <li class="mem"><b>Shader entries</b><span>past the folder's limit, delete the files used longest ago. A hit updates the file's time, so the files in use stay.</span></li>
+  <li class="gpu"><b>Pipeline cache</b><span>one file that only grows: a driver cannot drop the pipelines no run makes any more. Past its limit, delete it and start a new one.</span></li>
+</ol>
+
+<h2 id="pitfalls"><span class="n">8</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>An edit does not show up</dt><dd>An input is missing from the key: an included file, a define, the compiler version. Hash every input, or the whole include folder.</dd></div>
+  <div><dt>A shader from another file is used</dt><dd>A key collision, or a file name that is a short form of the key. Use a 128-bit key and compare the full key on read.</dd></div>
+  <div><dt>A crash at startup after a driver update</dt><dd>The pipeline cache was handed over without a check. Compare vendor, device, driver version and UUID first.</dd></div>
+  <div><dt>Tools break on a cache hit</dt><dd>They read reflection, which only a compile produces. Store it in the entry.</dd></div>
+  <div><dt>Tests give different results from run to run</dt><dd>A cache from an earlier run changes the path a test takes. Turn the cache off in tests that must be repeatable.</dd></div>
+  <div><dt>An installed program cannot write its cache</dt><dd>The program's own folder is often read-only. Fall back to the user's local cache folder (<samp>%LOCALAPPDATA%</samp>, <samp>~/Library/Caches</samp>, <samp>~/.cache</samp>), not a roaming one.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
+
+<p><code>EngineConfig::cacheDir</code> is the folder of both caches: <samp>cache</samp> beside the executable by default, an absolute path as it is, and <code>""</code> for none. <code>resolveCacheDir</code> (in <code>src/platform/paths.cpp</code>) makes the folder and writes a test file; if that fails for a relative path, the caches go to the user's local cache folder plus <samp>rasm/&lt;executable name&gt;</samp>, with one log line; if that fails too, the engine runs without them.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 360" role="img" aria-label="Engine::createGraphicsPipeline calls ShaderCompiler::compileFromString for each stage. It hashes the base key with the module name, entry point and source. readCachedShader looks for cache/shaders/key.shader. A hit gives the SPIR-V and the struct layouts; a miss runs compileWithSlang and writeCachedShader. Both go to validateRasmStructs, then RenderContext::createPipeline, then vkCreateGraphicsPipelines with the pipeline cache, which VulkanPipelineCache loads at device start and saves at device end.">
+    <rect x="20" y="20" width="230" height="50" rx="6" class="cpu"/>
+    <text x="135" y="42" class="mid small mono">Engine::create*Pipeline</text>
+    <text x="135" y="60" class="mid small">once per stage</text>
+    <line x1="250" y1="45" x2="296" y2="45" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="300" y="14" width="230" height="62" rx="6" class="box"/>
+    <text x="415" y="36" class="mid small mono">compileFromString</text>
+    <text x="415" y="54" class="mid small">key = baseKey + name</text>
+    <text x="415" y="68" class="mid small">+ entry point + source</text>
+    <line x1="530" y1="45" x2="576" y2="45" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="580" y="20" width="160" height="50" rx="6" class="mem"/>
+    <text x="660" y="42" class="mid small mono">shaders/&lt;key&gt;.shader</text>
+    <text x="660" y="60" class="mid small">readCachedShader</text>
+
+    <path d="M660,70 V110 H560" class="arrow ok" marker-end="url(#ah-ok)"/>
+    <text x="668" y="96" class="small t-ok">hit</text>
+    <path d="M630,70 C630,140 600,160 556,166" class="arrow bad dashed" marker-end="url(#ah-bad)"/>
+    <text x="588" y="138" class="small t-bad">miss</text>
+    <rect x="300" y="92" width="256" height="40" rx="6" class="shader o-50"/>
+    <text x="428" y="116" class="mid small">SPIR-V + struct layouts</text>
+    <rect x="300" y="146" width="256" height="40" rx="6" class="cpu o-50"/>
+    <text x="428" y="163" class="mid small mono">compileWithSlang</text>
+    <text x="428" y="179" class="mid small">then writeCachedShader</text>
+    <line x1="300" y1="166" x2="236" y2="166" class="arrow" marker-end="url(#ah)"/>
+    <line x1="300" y1="112" x2="236" y2="150" class="arrow" marker-end="url(#ah)"/>
+    <rect x="20" y="140" width="212" height="52" rx="6" class="box"/>
+    <text x="126" y="162" class="mid small mono">validateRasmStructs</text>
+    <text x="126" y="180" class="mid small">C++ structs vs the layouts</text>
+
+    <line x1="126" y1="192" x2="126" y2="232" class="arrow" marker-end="url(#ah)"/>
+    <rect x="20" y="236" width="240" height="50" rx="6" class="cpu"/>
+    <text x="140" y="258" class="mid small mono">RenderContext::createPipeline</text>
+    <text x="140" y="276" class="mid small">the set layout's pipeline layout</text>
+    <line x1="260" y1="261" x2="306" y2="261" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="310" y="236" width="240" height="50" rx="6" class="gpu"/>
+    <text x="430" y="258" class="mid small mono">vkCreate*Pipelines</text>
+    <text x="430" y="276" class="mid small">with VulkanPipelineCache::get()</text>
+    <line x1="550" y1="261" x2="596" y2="261" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="600" y="230" width="140" height="62" rx="6" class="mem"/>
+    <text x="670" y="252" class="mid small mono">vulkan-&lt;vendor&gt;-</text>
+    <text x="670" y="268" class="mid small mono">&lt;device&gt;.pipelines</text>
+    <text x="670" y="284" class="mid small">load / save</text>
+    <text x="20" y="320" class="small t-faint">base key, once at startup: cache version, Slang build tag, target, profile, every compiler option,</text>
+    <text x="20" y="338" class="small t-faint">every file of shaders/lib (path and bytes). The pipeline cache loads when the device starts and saves when it ends.</text>
+  </svg>
+  <figcaption>A hit skips Slang only. The struct check, the shader module and the pipeline are made as without a cache, and the pipeline cache lets the driver skip its own compile.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>This page</th><th>RASM</th></tr>
+  <tr><td>Included files</td><td>The whole folder: every file under <samp>shaders/lib</samp> (relative path and bytes) is in the base key. A module that read a file outside it (<code>IModule::getDependencyFilePath</code>) is compiled but not cached.</td></tr>
+  <tr><td>Compiler and options</td><td><code>getBuildTagString</code> of the Slang global session, the target's format and profile, and every entry of the session's and the target's option arrays, hashed from the arrays the session is made with, so a new option changes the key by itself.</td></tr>
+  <tr><td>Defines and entry point</td><td>The variants' defines are lines at the top of the source (<code>Engine::createScenePipeline</code>), so the source string holds them. The module name and the entry point are hashed too.</td></tr>
+  <tr><td>Key</td><td><code>CacheKey</code>, FNV-1a 128 (<code>hashBytes</code>, <code>hashString</code> with the length first). The file is <samp>shaders/&lt;32 hex digits&gt;.shader</samp>, and its header holds the key again.</td></tr>
+  <tr><td>File format</td><td><code>readCacheFile</code> / <code>writeCacheFile</code> in <code>src/core/cacheFile.cpp</code>: magic, version, key, size, FNV-1a 64 checksum, then the payload. Both caches use it. <code>CacheFileStatus</code> says <code>MISSING</code>, <code>STALE</code> or <code>CORRUPT</code>.</td></tr>
+  <tr><td>Reflection</td><td>Each entry holds the push constants' struct name and every struct <code>pc</code> reaches (<code>StructLayout</code>: size, members, flattened fields). <code>validateRasmStructs</code> checks them on every compile and every hit; the inspector's GPU tables section reads them through <code>ShaderCompiler::findStructLayout</code>.</td></tr>
+  <tr><td>Pipeline cache</td><td><code>VulkanPipelineCache</code>: checks the file's identity (vendor, device, driver version, UUID) and Vulkan's own header, merges what another run saved, writes only when the data changed. Over 256 MiB it is deleted.</td></tr>
+  <tr><td>Size limit</td><td><code>pruneCacheFolder</code>: past <code>MAX_SHADER_CACHE_BYTES</code> (256 MiB), the files used longest ago go, down to 3/4. A hit sets the file's time.</td></tr>
+  <tr><td>Off</td><td><code>cacheDir = ""</code>. The image tests and the unit tests turn it off; every example takes <samp>--no-cache</samp>.</td></tr>
+</table>
+</div>
+
+<p>Release, headless, RTX 3060, <samp>--frames 1 --wait-for-loads</samp>, median of 5 starts. Cold is the first start with an empty cache folder; warm is every start after it.</p>
+
+<div class="stats">
+  <div><b>1.02 s</b><span>09_gltf_materials, warm</span><small>2.43 s with no cache; 2.49 s cold (writing the entries)</small></div>
+  <div><b>0.98 s</b><span>15_debug_ui, warm</span><small>1.71 s with no cache; 1.72 s cold</small></div>
+  <div><b>1.54 s</b><span>02_gltf, warm</span><small>2.30 s with no cache; the rest is mesh import</small></div>
+  <div><b>14 ms</b><span>making 09's 24 pipelines, warm</span><small>1449 ms with no cache, 1389 ms of it in Slang (Tracy)</small></div>
+</div>
+
+<p>On this NVIDIA driver the pipeline cache saves little (about 35 ms in 09), because the driver keeps its own cache of compiled shaders too. Drivers without one, such as lavapipe, MoltenVK and many mobile drivers, gain more.</p>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Key, cache files, pruning</td><td><code>src/core/cacheFile.h</code>, <code>src/core/cacheFile.cpp</code></td></tr>
+  <tr><td>Shader entries</td><td><code>readCachedShader</code>, <code>writeCachedShader</code> in <code>src/renderer/shaderCache.cpp</code></td></tr>
+  <tr><td>Base key, hit or compile, struct check</td><td><code>ShaderCompiler::initialize</code>, <code>compileFromString</code>, <code>compileWithSlang</code> in <code>src/renderer/shaderCompiler.cpp</code></td></tr>
+  <tr><td>Pipeline cache</td><td><code>src/rhi/vulkan/vulkanPipelineCache.cpp</code>; loaded in <code>VulkanDevice::initialize</code>, saved in <code>~VulkanDevice</code></td></tr>
+  <tr><td>The folder</td><td><code>resolveCacheDir</code> in <code>src/platform/paths.cpp</code>, called from <code>Engine::Engine</code></td></tr>
+  <tr><td>Tests</td><td><samp>tests/cacheFileTests.cpp</samp>, <samp>tests/shaderCacheTests.cpp</samp>, <samp>tests/pathTests.cpp</samp></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Rules to keep</strong>
+  <p>Anything new that changes the SPIR-V goes into the key: a new compiler option goes into the option arrays (they are hashed), a new search path's files go into the base key, and a new way to pass defines must reach the source string. Change <code>SHADER_CACHE_VERSION</code> when the entry's payload changes, and <code>SHADER_CACHE_KEY_VERSION</code> when the key's inputs change. Never use a cached result without its stored key compared.</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Khronos, the Vulkan specification, "Pipeline Cache" (<code>VkPipelineCacheHeaderVersionOne</code>, <code>vkMergePipelineCaches</code>).</li>
+  <li>Arseny Kapoulkine, "Robust pipeline cache serialization" (the header checks some drivers need).</li>
+  <li><a href="uber-shaders.html">Uber shaders and shader permutations</a>, <a href="struct-layout.html">Struct layout rules</a>, <a href="vulkan-loader.html">The Vulkan loader</a>.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

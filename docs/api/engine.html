@@ -156,7 +156,7 @@
 <div class="api" id="Engine">
   <pre class="sig">Engine(const EngineConfig&amp; config);</pre>
   <div class="body">
-    <p>Opens the main window and sets up the whole renderer. It also resolves <code>shaderDir</code> and <code>assetRoot</code> (see <a href="#resolveAssetPath">paths</a>) and creates the default material. On any failure it logs an error and returns early, and <code>running()</code> stays false. A window width or height of 0 or less fails at once with <i>"Window dimensions must be positive."</i>.</p>
+    <p>Opens the main window and sets up the whole renderer. It also resolves <code>shaderDir</code>, <code>assetRoot</code> and <code>cacheDir</code> (see <a href="#resolveAssetPath">paths</a>) and creates the default material. On any failure it logs an error and returns early, and <code>running()</code> stays false. A window width or height of 0 or less fails at once with <i>"Window dimensions must be positive."</i>.</p>
     <dl>
       <dt>config</dt><dd>Copied into the engine. Fields are in the <a href="#EngineConfig">EngineConfig</a> table below (also on <a href="types.html#EngineConfig">types.html</a>).</dd>
     </dl>
@@ -199,6 +199,7 @@ if (!engine.running())
   <tr><td><code>preferredBackend</code></td><td><code>Backend::VULKAN</code></td><td>Only <code>VULKAN</code> works. The others log "not implemented yet" and the engine does not start.</td></tr>
   <tr><td><code>assetRoot</code></td><td>empty</td><td>Folder that relative <code>loadMesh</code> and <code>loadTexture</code> paths start from. A relative <code>assetRoot</code> starts beside the executable. Empty: paths are used as given (relative to the working directory).</td></tr>
   <tr><td><code>shaderDir</code></td><td>empty</td><td>Folder with the engine's <code>lib/</code> and <code>passes/</code> shaders. Empty: the build-time default, <code>shaders</code> beside the executable (CMake <code>-DRASM_SHADER_DIR=&lt;path&gt;</code> changes it). A relative path starts beside the executable.</td></tr>
+  <tr><td><code>cacheDir</code></td><td><code>"cache"</code></td><td>Folder of the <a href="../guides/shader-caching.html">shader and pipeline caches</a>: compiled shaders in <samp>shaders/</samp>, and the Vulkan pipeline cache, one file per GPU. A relative path starts beside the executable; if that folder cannot be made or written (an installed application), the caches go to the user's local cache folder (<samp>%LOCALAPPDATA%</samp> on Windows, <samp>~/Library/Caches</samp> on macOS, <samp>$XDG_CACHE_HOME</samp> or <samp>~/.cache</samp> on Linux) plus <samp>rasm/&lt;executable name&gt;</samp>, with one log line. An absolute path is used as it is, with no fallback. If neither works, a warning, and the engine runs without caches. Empty: no disk caches, every shader is compiled and every pipeline built (tests, repeatable runs). The examples' <samp>--no-cache</samp> sets it.</td></tr>
   <tr><td><code>geometryPoolVertices</code></td><td>2<sup>21</sup> = 2,097,152</td><td>Vertices of all meshes together, 64 bytes each (128 MiB). Fixed for the engine's life.</td></tr>
   <tr><td><code>geometryPoolColors</code></td><td>2<sup>20</sup> = 1,048,576</td><td>Vertex colors of the meshes that have them (glTF <code>COLOR_0</code>, or <code>createMesh</code>'s <code>colors</code>), 4 bytes each (4 MiB). A mesh without colors uses none. Fixed for the engine's life.</td></tr>
   <tr><td><code>geometryPoolSkins</code></td><td>2<sup>20</sup> = 1,048,576</td><td>Joints and weights of the skinned vertices (glTF <code>JOINTS_0</code> / <code>WEIGHTS_0</code>, a <a href="scene.html#SkinVertex"><code>SkinVertex</code></a> each), 16 bytes each (16 MiB). A mesh that is not skinned uses none. Fixed for the engine's life. The posed vertices go to buffers that grow by themselves (64 bytes per vertex per frame slot, per playing entity).</td></tr>
@@ -933,7 +934,7 @@ engine.setInspection(inspection);</code></pre>
   <tr><td>any</td><td><samp>D:/other/a.obj</samp> (absolute)</td><td><samp>D:/other/a.obj</samp>: an absolute path is kept</td></tr>
 </table>
 </div>
-<p><code>shaderDir</code> follows the same rule against the executable's folder, with the build-time default when empty. Paths are UTF-8, so folders with non-Latin names work.</p>
+<p><code>shaderDir</code> follows the same rule against the executable's folder, with the build-time default when empty. So does a relative <code>cacheDir</code>, which falls back to the user's cache folder when it cannot be written (see the table above). Paths are UTF-8, so folders with non-Latin names work.</p>
 
 <div class="api" id="resolveAssetPath">
   <pre class="sig">std::string resolveAssetPath(const std::string&amp; path) const;</pre>

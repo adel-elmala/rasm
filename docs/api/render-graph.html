@@ -892,7 +892,7 @@ if (engine.beginFrame(camera))
     const std::string&amp; shaderSource,
     const std::string&amp; entryPoint = "compMain");</pre>
   <div class="body">
-    <p>Compiles one compute entry point of <code>shaderSource</code> and makes a compute pipeline. Bind it in a compute pass, push constants with <code>ShaderType::COMPUTE</code>, then <code>dispatch</code>.</p>
+    <p>Compiles one compute entry point of <code>shaderSource</code> and makes a compute pipeline. Bind it in a compute pass, push its constants, then <code>dispatch</code>.</p>
     <dl>
       <dt>entryPoint</dt><dd>The <code>[shader("compute")]</code> function to use. One source can hold several, as <code>shaders/passes/cull.slang</code> does.</dd>
     </dl>
@@ -951,7 +951,7 @@ auto drawFullScreen = [&amp;engine](rasm::RenderContext &amp;ctx, rasm::Pipeline
     const uint32_t indices[2] = {first, second};
     ctx.bindPipeline(commandBuffer, pipeline);
     ctx.bindDescriptorSet(commandBuffer, pipeline, engine.getBindlessDescriptorSet(), 0);
-    ctx.pushConstants(commandBuffer, pipeline, rasm::ShaderType::VERTEX_FRAGMENT, indices, sizeof(indices), 0);
+    ctx.pushConstants(commandBuffer, pipeline, indices, sizeof(indices), 0);
     ctx.draw(commandBuffer, 3);
 };
 
@@ -1052,9 +1052,7 @@ graph.addComputePass(
             .count = PARTICLE_COUNT,       // 4 bytes
             .time = frame * FRAME_TIME};   // 4 bytes: 16 in all
         ctx.bindPipeline(commandBuffer, animatePipeline);
-        ctx.pushConstants(commandBuffer, animatePipeline,
-                          rasm::ShaderType::COMPUTE,
-                          &amp;pushConstants, sizeof(pushConstants));
+        ctx.pushConstants(commandBuffer, animatePipeline, &amp;pushConstants, sizeof(pushConstants));
         const uint32_t groups = (PARTICLE_COUNT + GROUP_SIZE - 1) / GROUP_SIZE;
         ctx.dispatch(commandBuffer, groups);
     });
@@ -1072,9 +1070,7 @@ graph.addPass(
         auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
         // ... push the address, then three vertices per particle
         ctx.bindPipeline(commandBuffer, drawPipeline);
-        ctx.pushConstants(commandBuffer, drawPipeline,
-                          rasm::ShaderType::VERTEX_FRAGMENT,
-                          &amp;pushConstants, sizeof(pushConstants));
+        ctx.pushConstants(commandBuffer, drawPipeline, &amp;pushConstants, sizeof(pushConstants));
         ctx.draw(commandBuffer, PARTICLE_COUNT * 3);
     });</code></pre>
 
