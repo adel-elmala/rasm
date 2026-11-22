@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transfer Queues · RASM</title>
+<meta name="description" content="Transfer queues and ownership transfers: the GPU's copy engine next to the graphics queue, uploads that need no wait, using data only once its copy is done, exclusive and concurrent sharing, release and acquire barriers, where the staging buffer lives, big copies in parts, when it pays off, and how RASM does it.">
+<meta name="rasm-sources" content="src/rhi/uploadManager.cpp src/rhi/uploadManager.h src/rhi/renderContext.cpp src/rhi/releaseQueue.h src/rhi/device.h src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/engine.cpp src/assets/texture.cpp src/assets/mesh.cpp src/renderer/environmentBake.cpp src/renderer/frameStats.cpp include/rasm/render/renderContext.h include/rasm/render/resource.h include/rasm/types.h include/rasm/engine.h examples/exampleArgs.h examples/10_ktx2_textures/main.cpp examples/17_streaming/main.cpp tools/load_bench.py">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/transfer-queue.js"></script>
+</head>
+<body data-root="../" data-page="guides/transfer-queue.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">GPU data</p>
+<h1>Transfer queues and ownership transfers</h1>
+<p class="lead">Most desktop GPUs have a copy engine: a part that only moves bytes, with a queue of its own. Uploads can run there, next to the frames, instead of in front of them. This page explains which copies may move there, how the frames learn that a copy is done, and how an image moves from one queue to another. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>On one queue, upload copies run <b>between frames</b> and make the GPU's frame longer while a level loads.</li>
+    <li>A <b>transfer queue</b> from a family that only copies is the <b>copy engine</b> (DMA). Its copies run <b>next to</b> the frames.</li>
+    <li>Copies into <b>new memory</b> need no wait for the frames. Copies that <b>overwrite</b> what a frame reads must stay ordered with the frames.</li>
+    <li><b>Use the data only once its copy is done.</b> Then a frame never waits for a copy in flight; its semaphore wait is on a value already reached.</li>
+    <li>A resource used by two queue families is <b>concurrent</b>, or <b>exclusive</b> and moved by a <b>release</b> and an <b>acquire</b> barrier. Buffers are usually concurrent; textures exclusive.</li>
+    <li>It pays off when the <b>GPU is busy</b>. With an idle GPU it changes nothing. <b>Measure</b> it.</li>
+  </ul>
+</div>
+
+<h2 id="problem"><span class="n">1</span>Copies on the graphics queue</h2>
+
+<p>A loaded texture goes into a staging buffer, then a copy command moves it into the image. On a GPU with one queue, those copies run in the queue's order: after the last frame, before the next one. Look at the graphics queue in the top row: each frame starts late by the copies in front of it.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="Two timelines. With one queue, copies run between frames on the graphics queue, so each frame starts later. With a copy engine, the copies run on their own queue under the frames, and the frames follow each other without a gap.">
+    <text x="10" y="22" class="title">One queue</text>
+    <rect x="120" y="34" width="630" height="36" rx="5" class="zone"/>
+    <text x="10" y="56" class="small">graphics</text>
+    <rect x="126" y="40" width="120" height="24" rx="4" class="gpu"/><text x="186" y="56" class="mid small">frame 1</text>
+    <rect x="248" y="40" width="70" height="24" rx="4" class="mem"/><text x="283" y="56" class="mid small">copies</text>
+    <rect x="320" y="40" width="120" height="24" rx="4" class="gpu"/><text x="380" y="56" class="mid small">frame 2</text>
+    <rect x="442" y="40" width="70" height="24" rx="4" class="mem"/><text x="477" y="56" class="mid small">copies</text>
+    <rect x="514" y="40" width="120" height="24" rx="4" class="gpu"/><text x="574" y="56" class="mid small">frame 3</text>
+
+    <text x="10" y="112" class="title">With a copy engine</text>
+    <rect x="120" y="124" width="630" height="36" rx="5" class="zone"/>
+    <rect x="120" y="166" width="630" height="30" rx="5" class="zone"/>
+    <text x="10" y="146" class="small">graphics</text>
+    <text x="10" y="185" class="small">transfer</text>
+    <rect x="126" y="130" width="120" height="24" rx="4" class="gpu"/><text x="186" y="146" class="mid small">frame 1</text>
+    <rect x="248" y="130" width="120" height="24" rx="4" class="gpu"/><text x="308" y="146" class="mid small">frame 2</text>
+    <rect x="370" y="130" width="120" height="24" rx="4" class="gpu"/><text x="430" y="146" class="mid small">frame 3</text>
+    <rect x="256" y="171" width="70" height="20" rx="4" class="mem"/><text x="291" y="185" class="mid small">copies</text>
+    <rect x="378" y="171" width="70" height="20" rx="4" class="mem"/><text x="413" y="185" class="mid small">copies</text>
+    <path d="M490,92V154" class="arrow dashed"/>
+    <path d="M634,66V92" class="arrow dashed"/>
+    <line x1="494" y1="92" x2="630" y2="92" class="arrow ok" marker-start="url(#ah-ok)" marker-end="url(#ah-ok)"/>
+    <text x="562" y="86" class="mid small t-ok">the time the copies took</text>
+  </svg>
+  <figcaption>The copy engine reads the staging buffer and writes video memory while the shader cores draw. The frames no longer wait for the copies, but they must not read a copy's data before it is done (section 4).</figcaption>
+</figure>
+
+<p>This matters only while something loads: a level, a streamed tile, a texture the camera just reached. With nothing to load, the two pictures are the same.</p>
+
+<h2 id="families"><span class="n">2</span>Queue families that only copy</h2>
+
+<p>A GPU offers its queues in <b>queue families</b>. Every family that can draw or compute can also copy. A family that can <b>only</b> copy is the copy engine.</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A graphics family: it draws, computes and copies, with one queue used for the frames.">
+      <rect x="20" y="20" width="200" height="90" rx="6" class="zone"/>
+      <rect x="32" y="34" width="56" height="26" rx="4" class="gpu"/><text x="60" y="51" class="mid small">draw</text>
+      <rect x="92" y="34" width="62" height="26" rx="4" class="shader"/><text x="123" y="51" class="mid small">compute</text>
+      <rect x="158" y="34" width="52" height="26" rx="4" class="mem"/><text x="184" y="51" class="mid small">copy</text>
+      <text x="120" y="88" class="mid small">the frames' queue</text>
+    </svg>
+    <h4>Graphics family</h4>
+    <p>Every GPU has one. It runs the frames, and it can copy too.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A compute family: it computes and copies, but cannot draw.">
+      <rect x="20" y="20" width="200" height="90" rx="6" class="zone"/>
+      <rect x="62" y="34" width="62" height="26" rx="4" class="shader"/><text x="93" y="51" class="mid small">compute</text>
+      <rect x="128" y="34" width="52" height="26" rx="4" class="mem"/><text x="154" y="51" class="mid small">copy</text>
+      <text x="120" y="88" class="mid small">async compute</text>
+    </svg>
+    <h4>Compute family</h4>
+    <p>Shader cores without the drawing parts. See <a href="async-compute.html">async compute</a>.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A transfer family: it only copies. It is the copy engine, which moves bytes over the bus without shader cores.">
+      <rect x="20" y="20" width="200" height="90" rx="6" class="zone"/>
+      <rect x="94" y="34" width="52" height="26" rx="4" class="mem"/><text x="120" y="51" class="mid small">copy</text>
+      <text x="120" y="88" class="mid small">the copy engine (DMA)</text>
+    </svg>
+    <h4>Transfer family</h4>
+    <p>Only <code>VK_QUEUE_TRANSFER_BIT</code>. NVIDIA and AMD GPUs have one; lavapipe, MoltenVK and most Intel GPUs do not.</p>
+  </div>
+</div>
+
+<div class="callout">
+  <strong>Check how exact its copies are</strong>
+  <p>Each family has a <code>minImageTransferGranularity</code>. (1, 1, 1) means a copy may start at any texel. A larger value means image copies must start and end on multiples of it, and (0, 0, 0) means whole mip levels only. An uploader that copies a few rows at a time needs (1, 1, 1), or must round its copies.</p>
+</div>
+
+<h2 id="two-kinds"><span class="n">3</span>Two kinds of uploads</h2>
+
+<p>On one queue, a barrier puts each copy after everything earlier on the queue. On another queue there is no such order. So ask of each copy: does it overwrite memory that a frame on the GPU may still read?</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="A copy overwrites a row of a table while the frame before still reads that row. On another queue nothing orders the two: the frame may read half-new data.">
+      <rect x="10" y="20" width="300" height="32" rx="4" class="zone"/>
+      <text x="16" y="40" class="small">graphics</text>
+      <rect x="80" y="26" width="160" height="20" rx="3" class="gpu"/><text x="160" y="40" class="mid small">frame reads row 5</text>
+      <rect x="10" y="86" width="300" height="32" rx="4" class="zone"/>
+      <text x="16" y="106" class="small">transfer</text>
+      <rect x="140" y="92" width="130" height="20" rx="3" class="mem"/><text x="205" y="106" class="mid small">copy writes row 5</text>
+      <line x1="190" y1="90" x2="190" y2="50" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <text x="198" y="72" class="small t-bad">race</text>
+    </svg>
+    <h4>Overwrites data in use</h4>
+    <p>A per-frame table, a buffer the application refills. The copy must wait for the frames that read it: keep it on the graphics queue, or wait on their semaphore and lose the overlap.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="A copy writes a new texture that no frame reads yet. Nothing on the GPU uses it, so it can run on the transfer queue at once.">
+      <rect x="10" y="20" width="300" height="32" rx="4" class="zone"/>
+      <text x="16" y="40" class="small">graphics</text>
+      <rect x="80" y="26" width="160" height="20" rx="3" class="gpu"/><text x="160" y="40" class="mid small">frame reads old data</text>
+      <rect x="10" y="86" width="300" height="32" rx="4" class="zone"/>
+      <text x="16" y="106" class="small">transfer</text>
+      <rect x="100" y="92" width="170" height="20" rx="3" class="mem"/><text x="185" y="106" class="mid small">copy fills a new texture</text>
+      <text x="160" y="72" class="mid small t-ok">nothing shared: no wait</text>
+    </svg>
+    <h4>Writes new memory</h4>
+    <p>A new texture, or a range of a pool that was freed only after every frame that used it was done. No frame reads it yet: the copy can start at once.</p>
+  </div>
+</div>
+
+<p>Loads are almost all of the second kind, and they are the big copies. Per-frame writes are small and of the first kind. So the usual split is: loads on the transfer queue, the rest on the graphics queue.</p>
+
+<h2 id="publish"><span class="n">4</span>Use the data only once its copy is done</h2>
+
+<p>The frame that first draws the new texture needs the copy finished. One way is to make that frame's submit wait for the copy's semaphore value. But if the copy is still running, the whole frame waits for it, and the overlap is gone. The better way is to <b>publish</b> the data only once the CPU sees the copy done.</p>
+
+<div class="stepper">
+  <div class="step">
+    <svg viewBox="0 0 760 120" role="img" aria-label="Frame N: the CPU fills the staging buffer and submits the copies on the transfer queue, which will signal value 7. The texture is not used yet.">
+      <rect x="10" y="20" width="740" height="30" rx="4" class="zone"/>
+      <text x="16" y="40" class="small t-cpu">CPU</text>
+      <rect x="90" y="25" width="170" height="20" rx="3" class="cpu"/><text x="175" y="39" class="mid small">frame N: fill, submit</text>
+      <rect x="10" y="70" width="740" height="30" rx="4" class="zone"/>
+      <text x="16" y="90" class="small">transfer</text>
+      <rect x="270" y="75" width="220" height="20" rx="3" class="mem"/><text x="380" y="89" class="mid small">copies → signal 7</text>
+      <line x1="260" y1="45" x2="272" y2="75" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <text x="520" y="40" class="small t-faint">the texture is not drawn yet</text>
+    </svg>
+    <p>Frame N fills the staging buffer and submits the copies on the transfer queue at once. The submit will signal value 7 on the transfer queue's timeline semaphore.</p>
+  </div>
+  <div class="step">
+    <svg viewBox="0 0 760 120" role="img" aria-label="Frame N plus 1: the CPU reads the semaphore without waiting. It reads 6, so the texture stays unpublished and the frame draws without it.">
+      <rect x="10" y="20" width="740" height="30" rx="4" class="zone"/>
+      <text x="16" y="40" class="small t-cpu">CPU</text>
+      <rect x="90" y="25" width="200" height="20" rx="3" class="cpu"/><text x="190" y="39" class="mid small">frame N+1: read value: 6</text>
+      <rect x="10" y="70" width="740" height="30" rx="4" class="zone"/>
+      <text x="16" y="90" class="small">transfer</text>
+      <rect x="90" y="75" width="300" height="20" rx="3" class="mem"/><text x="240" y="89" class="mid small">copies still running</text>
+      <text x="420" y="40" class="small t-faint">6 &lt; 7: draw without it, no wait</text>
+    </svg>
+    <p>Frame N+1 reads the semaphore's value, without waiting. It is 6, so the copies are not done. The frame draws without the texture (or with a stand-in) and never waits.</p>
+  </div>
+  <div class="step">
+    <svg viewBox="0 0 760 120" role="img" aria-label="Frame N plus 2: the value is 7, so the texture is published. The frame's graphics submit waits for value 7, which is already reached, and first acquires the texture.">
+      <rect x="10" y="20" width="740" height="30" rx="4" class="zone"/>
+      <text x="16" y="40" class="small t-cpu">CPU</text>
+      <rect x="90" y="25" width="230" height="20" rx="3" class="cpu"/><text x="205" y="39" class="mid small">frame N+2: value 7: publish</text>
+      <rect x="10" y="70" width="740" height="30" rx="4" class="zone"/>
+      <text x="16" y="90" class="small">graphics</text>
+      <rect x="340" y="75" width="60" height="20" rx="3" class="hot"/><text x="370" y="89" class="mid small">wait 7</text>
+      <rect x="402" y="75" width="70" height="20" rx="3" class="mem"/><text x="437" y="89" class="mid small">acquire</text>
+      <rect x="474" y="75" width="200" height="20" rx="3" class="gpu"/><text x="574" y="89" class="mid small">frame draws the texture</text>
+      <line x1="320" y1="45" x2="340" y2="75" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    </svg>
+    <p>Frame N+2 reads 7: the texture is published. Its graphics submit still waits for value 7, which is already reached, so the wait costs nothing; the wait makes the copies visible to the graphics queue, and the acquire barrier comes after it (section 6).</p>
+  </div>
+</div>
+
+<div class="callout rule">
+  <strong>Why still wait on the semaphore?</strong>
+  <p>Reading the value on the CPU tells the CPU, not the graphics queue. The spec makes the copy's writes visible to another queue only through a semaphore wait (or a fence and a later submit). A wait for a value already reached is free, so keep it.</p>
+</div>
+
+<h2 id="sharing"><span class="n">5</span>Exclusive or concurrent</h2>
+
+<p>Each buffer and image is created for one family (<b>exclusive</b>) or for several (<b>concurrent</b>, <code>VK_SHARING_MODE_CONCURRENT</code> with a list of families). An exclusive resource that a second family uses must be handed over with an ownership transfer, or its contents are undefined there.</p>
+
+<div class="vgrid two">
+  <div class="vcard good">
+    <svg viewBox="0 0 320 130" role="img" aria-label="A big buffer: the transfer queue writes one range while the graphics queue reads other ranges at the same time. The buffer is concurrent.">
+      <rect x="20" y="50" width="280" height="30" rx="4" class="mem"/>
+      <path d="M90,50V80M160,50V80M230,50V80" class="grid"/>
+      <rect x="160" y="50" width="70" height="30" rx="0" class="hot o-50"/>
+      <text x="195" y="70" class="mid small">new</text>
+      <line x1="195" y1="112" x2="195" y2="84" class="arrow mem" marker-end="url(#ah-mem)"/>
+      <text x="203" y="112" class="small">transfer writes</text>
+      <line x1="55" y1="18" x2="55" y2="46" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <line x1="125" y1="18" x2="125" y2="46" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <text x="135" y="20" class="small t-gpu">frames read</text>
+    </svg>
+    <h4>Buffers: concurrent</h4>
+    <p>A pool of geometry is copied into in one range while frames draw from the others. An ownership transfer moves the whole buffer, so copies and draws would have to take turns.</p>
+    <p class="cost"><b>Cost:</b> none known for buffers; drivers do not compress them.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 320 130" role="img" aria-label="A texture is written once on the transfer queue, then only sampled on the graphics queue. A release and an acquire move it once, from one family to the other.">
+      <rect x="10" y="14" width="300" height="38" rx="4" class="zone"/>
+      <rect x="10" y="78" width="300" height="38" rx="4" class="zone"/>
+      <text x="16" y="37" class="small">transfer</text>
+      <text x="16" y="101" class="small">graphics</text>
+      <rect x="76" y="21" width="96" height="24" rx="3" class="mem"/><text x="124" y="37" class="mid small">copy mips</text>
+      <rect x="176" y="21" width="56" height="24" rx="3" class="hot"/><text x="204" y="37" class="mid small">release</text>
+      <line x1="204" y1="47" x2="204" y2="83" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <rect x="176" y="85" width="56" height="24" rx="3" class="hot"/><text x="204" y="101" class="mid small">acquire</text>
+      <rect x="236" y="85" width="68" height="24" rx="3" class="gpu"/><text x="270" y="101" class="mid small">sample</text>
+    </svg>
+    <h4>Textures: exclusive, moved once</h4>
+    <p>A texture is written once, then only read. One release and one acquire move it to the graphics family for good.</p>
+    <p class="cost"><b>Cost:</b> two barriers per texture. It keeps the compression a driver may turn off for concurrent images.</p>
+  </div>
+</div>
+
+<h2 id="ownership"><span class="n">6</span>Release and acquire</h2>
+
+<p>An ownership transfer is one barrier recorded twice: a <b>release</b> on the queue that gives the resource up, and an <b>acquire</b> on the queue that takes it, with a semaphore between them. Both name the same two families, the same subresources and the same layouts, so the layout changes once.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="The transfer queue copies the mips, then records the release barrier from the transfer family to the graphics family, then signals value 7. The graphics queue waits for 7, records the same barrier as an acquire, then samples the texture.">
+    <rect x="110" y="24" width="640" height="54" rx="6" class="zone"/>
+    <rect x="110" y="124" width="640" height="54" rx="6" class="zone"/>
+    <text x="10" y="56" class="small">transfer</text>
+    <text x="10" y="156" class="small">graphics</text>
+    <rect x="120" y="36" width="150" height="30" rx="4" class="mem"/><text x="195" y="55" class="mid small">copy every mip</text>
+    <rect x="280" y="36" width="170" height="30" rx="4" class="hot"/><text x="365" y="55" class="mid small">release barrier</text>
+    <rect x="460" y="36" width="90" height="30" rx="4" class="box"/><text x="505" y="55" class="mid small">signal 7</text>
+    <line x1="505" y1="68" x2="505" y2="132" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="513" y="104" class="small t-hot">semaphore</text>
+    <rect x="460" y="136" width="90" height="30" rx="4" class="box"/><text x="505" y="155" class="mid small">wait 7</text>
+    <rect x="560" y="136" width="100" height="30" rx="4" class="hot"/><text x="610" y="155" class="mid small">acquire</text>
+    <rect x="670" y="136" width="74" height="30" rx="4" class="gpu"/><text x="707" y="155" class="mid small">sample</text>
+    <text x="365" y="96" class="mid small">TRANSFER_DST → SHADER_READ_ONLY</text>
+    <text x="365" y="110" class="mid small">transfer family → graphics family</text>
+  </svg>
+  <figcaption>The release's destination stages are ignored (the semaphore orders what follows), and so are the acquire's source stages (the semaphore wait orders what came before). Without the pair, the graphics queue would read an image that another family owns, whose contents are undefined there.</figcaption>
+</figure>
+
+<pre><code>// on the transfer queue, after the copies: the release
+VkImageMemoryBarrier2 release = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+release.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+release.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+release.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+release.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+release.srcQueueFamilyIndex = transferFamily;
+release.dstQueueFamilyIndex = graphicsFamily;
+
+// on the graphics queue, in a submit that waits for the copies' semaphore: the acquire
+VkImageMemoryBarrier2 acquire = release;
+acquire.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+acquire.srcAccessMask = VK_ACCESS_2_NONE;
+acquire.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+acquire.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;</code></pre>
+
+<div class="callout">
+  <strong>The first use needs no transfer</strong>
+  <p>A new exclusive resource is owned by no family: the first queue that uses it takes it. And a resource whose old contents are not needed (a barrier from <code>VK_IMAGE_LAYOUT_UNDEFINED</code>) can be used by any family without a transfer, once the semaphores order it after the last use.</p>
+</div>
+
+<h2 id="staging"><span class="n">7</span>Where the staging buffer lives</h2>
+
+<p>The CPU writes the staging buffer; the copy reads it. Where it lives decides who crosses the bus.</p>
+
+<div class="vgrid">
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The staging buffer in system memory. The CPU writes it at memory speed, and the copy engine reads it across the bus.">
+      <rect x="14" y="40" width="84" height="44" rx="5" class="cpu"/><text x="56" y="66" class="mid small">RAM: staging</text>
+      <rect x="142" y="40" width="84" height="44" rx="5" class="gpu"/><text x="184" y="66" class="mid small">video memory</text>
+      <line x1="100" y1="62" x2="140" y2="62" class="arrow mem flowing" marker-end="url(#ah-mem)"/>
+      <text x="120" y="108" class="mid small">the copy crosses the bus</text>
+    </svg>
+    <h4>System memory</h4>
+    <p>The usual place. The CPU writes fast; the copy engine pulls the bytes across the bus.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A small BAR heap of 256 MiB: a big staging buffer there takes room that buffers the CPU writes every frame need.">
+      <rect x="40" y="30" width="160" height="56" rx="5" class="zone"/>
+      <rect x="40" y="30" width="110" height="56" rx="5" class="mem"/>
+      <text x="95" y="62" class="mid small">staging</text>
+      <text x="120" y="108" class="mid small">256 MiB BAR heap: full</text>
+    </svg>
+    <h4>A small BAR heap</h4>
+    <p>Video memory the CPU can map, but only 256 MiB of it. A staging ring there takes room the per-frame buffers need.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="With resizable BAR all of video memory is mappable: the CPU writes the staging buffer across the bus, and the copy stays inside video memory.">
+      <rect x="20" y="30" width="200" height="56" rx="5" class="gpu"/>
+      <rect x="32" y="42" width="70" height="32" rx="4" class="mem"/><text x="67" y="62" class="mid small">staging</text>
+      <rect x="138" y="42" width="70" height="32" rx="4" class="mem"/><text x="173" y="62" class="mid small">texture</text>
+      <line x1="104" y1="58" x2="136" y2="58" class="arrow mem" marker-end="url(#ah-mem)"/>
+      <text x="120" y="108" class="mid small">resizable BAR: all mappable</text>
+    </svg>
+    <h4>All of video memory</h4>
+    <p>With resizable BAR (or memory shared with the CPU) there is no small heap to fill. The CPU crosses the bus once, and the GPU's copy stays in video memory: shorter.</p>
+  </div>
+</div>
+
+<h2 id="parts"><span class="n">8</span>Big copies in parts</h2>
+
+<p>The CPU side of an upload is a copy into the staging buffer, a few milliseconds for a big texture. Done in one go, it makes one long frame. A texture that is used only once its copy is done can be filled in <b>parts</b>, a few megabytes per frame: no frame samples it half filled.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 150" role="img" aria-label="A 2048 by 2048 texture with its mips is 21 MiB. It is filled in parts of 4 MiB over two frames under a time budget per frame. It is published after its last part is on the GPU.">
+    <text x="10" y="22" class="title">One 2048 × 2048 RGBA8 texture, mips included: 21 MiB</text>
+    <rect x="20" y="40" width="720" height="34" rx="4" class="zone"/>
+    <rect x="20" y="40" width="137" height="34" rx="4" class="mem"/><text x="88" y="61" class="mid small">4 MiB</text>
+    <rect x="160" y="40" width="137" height="34" rx="4" class="mem"/><text x="228" y="61" class="mid small">4 MiB</text>
+    <rect x="300" y="40" width="137" height="34" rx="4" class="mem"/><text x="368" y="61" class="mid small">4 MiB</text>
+    <rect x="440" y="40" width="137" height="34" rx="4" class="mem o-50"/><text x="508" y="61" class="mid small">4 MiB</text>
+    <rect x="580" y="40" width="137" height="34" rx="4" class="mem o-50"/><text x="648" y="61" class="mid small">4 MiB</text>
+    <rect x="720" y="40" width="20" height="34" rx="2" class="mem o-50"/>
+    <path d="M20,84V92H437V84" class="arrow cpu"/>
+    <text x="228" y="108" class="mid small t-cpu">frame N: until the budget is spent</text>
+    <path d="M440,84V92H740V84" class="arrow cpu"/>
+    <text x="590" y="108" class="mid small t-cpu">frame N+1: the rest, then publish</text>
+    <text x="380" y="138" class="mid small t-faint">a part also stops when the staging ring is full, instead of waiting for the GPU to free it</text>
+  </svg>
+</figure>
+
+<h2 id="pays-off"><span class="n">9</span>When it pays off</h2>
+
+<p>The copy engine saves the copies' time on the graphics queue. That is time on a busy GPU only: when the CPU sets the pace and the GPU idles half the frame, copies in front of a frame cost nothing visible. Move the sliders and watch the frame time of each case.</p>
+
+<figure class="lab" data-lab="copy-queue" data-title="Copies on which queue?">
+  <figcaption>Make the GPU frame longer than the CPU frame: the copies on the graphics queue now add to every frame, and the copy engine saves them. Make the CPU frame the longest: both cases take the same time.</figcaption>
+</figure>
+
+<dl class="pitfalls">
+  <div><dt>A frame waits for a copy in flight</dt><dd>Its submit waits for the newest value, not for one the CPU saw reached. Publish first, then wait for the published value.</dd></div>
+  <div><dt>Validation: an image used by a family that does not own it</dt><dd>A release without its acquire, or an acquire in a submit that does not wait for the release's semaphore. Record the acquire in a submit that waits, before any use.</dd></div>
+  <div><dt>Garbage in the first frame that samples a texture</dt><dd>The data was used before its copy was done, or the frame skipped the semaphore wait that makes the writes visible.</dd></div>
+  <div><dt>A copy writes into memory a frame still reads</dt><dd>A reused range went back to the allocator before every queue was done with it, or a per-frame write went to the transfer queue. Free ranges only after all queues' fences, and keep overwrites on the frames' queue.</dd></div>
+  <div><dt>The acquire is lost when a frame is dropped</dt><dd>Forget a texture's acquire only once the submit that carries it went out; a skipped or failed frame must take it again.</dd></div>
+  <div><dt>Copies fail on another GPU</dt><dd>Its transfer family has a coarser <code>minImageTransferGranularity</code>: row copies at any offset are not allowed there.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
+
+<p>RASM has a transfer queue for the loads' copies, on by default (<code>EngineConfig::transferQueue</code>). Everything a load fills goes there; the frames' own fills stay on the graphics queue. A load counts as loaded once its copies are on the GPU, so the frames never wait for copies in flight. On a GPU without a copy-only family the same code runs with the graphics queue in place of the transfer queue.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>main thread</span>
+  <span><i class="mem"></i>load uploads (transfer queue)</span>
+  <span><i class="gpu"></i>frames (graphics queue)</span>
+  <span><i class="hot"></i>waits and barriers</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Frame N: finishReadyLoads publishes what is done, fills ready loads between beginLoadUploads and endLoadUploads, which submits the copies on the transfer queue with value V. The copies release each texture. Frame N plus k: publishUploadedLoads sees the fence reach V, the texture and mesh count as loaded, and the frame's first graphics submit waits for V and runs the acquires first.">
+    <rect x="110" y="20" width="640" height="56" rx="6" class="zone"/>
+    <rect x="110" y="98" width="640" height="48" rx="6" class="zone"/>
+    <rect x="110" y="168" width="640" height="56" rx="6" class="zone"/>
+    <text x="10" y="52" class="small t-cpu">main thread</text>
+    <text x="10" y="126" class="small">transfer</text>
+    <text x="10" y="200" class="small">graphics</text>
+
+    <rect x="118" y="30" width="250" height="36" rx="4" class="cpu"/>
+    <text x="243" y="45" class="mid small">frame N: finishReadyLoads</text>
+    <text x="243" y="59" class="mid small">fills in 4 MiB parts, endLoadUploads</text>
+    <line x1="300" y1="66" x2="318" y2="106" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="320" y="108" width="190" height="28" rx="4" class="mem"/>
+    <text x="415" y="126" class="mid small">copies, release → V</text>
+
+    <rect x="520" y="30" width="222" height="36" rx="4" class="cpu"/>
+    <text x="631" y="45" class="mid small">frame N+k: fence ≥ V:</text>
+    <text x="631" y="59" class="mid small">publishUploadedLoads</text>
+    <line x1="510" y1="122" x2="560" y2="178" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <rect x="562" y="178" width="70" height="36" rx="4" class="hot"/>
+    <text x="597" y="193" class="mid small">wait V</text>
+    <text x="597" y="207" class="mid small">acquire</text>
+    <rect x="636" y="178" width="106" height="36" rx="4" class="gpu"/>
+    <text x="689" y="193" class="mid small">draws the</text>
+    <text x="689" y="207" class="mid small">new texture</text>
+    <rect x="118" y="178" width="436" height="36" rx="4" class="gpu o-50"/>
+    <text x="336" y="200" class="mid small">frames N … N+k−1 draw without it, and wait for nothing</text>
+  </svg>
+  <figcaption>The copies wait only for the frame and compute values the CPU saw reached, since what they write is new. Each graphics or compute submit waits for the newest load value the CPU saw done, once per new value; the first graphics submit after it runs the acquires first. The release queue waits for the load uploads' timeline too, so a destroyed texture or a freed pool range outlives its copies.</figcaption>
+</figure>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Which queue</td><td>a family that only copies</td><td><code>VulkanDevice::initialize</code> takes the first family with only <code>VK_QUEUE_TRANSFER_BIT</code> (and sparse binding or protected) and a <code>minImageTransferGranularity</code> of (1, 1, 1). None: the loads' copies use the graphics queue. <code>QueueType::TRANSFER</code> is the engine's own: <code>RenderContext::createCommandBuffer</code> and <code>submit</code> refuse it.</td></tr>
+  <tr><td>Which copies</td><td>new memory on the transfer queue</td><td>Every fill between <code>RenderContext::beginLoadUploads</code> and <code>endLoadUploads</code>, which <code>Engine::finishReadyLoads</code> brackets: texture levels, geometry and animation pool ranges, an environment's image. An application's <code>fillBuffer</code> and <code>fillTexture</code> stay on the graphics queue, ready for the next frame.</td></tr>
+  <tr><td>Publish</td><td>after the copy is done</td><td><code>Engine::publishUploadedLoads</code>, at the start of the next <code>finishReadyLoads</code>: a mesh becomes <code>READY</code>, a texture leaves <code>pendingTextures</code>, an environment may bake. Entities already wait for their mesh and textures, so they appear then.</td></tr>
+  <tr><td>Waits</td><td>for a value already reached</td><td><code>updateLoadUploadsDone</code> reads the fence once a frame; every graphics and compute submit waits for that value, once per new value (<code>loadWaited</code>).</td></tr>
+  <tr><td>Sharing</td><td>buffers concurrent, textures exclusive</td><td>The same without a compute queue: <code>rhi::Texture::ownershipTransfer</code>. With one, images filled from the ring are concurrent for the graphics, compute and transfer families (they were already concurrent for two, <code>P11</code>).</td></tr>
+  <tr><td>Release, acquire</td><td>one barrier recorded twice</td><td><code>copyToTextures</code> releases a texture with its fill's last copy (<code>TextureCopy::last</code>). <code>UploadManager::recordAcquires</code> records the acquires (<code>acquireTextures</code>) into one of three graphics command buffers, which <code>RenderContext::submit</code> puts first; <code>acquiresSubmitted</code> forgets them only once that submit went out.</td></tr>
+  <tr><td>Staging</td><td>system memory, or all of video memory</td><td>Each upload manager has a 64 MB ring of <code>BufferUsage::TRANSFER</code>: system memory, or video memory where all of it is host-visible (<code>P10</code>).</td></tr>
+  <tr><td>Parts</td><td>a few MiB per frame</td><td><code>RenderContext::fillTexturePart</code> with <code>TextureFillProgress</code>, 4 MiB at a time under the 4 ms load budget, begun textures first; a part stops at a full ring. A model's geometry is still one step (<code>P24</code>).</td></tr>
+  <tr><td>Timing</td><td>time the copies on their queue</td><td>Each upload batch has two timestamps; <code>FrameStats::uploadGpuMs</code> sums the batches that finished since the last frame.</td></tr>
+</table>
+</div>
+
+<h3>Is it faster?</h3>
+
+<div class="stats">
+  <div><b>220 → 195 ms</b><span>PNG Flight Helmet load, busy GPU</span><small>4.5 ms frames: 3840 × 2160, 8× MSAA, bloom</small></div>
+  <div><b>190 = 190 ms</b><span>the same load, idle GPU</span><small>0.16 ms frames at 1280 × 720</small></div>
+  <div><b>9.2 → 5.0 ms</b><span>longest frame while it loads</span><small>textures filled in 4 MiB parts</small></div>
+  <div><b>1.28 → 1.27 ms</b><span><samp>05_city</samp> steady GPU frame</span><small>every buffer concurrent: no cost</small></div>
+</div>
+
+<p>Measured with <code>tools/load_bench.py</code> (Release, headless, RTX 3060, median of 5 runs, both queues; the examples take <code>--transfer-queue on|off</code>). With a busy GPU, loads end 6 to 11 % sooner; with an idle one, nothing changes, and the 300-image burst of <code>17_streaming</code> takes 433 ms against 421 ms. The staging rings stay in video memory on this GPU, which has resizable BAR: in system memory the copies took 2.6 times as long on the GPU. So the option is on by default. Uploads are still recorded on the main thread (<code>D13</code>).</p>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The option</td><td><code>EngineConfig::transferQueue</code> in <code>include/rasm/types.h</code></td></tr>
+  <tr><td>Picking the queue, sharing, ring placement</td><td><code>VulkanDevice::initialize</code>, <code>getImageFamilies</code>, <code>createBuffer</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
+  <tr><td>Release and acquire barriers</td><td><code>copyToTextures</code>, <code>acquireTextures</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
+  <tr><td>Rings, batches, releases, timers</td><td><code>UploadManager</code> in <code>src/rhi/uploadManager.cpp</code></td></tr>
+  <tr><td>The two upload managers, waits, acquires in a submit</td><td><code>beginLoadUploads</code>, <code>endLoadUploads</code>, <code>submit</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>Fill and publish loads</td><td><code>Engine::finishReadyLoads</code>, <code>publishUploadedLoads</code> in <code>src/engine.cpp</code>; <code>finishTextureLoad</code> in <code>src/assets/texture.cpp</code></td></tr>
+  <tr><td>Release queue timelines</td><td><code>RELEASE_TIMELINES</code> in <code>src/rhi/releaseQueue.h</code></td></tr>
+  <tr><td>Tests</td><td><code>tests/uploadManagerTests.cpp</code>, <code>tests/releaseQueueTests.cpp</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>A fill between <code>beginLoadUploads</code> and <code>endLoadUploads</code> writes only memory no submitted work uses, and its data is used only after <code>isLoadUploadDone</code>.</li>
+    <li>A graphics or compute submit waits only for a load value the CPU saw reached; never for one in flight.</li>
+    <li>An exclusive texture is sampled only after the graphics submit that acquired it; its acquire is forgotten only once that submit went out.</li>
+    <li>What a destroy frees waits for all four timelines (<code>RELEASE_TIMELINES</code>).</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>The Vulkan specification: the sections on queue family ownership transfer, resource sharing modes and <code>minImageTransferGranularity</code>.</li>
+  <li>The Khronos <i>Vulkan Guide</i> and synchronization examples: transferring a resource between queue families.</li>
+  <li>The VMA documentation: the usage patterns for staging buffers and resizable BAR.</li>
+  <li>Related guides: <a href="gpu-memory.html">GPU memory and uploads</a>, <a href="texture-uploads.html">texture uploads</a>, <a href="asset-streaming.html">streaming assets</a>, <a href="async-compute.html">async compute</a>, <a href="gpu-sync.html">GPU synchronization</a>.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

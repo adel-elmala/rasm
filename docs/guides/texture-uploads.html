@@ -361,10 +361,10 @@
 
 <h2 id="in-rasm"><span class="n">7</span>In RASM</h2>
 
-<p>The worker decodes and makes every level; the main thread only creates the texture and copies the levels, a few textures per frame; the device copies through the staging ring unless host copy is safe for the format.</p>
+<p>The worker decodes and makes every level; the main thread only creates the texture and copies the levels, in parts of 4 MiB under a budget per frame; the device copies through the staging ring, on the transfer queue where there is one, unless host copy is safe for the format. The texture counts as loaded once its copies are done (<a href="transfer-queue.html">transfer queues</a>).</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 330" role="img" aria-label="Worker: loadTexture's decodeTexture, or a glTF image's job, runImageWork, decodes and calls buildTextureLevels, which makes every mip in linear light for sRGB, weighted by alpha, and renormalized for normal maps. It returns a TextureRaw with all levels. Main thread: the texture is created and waits in pendingTextures. finishLoads fills them one by one until the 4 ms LOAD_BUDGET is used. fillTexture copies through the staging ring, or by host copy where queryFormatSupport allowed it. The texture lives in a VMA block shared with other textures.">
+  <svg viewBox="0 0 760 330" role="img" aria-label="Worker: loadTexture's decodeTexture, or a glTF image's job, runImageWork, decodes and calls buildTextureLevels, which makes every mip in linear light for sRGB, weighted by alpha, and renormalized for normal maps. It returns a TextureRaw with all levels. Main thread: the texture is created and waits in pendingTextures. finishLoads fills them in parts of 4 MiB until the 4 ms LOAD_BUDGET is used. fillTexturePart copies through the staging ring on the transfer queue, or by host copy where queryFormatSupport allowed it. The texture lives in a VMA block shared with other textures.">
     <text x="20" y="22" class="title t-cpu">worker thread</text>
     <rect x="20" y="32" width="220" height="60" rx="6" class="cpu"/>
     <text x="130" y="50" class="mid small mono">decodeTexture</text>
@@ -382,19 +382,19 @@
 
     <text x="20" y="124" class="title t-cpu">main thread · finishLoads, every frame</text>
     <rect x="20" y="132" width="720" height="70" rx="8" class="zone"/>
-    <text x="34" y="152" class="small">pendingTextures, filled one at a time until LOAD_BUDGET (4 ms):</text>
+    <text x="34" y="152" class="small">pendingTextures, filled in 4 MiB parts until LOAD_BUDGET (4 ms):</text>
     <rect x="34" y="162" width="70" height="28" rx="4" class="cpu"/><text x="69" y="181" class="mid small">tex 1</text>
     <rect x="108" y="162" width="70" height="28" rx="4" class="cpu"/><text x="143" y="181" class="mid small">tex 2</text>
     <line x1="186" y1="156" x2="186" y2="198" class="arrow hot dashed"/>
     <text x="192" y="181" class="small t-hot">4 ms: next frame</text>
     <rect x="300" y="162" width="70" height="28" rx="4" class="cpu o-50"/><text x="335" y="181" class="mid small">tex 3</text>
     <rect x="374" y="162" width="70" height="28" rx="4" class="cpu o-50"/><text x="409" y="181" class="mid small">tex 4</text>
-    <text x="600" y="181" class="mid small">fillTexture copies only</text>
+    <text x="600" y="181" class="mid small">fillTexturePart copies only</text>
 
     <line x1="250" y1="202" x2="160" y2="236" class="arrow gpu" marker-end="url(#ah-gpu)"/>
     <line x1="500" y1="202" x2="590" y2="236" class="arrow gpu" marker-end="url(#ah-gpu)"/>
     <rect x="20" y="238" width="300" height="60" rx="6" class="gpu"/>
-    <text x="170" y="260" class="mid small">staging ring → copy command</text>
+    <text x="170" y="260" class="mid small">staging ring → copy, transfer queue</text>
     <text x="170" y="280" class="mid small">UploadManager::uploadTexture</text>
     <rect x="440" y="238" width="300" height="60" rx="6" class="gpu"/>
     <text x="590" y="260" class="mid small">host copy, where it is safe</text>
@@ -413,7 +413,7 @@
   <tr><td>Mips</td><td>file, CPU worker, GPU blits or compute</td><td>KTX2: from the file (or made on the worker for a Basis file without them). PNG and JPEG: <code>buildTextureLevels</code> on the worker, with stb_image_resize2's default filter (Mitchell), each level from the one above. GPU mip generation is not used: it would need storage usage on every texture, and blits have no alpha weighting.</td></tr>
   <tr><td>Filtering</td><td>linear light, alpha, renormalize</td><td><code>R8G8B8A8_SRGB</code>: linear light, alpha-weighted. <code>R8G8B8A8_UNORM</code>: the stored numbers. A glTF normal texture (<code>KtxSlot::NORMAL</code>): renormalized; <code>loadTexture</code> does not know the slot, so it does not renormalize.</td></tr>
   <tr><td>Copy</td><td>staging or host copy</td><td>Host copy only for a format where <code>VulkanDevice::queryFormatSupport</code> found the feature, host transfer, <code>optimalDeviceAccess</code>, <code>SHADER_READ_ONLY_OPTIMAL</code> among the copy layouts, and a device-local type in both sets (<code>getHostCopyMemoryTypes</code>); the image is then made with only those types. Every other format, and every format with <code>EngineConfig::hostImageCopy</code> false, goes through the staging ring. The log says which: <samp>Host image copy: off</samp> on the RTX 3060, and on for 13 formats on lavapipe.</td></tr>
-  <tr><td>Per frame</td><td>a few textures per frame</td><td>Each texture is its own entry in <code>pendingTextures</code>, filled after the meshes inside <code>LOAD_BUDGET</code>, at least one per frame. A glTF texture whose fill fails is taken out of its materials, which then read their defaults. One texture is never split: a 8192² RGBA8 texture copies in one frame (<code>P24</code>). <code>isLoaded(mesh)</code> is true once its glTF's textures are filled.</td></tr>
+  <tr><td>Per frame</td><td>a few textures per frame</td><td>Each texture is its own entry in <code>pendingTextures</code>, filled after the meshes inside <code>LOAD_BUDGET</code>, in parts of 4 MiB (<code>RenderContext::fillTexturePart</code>, <code>TextureFillProgress</code>), at least one part per frame, the textures begun first; a part stops at a full staging ring instead of waiting. The longest frame while the PNG Flight Helmet loads is 5 ms (9 ms with a texture in one go). A glTF texture whose fill fails is taken out of its materials, which then read their defaults. A texture is loaded once its last part's copies are done; <code>isLoaded(mesh)</code> is true once its glTF's textures are (<a href="transfer-queue.html">transfer queues</a>).</td></tr>
   <tr><td>Memory</td><td>sub-allocate, dedicated for big targets</td><td>Sampled textures are sub-allocated by VMA, with no host-access flags. Attachments and storage textures keep a dedicated allocation. <code>VRAMStats::vramAllocated</code> counts the bytes of the allocations, <code>vramUsage</code> the whole blocks.</td></tr>
   <tr><td>App-filled textures</td><td>—</td><td><code>RenderContext::fillTexture(texture, data)</code> with one RGBA8 level still makes the mips in the caller's thread (<code>buildMipChain</code>), as the application asked for.</td></tr>
 </table>

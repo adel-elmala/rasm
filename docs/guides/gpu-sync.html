@@ -898,7 +898,7 @@ vkCmdPipelineBarrier2(commandBuffer, &dependency);</code></pre>
   <tr><td>a compute batch and a graphics batch</td><td>a timeline fence wait at all commands (<code>VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT</code>), since a batch often starts with a layout transition that must come after it</td></tr>
   <tr><td>uploads and the compute queue</td><td>the upload submit waits for the last compute submit, and a compute submit waits for the last upload (<code>UploadManager::lastSubmit</code>)</td></tr>
   <tr><td>barriers in a compute-queue command buffer</td><td><code>fitToComputeQueue</code>: graphics source stages become all commands, which chains to the submit's wait; graphics destination stages and graphics-only accesses are dropped</td></tr>
-  <tr><td>resource ownership</td><td>none: every buffer and image is created <code>VK_SHARING_MODE_CONCURRENT</code> for both families</td></tr>
+  <tr><td>resource ownership</td><td>with a compute queue, every buffer and image is created <code>VK_SHARING_MODE_CONCURRENT</code> for both families; a texture a load fills on the transfer queue moves to the graphics family by a release and an acquire (<a href="transfer-queue.html">transfer queues</a>)</td></tr>
 </table>
 </div>
 
@@ -919,7 +919,7 @@ vkCmdPipelineBarrier2(commandBuffer, &dependency);</code></pre>
   <tr><td>State tracking</td><td>per resource, or a render graph</td><td>Both: <code>TextureStates</code> for textures, <code>RenderGraph::bufferAccess</code> for buffers used by graph passes, the scene passes included, per queue. <code>RenderGraph::textureAccess</code> tracks textures across queues only. Only the barriers between dispatches inside one pass are placed by the pass itself.</td></tr>
   <tr><td>Discard</td><td>UNDEFINED as old layout</td><td>The <code>discard</code> flag, or <code>UNKNOWN</code> as the state. <code>beginPass</code> discards the attachments a pass clears, and keeps the ones it loads.</td></tr>
   <tr><td>Split barriers, events</td><td>possible</td><td>None.</td></tr>
-  <tr><td>Queues</td><td>semaphores, ownership transfers</td><td>A graphics queue, and a compute queue when <code>EngineConfig::asyncCompute</code> is on and the GPU has one. Timeline fence waits between them, and concurrent sharing instead of ownership transfers (<b>P11</b>). Uploads go on the graphics queue and need no semaphore there: <code>copyBuffers</code> brackets them with all-commands barriers. No transfer queue (<b>D13</b>).</td></tr>
+  <tr><td>Queues</td><td>semaphores, ownership transfers</td><td>A graphics queue, and a compute queue when <code>EngineConfig::asyncCompute</code> is on and the GPU has one. Timeline fence waits between them, and concurrent sharing instead of ownership transfers (<b>P11</b>). The frames' uploads go on the graphics queue and need no semaphore there: <code>copyBuffers</code> brackets them with all-commands barriers. The loads' copies go on a transfer queue (<code>EngineConfig::transferQueue</code>); a frame waits only for load values the CPU saw reached, and a texture filled there is released by the transfer queue and acquired by the graphics queue (<a href="transfer-queue.html">transfer queues</a>).</td></tr>
   <tr><td>Host reads</td><td>barrier to host, fence, invalidate</td><td>All three: <code>COMPUTE</code> → <code>HOST</code> at the end of the frame, or of its last compute batch with async compute, the slot's fences, and <code>readBuffer</code> invalidates the range. A readback has its own copy → host barrier, and <code>takeReadback</code> waits for the fence of the frame that copied it (<a href="headless-readback.html">readbacks</a>).</td></tr>
   <tr><td>Host-side layout change</td><td>—</td><td>Loaded textures use host image copy where it costs the GPU nothing for their format (on lavapipe, not on the RTX 3060): <code>fillTexture</code> transitions and fills them on the CPU, with no GPU barrier. The others go through the staging ring, with the barriers of <code>copyToTextures</code>.</td></tr>
 </table>
@@ -956,7 +956,7 @@ vkCmdPipelineBarrier2(commandBuffer, &dependency);</code></pre>
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>There is no transfer queue (<b>D13</b>), and with async compute every resource is shared by both queue families instead of moving ownership (<b>P11</b>). The render graph places barriers and aliases transient render targets, but does not cull passes (<b>D9</b>). Aliasing needs its own global barrier: see <a href="memory-aliasing.html">Transient memory and aliasing</a>.</p>
+  <p>With async compute every resource is shared by both queue families instead of moving ownership (<b>P11</b>); only a texture a load fills on the transfer queue moves ownership, once (<a href="transfer-queue.html">transfer queues</a>). The render graph places barriers and aliases transient render targets, but does not cull passes (<b>D9</b>). Aliasing needs its own global barrier: see <a href="memory-aliasing.html">Transient memory and aliasing</a>.</p>
 </div>
 
 <h3>Further reading</h3>

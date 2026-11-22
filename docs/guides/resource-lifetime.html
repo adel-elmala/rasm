@@ -177,7 +177,7 @@
       <rect x="20" y="36" width="200" height="40" rx="4" class="mem"/><text x="120" y="54" class="mid small">free T</text><text x="120" y="70" class="mid small">graphics 12, upload 40</text>
       <text x="260" y="60" class="small">frame 12 is submitted; it will signal 12</text>
     </svg>
-    <p>The entry gets the values of frame 12's submits, and the uploads' last one.</p>
+    <p>The entry gets the values of frame 12's submits, and the uploads' last ones.</p>
   </div>
   <div class="step">
     <h4>Start of frame 13: not yet</h4>
@@ -397,7 +397,7 @@
     <text x="170" y="186" class="mid small">reads the 3 fences, never waits</text>
     <line x1="170" y1="196" x2="170" y2="228" class="arrow ok" marker-end="url(#ah-ok)"/>
     <rect x="20" y="230" width="720" height="50" rx="6" class="gpu"/>
-    <text x="380" y="250" class="mid small">every entry whose values all three reached: textureStates.forget, cancelUploads, destroyTexture;</text>
+    <text x="380" y="250" class="mid small">every entry whose values all four reached: textureStates.forget, cancelUploads, destroyTexture;</text>
     <text x="380" y="268" class="mid small">the bindless slot goes on freeBindlessSlots, and the next texture that needs a slot takes it</text>
   </svg>
   <figcaption>The graphics value covers the frame's compute work, because the frame's last graphics batch waits for it (<a href="async-compute.html">async compute</a>). The compute value still counts, for a frame whose later batches failed after a compute one went out.</figcaption>
@@ -426,7 +426,7 @@
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Handle</td><td>dies at the call</td><td>The same: the <code>HandlePool</code> of the object's table bumps the generation, so a lookup with the old handle logs an error and fails (<a href="generational-handles.html#in-rasm">generational handles</a>).</td></tr>
-  <tr><td>Counters</td><td>one per queue, and the uploads'</td><td><code>RELEASE_TIMELINES</code> = 3: <code>frameFence</code>, <code>computeFence</code> (only with async compute) and the upload manager's fence.</td></tr>
+  <tr><td>Counters</td><td>one per queue, and the uploads'</td><td><code>RELEASE_TIMELINES</code> = 4: <code>frameFence</code>, <code>computeFence</code> (only with async compute), the frames' upload fence and the loads' upload fence (on the transfer queue, <a href="transfer-queue.html">transfer queues</a>).</td></tr>
   <tr><td>Tag</td><td>at the end of the frame</td><td><code>tagReleases</code> in <code>endFrame</code>, right after <code>submitBatches</code>, also when the frame was dropped.</td></tr>
   <tr><td>Collect</td><td>at the start of a frame, by reading the counters</td><td><code>beginFrame</code> tags and collects first thing, before it may skip the frame (a minimized window), and collects again after the slot's fence wait. With nothing tagged it returns at once.</td></tr>
   <tr><td>Free</td><td>a free function per entry</td><td>A <code>std::function</code> per entry, in order. <code>RenderContext::cleanup</code> waits for the device and runs them all (<code>releaseAll</code>).</td></tr>
