@@ -207,16 +207,19 @@ namespace rasm
         ctx.destroyTexture(texture);
     }
 
-    // The load's bytes go back to the budget here or once it is filled (finishLoads).
+    // The load's bytes go back to the budget once a worker freed its data, from here or once it is filled (finishLoads).
     void Engine::dropTextureLoad(TextureHandle texture)
     {
         auto it = pendingTextures.find(texture);
         if (it == pendingTextures.end())
             return;
         if (it->second.job)
-            workers->dropLoad(it->second.job->ticket);
+        {
+            LoadTicket &ticket = it->second.job->ticket;
+            dropPendingLoad(ticket, std::move(it->second.job));
+        }
         else
-            workers->releaseBytes(it->second.bytes);
+            freeOnWorker(std::move(it->second.levels), it->second.bytes);
         pendingTextures.erase(it);
     }
 

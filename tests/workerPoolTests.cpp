@@ -310,6 +310,44 @@ TEST_CASE("shutdown drops queued jobs and waits for running ones")
     CHECK(queuedRan == 0);
 }
 
+// Engine::freeOnWorker hands a load's result to a child job: what it holds is freed when the job runs, when shutdown
+// drops it from the queue, or at once when the pool is stopping, never leaked (P26).
+TEST_CASE("a child job's captures are freed whether it runs, is dropped by shutdown, or comes after it")
+{
+    auto ran = std::make_shared<int>(0);
+    auto queued = std::make_shared<int>(0);
+    auto late = std::make_shared<int>(0);
+    Gate gate;
+    {
+        WorkerPool pool(1, UINT64_MAX, "test");
+        pool.pushChild([ran]() {});
+        REQUIRE(waitUntil([&]()
+                          { return ran.use_count() == 1; }));
+
+        // The only worker waits, so this child is still queued when the pool stops.
+        std::atomic<bool> started = false;
+        pool.push({.run = [&started, f = gate.future]()
+                   {
+                       started = true;
+                       f.wait();
+                   }});
+        REQUIRE(waitUntil([&]()
+                          { return started.load(); }));
+        pool.pushChild([queued]() {});
+        CHECK(queued.use_count() == 2);
+        std::thread opener([&gate]()
+                           {
+                               std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                               gate.open(); });
+        pool.shutdown();
+        opener.join();
+        CHECK(queued.use_count() == 1);
+
+        pool.pushChild([late]() {});
+        CHECK(late.use_count() == 1);
+    }
+}
+
 TEST_CASE("the destructor stops a pool that still has work")
 {
     std::atomic<int> ran = 0;

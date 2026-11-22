@@ -104,7 +104,8 @@ namespace rasm
         {
             if (it->handle == environment)
             {
-                workers->dropLoad(it->job->ticket);
+                LoadTicket &ticket = it->job->ticket;
+                dropPendingLoad(ticket, std::move(it->job));
                 pendingEnvironments.erase(it);
                 break;
             }
@@ -132,7 +133,7 @@ namespace rasm
     {
         ZoneScoped;
 
-        const EnvironmentRaw raw = std::move(load.job->raw);
+        const EnvironmentRaw &raw = load.job->raw;
         if (!isLive(load.handle))
             return;
         Environment &environment = environments->environments[load.handle.index];
