@@ -753,7 +753,7 @@ void bindTexture(TextureHandle texture);</code></pre>
 <table>
   <tr><th>Owner</th><th>Type</th><th>Limit</th><th>Where the limit is</th></tr>
   <tr><td rowspan="6"><code>Engine</code> registry</td><td><code>Entity</code></td><td><code>MAX_ENTITIES</code> = 262,144 (2<sup>18</sup>) (262,143 usable)</td><td><code>include/rasm/entity.h</code></td></tr>
-  <tr><td><code>Mesh</code></td><td><code>MAX_MESHES</code> = 8 (7 usable)</td><td><code>include/rasm/mesh.h</code></td></tr>
+  <tr><td><code>Mesh</code></td><td>no count limit; its sub-meshes take rows of the geometry table (<code>EngineConfig::geometryPoolSubMeshes</code> = 16384) and ranges of the geometry pool</td><td><code>include/rasm/types.h</code></td></tr>
   <tr><td><code>Material</code></td><td><code>MAX_MATERIALS</code> = 256 (255 usable)</td><td><code>include/rasm/engine.h</code></td></tr>
   <tr><td><code>Camera</code></td><td><code>MAX_CAMERAS</code> = 8 (7 usable)</td><td><code>include/rasm/engine.h</code></td></tr>
   <tr><td><code>Light</code></td><td><code>EngineConfig::maxLights</code> = 16384</td><td><code>include/rasm/types.h</code></td></tr>
@@ -763,26 +763,40 @@ void bindTexture(TextureHandle texture);</code></pre>
 </table>
 </div>
 
-<p>Indices start at 1 and the check is <code>index &gt;= MAX_*</code>, so slot 0 is never used. That is why every registry holds one less than its limit: 7 meshes fit in 8.</p>
+<p>Indices start at 1 and the check is <code>index &gt;= MAX_*</code>, so slot 0 is never used. That is why a registry with a cap holds one less than its limit: 7 cameras fit in 8.</p>
+
+<p>Meshes have no count cap. A mesh is refused only when its sub-meshes do not fit the geometry pool: one row of the geometry table per sub-mesh, and ranges of the vertex and index pools. The whole mesh is checked before anything is created.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 132" role="img" aria-label="The mesh registry with MAX_MESHES equal to 8. Position 0 is never used, because indices start at 1. Positions 1 to 7 hold meshes. The next handle would have index 8, which is not less than MAX_MESHES, so the create returns an invalid handle.">
-    <text x="20" y="20" class="small">the mesh registry, MAX_MESHES = 8</text>
-    <rect x="20"  y="32" width="68" height="44" rx="4" class="ghost"/><text x="54"  y="51" class="mid mono t-faint">[0]</text><text x="54" y="68" class="mid small t-faint">unused</text>
-    <rect x="92"  y="32" width="68" height="44" rx="4" class="cpu"/><text x="126" y="51" class="mid mono">[1]</text><text x="126" y="68" class="mid small">Mesh</text>
-    <rect x="164" y="32" width="68" height="44" rx="4" class="cpu"/><text x="198" y="51" class="mid mono">[2]</text><text x="198" y="68" class="mid small">Mesh</text>
-    <rect x="236" y="32" width="68" height="44" rx="4" class="cpu"/><text x="270" y="51" class="mid mono">[3]</text><text x="270" y="68" class="mid small">Mesh</text>
-    <rect x="308" y="32" width="68" height="44" rx="4" class="cpu"/><text x="342" y="51" class="mid mono">[4]</text><text x="342" y="68" class="mid small">Mesh</text>
-    <rect x="380" y="32" width="68" height="44" rx="4" class="cpu"/><text x="414" y="51" class="mid mono">[5]</text><text x="414" y="68" class="mid small">Mesh</text>
-    <rect x="452" y="32" width="68" height="44" rx="4" class="cpu"/><text x="486" y="51" class="mid mono">[6]</text><text x="486" y="68" class="mid small">Mesh</text>
-    <rect x="524" y="32" width="68" height="44" rx="4" class="cpu"/><text x="558" y="51" class="mid mono">[7]</text><text x="558" y="68" class="mid small">Mesh</text>
-    <rect x="620" y="32" width="120" height="44" rx="4" class="bad"/><text x="680" y="51" class="mid mono">{8, 1}</text><text x="680" y="68" class="mid small t-bad">8 &gt;= 8: rejected</text>
-    <path d="M92,86 V92 H592 V86" class="arrow cpu"/>
-    <text x="342" y="112" class="mid small">7 usable</text>
-    <text x="54" y="112" class="mid small t-faint">index 0</text>
-    <text x="680" y="112" class="mid small t-bad">an invalid handle</text>
+  <svg viewBox="0 0 760 176" role="img" aria-label="The mesh registry is a vector with no count limit. Position 0 is unused. Mesh 1 has two sub-meshes, mesh 2 one, mesh 3 three, and more meshes follow. Each sub-mesh takes one row of the geometry table, which has geometryPoolSubMeshes rows. Two rows are free. A new mesh D with four sub-meshes needs four rows, so it does not fit: the geometry pool is full, nothing is created, createMesh returns an invalid handle and loadMesh marks the mesh failed.">
+    <text x="20" y="18" class="small">the mesh registry: a std::vector, no count limit</text>
+    <rect x="20"  y="28" width="50"  height="40" rx="4" class="ghost"/><text x="45"  y="45" class="mid mono t-faint">[0]</text><text x="45"  y="60" class="mid small t-faint">unused</text>
+    <rect x="74"  y="28" width="86"  height="40" rx="4" class="cpu"/><text x="117" y="45" class="mid mono">[1]</text><text x="117" y="60" class="mid small">2 subs</text>
+    <rect x="162" y="28" width="42"  height="40" rx="4" class="cpu"/><text x="183" y="45" class="mid mono">[2]</text><text x="183" y="60" class="mid small">1 sub</text>
+    <rect x="206" y="28" width="130" height="40" rx="4" class="cpu"/><text x="271" y="45" class="mid mono">[3]</text><text x="271" y="60" class="mid small">3 subs</text>
+    <rect x="338" y="28" width="130" height="40" rx="4" class="ghost"/><text x="403" y="45" class="mid mono t-faint">[4] [5] ...</text><text x="403" y="60" class="mid small t-faint">more meshes</text>
+    <path d="M117,70 V92" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <path d="M183,70 V92" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <path d="M271,70 V92" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="74"  y="96" width="44" height="32" class="mem"/><text x="96"  y="116" class="mid mono">A0</text>
+    <rect x="118" y="96" width="44" height="32" class="mem"/><text x="140" y="116" class="mid mono">A1</text>
+    <rect x="162" y="96" width="44" height="32" class="mem"/><text x="184" y="116" class="mid mono">B0</text>
+    <rect x="206" y="96" width="44" height="32" class="mem"/><text x="228" y="116" class="mid mono">C0</text>
+    <rect x="250" y="96" width="44" height="32" class="mem"/><text x="272" y="116" class="mid mono">C1</text>
+    <rect x="294" y="96" width="44" height="32" class="mem"/><text x="316" y="116" class="mid mono">C2</text>
+    <rect x="338" y="96" width="132" height="32" class="mem o-50"/><text x="404" y="116" class="mid small">rows in use</text>
+    <rect x="470" y="96" width="44" height="32" class="ghost"/>
+    <rect x="514" y="96" width="44" height="32" class="ghost"/>
+    <text x="74" y="146" class="small">the geometry table: EngineConfig::geometryPoolSubMeshes rows</text>
+    <text x="514" y="146" class="mid small t-faint">2 free</text>
+    <rect x="600" y="28" width="140" height="40" rx="4" class="ghost"/><text x="670" y="45" class="mid mono">new mesh D</text><text x="670" y="60" class="mid small">4 subs</text>
+    <path d="M670,70 V92" class="arrow bad" marker-end="url(#ah-bad)"/>
+    <rect x="600" y="96" width="140" height="32" rx="4" class="bad"/><text x="670" y="116" class="mid small">needs 4 rows, 2 free</text>
+    <path d="M598,112 H564" class="arrow bad dashed" marker-end="url(#ah-bad)"/>
+    <text x="670" y="146" class="mid small t-bad">the geometry pool is full</text>
+    <text x="670" y="164" class="mid small">nothing is created</text>
   </svg>
-  <figcaption>The same holds for every registry: one position less than its limit.</figcaption>
+  <figcaption>The same check covers the vertex, index, color, skin and morph pools, whose sizes are the other <code>EngineConfig::geometryPool*</code> fields. A mesh that does not fit logs what it needs and what is in use. <code>createMesh</code> then returns an invalid handle and uses no index; <code>loadMesh</code> has already returned a handle, so its mesh becomes failed.</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>

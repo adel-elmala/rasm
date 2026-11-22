@@ -132,7 +132,7 @@ Goal: production look and completeness for glTF content. The order is roughly by
 
 **Exit criteria:** the Khronos glTF sample models (DamagedHelmet, Sponza, AlphaBlendModeTest, …) render correctly under IBL with shadows, and image tests guard regressions.
 
-*Status 2026-11-22:* met, with two limits. The sample models render correctly under IBL with shadows, and 15 image tests guard them in CI on lavapipe. The environment light is not shadowed (`D23`): Sponza's atrium and the ground under the models get the full sky light, so the image is correct for today's lighting model, not for a shadowed sky. The goldens are lavapipe's only; real GPUs are checked by `verify-change` baselines, and macOS CI runs no image tests. An engine holds at most 7 meshes (`D33`), so the runner uses three engines.
+*Status 2026-11-22:* met, with two limits. The sample models render correctly under IBL with shadows, and 15 image tests guard them in CI on lavapipe. The environment light is not shadowed (`D23`): Sponza's atrium and the ground under the models get the full sky light, so the image is correct for today's lighting model, not for a shadowed sky. The goldens are lavapipe's only; real GPUs are checked by `verify-change` baselines, and macOS CI runs no image tests. The runner renders all 15 tests in one engine, since meshes have no count limit (`D33`, fixed 2026-11-22).
 
 ## Phase 5: Integration for the target audiences
 

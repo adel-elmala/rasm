@@ -335,7 +335,6 @@ engine.updateTransform(bunny, transform);</code></pre>
       <tr><th>Problem</th><th>When you see it</th><th>Result</th></tr>
       <tr><td>Unknown extension</td><td>at the call</td><td>"Unsupported mesh format" logged, invalid handle</td></tr>
       <tr><td>File does not exist</td><td>at the call</td><td>"Mesh file not found" logged, invalid handle</td></tr>
-      <tr><td>More than 7 meshes</td><td>at the call</td><td>warning, invalid handle (<code>MAX_MESHES</code> is 8, indices start at 1)</td></tr>
       <tr><td>File does not parse, or a glTF requires an extension RASM does not support</td><td>in a later <code>beginFrame</code></td><td>error logged (naming the extensions), the handle stays valid but <code>isLoaded</code> is false; entities using it log a warning and are not drawn</td></tr>
       <tr><td>Geometry pool full</td><td>in a later <code>beginFrame</code></td><td>error naming the <code>EngineConfig</code> field to raise; nothing of the mesh is uploaded</td></tr>
     </table>
@@ -372,7 +371,7 @@ rasm::EntityHandle entity = engine.createEntity("room", room, {}, transform); //
       <dt>indices</dt><dd>A triangle list, 3 per triangle, counting from 0 in <code>vertices</code>. Front faces are counter-clockwise seen from outside.</dd>
       <dt>colors</dt><dd>Optional vertex colors: empty, or one per vertex, each made with <a href="#packVertexColor"><code>packVertexColor</code></a>. They multiply the material's base color. A mesh without them uses no color memory.</dd>
     </dl>
-    <p>Returns an invalid handle when <code>colors</code> is neither empty nor one per vertex, the index count is not a multiple of 3, an index is not below <code>vertices.size()</code>, <code>MAX_MESHES</code> is reached or the geometry pool is full (all logged). A mesh with no vertices or no indices is accepted but its entities skip it with a warning.</p>
+    <p>Returns an invalid handle when <code>colors</code> is neither empty nor one per vertex, the index count is not a multiple of 3, an index is not below <code>vertices.size()</code>, or the geometry pool is full (all logged). A mesh that does not fit takes no handle index. A mesh with no vertices or no indices is accepted but its entities skip it with a warning.</p>
     <pre><code>// examples/03_instances: one quad per cube face, so each face has its own normal.
 std::vector&lt;rasm::Vertex&gt; vertices;
 std::vector&lt;uint32_t&gt; indices;
@@ -1020,7 +1019,6 @@ engine.setSceneEnvironment(scene, {});</code></pre>
   <tr><td><code>MAX_SCENES</code></td><td>16</td><td>15</td><td>scenes</td></tr>
   <tr><td><code>MAX_ENTITIES</code></td><td>262,144</td><td>262,143</td><td>entities in total</td></tr>
   <tr><td><code>MAX_ENTITIES_PER_SCENE</code></td><td>262,144</td><td>262,144</td><td>entity entries in one scene</td></tr>
-  <tr><td><code>MAX_MESHES</code></td><td>8</td><td>7</td><td>meshes in total (each glTF file is one mesh)</td></tr>
   <tr><td><code>EngineConfig::maxLights</code></td><td>16,384</td><td>all</td><td>lights in total; a scene holds any of them</td></tr>
   <tr><td><code>MAX_CLUSTER_LIGHTS</code></td><td>256</td><td>256</td><td>lights that reach one cluster of a view</td></tr>
   <tr><td><code>MAX_CAMERAS_PER_SCENE</code></td><td>8</td><td>8</td><td>camera entries in one scene</td></tr>
@@ -1031,7 +1029,7 @@ engine.setSceneEnvironment(scene, {});</code></pre>
   <tr><td><code>MAX_MESH_LODS</code></td><td>8</td><td>8</td><td>LODs per sub-mesh, LOD 0 included</td></tr>
   <tr><td><code>MAX_MORPH_TARGETS</code></td><td>256</td><td>256</td><td>morph targets per glTF primitive</td></tr>
   <tr><td><code>EngineConfig::maxInstances</code></td><td>65,536</td><td>all</td><td>sub-meshes of all entities together</td></tr>
-  <tr><td><code>EngineConfig::geometryPoolVertices</code>, <code>geometryPoolIndices</code>, <code>geometryPoolSubMeshes</code></td><td>2<sup>21</sup> / 2<sup>24</sup> / 2<sup>14</sup></td><td>all</td><td>geometry of all meshes together</td></tr>
+  <tr><td><code>EngineConfig::geometryPoolVertices</code>, <code>geometryPoolIndices</code>, <code>geometryPoolSubMeshes</code></td><td>2<sup>21</sup> / 2<sup>24</sup> / 2<sup>14</sup></td><td>all</td><td>geometry of all meshes together: vertices, indices, and one row per sub-mesh. The number of meshes has no limit of its own.</td></tr>
   <tr><td><code>EngineConfig::geometryPoolColors</code>, <code>geometryPoolSkins</code>, <code>geometryPoolMorphs</code></td><td>2<sup>20</sup> / 2<sup>20</sup> / 2<sup>20</sup></td><td>all</td><td>vertex colors, skinned vertices' joints and weights, and morph target deltas (one per vertex and target), of all meshes together</td></tr>
   <tr><td><code>EngineConfig::maxAnimatedEntities</code></td><td>16,384</td><td>all</td><td>entities that have played a clip, or of a skinned or morphed mesh (each keeps its row)</td></tr>
   <tr><td><code>EngineConfig::maxMorphWeights</code></td><td>65,536</td><td>all</td><td>morph weights of all posed entities together (each keeps its range)</td></tr>

@@ -1028,7 +1028,7 @@
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>No thread pool, no priorities, no cancel. Mips are built on the main thread (P2), so a big glTF file can make one long frame. Nothing can be unloaded (D4), and only 7 meshes can ever be created, because <code>MAX_MESHES</code> is 8 and handles start at 1 and are never reused (B13, D33).</p>
+  <p>No thread pool, no priorities, no cancel. Mips are built on the main thread (P2), so a big glTF file can make one long frame. Nothing can be unloaded (D4), so meshes load until the geometry pool is full, and the pool never gets space back.</p>
 </div>
 
 <h3>Further reading</h3>
