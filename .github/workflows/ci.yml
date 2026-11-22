@@ -128,6 +128,45 @@ jobs:
         if: ${{ !cancelled() && steps.build-release.outcome == 'success' }}
         run: ctest --preset ${{ matrix.release }}
 
+      # The golden-image tests run on lavapipe, Mesa's CPU Vulkan driver, which the goldens come from. The script fetches
+      # it and Sponza, both pinned by SHA-256; the cache keeps them between runs.
+      - name: Restore the image test assets
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: build/test-assets
+          key: image-test-assets-${{ hashFiles('tools/image_tests.py') }}
+          restore-keys: image-test-assets-
+
+      # The runner's processes are elevated, and the Vulkan loader of an elevated process ignores VK_DRIVER_FILES and
+      # VK_LAYER_PATH, so lavapipe and the validation layer are registered instead.
+      - name: Install lavapipe
+        id: lavapipe
+        if: ${{ runner.os == 'Windows' && !cancelled() && steps.build-release.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $icd = (python tools/image_tests.py --lavapipe --fetch-only | Select-Object -Last 1)
+          if (-not (Test-Path $icd)) { throw "no lavapipe manifest: $icd" }
+          $layer = (Get-ChildItem -Recurse $env:VULKAN_SDK -Filter 'VkLayer_khronos_validation.json' | Select-Object -First 1).FullName
+          foreach ($entry in @(@('Drivers', $icd), @('ExplicitLayers', $layer))) {
+            $key = "HKLM:\SOFTWARE\Khronos\Vulkan\$($entry[0])"
+            New-Item -Path $key -Force | Out-Null
+            New-ItemProperty -Path $key -Name $entry[1] -Value 0 -PropertyType DWord -Force | Out-Null
+          }
+          & "$env:VULKAN_SDK\Bin\vulkaninfoSDK.exe" --summary | Select-String -Pattern 'deviceName|driverInfo|apiVersion'
+
+      - name: Image tests
+        if: ${{ !cancelled() && steps.lavapipe.outcome == 'success' }}
+        run: python tools/image_tests.py --lavapipe --preset ${{ matrix.release }}
+
+      - name: Upload the image test failures
+        if: ${{ failure() && steps.lavapipe.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-test-failures
+          path: build/${{ matrix.release }}/image-tests/
+          if-no-files-found: ignore
+
       - name: Check for new vcpkg packages
         id: vcpkg-packages
         if: ${{ !cancelled() }}

@@ -618,6 +618,16 @@ if (engine.takeReadback(copy, image))
   </div>
 </div>
 
+<div class="api" id="readPng">
+  <pre class="sig">bool readPng(const std::string&amp; path, ReadbackImage&amp; image);</pre>
+  <div class="body">
+    <p>Reads a PNG file at a UTF-8 path into an <code>RGBA8_SRGB</code> image, the format <a href="#writePng"><code>writePng</code></a> writes, so a frame can be compared with a stored one byte by byte (<a href="../guides/image-tests.html">Image tests</a>). Returns false (with an error in the log) when the file can't be opened or decoded.</p>
+    <pre><code>rasm::ReadbackImage golden;
+if (rasm::readPng("golden.png", golden) &amp;&amp; golden.width == image.width)
+    std::printf("%zu bytes to compare\n", golden.pixels.size());</code></pre>
+  </div>
+</div>
+
 <h2><span class="n">4</span>Constants and limits</h2>
 
 <p>All are <code>constexpr</code> in the public headers. Exceeding a <code>create</code> limit logs a warning or error and returns an invalid handle. Because handle indices start at 1 and are never reused, the limits on handle indices hold one object less than their value, and a failed create uses up an index too (B13).</p>

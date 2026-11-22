@@ -508,7 +508,7 @@
       <text x="160" y="130" class="mid small t-bad">∂uv/∂x = ?</text>
     </svg>
     <h4>Derivatives can break</h4>
-    <p>The neighbors must run the same code. Inside an <code class="lang-text">if</code> that differs between the 4 pixels of a quad, some neighbors do not compute <var>uv</var>, and the derivative is undefined. A jump in <var>uv</var> also breaks it: at the seam of a texture atlas, or where <var>uv</var> wraps from 0.99 to 0.01, the GPU sees a huge change and picks the smallest level, which shows as a thin line of wrong color.</p>
+    <p>The neighbors must run the same code. Inside an <code class="lang-text">if</code> that differs between the 4 pixels of a quad, some neighbors do not compute <var>uv</var>, and the derivative is undefined. A jump in <var>uv</var> also breaks it: at the seam of a texture atlas, or where <var>uv</var> wraps from 0.99 to 0.01, the GPU sees a huge change and picks the smallest level, which shows as a thin line of wrong color. A pixel that a <code class="lang-text">discard</code> killed has left its quad too; a <b>demote</b> keeps it as a helper that still computes <var>uv</var>.</p>
   </div>
   <div>
     <svg viewBox="0 0 320 140" role="img" aria-label="A mip chain of four levels. One level is marked: the shader chose it by number.">

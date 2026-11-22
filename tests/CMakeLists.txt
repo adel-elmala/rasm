@@ -44,3 +44,17 @@ target_compile_definitions(rasm_tests PRIVATE RASM_TEST_EXECUTABLE_DIR="$<TARGET
 rasm_copy_runtime_dlls(rasm_tests)
 
 add_test(NAME rasm_tests COMMAND rasm_tests)
+
+# Golden-image tests: render scenes headless and compare them with tests/golden/lavapipe. The goldens are lavapipe's,
+# so tools/image_tests.py runs them on that driver; the presets' ctest leaves out the label "image".
+add_executable(rasm_image_tests "image/imageTests.cpp")
+target_link_libraries(rasm_image_tests PRIVATE rasm::rasm)
+target_compile_definitions(rasm_image_tests PRIVATE RASM_IMAGE_TESTS_ASSET_ROOT="${PROJECT_SOURCE_DIR}/assets"
+                                                    RASM_IMAGE_TESTS_SHADER_DIR="${PROJECT_SOURCE_DIR}/shaders"
+                                                    RASM_IMAGE_TESTS_GOLDEN_DIR="${PROJECT_SOURCE_DIR}/tests/golden/lavapipe"
+                                                    RASM_IMAGE_TESTS_OUT_DIR="${CMAKE_BINARY_DIR}/image-tests"
+                                                    RASM_IMAGE_TESTS_SPONZA="${PROJECT_SOURCE_DIR}/build/test-assets/Sponza/glTF/Sponza.gltf")
+rasm_copy_runtime_dlls(rasm_image_tests)
+
+add_test(NAME rasm_image_tests COMMAND rasm_image_tests)
+set_tests_properties(rasm_image_tests PROPERTIES LABELS image)

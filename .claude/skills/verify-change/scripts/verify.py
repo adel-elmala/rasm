@@ -8,6 +8,7 @@ collect validation messages, screenshot frame N and diff it against a baseline.
 options: --preset x64-debug  --examples 00_hello_scene,02_gltf  --frame 60  --tolerance 2
          --no-build  --no-tests  --keep-captures
          --sync (synchronization validation)  --best-practices  --gpu-av (GPU-assisted validation)
+         --images (also runs tools/image_tests.py --lavapipe: downloads and runs a third-party Mesa build)
 
 Output goes to build/verify/<preset>/ (screens/, diffs/, logs/, baseline/).
 Screenshots come from GFXReconstruct (Vulkan SDK): its layer quits the app after frame N,
@@ -305,6 +306,7 @@ def cmd_check(args, make_baseline):
     no_build = take_flag(args, "--no-build")
     no_tests = take_flag(args, "--no-tests")
     keep = take_flag(args, "--keep-captures")
+    images = take_flag(args, "--images")
     extra_args = shlex.split(take_opt(args, "--args", ""))
     layer_env = {}
     if take_flag(args, "--sync"):
@@ -333,6 +335,16 @@ def cmd_check(args, make_baseline):
         for l in fails[:20]:
             print("   " + l)
         failed |= not ok
+
+    # The golden-image tests run on lavapipe, a third-party Mesa build, so only when asked (--images). They use the
+    # x64-release build like CI, whatever --preset is, since a Debug build may round some CPU-side math differently.
+    if images and not make_baseline:
+        script = os.path.join(REPO, "tools", "image_tests.py")
+        result = subprocess.run([sys.executable, script, "--lavapipe", "--preset", "x64-release", "--build"], cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+        print("images  %s" % ("OK" if result.returncode == 0 else "FAILED"))
+        for l in result.stdout.splitlines():
+            print("   " + l)
+        failed |= result.returncode != 0
 
     names = example_names()
     if only:

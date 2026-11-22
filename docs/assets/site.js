@@ -98,6 +98,7 @@ const SECTIONS = [
             { path: "guides/immediate-mode-ui.html",     title: "Immediate-mode UI",                   blurb: "Windows and sliders as code each frame: draw lists, clip rectangles and an atlas." },
             { path: "guides/debug-views.html",           title: "Debug views",                         blurb: "Normals, UVs, overdraw, LODs, culling and light counts in place of the shading." },
             { path: "guides/inspecting-gpu-resources.html", title: "Inspecting GPU resources",         blurb: "Show a target, depth, Hi-Z or light clusters mid-frame, and GPU table rows from reflection." },
+            { path: "guides/image-tests.html",           title: "Image tests: golden images",          blurb: "Compare each frame with a stored image, with a threshold for driver noise." },
         ],
     },
     {

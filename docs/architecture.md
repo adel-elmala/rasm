@@ -73,7 +73,7 @@ There are two kinds of handle owner:
 - 1.0: `multiDrawIndirect`, `drawIndirectFirstInstance` (each draw names its instance row in `firstInstance`), `samplerAnisotropy`, `shaderInt64`.
 - 1.1: `shaderDrawParameters`.
 - 1.2: descriptor indexing (runtime arrays, partially bound, update-after-bind for sampled and storage images, variable count, non-uniform sampled image indexing), `drawIndirectCount`, `bufferDeviceAddress`, `scalarBlockLayout`, `hostQueryReset`, `timelineSemaphore`, `shaderInt8`, `storagePushConstant8`.
-- 1.3: `dynamicRendering`, `synchronization2`.
+- 1.3: `dynamicRendering`, `synchronization2`, `shaderDemoteToHelperInvocation` (`discard` demotes, §7).
 - 1.4: `hostImageCopy`.
 - Extensions: `VK_EXT_memory_budget`, and `VK_KHR_swapchain` with a window.
 - Optional, each on when the GPU has it: `textureCompressionBC`, `textureCompressionASTC_LDR`, `textureCompressionETC2` (1.0), for block-compressed textures (§5). The log says which are on.
@@ -150,8 +150,27 @@ frame F+2  beginFrame waits slot F  → isReadbackReady(h) is true
 
 - Only a readable texture can be copied: `TextureDesc::readable` adds `TRANSFER_SRC` usage, and `RenderTargetDesc::readable` gives every color and the depth of a target that usage. A graph makes a readable target in memory of its own, like a history target (`RenderGraph::createRenderTarget`), and `createTransientRenderTarget` refuses one, since a later pass could reuse the memory before the copy at the end of the frame. The offscreen swapchain's images are always readable; a window's are when its surface allows it. Multisampled textures are refused (read the resolve).
 - `rhi::CommandBuffer::copyFromTexture` moves the layer and mip to `TRANSFER_SRC_OPTIMAL` and back to its tracked state around `vkCmdCopyImageToBuffer2`, so the texture states do not change, then makes the bytes visible to the host (`COPY` → `HOST` buffer barrier). With a compute queue the copy waits for all of the frame's compute work first, and the compute batches of later frames wait for the frame that made it (`readbackComputeWait`), since no graph sees the copy's use of the texture.
-- `convertReadback` turns the tightly packed texels into a `ReadbackImage` on the CPU, when the image is taken: 8-bit sources keep their bytes as `RGBA8_SRGB` (BGRA swizzled), float sources are clamped and sRGB-encoded for it; `RGBA32_FLOAT` decodes sRGB and widens halves; a depth reads only as `RGBA32_FLOAT`. Formats: RGBA8 and BGRA8 (UNORM, sRGB), `R16G16B16A16_SFLOAT`, `R16G16_SFLOAT`, `R32G32B32A32_SFLOAT`, `R32G32_SFLOAT`, `D32_SFLOAT`. `writePng` writes an `RGBA8_SRGB` image through `stbi_write_png_to_func` to a UTF-8 path.
+- `convertReadback` turns the tightly packed texels into a `ReadbackImage` on the CPU, when the image is taken: 8-bit sources keep their bytes as `RGBA8_SRGB` (BGRA swizzled), float sources are clamped and sRGB-encoded for it; `RGBA32_FLOAT` decodes sRGB and widens halves; a depth reads only as `RGBA32_FLOAT`. Formats: RGBA8 and BGRA8 (UNORM, sRGB), `R16G16B16A16_SFLOAT`, `R16G16_SFLOAT`, `R32G32B32A32_SFLOAT`, `R32G32_SFLOAT`, `D32_SFLOAT`. `writePng` writes an `RGBA8_SRGB` image through `stbi_write_png_to_func` to a UTF-8 path, and `readPng` reads one back (`stbi_load_from_file`).
 - `takeReadback` blocks on the frame fence when the copy is recorded but not done, and returns false without blocking when no frame has recorded it yet.
+
+### Image tests
+
+`rasm_image_tests` (`tests/image/imageTests.cpp`) renders 15 scenes headless at 512 × 288 and compares each frame with `tests/golden/lavapipe/<test>.png`. The concept: `docs/guides/image-tests.html`.
+
+```
+tools/image_tests.py --lavapipe   fetch Mesa 26.3.0 (lavapipe) and Sponza, SHA-256 checked, into build/test-assets/
+                                  VK_DRIVER_FILES = lavapipe's manifest, LP_NATIVE_VECTOR_WIDTH = 256
+rasm_image_tests                  for each group: one headless Engine, one camera, the sunset environment, a cube
+  for each test of the group      the scene (built once, shared by the tests of one build function)
+                                  a graph: shadows, scene passes, MSAA resolve or TAA, bloom, tone map
+                                  waitForLoads, N frames at a fixed animation time, readFrame, takeReadback
+                                  compareImages with the golden (readPng): fail when > F of the pixels differ by > T
+```
+
+- `ImageTest` holds a test: its build function, engine group, samples, TAA, bloom, debug view, frame count, animation time, T (`threshold`, 0 to 255) and F (`fraction`). Every test uses T = 3, F = 0.1%; `determinism` renders the helmet again and compares it with `helmet_ibl`'s image of the same run, T = 0, F = 0 (`sameAs`).
+- Three engines run one after another, because an engine holds at most 7 meshes (`D33`). Tests that share a build function share its scene, so their pipelines and loads are made once. Each test resets the camera's history and sets its projection, transform, bloom strength and debug view.
+- A failure writes `actual.png`, `expected.png` and `diff.png` (gray same, orange ≤ T, red > T) to `build/<preset>/image-tests/<test>/`. `--update` writes the goldens; `--scenes` picks tests; `--sponza` points at the fetched Sponza.
+- The goldens are lavapipe's. The script fails when the log names a device other than llvmpipe, or has a validation or engine error. The presets' `ctest` excludes the label `image`. CI's Windows job registers lavapipe and the validation layer in the registry (its processes are elevated, so the loader ignores `VK_DRIVER_FILES`) and runs the script after the Release tests.
 
 ### Frame stats and the overlay
 
@@ -594,6 +613,7 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 - `ShaderCompiler` wraps one Slang global session and one session.
 - `compileFromString(source, moduleName, entryPoint)` loads a module, finds the entry point, composes, links and returns SPIR-V. The session keeps every module and rejects a second one with the same name and different source, so the name it loads includes a hash of the source. Callers can reuse a name.
 - Shaders are compiled **at runtime from source** every time a pipeline is built. Nothing is cached.
+- The SPIR-V target is profile `spirv_1_4` with two capabilities (`getTargetDesc`): `spvImageGatherExtended`, which only silences a warning, and `spvDemoteToHelperInvocation`, which makes every `discard` an `OpDemoteToHelperInvocation` instead of an `OpKill`. A demoted lane stays in its 2x2 quad as a helper, so a cut-out's samples after its `discard` (the MASK `fragMain` reads the material's other textures) keep defined derivatives (`B33`). The device enables `shaderDemoteToHelperInvocation`, a core Vulkan 1.3 feature.
 - The examples set `shaderDir` to the repo's `shaders/`, so a shader edit reaches an example the next time it starts, with no build.
 - `tools/compile-shaders.bat` is an offline `slangc` invocation that is useful for checking compile errors. The engine does not consume its output.
 

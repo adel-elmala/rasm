@@ -132,6 +132,7 @@ namespace rasm::rhi
             VkPhysicalDeviceVulkan13Features enabledVk13Features{
                 .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
                 .pNext = &enabledVk12Features,
+                .shaderDemoteToHelperInvocation = VK_TRUE,
                 .synchronization2 = VK_TRUE,
                 .dynamicRendering = VK_TRUE,
             };

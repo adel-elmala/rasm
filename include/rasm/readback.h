@@ -27,6 +27,8 @@ namespace rasm
 
     // Writes an RGBA8_SRGB image as a PNG at a UTF-8 path. Returns false for a float image or when the file can't be written.
     bool                            writePng(const std::string& path, const ReadbackImage& image);
+    // Reads a PNG at a UTF-8 path as an RGBA8_SRGB image, as writePng wrote it. Returns false when it can't be read.
+    bool                            readPng(const std::string& path, ReadbackImage& image);
 
 }
 // clang-format on

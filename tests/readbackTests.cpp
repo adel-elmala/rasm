@@ -4,7 +4,6 @@
 #include "doctest/doctest.h"
 
 #include "glm/gtc/packing.hpp"
-#include "stb_image.h"
 
 #include <cstdint>
 #include <cstring>
@@ -105,7 +104,7 @@ TEST_CASE("two-channel and depth texels fill the missing channels with 0, 0, 1")
     CHECK(pixelFloat(image, 0, 3) == doctest::Approx(1.0f));
 }
 
-TEST_CASE("writePng writes an RGBA8 image that reads back the same, and refuses floats")
+TEST_CASE("writePng writes an RGBA8 image that readPng reads back the same, and both refuse what they can't do")
 {
     rasm::ReadbackImage image{.width = 3, .height = 2, .format = rasm::ReadbackFormat::RGBA8_SRGB};
     for (uint8_t i = 0; i < 24; ++i)
@@ -114,19 +113,14 @@ TEST_CASE("writePng writes an RGBA8 image that reads back the same, and refuses 
     const std::string utf8 = rasm::pathToUtf8(path);
     REQUIRE(rasm::writePng(utf8, image));
 
-    int width = 0;
-    int height = 0;
-    int channels = 0;
-    std::FILE *file = rasm::openFileForReading(utf8);
-    REQUIRE(file != nullptr);
-    unsigned char *pixels = stbi_load_from_file(file, &width, &height, &channels, 4);
-    std::fclose(file);
-    REQUIRE(pixels != nullptr);
-    CHECK(width == 3);
-    CHECK(height == 2);
-    CHECK(std::memcmp(pixels, image.pixels.data(), 24) == 0);
-    stbi_image_free(pixels);
+    rasm::ReadbackImage read;
+    REQUIRE(rasm::readPng(utf8, read));
+    CHECK(read.width == 3);
+    CHECK(read.height == 2);
+    CHECK(read.format == rasm::ReadbackFormat::RGBA8_SRGB);
+    CHECK(read.pixels == image.pixels);
     std::filesystem::remove(path);
+    CHECK_FALSE(rasm::readPng(utf8, read));
 
     image.format = rasm::ReadbackFormat::RGBA32_FLOAT;
     CHECK_FALSE(rasm::writePng(utf8, image));
