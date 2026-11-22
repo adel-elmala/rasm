@@ -16,7 +16,6 @@ namespace tinygltf { class Model; }
 namespace rasm
 {
 
-    constexpr uint32_t MAX_MESHES              = 8;
     constexpr uint32_t MAX_VERTEX_UV_SETS      = 3;
     constexpr uint32_t MAX_MESH_LODS           = 8;
     constexpr uint32_t MAX_MORPH_TARGETS       = 256;      // per primitive: the Skin pass keeps a group's weights in shared memory

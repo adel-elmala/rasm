@@ -291,7 +291,7 @@
 <p>RASM's image tests are one executable, <code>rasm_image_tests</code> (<code>tests/image/imageTests.cpp</code>), and one script that runs it on lavapipe, <code>tools/image_tests.py</code>. Each test renders a scene headless at 512 × 288 and compares the frame with its golden in <code>tests/golden/lavapipe/</code>.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 290" role="img" aria-label="tools/image_tests.py fetches lavapipe and Sponza, checks their SHA-256, and runs rasm_image_tests with VK_DRIVER_FILES pointing at lavapipe. The runner makes three engines in turn, one per group of tests, because an engine holds at most 7 meshes. Each test waits for all loads, renders a fixed number of frames at a fixed animation time, reads the frame back and compares it with its golden. A failure writes actual, expected and diff images.">
+  <svg viewBox="0 0 760 290" role="img" aria-label="tools/image_tests.py fetches lavapipe and Sponza, checks their SHA-256, and runs rasm_image_tests with VK_DRIVER_FILES pointing at lavapipe. The runner makes one engine and runs every test in it, in order. Each test waits for all loads, renders a fixed number of frames at a fixed animation time, reads the frame back and compares it with its golden. A failure writes actual, expected and diff images.">
     <rect x="20" y="20" width="190" height="64" rx="6" class="cpu"/>
     <text x="115" y="44" class="mid mono small">tools/image_tests.py</text>
     <text x="115" y="62" class="mid small">--lavapipe: fetch, check,</text>
@@ -303,21 +303,13 @@
     <line x1="210" y1="52" x2="256" y2="52" class="arrow" marker-end="url(#ah)"/>
     <rect x="260" y="20" width="480" height="200" rx="8" class="zone"/>
     <text x="500" y="40" class="mid mono">rasm_image_tests</text>
-    <rect x="276" y="54" width="140" height="150" rx="6" class="gpu"/>
-    <text x="346" y="74" class="mid small title">engine 1</text>
-    <text x="346" y="94" class="mid small">helmet, sponza,</text>
-    <text x="346" y="110" class="mid small">alpha modes, msaa4,</text>
-    <text x="346" y="126" class="mid small">taa, bloom, lights,</text>
-    <text x="346" y="142" class="mid small">local shadows, ktx2,</text>
-    <text x="346" y="158" class="mid small">debug normals,</text>
-    <text x="346" y="174" class="mid small">determinism</text>
-    <rect x="430" y="54" width="140" height="70" rx="6" class="gpu"/>
-    <text x="500" y="74" class="mid small title">engine 2</text>
-    <text x="500" y="94" class="mid small">skinning, morph,</text>
-    <text x="500" y="110" class="mid small">node animation</text>
-    <rect x="430" y="134" width="140" height="70" rx="6" class="gpu"/>
-    <text x="500" y="154" class="mid small title">engine 3</text>
-    <text x="500" y="174" class="mid small">materials</text>
+    <rect x="276" y="54" width="294" height="150" rx="6" class="gpu"/>
+    <text x="423" y="74" class="mid small title">one engine, the tests in order</text>
+    <text x="423" y="96" class="mid small">helmet, sponza, alpha modes, msaa4, taa,</text>
+    <text x="423" y="114" class="mid small">bloom, many lights, local shadows, ktx2,</text>
+    <text x="423" y="132" class="mid small">debug normals, determinism, skinning,</text>
+    <text x="423" y="150" class="mid small">morph, node animation, materials</text>
+    <text x="423" y="180" class="mid small t-faint">tests with the same build share its scene</text>
     <rect x="586" y="54" width="140" height="150" rx="6" class="paper"/>
     <text x="656" y="74" class="mid small title">each test</text>
     <text x="656" y="96" class="mid small">waitForLoads</text>
@@ -328,7 +320,7 @@
     <line x1="500" y1="220" x2="500" y2="250" class="arrow ok" marker-end="url(#ah-ok)"/>
     <text x="500" y="270" class="mid small">a table: test, result, share over T, largest difference, seconds</text>
   </svg>
-  <figcaption>One engine runs many tests, so lavapipe compiles each pipeline once. There are three engines because one engine holds at most 7 meshes (<code>D33</code>).</figcaption>
+  <figcaption>One engine runs all the tests, so lavapipe compiles each pipeline once.</figcaption>
 </figure>
 
 <h3>The tests</h3>
@@ -377,7 +369,7 @@
 <div class="table-wrap">
 <table>
   <tr><th>What</th><th>Where</th></tr>
-  <tr><td>The tests, scenes and compare</td><td><code>tests/image/imageTests.cpp</code>: the <code>TESTS</code> table, <code>buildGraph</code>, <code>renderTest</code>, <code>compareImages</code>, <code>runGroup</code></td></tr>
+  <tr><td>The tests, scenes and compare</td><td><code>tests/image/imageTests.cpp</code>: the <code>TESTS</code> table, <code>buildGraph</code>, <code>renderTest</code>, <code>compareImages</code>, <code>runTests</code></td></tr>
   <tr><td>The goldens</td><td><code>tests/golden/lavapipe/</code></td></tr>
   <tr><td>Fetch, run, report</td><td><code>tools/image_tests.py</code> (<code class="lang-text">--lavapipe</code>, <code class="lang-text">--update</code>, <code class="lang-text">--scenes</code>, <code class="lang-text">--fetch-only</code>)</td></tr>
   <tr><td>Registration and presets</td><td><code>tests/CMakeLists.txt</code> (label <code class="lang-text">image</code>), <code>CMakePresets.json</code> (the default test presets leave it out)</td></tr>
@@ -388,7 +380,7 @@
 
 <div class="callout rule">
   <strong>Rules to keep</strong>
-  <p>A golden changes only in a change that says why, with the old and new image. Look at every new golden before you store it. Set T or F per test only from measured noise, and write the reason next to it. A new test that would need an eighth mesh in an engine goes into another group.</p>
+  <p>A golden changes only in a change that says why, with the old and new image. Look at every new golden before you store it. Set T or F per test only from measured noise, and write the reason next to it. All the tests share one engine, so their materials add up: the 15 tests make 73 of the 255 an engine can hold (<code>D34</code>). Past that, a glTF primitive falls back to the default material with only a warning, and the image test fails as if the rendering were wrong.</p>
 </div>
 
 <h3>Further reading</h3>

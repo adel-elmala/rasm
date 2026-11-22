@@ -66,21 +66,16 @@ namespace rasm
             }
         }
 
-        auto handle = handleManager.getNextMeshHandle();
-        if (handle.index >= MAX_MESHES)
-        {
-            spdlog::error("Exceeded maximum number of meshes.");
-            return {};
-        }
-
         ObjRaw raw{.vertices = std::move(vertices), .indices = std::move(indices), .colors = std::move(colors)};
         if (config.meshLods)
             buildMeshLods(raw);
 
+        // The handle is taken once the geometry is in the pool, so a mesh that does not fit uses no index.
         Mesh mesh{.state = MeshState::READY, .subMeshes = {SubMesh{.transform = glm::mat4(1.0f)}}};
         if (!geometryPool->upload(ctx, raw, mesh.subMeshes[0].geometry))
             return {};
 
+        const MeshHandle handle = handleManager.getNextMeshHandle();
         registry.meshes.resize(handle.index + 1);
         registry.meshes[handle.index] = std::move(mesh);
 
@@ -119,11 +114,6 @@ namespace rasm
         if (!handle.isValid())
         {
             handle = handleManager.getNextMeshHandle();
-            if (handle.index >= MAX_MESHES)
-            {
-                spdlog::warn("Exceeded maximum number of meshes.");
-                return MeshHandle{};
-            }
             registry.loadedMeshes[path] = handle;
             registry.meshes.resize(handle.index + 1);
         }

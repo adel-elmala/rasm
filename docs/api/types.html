@@ -653,7 +653,6 @@ if (rasm::readPng("golden.png", golden) &amp;&amp; golden.width == image.width)
   <tr id="MAX_CLUSTER_LIGHTS"><td><code>MAX_CLUSTER_LIGHTS</code><br><code>rasm/light.h</code></td><td>256</td><td>Lights that reach one cluster of a shaded view; more are left out of it (<code>FrameStats::lightsDropped</code>). The number of lights is <code>EngineConfig::maxLights</code>.</td></tr>
   <tr id="MAX_TEXTURE_SLOTS"><td><code>MAX_TEXTURE_SLOTS</code><br><code>rasm/material.h</code></td><td>6 (<code>PbrSlot::COUNT</code>)</td><td>Textures per material, one per <a href="materials.html#PbrSlot">PbrSlot</a>.</td></tr>
   <tr id="MAX_PARAM_SLOTS"><td><code>MAX_PARAM_SLOTS</code><br><code>rasm/material.h</code></td><td>10 (<code>PbrParam::COUNT</code>)</td><td>Floats in <code>Material::params</code>, indexed by <a href="materials.html#PbrParam">PbrParam</a>.</td></tr>
-  <tr id="MAX_MESHES"><td><code>MAX_MESHES</code><br><code>rasm/mesh.h</code></td><td>8</td><td>Meshes: 7 fit, and a failed load uses one up.</td></tr>
   <tr id="MAX_VERTEX_UV_SETS"><td><code>MAX_VERTEX_UV_SETS</code><br><code>rasm/mesh.h</code></td><td>3</td><td>UV sets per <code>Vertex</code>. Mirrored in <code>shaders/lib/core.slang</code>.</td></tr>
   <tr id="MAX_MORPH_TARGETS"><td><code>MAX_MORPH_TARGETS</code><br><code>rasm/mesh.h</code></td><td>256</td><td>Morph targets per glTF primitive; the rest are dropped with a warning (<a href="scene.html#MorphDelta">MorphDelta</a>). Mirrored in <code>shaders/lib/geometryTypes.slang</code>.</td></tr>
   <tr id="MAX_MESH_LODS"><td><code>MAX_MESH_LODS</code><br><code>rasm/mesh.h</code></td><td>8</td><td>LODs per sub-mesh, LOD 0 included, so <code>ObjRaw::lods</code> holds at most 7 (<a href="scene.html#MeshLod">MeshLod</a>). Mirrored in <code>shaders/lib/core.slang</code>.</td></tr>
@@ -666,7 +665,7 @@ if (rasm::readPng("golden.png", golden) &amp;&amp; golden.width == image.width)
 </table>
 </div>
 
-<p>Mesh, instance and light capacity on the GPU is not a constant: it comes from <code>EngineConfig::geometryPoolVertices</code>, <code>geometryPoolIndices</code>, <code>geometryPoolSubMeshes</code>, <code>maxInstances</code> and <code>maxLights</code>; animation capacity from <code>maxAnimatedEntities</code>, <code>animationPoolBytes</code> and <code>maxMorphWeights</code>.</p>
+<p>Meshes have no count limit. Mesh, instance and light capacity on the GPU is not a constant: it comes from <code>EngineConfig::geometryPoolVertices</code>, <code>geometryPoolIndices</code>, <code>geometryPoolSubMeshes</code>, <code>maxInstances</code> and <code>maxLights</code>; animation capacity from <code>maxAnimatedEntities</code>, <code>animationPoolBytes</code> and <code>maxMorphWeights</code>.</p>
 
 <div class="callout warn">
   <strong>Known limits</strong>
