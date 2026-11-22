@@ -85,6 +85,23 @@ namespace
         uint32_t firstPass(uint32_t transient) const { return transientFirstPasses[transient]; }
         uint32_t lastPass(uint32_t transient) const { return transientLastPasses[transient]; }
 
+        // Engine::updateInspectPass's pass: a compute pass that copies what it reads.
+        void addInspectPass(rasm::TextureHandle source, rasm::TextureHandle copy)
+        {
+            addComputePass(
+                "Inspect",
+                [&](rasm::PassBuilder &builder)
+                {
+                    builder.read(source);
+                    builder.write(copy);
+                },
+                [](rasm::RenderContext &) {});
+            inspectPass = static_cast<uint32_t>(passes.size() - 1);
+        }
+        void remove(uint32_t passIdx) { removePass(passIdx); }
+        uint32_t inspect() const { return inspectPass; }
+        size_t passCount() const { return passes.size(); }
+
         const std::vector<uint32_t> &order() const { return executionOrder; }
         const rasm::Pass &pass(uint32_t passIdx) const { return passes[passIdx]; }
         bool isCompiled() const { return compiled; }
@@ -941,4 +958,50 @@ TEST_CASE("the dump lists a swapchain pass without depth")
     CHECK(text.find("    writes: swapchain") != std::string::npos);
     CHECK(text.find("    attachments: clear color, no depth") != std::string::npos);
     CHECK(text.find("swapchain depth") == std::string::npos);
+}
+
+TEST_CASE("the inspect pass runs right after the last pass that writes what it reads")
+{
+    TestGraph graph;
+    graph.addTexturePass({}, {TEXTURE_A});          // 0
+    graph.addTexturePass({}, {TEXTURE_B});          // 1: independent, sorted before 2 and 3 otherwise
+    graph.addTexturePass({TEXTURE_A}, {TEXTURE_C}); // 2
+    graph.addInspectPass(TEXTURE_A, {9, 1});        // 3
+
+    graph.compile();
+
+    REQUIRE(graph.isCompiled());
+    CHECK(graph.order() == std::vector<uint32_t>{0, 3, 1, 2});
+}
+
+TEST_CASE("taking the inspect pass out gives back the graph without it")
+{
+    TestGraph graph;
+    graph.addTexturePass({}, {TEXTURE_A});
+    graph.addTexturePass({}, {TEXTURE_B});
+    graph.addTexturePass({TEXTURE_A}, {TEXTURE_C});
+    graph.compile();
+    const std::vector<uint32_t> before = graph.order();
+    graph.addInspectPass(TEXTURE_A, {9, 1});
+    graph.compile();
+    REQUIRE(graph.order().size() == 4);
+
+    graph.remove(graph.inspect());
+    graph.compile();
+
+    CHECK(graph.inspect() == UINT32_MAX);
+    CHECK(graph.passCount() == 3);
+    CHECK(graph.order() == before);
+}
+
+TEST_CASE("taking out a pass before the inspect pass keeps its index pointing at it")
+{
+    TestGraph graph;
+    graph.addTexturePass({}, {TEXTURE_A});
+    graph.addInspectPass(TEXTURE_A, {9, 1});
+    graph.addTexturePass({}, {TEXTURE_B});
+    graph.remove(0);
+
+    CHECK(graph.inspect() == 0);
+    CHECK(graph.pass(0).name == "Inspect");
 }
