@@ -897,8 +897,8 @@ lit  = bit g.x of row g.y of the glyph of code</code></pre>
 <p>RASM uses exactly the method of sections 2 to 6 for its <b>stats overlay</b>, the panel that shows the numbers from <a href="gpu-timing.html#in-rasm">GPU timing and frame statistics</a>. The font, the lookup and the panel layout are in one shader, <code>shaders/passes/statsOverlay.slang</code>. The text is built on the CPU in <code>src/renderer/statsOverlay.cpp</code>. <kbd>F1</kbd> turns it on and off (<code>showStats</code>). With the Dear ImGui UI on (<code>EngineConfig::ui</code>), the same numbers show in the RASM window instead, and the overlay is not drawn; see <a href="immediate-mode-ui.html#in-rasm">Immediate-mode UI</a>.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 300" role="img" aria-label="Every 250 ms, buildText formats FrameStats into lines and buildGrid pads them into a grid of at most 40 columns and 76 rows. Every frame, updateStatsOverlay copies the grid into the frame slot's text buffer. At the end of the frame, endFrame calls drawStatsOverlay, which begins a pass of its own on the window, pushes 16 bytes of push constants and draws 6 vertices with the statsOverlay pipeline.">
-    <text x="20" y="22" class="title t-cpu">CPU · every 250 ms</text>
+  <svg viewBox="0 0 760 300" role="img" aria-label="Every 0.25 s of frame time, buildText formats FrameStats into lines and buildGrid pads them into a grid of at most 40 columns and 76 rows. Every frame, updateStatsOverlay copies the grid into the frame slot's text buffer. At the end of the frame, endFrame calls drawStatsOverlay, which begins a pass of its own on the window, pushes 16 bytes of push constants and draws 6 vertices with the statsOverlay pipeline.">
+    <text x="20" y="22" class="title t-cpu">CPU · every 0.25 s of frame time</text>
     <rect x="20" y="32" width="180" height="56" rx="6" class="cpu"/>
     <text x="110" y="56" class="mid mono">buildText</text>
     <text x="110" y="74" class="mid small">FrameStats → lines</text>
@@ -964,7 +964,7 @@ lit  = bit g.x of row g.y of the glyph of code</code></pre>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Font</td><td>8×8, 1 bit, bit 0 on the left</td><td>The same: the public-domain IBM VGA 8x8 font, <samp>!</samp> to <samp>~</samp> (<code>FIRST_CHAR</code> 33, <code>LAST_CHAR</code> 126), as <code>FONT[188]</code> in the shader.</td></tr>
   <tr><td>Text grid</td><td>row by row, padded, 4 codes per word</td><td>The same. <code>buildGrid</code> pads lines to the longest one, cut at <code>MAX_TEXT_COLUMNS</code> = 40 columns and <code>MAX_TEXT_ROWS</code> = 76 rows, room for every GPU timer. One host-visible buffer of 3040 bytes per frame slot.</td></tr>
-  <tr><td>Update rate</td><td>a few times per second</td><td>The text is rebuilt every 250 ms (<code>TEXT_REFRESH</code>); the current grid is copied into the slot's buffer every frame.</td></tr>
+  <tr><td>Update rate</td><td>a few times per second</td><td>The text is rebuilt every 0.25 s of frame time (<code>TEXT_REFRESH</code>; <code>gridAge</code> adds up the engine's <code>deltaTime</code>, so <code>EngineConfig::fixedDeltaTime</code> rebuilds it on the same frames in every run); the current grid is copied into the slot's buffer every frame.</td></tr>
   <tr><td>Geometry</td><td>one quad, no vertex buffer</td><td>The same: <code>draw</code> of 6 vertices; <code>vertMain</code> builds the corners from <code>SV_VertexID</code>. The triangles wind clockwise on screen, so the draw sets <code>CullMode::NONE</code>.</td></tr>
   <tr><td>Placement</td><td>pixels from a corner</td><td>8 screen pixels from the top-left corner (<code>MARGIN</code>), text 4 font pixels inside the panel (<code>PADDING</code>). Viewport and scissor are reset to the whole window first.</td></tr>
   <tr><td>Scale</td><td>a whole number from the screen size</td><td>max(1, swapchain height / 1080): 1 at 1080p, 2 at 2160p.</td></tr>

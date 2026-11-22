@@ -6,10 +6,15 @@ description: Verify a RASM code or shader change end to end. Build, unit tests, 
 # Verify change
 
 One command checks everything CLAUDE.md asks for ("a change that adds validation messages is
-not done") plus image regressions. The GFXReconstruct layer (Vulkan SDK) quits each example after frame N,
-and its replay renders that frame to PNG. A headless example (`HEADLESS_EXAMPLES` in the script, `16_headless`)
-presents nothing for GFXR to count, so it renders N frames itself and writes frame N through `Engine::readFrame`
-(`--frames N --out <png>`).
+not done") plus image regressions. Every example runs **headless**, so no window opens: it gets
+`--headless --frames N --out <png>` (`examples/exampleArgs.h`), renders N frames into an offscreen swapchain with
+validation on, writes frame N through `Engine::readFrame` and exits. The UI is drawn headless too (with no input),
+so the RASM window and an example's own ImGui windows are in the screenshot.
+
+`--windowed` runs the examples in a window under the GFXReconstruct layer (Vulkan SDK) instead: the layer quits each
+one after frame N, and its replay renders that frame to PNG. Use it only for captures (`--keep-captures`, for
+`frame-debug`); it opens a window per example. `16_headless` (`HEADLESS_EXAMPLES` in the script) runs headless
+either way.
 
 ```sh
 V=.claude/skills/verify-change/scripts/verify.py
@@ -31,7 +36,8 @@ python $V run           # AFTER: same checks + pixel diff against the baseline
 | `--best-practices` | Best Practices warnings. Noisy, so compare the counts against a baseline run with the same flag. |
 | `--gpu-av` | GPU-assisted validation: out-of-bounds bindless indices and buffer device address reads in shaders. Slow. |
 | `--args "--debug-view normals"` | Extra arguments for every example, after `--fixed-step --wait-for-loads` (an example ignores the ones it does not know). Compare such a run against a baseline taken with the same arguments. |
-| `--keep-captures` | Keep the `.gfxr` captures (≈100 MB each) for `frame-debug`. |
+| `--windowed` | Run in a window under GFXR instead of headless (opens a window per example). |
+| `--keep-captures` | With `--windowed`: keep the `.gfxr` captures (≈100 MB each) for `frame-debug`. |
 | `--images` | Also run the golden-image tests (`tools/image_tests.py --lavapipe --preset x64-release --build`, `run` only, whatever `--preset` is). **It downloads (once) and runs a third-party Mesa build, lavapipe**, so pass it only when the user asked for it. The goldens are lavapipe's; this machine's GPU is checked by the baseline diff above, not by them. |
 
 `diff <a.png> <b.png> [--out d.png]` compares any two PNGs.
@@ -41,7 +47,7 @@ python $V run           # AFTER: same checks + pixel diff against the baseline
 ```
 build   OK  (0 unique warnings)
 tests   OK  100% tests passed, 0 tests failed out of 1
-examples at frame 60, preset x64-debug:
+examples at frame 60, preset x64-debug, headless:
   00_hello_scene   OK    validation/engine: 0 errors, 0 warnings  | image same (max diff 0)
   02_gltf          DIFF  validation/engine: 0 errors, 0 warnings  | image CHANGED 1.443% px, max diff 139, bbox (89, 190, 624, 336)
       [WARNING Validation] x9 BestPractices-...   (grouped by VUID / message id, with count)
@@ -67,14 +73,18 @@ Look at the diff and the new screenshot with Read.
 - Baselines depend on the machine, GPU and driver. They are local and never committed. The golden images in
   `tests/golden/lavapipe/` are the committed ones: they belong to lavapipe, and CI checks them on every PR
   (`docs/guides/image-tests.html`).
-- Messages about `vkCmdPipelineBarrier()` (the original, not `...2`) come from GFXR's frame snapshot, not RASM, which only uses `vkCmdPipelineBarrier2`. The script counts them as "ignored". If a message looks like it came from the capture layer, run the exe once without the layer before blaming RASM (`timeout 10 <exe>` with the same `VK_LAYER_VALIDATE_*` variables).
+- With `--windowed`, messages about `vkCmdPipelineBarrier()` (the original, not `...2`) come from GFXR's frame snapshot, not RASM, which only uses `vkCmdPipelineBarrier2`. The script counts them as "ignored". If a message looks like it came from the capture layer, run the same example headless before blaming RASM.
+- Run one example by hand the same way: `build/x64-debug/examples/<name>.exe --fixed-step --wait-for-loads --headless --frames 60 --out shot.png`.
 
 ## Determinism
 
 Frame N is pixel-exact between runs (tested: max diff 0) because the examples rotate objects by
-a fixed angle per frame, not by elapsed time, the camera has no input, and with `--wait-for-loads`
+a fixed angle per frame, not by elapsed time, the camera has no input, `--fixed-step` sets
+`EngineConfig::fixedDeltaTime` to 1/60 s (the cameras' easing, the UI and the stats' refresh step by it, so the RASM
+window and the stats overlay renew their numbers on the same frames: `C15`), and with `--wait-for-loads`
 (`examples/exampleArgs.h`) every example that loads calls `Engine::waitForLoads` before its first frame, so
 frame N does not depend on how fast the loads ran (`C16`). The camera eases toward its target by `deltaTime`, but snaps to it once it is within float precision (`B24`), so a camera at rest does not drift. A DIFF only on equal-depth edges, different from run to run, points at something time-based like that. If an example starts
 animating by time, its diffs become noise. Make the animation per-frame, or exclude that example
 with `--examples`. `05_city` animates by wall clock, but the script runs every example with `--fixed-step`, which makes it
-advance a fixed 1/60 s per frame.
+advance a fixed 1/60 s per frame. The stats' timings (ms, fps, VRAM) still change from run to run: a DIFF only in the
+numbers of the RASM window or the stats overlay is that.

@@ -930,14 +930,14 @@ uint64_t pack(const Request *req, uint32_t count, uint64_t *offsets)
 
 <h2 id="in-rasm"><span class="n">8</span>In RASM</h2>
 
-<p>RASM aliases the render targets of a <a href="render-graphs.html#in-rasm">render graph</a>. A render target that <code>RenderGraph::createRenderTarget</code> or <code>PassBuilder::createRenderTarget</code> makes without <code>history</code> is transient: its handle exists at once, but its textures are made only after the graph is compiled, inside heaps shared with the graph's other transient targets. The packing is the greedy method of <a href="#packing">section 4</a>, in <code>rhi::packAliased</code>.</p>
+<p>RASM aliases the render targets of a <a href="render-graphs.html#in-rasm">render graph</a>. A render target that <code>RenderGraph::createRenderTarget</code> or <code>PassBuilder::createRenderTarget</code> makes without <code>history</code> or <code>readable</code> is transient: its handle exists at once, but its textures are made only after the graph is compiled, inside heaps shared with the graph's other transient targets. The packing is the greedy method of <a href="#packing">section 4</a>, in <code>rhi::packAliased</code>.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 340" role="img" aria-label="Setup: createRenderTarget of the graph or of a PassBuilder, without history, calls createTransientRenderTarget, which returns a handle without textures, kept in the graph's transientTargets. Compile: transientLifetimes finds the first and last position of each target, and the layout is redone only if they changed. Execute, until placed: placeTransients calls placeTransientRenderTargets, whose placeGroup asks for memory requirements, packs with packAliased, creates heaps and placed textures. Every frame on the GPU: aliasingBarrier before the first pass of each transient target, then beginPass clears it.">
+  <svg viewBox="0 0 760 340" role="img" aria-label="Setup: createRenderTarget of the graph or of a PassBuilder, without history or readable, calls createTransientRenderTarget, which returns a handle without textures, kept in the graph's transientTargets. Compile: transientLifetimes finds the first and last position of each target, and the layout is redone only if they changed. Execute, until placed: placeTransients calls placeTransientRenderTargets, whose placeGroup asks for memory requirements, packs with packAliased, creates heaps and placed textures. Every frame on the GPU: aliasingBarrier before the first pass of each transient target, then beginPass clears it.">
     <text x="20" y="22" class="title t-cpu">setup · before or inside addPass</text>
     <rect x="20" y="32" width="230" height="50" rx="6" class="cpu"/>
     <text x="135" y="53" class="mid mono">createRenderTarget</text>
-    <text x="135" y="71" class="mid small">graph or PassBuilder, no history</text>
+    <text x="135" y="71" class="mid small">no history, not readable</text>
     <line x1="250" y1="57" x2="278" y2="57" class="arrow cpu" marker-end="url(#ah-cpu)"/>
     <rect x="280" y="32" width="230" height="50" rx="6" class="cpu"/>
     <text x="395" y="53" class="mid mono">createTransientRenderTarget</text>
@@ -981,44 +981,48 @@ uint64_t pack(const Request *req, uint32_t count, uint64_t *offsets)
   <figcaption>The layout is made once, and again only when a compile changes the lifetimes or a resize changes the sizes. The barrier is recorded every frame.</figcaption>
 </figure>
 
-<p><code>examples/01_render_graph</code> has two transient targets. <samp>offscreen_rt</samp> (one color and depth) lives in passes 1 to 5: <code>Scene 1</code> draws it, <code>Hi-Z</code> reads its depth, <code>Scene 2</code> draws it again, and <code>Trail</code> reads it. <samp>composite_rt</samp> (two colors and depth) lives in passes 6 and 7. Their lifetimes do not overlap, so they share one heap. <samp>trail_rt</samp> has history, so it has memory of its own.</p>
+<p><code>examples/01_render_graph</code> has two transient targets. <samp>offscreen_rt</samp> (one color and depth) lives in passes 3 to 8: <code>Scene 1</code> draws it, <code>Hi-Z</code> reads its depth, <code>Scene 2</code> and <code>Transparent</code> draw it again, and <code>Trail</code> reads it. <samp>composite_rt</samp> (two colors and depth) lives in passes 9 and 10. Their lifetimes do not overlap, so they share one heap. <samp>trail_rt</samp> has history, so it has memory of its own.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 262" role="img" aria-label="Example 01 at 1920 by 1080. Passes 0 Cull 1, 1 Scene 1, 2 Hi-Z, 3 Cull 2, 4 Scene 2, 5 Trail, 6 Background, 7 Present. One heap with three slots of about 8.4 MiB. Slot 0: offscreen_rt color in passes 1 to 5, then composite_rt color 0 in passes 6 to 7. Slot 1: offscreen_rt depth, then composite_rt color 1. Slot 2: composite_rt depth only. An aliasing barrier comes before passes 1 and 6. trail_rt has its own memory.">
-    <text x="204" y="24" class="mid mono small t-hot">aliasingBarrier</text>
-    <text x="474" y="24" class="mid mono small t-hot">aliasingBarrier</text>
-    <rect x="150" y="36" width="432" height="126" class="zone"/>
-    <line x1="204" y1="30" x2="204" y2="168" class="hot"/>
-    <line x1="474" y1="30" x2="474" y2="168" class="hot"/>
+  <svg viewBox="0 0 760 262" role="img" aria-label="Example 01 at 1920 by 1080. Passes 0 Animate, 1 Skin, 2 Cull 1, 3 Scene 1, 4 Hi-Z, 5 Cull 2, 6 Scene 2, 7 Transparent, 8 Trail, 9 Background, 10 Present, 11 UI. One heap with three slots of about 8.4 MiB. Slot 0: offscreen_rt color in passes 3 to 8, then composite_rt color 0 in passes 9 to 10. Slot 1: offscreen_rt depth, then composite_rt color 1. Slot 2: composite_rt depth only. An aliasing barrier comes before passes 3 and 9. trail_rt has its own memory.">
+    <text x="264" y="24" class="mid mono small t-hot">aliasingBarrier</text>
+    <text x="492" y="24" class="mid mono small t-hot">aliasingBarrier</text>
+    <rect x="150" y="36" width="456" height="126" class="zone"/>
+    <line x1="264" y1="30" x2="264" y2="168" class="hot"/>
+    <line x1="492" y1="30" x2="492" y2="168" class="hot"/>
     <text x="140" y="40" class="end small">0</text>
     <text x="140" y="82" class="end small">8.4</text>
     <text x="140" y="124" class="end small">16.9</text>
     <text x="140" y="166" class="end small">25.3 MiB</text>
-    <rect x="208" y="38" width="262" height="38" rx="3" class="mem"/>
-    <text x="339" y="61" class="mid small">offscreen_rt color</text>
-    <rect x="478" y="38" width="100" height="38" rx="3" class="mem"/>
-    <text x="528" y="61" class="mid small">composite color 0</text>
-    <rect x="208" y="80" width="262" height="38" rx="3" class="mem"/>
-    <text x="339" y="103" class="mid small">offscreen_rt depth</text>
-    <rect x="478" y="80" width="100" height="38" rx="3" class="mem"/>
-    <text x="528" y="103" class="mid small">composite mask</text>
-    <rect x="478" y="122" width="100" height="38" rx="3" class="mem"/>
-    <text x="528" y="145" class="mid small">composite depth</text>
-    <text x="177" y="184" class="mid small">0</text>
-    <text x="231" y="184" class="mid small">1</text>
-    <text x="285" y="184" class="mid small">2</text>
-    <text x="339" y="184" class="mid small">3</text>
-    <text x="393" y="184" class="mid small">4</text>
-    <text x="447" y="184" class="mid small">5</text>
-    <text x="501" y="184" class="mid small">6</text>
-    <text x="555" y="184" class="mid small">7</text>
-    <text x="20" y="200" class="small">passes: 0 Cull 1 · 1 Scene 1 · 2 Hi-Z · 3 Cull 2 · 4 Scene 2 · 5 Trail · 6 Background · 7 Present</text>
+    <rect x="268" y="38" width="220" height="38" rx="3" class="mem"/>
+    <text x="378" y="61" class="mid small">offscreen_rt color</text>
+    <rect x="496" y="38" width="68" height="38" rx="3" class="mem"/>
+    <text x="530" y="54" class="mid small">composite</text><text x="530" y="68" class="mid small">color 0</text>
+    <rect x="268" y="80" width="220" height="38" rx="3" class="mem"/>
+    <text x="378" y="103" class="mid small">offscreen_rt depth</text>
+    <rect x="496" y="80" width="68" height="38" rx="3" class="mem"/>
+    <text x="530" y="96" class="mid small">composite</text><text x="530" y="110" class="mid small">mask</text>
+    <rect x="496" y="122" width="68" height="38" rx="3" class="mem"/>
+    <text x="530" y="138" class="mid small">composite</text><text x="530" y="152" class="mid small">depth</text>
+    <text x="169" y="184" class="mid small">0</text>
+    <text x="207" y="184" class="mid small">1</text>
+    <text x="245" y="184" class="mid small">2</text>
+    <text x="283" y="184" class="mid small">3</text>
+    <text x="321" y="184" class="mid small">4</text>
+    <text x="359" y="184" class="mid small">5</text>
+    <text x="397" y="184" class="mid small">6</text>
+    <text x="435" y="184" class="mid small">7</text>
+    <text x="473" y="184" class="mid small">8</text>
+    <text x="511" y="184" class="mid small">9</text>
+    <text x="549" y="184" class="mid small">10</text>
+    <text x="587" y="184" class="mid small">11</text>
+    <text x="20" y="200" class="small">0 Animate · 1 Skin · 2 Cull 1 · 3 Scene 1 · 4 Hi-Z · 5 Cull 2 · 6 Scene 2 · 7 Transparent · 8 Trail · 9 Background · 10 Present · 11 UI</text>
 
-    <rect x="606" y="38" width="140" height="80" rx="6" class="box"/>
-    <text x="676" y="58" class="mid small title">trail_rt</text>
-    <text x="676" y="76" class="mid small">history: 2 copies of</text>
-    <text x="676" y="92" class="mid small">color + depth, in</text>
-    <text x="676" y="108" class="mid small">memory of its own</text>
+    <rect x="614" y="38" width="140" height="80" rx="6" class="box"/>
+    <text x="684" y="58" class="mid small title">trail_rt</text>
+    <text x="684" y="76" class="mid small">history: 2 copies of</text>
+    <text x="684" y="92" class="mid small">color + depth, in</text>
+    <text x="684" y="108" class="mid small">memory of its own</text>
 
     <text x="20" y="224" class="mono small">Placed 2 transient render targets in 1 heap(s): 25.3 MiB instead of 42.2 MiB.</text>
     <text x="20" y="246" class="small">At 1920 × 1080 each of the 5 textures asks for about 8.4 MiB (more than 7.9: the driver pads it). At most 3 are alive at once.</text>
@@ -1031,7 +1035,7 @@ uint64_t pack(const Request *req, uint32_t count, uint64_t *offsets)
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>What is transient</td><td>any resource made inside the frame</td><td>Render targets without <code>history</code> from <code>RenderGraph::createRenderTarget</code> or <code>PassBuilder::createRenderTarget</code>. Textures and buffers from the builder, history targets, and targets from <code>Engine::createRenderTarget</code> get their own memory.</td></tr>
+  <tr><td>What is transient</td><td>any resource made inside the frame</td><td>Render targets without <code>history</code> or <code>readable</code> from <code>RenderGraph::createRenderTarget</code> or <code>PassBuilder::createRenderTarget</code>. Textures and buffers from the builder, history targets, readable targets (a readback copies them after the frame's last pass, <a href="headless-readback.html">readbacks</a>), and targets from <code>Engine::createRenderTarget</code> get their own memory.</td></tr>
   <tr><td>Lifetime</td><td>first to last use, both ends included</td><td>The same, as positions in the sorted order (<code>RenderGraph::transientLifetimes</code>). A target that no pass declares lives the whole frame.</td></tr>
   <tr><td>Looking inside</td><td>–</td><td>A transient target holds its data only during its lifetime. The RASM window's Buffers section copies one with an Inspect pass placed right after its last writer, which counts as a use, so its lifetime covers the copy (<a href="inspecting-gpu-resources.html">Inspecting GPU resources</a>). Adding or removing that pass lays the memory out again.</td></tr>
   <tr><td>One request per</td><td>resource</td><td>Texture: each color and the depth of a target is its own request, with the target's lifetime (<code>attachmentTextureDescs</code>).</td></tr>

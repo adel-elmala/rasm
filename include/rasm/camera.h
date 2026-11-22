@@ -11,7 +11,7 @@ namespace rasm
         glm::vec2   mouseStart = glm::vec2(0.0f);  // NDC coordinates [-1, 1]
         glm::vec2   mouseEnd   = glm::vec2(0.0f);  // NDC coordinates [-1, 1]
         float       wheelDelta = 0.0f;             // scroll wheel delta
-        float       deltaTime  = 0.0f;             // frame time in seconds
+        float       deltaTime  = 0.0f;             // the frame's step in seconds: EngineConfig::fixedDeltaTime, else the frame time
 
         bool        forward  = false;
         bool        backward = false;

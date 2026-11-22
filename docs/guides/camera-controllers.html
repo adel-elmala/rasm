@@ -817,7 +817,7 @@ so                         t = 1 − e^(−k · dt)</code></pre>
   <li><code>mouseStart</code> is last frame's drag position, <code>mouseEnd</code> the newest one, both from <code>toNDC</code>.</li>
   <li><code>wheelDelta</code> is summed over the frame.</li>
   <li>W, A, S, D are scancodes from <code>SDL_GetKeyboardState</code>.</li>
-  <li><code>deltaTime</code> comes from <code>steady_clock</code>: 0 on the first frame, at most 0.1 s.</li>
+  <li><code>deltaTime</code> comes from <code>steady_clock</code>: 0 on the first frame, at most 0.1 s. With <code>EngineConfig::fixedDeltaTime</code> it is that step instead, so the easing is the same in every run.</li>
   <li>A lost focus calls <code>SDL_ResetKeyboard</code>, so no key stays held.</li>
 </ul>
 

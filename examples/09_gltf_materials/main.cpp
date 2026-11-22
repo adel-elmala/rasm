@@ -133,7 +133,7 @@ namespace
 
 int main(int argc, char **argv)
 {
-    const ExampleArgs args = parseExampleArgs(argc, argv);
+    ExampleArgs args = parseExampleArgs(argc, argv);
     uint32_t glassCount = 1536;
     bool printGpuTimes = false;
     bool bloom = true;
@@ -185,6 +185,7 @@ int main(int argc, char **argv)
         .showStats = inspect || inspectRows,
         .ui = true};
 
+    applyExampleArgs(args, config);
     rasm::Engine engine(config);
     if (!engine.running())
         return 1;
@@ -300,7 +301,7 @@ int main(int argc, char **argv)
     if (args.waitForLoads)
         engine.waitForLoads();
 
-    for (uint32_t frame = 0; engine.running(); ++frame)
+    for (uint32_t frame = 0; exampleRunning(engine, args); ++frame)
     {
         // The lantern turns by a fixed angle per frame, so its motion (and TAA's motion vectors) is the same every run.
         engine.updateTransform(lanternEntity, engine.getTransform(lanternEntity).rotate(glm::vec3(0.0f, 1.0f, 0.0f), glm::radians(1.0f)));
@@ -331,5 +332,5 @@ int main(int argc, char **argv)
         }
     }
 
-    return 0;
+    return exampleExit(args);
 }

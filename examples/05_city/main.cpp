@@ -838,7 +838,7 @@ namespace
 
 int main(int argc, char **argv)
 {
-    const ExampleArgs args = parseExampleArgs(argc, argv);
+    ExampleArgs args = parseExampleArgs(argc, argv);
     rasm::EngineConfig config = {
         .appName = "rasm city",
         .windowWidth = 1280,
@@ -851,6 +851,7 @@ int main(int argc, char **argv)
         .showStats = true,
         .ui = true};
 
+    applyExampleArgs(args, config);
     rasm::Engine engine(config);
     if (!engine.running())
         return 1;
@@ -917,7 +918,7 @@ int main(int argc, char **argv)
     bool touring = true;
     bool aviationOn = false;
 
-    for (uint32_t frame = 0; engine.running(); ++frame)
+    for (uint32_t frame = 0; exampleRunning(engine, args); ++frame)
     {
         if (freezeCulling && frame == 30)
             engine.setCullingFrozen(true);
@@ -959,5 +960,5 @@ int main(int argc, char **argv)
         lastTime = now;
     }
 
-    return 0;
+    return exampleExit(args);
 }

@@ -5,7 +5,6 @@
 #include "rasm/handle.h"
 #include "rasm/types.h"
 
-#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -63,8 +62,8 @@ namespace rasm
         std::vector<UiRelease>                          releases;
         std::vector<uint8_t>                            expanded;                                   // an Alpha8 texture's pixels as RGBA8
         std::function<void()>                           callback;
-        FrameStats                                      stats;                                      // what the RASM window shows, renewed every 250 ms
-        std::chrono::steady_clock::time_point           statsTime                       = {};
+        FrameStats                                      stats;                                      // what the RASM window shows, renewed every 250 ms of frame time
+        float                                           statsAge                        = 1.0f;     // seconds of frame time since then; due at the start
         uint32_t                                        displaySize                     = 0;        // width | height << 16, in points
         bool                                            active                          = false;    // this frame built a UI
         bool                                            drawn                           = false;    // a UI pass drew it

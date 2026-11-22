@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Generational Handles · RASM</title>
 <meta name="description" content="How generational handles work: why not pointers or plain indices, index plus generation, free lists and slot maps, stale handle detection, bit budgets, type-safe tags, ownership and deferred destruction, dedup caches, and how RASM does it.">
-<meta name="rasm-sources" content="include/rasm/handle.h src/core/handle.cpp include/rasm/engine.h src/rhi/renderContext.cpp src/rhi/resource.cpp include/rasm/render/resource.h include/rasm/render/renderContext.h src/scene/entity.cpp src/assets/mesh.cpp src/assets/material.cpp src/assets/texture.cpp src/renderer/gpuScene.cpp include/rasm/entity.h include/rasm/mesh.h include/rasm/light.h include/rasm/scene.h include/rasm/types.h">
+<meta name="rasm-sources" content="include/rasm/handle.h src/core/handle.cpp include/rasm/engine.h src/rhi/renderContext.cpp src/rhi/resource.cpp include/rasm/render/resource.h include/rasm/render/renderContext.h src/scene/entity.cpp src/assets/mesh.cpp src/assets/material.cpp src/assets/texture.cpp src/renderer/gpuScene.cpp src/renderer/readback.h include/rasm/entity.h include/rasm/mesh.h include/rasm/light.h include/rasm/scene.h include/rasm/types.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -758,6 +758,7 @@ void bindTexture(TextureHandle texture);</code></pre>
   <tr><td><code>Camera</code></td><td><code>MAX_CAMERAS</code> = 8 (7 usable)</td><td><code>include/rasm/engine.h</code></td></tr>
   <tr><td><code>Light</code></td><td><code>EngineConfig::maxLights</code> = 16384</td><td><code>include/rasm/types.h</code></td></tr>
   <tr><td><code>Scene</code></td><td><code>MAX_SCENES</code> = 16 (15 usable)</td><td><code>include/rasm/scene.h</code></td></tr>
+  <tr><td><code>Engine</code> readbacks</td><td><code>PendingReadback</code></td><td>no count limit; <code>takeReadback</code> frees it</td><td><code>src/renderer/readback.h</code></td></tr>
   <tr><td><code>RenderContext</code> maps</td><td>buffers, textures, pipelines, ...</td><td>no count limit; bindless texture slots stop at <code>MAX_BINDLESS_TEXTURES</code> = 1024</td><td><code>include/rasm/types.h</code></td></tr>
 </table>
 </div>
@@ -791,7 +792,7 @@ void bindTexture(TextureHandle texture);</code></pre>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Handle layout</td><td>index + generation, often packed in 32 or 64 bits</td><td>Two separate <code>uint64_t</code> fields: 16 bytes per handle. They never wrap in practice.</td></tr>
   <tr><td>Invalid handle</td><td>generation 0</td><td>The same: <code>isValid</code> is <code>generation != 0</code>, so <code>{}</code> is invalid.</td></tr>
-  <tr><td>Type safety</td><td>tag types</td><td>The same: <code>Handle&lt;Tag&gt;</code> with 20 tags, from <code>MeshHandle</code> to <code>QueryPoolHandle</code>. It is the only template RASM code may define.</td></tr>
+  <tr><td>Type safety</td><td>tag types</td><td>The same: <code>Handle&lt;Tag&gt;</code> with 22 tags, from <code>MeshHandle</code> to <code>ReadbackHandle</code>. It is the only template RASM code may define.</td></tr>
   <tr><td>Making a handle</td><td>pop the free list, or add a slot</td><td>A counter per type in <code>HandleCounters</code>. <code>getNextMeshHandle</code> returns <code>{counter++, 1}</code>. Nothing is ever reused (D4, B13).</td></tr>
   <tr><td>Generation bump on destroy</td><td>yes</td><td>No. The generation is always 1 (<code>src/core/handle.cpp</code>).</td></tr>
   <tr><td>Stale handle detection</td><td>compare generations</td><td><code>RenderContext</code>: indices are never reused, so a destroyed buffer or texture handle is simply missing from the map, and the lookup logs an error. This is the "counter as the index" row of section 9. <code>Engine</code> registry: no detection, but nothing there can be destroyed either.</td></tr>
@@ -804,7 +805,7 @@ void bindTexture(TextureHandle texture);</code></pre>
 
 <h3>The dedup caches</h3>
 
-<p>Every creation descriptor in <code>include/rasm/render/resource.h</code> (<code>ShaderDesc</code>, <code>PipelineDesc</code>, <code>BindlessDescriptorSetLayoutDesc</code>, ...) has a defaulted <code>operator==</code>, so equality always compares every field. The hashes are written by hand in <code>src/rhi/resource.cpp</code>. <code>ShaderDescHash</code> hashes the name, the type, the entry point and the SPIR-V bytes; <code>PipelineDescHash</code> hashes the name, the four handles (with <code>HandleHash</code>), the topology and both attachment formats.</p>
+<p>Every creation descriptor in <code>include/rasm/render/resource.h</code> (<code>ShaderDesc</code>, <code>PipelineDesc</code>, <code>BindlessDescriptorSetLayoutDesc</code>, ...) has a defaulted <code>operator==</code>, so equality always compares every field. The hashes are written by hand in <code>src/rhi/resource.cpp</code>. <code>ShaderDescHash</code> hashes the name, the type, the entry point and the SPIR-V bytes; <code>PipelineDescHash</code> hashes the name, the four handles (with <code>HandleHash</code>), the topology, the color and depth formats, the blend mode, depth write and depth test, the sample count and alpha-to-coverage.</p>
 
 <p>Because a pipeline's description holds shader <i>handles</i>, and equal shader descriptions give the same shader handle, two equal pipeline descriptions find each other too.</p>
 

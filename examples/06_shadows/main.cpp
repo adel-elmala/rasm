@@ -72,7 +72,7 @@ namespace
 
 int main(int argc, char **argv)
 {
-    const ExampleArgs args = parseExampleArgs(argc, argv);
+    ExampleArgs args = parseExampleArgs(argc, argv);
     rasm::EngineConfig config = {
         .appName = "example_6",
         .windowWidth = 1280,
@@ -83,6 +83,7 @@ int main(int argc, char **argv)
         .shaderDir = RASM_EXAMPLE_SHADER_DIR,
         .ui = true};
 
+    applyExampleArgs(args, config);
     rasm::Engine engine(config);
     if (!engine.running())
         return 1;
@@ -306,11 +307,11 @@ int main(int argc, char **argv)
         engine.waitForLoads();
 
     // Animation advances per frame, not per second, so a given frame renders the same on every run.
-    while (engine.running())
+    while (exampleRunning(engine, args))
     {
         engine.updateTransform(spinner, engine.getTransform(spinner).rotate(glm::normalize(glm::vec3(1.0f, 2.0f, 0.5f)), glm::radians(1.0f)));
         graph.execute(camera);
     }
 
-    return 0;
+    return exampleExit(args);
 }

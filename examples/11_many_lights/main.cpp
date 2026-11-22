@@ -3,6 +3,8 @@
 
 #include "rasm/rasm.h"
 
+#include "exampleArgs.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -223,6 +225,7 @@ namespace
 int main(int argc, char **argv)
 {
     const Options options = parseOptions(argc, argv);
+    ExampleArgs args = parseExampleArgs(argc, argv);
     rasm::EngineConfig config = {
         .appName = "example_11",
         .windowWidth = options.bench ? 1920 : 1280,
@@ -236,6 +239,7 @@ int main(int argc, char **argv)
         .clusteredLighting = !options.allLights,
         .ui = true};
 
+    applyExampleArgs(args, config);
     rasm::Engine engine(config);
     if (!engine.running())
         return 1;
@@ -342,12 +346,15 @@ int main(int argc, char **argv)
     std::printf("%u lights of range %.1f, %s. F1: stats.\n", options.lights, range, options.allLights ? "every light per pixel" : "in clusters");
     std::fflush(stdout);
 
+    if (args.waitForLoads)
+        engine.waitForLoads();
+
     // Animation advances per frame, not per second, so a given frame renders the same on every run.
     BenchTimers bench;
     if (options.bench)
         engine.getFrameStats();
     uint32_t frame = 0;
-    while (engine.running())
+    while (exampleRunning(engine, args))
     {
         ++frame;
         for (const MovingLight &moving : lights)
@@ -370,5 +377,5 @@ int main(int argc, char **argv)
         }
     }
 
-    return 0;
+    return exampleExit(args);
 }

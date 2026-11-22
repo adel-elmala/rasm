@@ -12,7 +12,7 @@
 // the turning models show with their motion.
 int main(int argc, char **argv)
 {
-    const ExampleArgs args = parseExampleArgs(argc, argv);
+    ExampleArgs args = parseExampleArgs(argc, argv);
     // Create engine instance
     rasm::EngineConfig config = {
         .appName = "example_2",
@@ -38,6 +38,7 @@ int main(int argc, char **argv)
             config.antiAliasing = rasm::AntiAliasing::TAA;
     }
 
+    applyExampleArgs(args, config);
     rasm::Engine engine(config);
     if (!engine.running())
         return 1;
@@ -123,7 +124,7 @@ int main(int argc, char **argv)
         engine.waitForLoads();
 
     // Main loop
-    while (engine.running())
+    while (exampleRunning(engine, args))
     {
         // Update transforms, animations, etc.
         engine.updateTransform(pottery, engine.getTransform(pottery).rotate(glm::vec3(0.0f, 1.0f, 0.0f), glm::radians(0.01f)));
@@ -134,5 +135,5 @@ int main(int argc, char **argv)
         engine.render(scene, camera);
     }
 
-    return 0;
+    return exampleExit(args);
 }

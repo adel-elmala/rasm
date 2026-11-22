@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Async Compute · RASM</title>
 <meta name="description" content="Async compute: running compute work on a second GPU queue next to graphics work. Queue families, overlap and dependency chains, semaphores and batches, sharing resources between queues, timing, when it pays off, and how RASM does it.">
-<meta name="rasm-sources" content="src/engine.cpp src/renderer/renderGraph.cpp src/renderer/gpuScene.cpp src/renderer/frameStats.cpp src/rhi/renderContext.cpp src/rhi/uploadManager.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanQueue.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/rhi/vulkan/vulkanSwapchain.cpp include/rasm/render/renderGraph.h include/rasm/render/renderContext.h include/rasm/render/resource.h include/rasm/types.h examples/03_instances/main.cpp">
+<meta name="rasm-sources" content="src/engine.cpp src/renderer/renderGraph.cpp src/renderer/gpuScene.cpp src/renderer/frameStats.cpp src/rhi/renderContext.cpp src/rhi/uploadManager.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanQueue.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/renderer/animation.cpp src/renderer/readback.cpp include/rasm/render/renderGraph.h include/rasm/render/renderContext.h include/rasm/render/resource.h include/rasm/types.h examples/03_instances/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -570,7 +570,7 @@
 
 <h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
 
-<p>RASM has an optional compute queue. With <code>EngineConfig::asyncCompute</code> on, and a GPU with a compute family that has no graphics, the scene view's culling and Hi-Z passes run on it. They are added with <code>RenderGraph::addAsyncComputePass</code>, and the graph places the semaphore waits. With the option off (the default), or without such a family, every pass runs on the graphics queue in one submit, as before.</p>
+<p>RASM has an optional compute queue. With <code>EngineConfig::asyncCompute</code> on, and a GPU with a compute family that has no graphics, the frame's animation passes and each scene view's culling and Hi-Z passes run on it. They are added with <code>RenderGraph::addAsyncComputePass</code>, and the graph places the semaphore waits. With the option off (the default), or without such a family, every pass runs on the graphics queue in one submit, as before.</p>
 
 <div class="legend">
   <span><i class="shader"></i>compute batches</span>
@@ -579,16 +579,16 @@
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 180" role="img" aria-label="Frame N as four batches: compute Cull 1, graphics Scene 1, compute Hi-Z and Cull 2, graphics Scene 2, Transparent, Tone Map and the stats overlay, then present. Frame N plus 1's Cull 1 runs on the compute queue while frame N's Scene 2 still runs on the graphics queue, because it writes the other frame slot's visible draws.">
+  <svg viewBox="0 0 760 180" role="img" aria-label="Frame N as four batches: compute Animate, Skin and Cull 1, graphics Scene 1, compute Hi-Z and Cull 2, graphics Scene 2, Transparent, Tone Map and the stats overlay, then present. Frame N plus 1's Animate, Skin and Cull 1 run on the compute queue while frame N's Scene 2 still runs on the graphics queue, because they write the other frame slot's buffers.">
     <text x="20" y="22" class="title">One scene view with async compute</text>
     <rect x="80" y="34" width="670" height="54" rx="6" class="zone"/>
     <rect x="80" y="110" width="670" height="54" rx="6" class="zone"/>
     <text x="20" y="66" class="small">compute</text>
     <text x="20" y="142" class="small">graphics</text>
 
-    <rect x="90" y="44" width="80" height="34" rx="5" class="shader"/>
-    <text x="130" y="65" class="mid small">Cull 1</text>
-    <line x1="170" y1="78" x2="188" y2="118" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+    <rect x="86" y="44" width="92" height="34" rx="5" class="shader"/>
+    <text x="132" y="58" class="mid small">Animate, Skin</text><text x="132" y="72" class="mid small">Cull 1</text>
+    <line x1="178" y1="78" x2="190" y2="118" class="arrow hot thick" marker-end="url(#ah-hot)"/>
     <rect x="190" y="120" width="150" height="34" rx="5" class="gpu"/>
     <text x="265" y="141" class="mid small">Scene 1</text>
     <line x1="340" y1="120" x2="356" y2="80" class="arrow hot thick" marker-end="url(#ah-hot)"/>
@@ -600,13 +600,13 @@
     <line x1="646" y1="137" x2="668" y2="137" class="arrow" marker-end="url(#ah)"/>
     <text x="674" y="141" class="small">present</text>
 
-    <rect x="520" y="44" width="80" height="34" rx="5" class="shader o-75"/>
-    <text x="560" y="65" class="mid small">Cull 1</text>
-    <text x="608" y="65" class="small t-faint">of frame N+1</text>
-    <path d="M520,96V102H600V96" class="arrow ok"/>
-    <text x="608" y="103" class="small t-ok">runs next to Scene 2</text>
+    <rect x="520" y="44" width="92" height="34" rx="5" class="shader o-75"/>
+    <text x="566" y="58" class="mid small">Animate, Skin</text><text x="566" y="72" class="mid small">Cull 1</text>
+    <text x="620" y="65" class="small t-faint">of frame N+1</text>
+    <path d="M520,96V102H612V96" class="arrow ok"/>
+    <text x="620" y="103" class="small t-ok">runs next to Scene 2</text>
   </svg>
-  <figcaption>Frame N+1's <code>Cull 1</code> writes the other frame slot's visible draws, so it waits for nothing of frame N and runs next to <code>Scene 2</code>. Batches are cut while the frame is recorded and all submitted at the end of the frame, in that order. The last graphics batch waits for all of the frame's compute work and presents.</figcaption>
+  <figcaption><code>Animate</code> and <code>Skin</code> run once per frame, before every view. Frame N+1's <code>Animate</code>, <code>Skin</code> and <code>Cull 1</code> write the other frame slot's buffers (animated vertices, visible draws, light clusters), so they wait for nothing of frame N and run next to <code>Scene 2</code>. Batches are cut while the frame is recorded and all submitted at the end of the frame, in that order. The last graphics batch waits for all of the frame's compute work and presents.</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
@@ -615,15 +615,16 @@
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Which queue</td><td>a compute-only family</td><td>The same. <code>VulkanDevice::initialize</code> takes vk-bootstrap's compute queue only from a family without graphics, and only if its timestamps have as many valid bits as the graphics queue's. <code>RenderContext::hasAsyncCompute</code> says whether there is one.</td></tr>
-  <tr><td>Which passes</td><td>independent work</td><td>The scene view's <code>Cull 1</code>, <code>Hi-Z</code> and <code>Cull 2</code>: a chain with the draws, so the only overlap is <code>Cull 1</code> next to the previous frame's last draws (<b>P11</b>).</td></tr>
+  <tr><td>Which passes</td><td>independent work</td><td>The frame's <code>Animate</code> and <code>Skin</code>, then each scene view's <code>Cull 1</code> (which also fills the light clusters), <code>Hi-Z</code> and <code>Cull 2</code>: a chain with the draws, so the only overlap is the next frame's first compute work next to this frame's last draws (<b>P11</b>).</td></tr>
   <tr><td>Semaphores</td><td>one timeline per queue</td><td>The same: <code>frameFence</code> for graphics and <code>computeFence</code> for compute. A frame slot waits for both before it is reused.</td></tr>
   <tr><td>Batches</td><td>cut where a queue needs the other's result</td><td>The same, done by the graph: <code>Engine::waitForQueue</code> closes the other queue's open batch when a pass needs it. All batches go out at the end of the frame, in the order they were closed (<code>Engine::submitBatches</code>).</td></tr>
   <tr><td>Finding the waits</td><td>from declared reads and writes</td><td>The graph keeps, per resource and per queue, how it was used and in which batch. A use on the other queue becomes a wait instead of a barrier. Undeclared resources get no wait.</td></tr>
   <tr><td>Hazards across frames</td><td>one copy per frame slot</td><td><code>PassBuilder::write(perFrame)</code> declares one buffer per slot. The visible draws and the Hi-Z use it. The per-resource state also carries over between frames.</td></tr>
   <tr><td>Sharing</td><td>exclusive + transfers, or concurrent</td><td>Concurrent for every buffer and image when there is a compute queue. No ownership transfers.</td></tr>
   <tr><td>Barriers on the compute queue</td><td>compute stages only</td><td><code>fitToComputeQueue</code> turns graphics source stages into all commands and drops graphics destination stages and accesses.</td></tr>
-  <tr><td>Swapchain</td><td>wait once, present from the last submit</td><td>The same: every graphics submit asks for the acquire wait, and the swapchain gives it only to the first one.</td></tr>
+  <tr><td>Swapchain</td><td>wait once, present from the last submit</td><td>The same: every graphics submit asks for the acquire wait, and the swapchain gives it only to the first one. A headless engine's offscreen images need no acquire wait and are not presented.</td></tr>
   <tr><td>Uploads</td><td>order them against both queues</td><td>Uploads stay on the graphics queue. They wait for the last compute submit, and a compute submit waits for the last upload (<code>UploadManager::lastSubmit</code>). A frame with uploads gets no overlap.</td></tr>
+  <tr><td>Readbacks</td><td>—</td><td>The copies of <code>Engine::readFrame</code> and <code>Engine::readTexture</code> go in the frame's last graphics batch, which first waits for all of the frame's compute work. No graph orders them, so the compute batches of the next frames wait for that batch (<code>readbackComputeWait</code>).</td></tr>
   <tr><td>Timing</td><td>a frame total on one queue</td><td><code>gpuFrameMs</code> uses graphics timers only. Compute pass timers are durations, flagged by <code>timerOnCompute</code>.</td></tr>
 </table>
 </div>
@@ -647,7 +648,7 @@
   <tr><td>Submits with waits</td><td><code>RenderContext::submit</code> (<code>SubmitInfo</code>, <code>FenceValue</code>) and <code>VulkanQueue::submit</code></td></tr>
   <tr><td>Batches</td><td><code>Engine::useQueue</code>, <code>waitForQueue</code>, <code>closeBatch</code>, <code>submitBatches</code> in <code>src/engine.cpp</code></td></tr>
   <tr><td>Waits from declared resources</td><td><code>RenderGraph::bufferBarrier</code>, <code>waitForOtherQueue</code>, <code>textureWaits</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
-  <tr><td>The async passes</td><td><code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>The async passes</td><td><code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code>; <code>Engine::addAnimationPass</code> in <code>src/renderer/animation.cpp</code></td></tr>
   <tr><td>Barriers on the compute queue</td><td><code>fitToComputeQueue</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
   <tr><td>Acquire once, present from the last submit</td><td><code>getAcquireWait</code>, <code>getPresentSignals</code> in <code>src/rhi/vulkan/vulkanSwapchain.cpp</code></td></tr>
   <tr><td>Uploads against the compute queue</td><td><code>UploadManager::flush</code>, <code>lastSubmit</code> in <code>src/rhi/uploadManager.cpp</code></td></tr>

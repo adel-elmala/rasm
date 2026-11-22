@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Immediate-mode UI · RASM</title>
 <meta name="description" content="How an immediate-mode UI like Dear ImGui works: the UI is code that runs every frame, widgets append triangles to draw lists, draw commands carry a clip rectangle and a texture, one atlas holds the font, and the renderer turns it all into indexed draws with scissors. Input capture, sRGB blending of UI colors, and how RASM draws Dear ImGui through its own RHI.">
-<meta name="rasm-sources" content="src/renderer/ui.cpp src/renderer/ui.h src/renderer/engineUi.cpp src/platform/uiPlatform.cpp src/platform/uiPlatform.h shaders/passes/ui.slang src/platform/sdlPlatform.cpp src/platform/platform.h src/engine.cpp include/rasm/engine.h include/rasm/types.h src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp examples/15_debug_ui/main.cpp src/renderer/inspector.cpp">
+<meta name="rasm-sources" content="src/renderer/ui.cpp src/renderer/ui.h src/renderer/engineUi.cpp src/platform/uiPlatform.cpp src/platform/uiPlatform.h shaders/passes/ui.slang src/platform/sdlPlatform.cpp src/platform/platform.h src/engine.cpp include/rasm/engine.h include/rasm/types.h src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/offscreenSwapchain.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp examples/15_debug_ui/main.cpp src/renderer/inspector.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -342,13 +342,13 @@
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Library</td><td>an immediate-mode UI</td><td>Dear ImGui from vcpkg (the <code>imgui</code> port with <code>sdl3-binding</code>), behind the CMake option <code>RASM_IMGUI</code>. One context, owned by the engine; the application's <code>ImGui::</code> calls use it.</td></tr>
-  <tr><td>Input</td><td>events to the library, capture flags</td><td>ImGui's SDL3 backend, called only from <code>src/platform/uiPlatform.cpp</code>, so <code>D7</code> can replace it. <code>Engine::pollEvents</code> keeps the mouse, the W/A/S/D keys and, while typing, Escape and F1–F3 from the camera and the engine.</td></tr>
+  <tr><td>Input</td><td>events to the library, capture flags</td><td>ImGui's SDL3 backend, called only from <code>src/platform/uiPlatform.cpp</code>, so <code>D7</code> can replace it. A headless engine has no backend and no input: <code>newUiPlatformFrame</code> sets the display to the window's pixel size, and the UI is drawn as with a window. With or without a window, ImGui's time step is the engine's <code>deltaTime</code>, so <code>EngineConfig::fixedDeltaTime</code> steps it too. <code>Engine::pollEvents</code> keeps the mouse, the W/A/S/D keys and, while typing, Escape and F1–F3 from the camera and the engine.</td></tr>
   <tr><td>When it is built</td><td>between input and drawing</td><td>In <code>beginFrame</code>, after the slot's fence wait and before <code>syncGpuScene</code>, so the callback's changes show in the same frame. Only while the RASM window is shown or a callback is set; otherwise nothing runs.</td></tr>
   <tr><td>Buffers</td><td>vertex and index buffers</td><td>Host-visible <code>UI Vertices</code> and <code>UI Indices</code> per frame slot, written with <code>fillBuffer</code>. They grow to the next power of two and are never made per frame.</td></tr>
   <tr><td>Vertices</td><td>a vertex layout</td><td>No vertex input: <a href="vertex-pulling.html">vertex pulling</a> through a <a href="device-addresses.html">device address</a>. The address points at the draw's first vertex, so the base vertex works on D3D12 too.</td></tr>
   <tr><td>Clip</td><td>clip rectangle → scissor</td><td><code>getUiScissor</code>, the rule of the formula above, with <code>io.DisplayFramebufferScale</code>.</td></tr>
   <tr><td>Textures</td><td>an atlas, IDs for images</td><td>ImGui's texture requests (<code>ImGuiBackendFlags_RendererHasTextures</code>): a new texture for each request, in a <a href="bindless.html">bindless</a> slot; the old one is freed once the graphics fence passes the last frame submitted with it. An <code>ImTextureID</code> is the slot + 1, with a bit for sRGB textures (<code>Engine::getUiTexture</code>).</td></tr>
-  <tr><td>Blending</td><td>as numbers, through a UNORM view</td><td>The swapchain's <code>B8G8R8A8_UNORM</code> view (<code>VK_KHR_swapchain_mutable_format</code>) when the device has it; else colors decoded in the shader (<code>D31</code>).</td></tr>
+  <tr><td>Blending</td><td>as numbers, through a UNORM view</td><td>The swapchain's <code>B8G8R8A8_UNORM</code> view (<code>VK_KHR_swapchain_mutable_format</code>) when the device has it; headless, the offscreen images' <code>R8G8B8A8_UNORM</code> view (<code>TextureDesc::encodedView</code>); else colors decoded in the shader (<code>D31</code>).</td></tr>
   <tr><td>Where it draws</td><td>last in the frame</td><td>The <code>UI</code> pass of <code>Engine::addUiPass</code>, after the tone map. A graph without it gets one from <code>endFrame</code>, at the cost of one more load and store of the image.</td></tr>
   <tr><td>Images of the frame</td><td>any texture, by its ID</td><td>The RASM window's Buffers section shows a render target, depth, Hi-Z level or light clusters of the running frame: an Inspect pass copies it into a storage target that the <code>UI</code> pass declares as a read, so the graph moves it to <code>SAMPLED</code>. The GPU tables section lists the GPU scene tables and an entity's rows. See <a href="inspecting-gpu-resources.html">Inspecting GPU resources</a>.</td></tr>
   <tr><td>Scale</td><td>style and font by the display scale</td><td>The display's content scale, read once at startup (<code>getUiContentScale</code>).</td></tr>
@@ -377,7 +377,7 @@
   <tr><td>RASM window</td><td><code>drawEngineWindow</code> in <code>src/renderer/engineUi.cpp</code>: the stats, the forced LOD, the <a href="debug-views.html">debug views</a> and Freeze culling, the graph dump</td></tr>
   <tr><td>Input, scale</td><td><code>src/platform/uiPlatform.cpp</code>, used by <code>Engine::pollEvents</code></td></tr>
   <tr><td>Shader</td><td><code>shaders/passes/ui.slang</code>, <code>gfx::UiPushConstants</code></td></tr>
-  <tr><td>UNORM view</td><td><code>VulkanSwapchain::getEncodedFormat</code>, <code>AttachmentOps::encodedColor</code></td></tr>
+  <tr><td>UNORM view</td><td><code>VulkanSwapchain::getEncodedFormat</code>, <code>OffscreenSwapchain::getEncodedFormat</code>, <code>AttachmentOps::encodedColor</code></td></tr>
   <tr><td>Example</td><td><code>examples/15_debug_ui/main.cpp</code></td></tr>
 </table>
 </div>

@@ -1435,10 +1435,13 @@ namespace rasm
         rhiCommandBuffer->beginRendering(colors, colorCount, depth, clearColor, ops, face);
         for (uint32_t i = 0; i < MAX_COLOR_ATTACHMENTS; ++i)
             impl->passColorFormats[i] = i < colorCount ? colors[i]->desc.format : Format::UNKNOWN;
-        // A swapchain image drawn through its UNORM view takes pipelines made for that view's format.
+        // A swapchain image or a texture with TextureDesc::encodedView drawn through its UNORM view takes pipelines made
+        // for that view's format.
         const bool swapchainColor = colorCount > 0 && std::find(impl->swapchainImages.begin(), impl->swapchainImages.end(), colorAttachments[0]) != impl->swapchainImages.end();
         if (ops.encodedColor && swapchainColor && impl->swapchain->getEncodedFormat() != Format::UNKNOWN)
             impl->passColorFormats[0] = impl->swapchain->getEncodedFormat();
+        else if (ops.encodedColor && colorCount > 0 && colors[0]->desc.encodedView && colors[0]->desc.format == Format::R8G8B8A8_SRGB && !colors[0]->desc.cube)
+            impl->passColorFormats[0] = Format::R8G8B8A8_UNORM;
         impl->passDepthFormat = depth ? depth->desc.format : Format::UNKNOWN;
         impl->passSamples = samples;
         impl->skipDraws = false;

@@ -3,6 +3,8 @@
 
 #include "rasm/rasm.h"
 
+#include "exampleArgs.h"
+
 #include <cmath>
 #include <cstdint>
 #include <string>
@@ -63,8 +65,9 @@ namespace
     }
 }
 
-int main()
+int main(int argc, char **argv)
 {
+    ExampleArgs args = parseExampleArgs(argc, argv);
     rasm::EngineConfig config = {
         .appName = "example_3",
         .windowWidth = 720,
@@ -78,6 +81,7 @@ int main()
         .asyncCompute = true,
         .ui = true};
 
+    applyExampleArgs(args, config);
     rasm::Engine engine(config);
     if (!engine.running())
         return 1;
@@ -140,10 +144,13 @@ int main()
     engine.addLightToScene(scene, light);
     engine.addLightToScene(scene, fillLight);
 
+    if (args.waitForLoads)
+        engine.waitForLoads();
+
     // Animation advances per frame, not per second, so a given frame renders the same on every run.
     uint64_t frame = 0;
     int spawnedRows = 0;
-    while (engine.running())
+    while (exampleRunning(engine, args))
     {
         for (int i = 0; i < SPINNER_COUNT; ++i)
         {
@@ -175,5 +182,5 @@ int main()
         ++frame;
     }
 
-    return 0;
+    return exampleExit(args);
 }

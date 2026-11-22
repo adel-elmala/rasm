@@ -675,7 +675,7 @@
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 270" role="img" aria-label="The scene passes Cull, Scene 1, Hi-Z, Cull 2, Scene 2 and Transparent draw into scene_hdr with 4 samples per pixel: RGBA16F color and D32 depth. The Hi-Z pass reads every depth sample. MASK draws use alpha-to-coverage with a sharpened alpha. MSAA Resolve, a compute pass, reads the color samples and writes scene_hdr_resolved, a single-sample storage target, with the weighted mean. Bloom and Tone Map read the resolved target.">
+  <svg viewBox="0 0 760 270" role="img" aria-label="The scene passes Cull 1, Scene 1, Hi-Z, Cull 2, Scene 2 and Transparent draw into scene_hdr with 4 samples per pixel: RGBA16F color and D32 depth. The Hi-Z pass reads every depth sample. MASK draws use alpha-to-coverage with a sharpened alpha. MSAA Resolve, a compute pass, reads the color samples and writes scene_hdr_resolved, a single-sample storage target, with the weighted mean. Bloom and Tone Map read the resolved target.">
     <rect x="20" y="30" width="230" height="60" rx="6" class="gpu"/>
     <text x="135" y="54" class="mid title">scene passes</text>
     <text x="135" y="74" class="mid small">Scene 1, Scene 2, Transparent</text>
@@ -707,7 +707,7 @@
     <text x="20" y="230" class="small">The shadow maps stay at 1 sample,</text>
     <text x="20" y="246" class="small">with discard for MASK.</text>
   </svg>
-  <figcaption>The shaded view's pipelines are made per sample count (<code>ShadedPipelines</code>, one set each for 1, 2, 4 and 8), so views with and without MSAA can share a frame.</figcaption>
+  <figcaption>The shaded view's pipelines are made per sample count (<code>ShadedPipelines</code>, one set each for 1, 2, 4 and 8, its debug view pipelines included, and one more for a single-sample target with a motion color, <code>MOTION_VARIANT</code>), so views with and without MSAA can share a frame.</figcaption>
 </figure>
 
 <h3>Where RASM follows this page, and where it differs</h3>
@@ -715,7 +715,7 @@
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>Sample counts</td><td>2, 4, 8</td><td><code>RenderTargetDesc::samples</code>: 1, 2, 4 or 8 (no more, though some GPUs have 16), whatever the device can draw and sample for color and depth (<code>RenderContext::supportsSampleCount</code>). A multisampled target has colors and no history, storage or cube. <code>EngineConfig::antiAliasing</code> (<code>NONE</code>, <code>MSAA_2X</code>, <code>MSAA_4X</code>, <code>MSAA_8X</code>) falls back to the most the device has, with a warning.</td></tr>
+  <tr><td>Sample counts</td><td>2, 4, 8</td><td><code>RenderTargetDesc::samples</code>: 1, 2, 4 or 8 (no more, though some GPUs have 16), whatever the device can draw and sample for color and depth (<code>RenderContext::supportsSampleCount</code>). A multisampled target has colors and no history, storage or cube. <code>EngineConfig::antiAliasing</code> (<code>NONE</code>, <code>MSAA_2X</code>, <code>MSAA_4X</code>, <code>MSAA_8X</code>) falls back to the most the device has, with a warning. Its other value, <code>TAA</code>, draws one sample and blends frames instead (<a href="taa.html">TAA</a>): <code>addScenePasses</code> takes a <code>MOTION_FORMAT</code> color only on a target with one sample.</td></tr>
   <tr><td>Pipelines</td><td>one per sample count</td><td><code>PipelineDesc::samples</code> and <code>alphaToCoverage</code>, compared and hashed like every field. <code>Engine::createPipeline(name, source, renderTarget)</code> takes the target's count; <code>RenderContext::bindPipeline</code> skips the draws of a pipeline whose count does not match the pass.</td></tr>
   <tr><td>Resolve</td><td>weighted mean</td><td><code>Engine::addMsaaResolvePass</code>: the <code>MSAA Resolve</code> compute pass, <code>resolveMain</code> in <code>shaders/passes/msaaResolve.slang</code>, weights <code>1 / (1 + luminance · exposure)</code> with the camera's exposure. It writes <samp>&lt;source&gt;_resolved</samp>, a transient storage target of the source's size. <code>addBloomPasses</code> and <code>addToneMapPass</code> refuse a multisampled source.</td></tr>
   <tr><td>Cut-outs</td><td>sharpened alpha-to-coverage</td><td>The MASK pipeline of a multisampled view is <code>fragMain</code> with <code>RASM_ALPHA_TO_COVERAGE</code>: no discard, alpha = <code>getCoverage</code>, alpha-to-coverage on. Where alpha does not change (no edge), <code>getCoverage</code> covers all or nothing by the cutoff, as discard does, so a cutoff of 1 on opaque texels stays solid. Cut-outs still thin out in the far mips (<code>D25</code>): the sharpening keeps the cutoff's edge, but the mips' alpha is still averaged.</td></tr>
@@ -749,7 +749,7 @@
   <tr><td>Hi-Z</td><td><code>loadDepth</code> in <code>shaders/passes/hiz.slang</code>; <code>SceneData::depthSamples</code></td></tr>
   <tr><td>Resolve</td><td><code>Engine::addMsaaResolvePass</code> in <code>src/renderer/msaaResolve.cpp</code>; <code>shaders/passes/msaaResolve.slang</code>; <code>gfx::ResolvePushConstants</code></td></tr>
   <tr><td>The default frame</td><td><code>Renderer::render</code> in <code>src/renderer/renderer.cpp</code> with <code>EngineConfig::antiAliasing</code></td></tr>
-  <tr><td>Examples</td><td><code>examples/09_gltf_materials</code> and <code>examples/02_gltf</code>: <samp>--aa msaa2|msaa4|msaa8</samp></td></tr>
+  <tr><td>Examples</td><td><code>examples/09_gltf_materials</code> and <code>examples/02_gltf</code>: <samp>--aa msaa2|msaa4|msaa8</samp> (<samp>--aa taa</samp> for TAA)</td></tr>
 </table>
 </div>
 

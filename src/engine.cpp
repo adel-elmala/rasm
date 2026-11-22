@@ -81,12 +81,6 @@ namespace rasm
             spdlog::error("Failed to initialize engine window.");
             return;
         }
-        // Dear ImGui takes its input from the window's events, which a headless engine has none of.
-        if (headless && config.ui)
-        {
-            spdlog::warn("EngineConfig::ui needs a window; a headless engine runs without the UI.");
-            this->config.ui = false;
-        }
 
         if (!ctx.initialize(config.preferredBackend))
         {
@@ -225,7 +219,8 @@ namespace rasm
     {
         // The first frame has no previous one, and a long stall (a debugger, a window drag) is capped so the camera does not jump.
         const auto now = std::chrono::steady_clock::now();
-        deltaTime = lastFrameTime == std::chrono::steady_clock::time_point{} ? 0.0f : std::min(std::chrono::duration<float>(now - lastFrameTime).count(), 0.1f);
+        frameTime = lastFrameTime == std::chrono::steady_clock::time_point{} ? 0.0f : std::min(std::chrono::duration<float>(now - lastFrameTime).count(), 0.1f);
+        deltaTime = config.fixedDeltaTime > 0.0f ? config.fixedDeltaTime : frameTime;
         lastFrameTime = now;
 
         PlatformEvents events = {};

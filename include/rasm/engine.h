@@ -292,7 +292,8 @@ namespace rasm
         uint32_t                                                    currentFace                             = 0;  // of a cube target
         uint64_t                                                    frameCount                              = 0;
         uint32_t                                                    imageIdx                                = 0;
-        float                                                       deltaTime                               = 0.0f; // seconds since the previous frame
+        float                                                       deltaTime                               = 0.0f; // the frame's step: EngineConfig::fixedDeltaTime, else frameTime
+        float                                                       frameTime                               = 0.0f; // seconds since the previous frame
         std::chrono::steady_clock::time_point                       lastFrameTime                           = {};
         bool                                                        isRunning                               = false;
         bool                                                        swapchainOutOfDate                      = false;

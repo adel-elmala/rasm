@@ -38,6 +38,7 @@
     <li>Every object is a <b>handle</b>. A function that fails logs an error and returns an invalid handle (<code>isValid()</code> is false).</li>
     <li>Files load in the background. You can use a mesh or texture handle at once; the object is drawn when its data is ready.</li>
     <li>Call the engine from one thread only. It has no locks.</li>
+    <li>No window needed: with <code>PlatformType::HEADLESS</code> frames render offscreen, and <code>readFrame</code> copies them back to the CPU (<a href="engine.html#headless">headless</a>).</li>
   </ul>
 </div>
 
@@ -66,7 +67,7 @@
     <text x="320" y="169" class="mid small">projection + controller</text>
     <rect x="240" y="190" width="160" height="54" rx="6" class="cpu"/>
     <text x="320" y="213" class="mid title">Light</text>
-    <text x="320" y="231" class="mid small">directional or point</text>
+    <text x="320" y="231" class="mid small">directional, point or spot</text>
 
     <line x1="175" y1="145" x2="237" y2="84"  class="arrow cpu" marker-end="url(#ah-cpu)"/>
     <line x1="175" y1="155" x2="237" y2="155" class="arrow cpu" marker-end="url(#ah-cpu)"/>

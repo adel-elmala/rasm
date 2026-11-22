@@ -900,7 +900,7 @@ B  ∝ (dp/dy · du/dx − dp/dx · du/dy) · sign(det)</code></pre>
 <p>RASM does tangent-space normal mapping in the fragment shader, in <code>getNormalFromMap</code> (<code>shaders/lib/pbr.slang</code>), which <code>shadePBR</code> calls when the material has a normal texture. It supports both kinds of frame from this page: the stored tangent with its sign (sections 5 to 7), and the frame from derivatives (section 8) when the mesh has no tangents.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 360" role="img" aria-label="At import, glTF TANGENT goes into Vertex.tangent with w snapped to ±1; without it, or with generated normals, w is 0. vertMain moves the normal with normalMatrix and the tangent with the model matrix, and multiplies w by the handedness. getNormalFromMap decodes the texel and scales x and y; if the absolute value of w is above 0.5 it uses the authored frame after Gram–Schmidt; otherwise it builds a frame from derivatives; if that fails it returns N.">
+  <svg viewBox="0 0 760 360" role="img" aria-label="At import, glTF TANGENT goes into Vertex.tangent with w snapped to ±1; without it, or with generated normals, w is 0. vertMain moves the normal with normalMatrix, made on the CPU or, for an animated sub-mesh, by the Animate pass, and the tangent with the model matrix, and multiplies w by the handedness. getNormalFromMap decodes the texel and scales x and y; if the absolute value of w is above 0.5 it uses the authored frame after Gram–Schmidt; otherwise it builds a frame from derivatives; if that fails it returns N.">
     <text x="20" y="24" class="title t-cpu">CPU · at load</text>
     <rect x="20" y="34" width="200" height="74" rx="6" class="cpu"/>
     <text x="120" y="56" class="mid title">glTF import</text>
@@ -920,7 +920,7 @@ B  ∝ (dp/dy · du/dx − dp/dx · du/dy) · sign(det)</code></pre>
     <line x1="400" y1="108" x2="418" y2="108" class="arrow" marker-end="url(#ah)"/>
     <rect x="420" y="34" width="320" height="140" rx="6" class="shader"/>
     <text x="432" y="58" class="mono small">N = normalMatrix · normal</text>
-    <text x="432" y="74" class="small">  (inverse-transpose, from the CPU)</text>
+    <text x="432" y="74" class="small">  (inverse-transpose: CPU or Animate pass)</text>
     <text x="432" y="98" class="mono small">T = mat3(worldMatrix) · tangent.xyz</text>
     <text x="432" y="122" class="mono small">w = tangent.w · handedness</text>
     <text x="432" y="138" class="small">  handedness = −1 when det &lt; 0</text>
@@ -956,7 +956,8 @@ B  ∝ (dp/dy · du/dx − dp/dx · du/dy) · sign(det)</code></pre>
   <tr><td>"No tangent" marker</td><td>—</td><td><code>tangent.w</code> = 0. Import snaps a stored <var>w</var> to ±1, so 0 is free for this.</td></tr>
   <tr><td>Bitangent</td><td><var>w</var> · cross(<var>N</var>, <var>T</var>)</td><td>The same, with the sign of <var>w</var>.</td></tr>
   <tr><td>Gram–Schmidt</td><td>yes</td><td>Yes, in the fragment shader. A tangent that becomes 0 falls back to the derivative frame.</td></tr>
-  <tr><td>Normal transform</td><td>inverse-transpose</td><td><code>normalMatrix</code> = transpose(inverse(mat3(model))), computed per instance on the CPU in <code>writeInstanceRows</code>. A normal of length 0 becomes (0, 0, 1).</td></tr>
+  <tr><td>Normal transform</td><td>inverse-transpose</td><td><code>normalMatrix</code> = transpose(inverse(mat3(model))), computed per instance on the CPU in <code>writeInstanceRows</code>. A sub-mesh that a clip moves gets it from the <code>Animate</code> pass instead, in its <code>InstanceTransform</code> row; <code>getNormalMatrix</code> picks the one to read. A normal of length 0 becomes (0, 0, 1).</td></tr>
+  <tr><td>Skinned and morphed vertices</td><td>—</td><td>The <code>Skin</code> pass poses them before any view draws (<a href="skinning.html#in-rasm">skinning</a>): it adds the <a href="morph-targets.html#in-rasm">morph</a> deltas to the normal and the tangent and renormalizes them, then moves the normal with the normal matrix of the mixed joint matrix and the tangent with the mix itself, and flips <var>w</var> when the mix mirrors. A tangent with <var>w</var> = 0 stays "no tangent".</td></tr>
   <tr><td>Tangent transform</td><td><var>M</var>, and <var>w</var> · sign(det <var>M</var>)</td><td>The same, in <code>vertMain</code>; the sign is the <code>handedness</code> output.</td></tr>
   <tr><td>Derivative frame</td><td>section 8</td><td>The same idea. The bitangent's sign is chosen against d<var>P</var>/d<var>v</var>, so <var>B</var> points toward decreasing <var>v</var> and matches the authored frame (fixed in <code>B19</code>).</td></tr>
   <tr><td>Mipmap filtering</td><td>renormalize, Toksvig</td><td>The mip levels are made on the CPU at load by averaging the stored values, like any UNORM texture. The shader renormalizes the final normal. No roughness adjustment.</td></tr>
@@ -972,7 +973,8 @@ B  ∝ (dp/dy · du/dx − dp/dx · du/dy) · sign(det)</code></pre>
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>Tangents on import</td><td><code>extractGLTFRaws</code> in <code>src/assets/meshImport.cpp</code></td></tr>
   <tr><td>Vertex layout</td><td><code>Vertex</code> in <code>include/rasm/mesh.h</code>; <code>VertexFull</code> in <code>shaders/lib/core.slang</code></td></tr>
-  <tr><td>Normal matrix</td><td><code>Engine::writeInstanceRows</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Normal matrix</td><td><code>Engine::writeInstanceRows</code> in <code>src/renderer/gpuScene.cpp</code>; for animated sub-meshes <code>animateMain</code> in <code>shaders/passes/animate.slang</code>; read through <code>getNormalMatrix</code> in <code>shaders/lib/core.slang</code></td></tr>
+  <tr><td>Posed normals and tangents</td><td><code>skinMain</code> in <code>shaders/passes/skin.slang</code></td></tr>
   <tr><td>Normal, tangent and sign to world space</td><td><code>vertMain</code> in <code>shaders/passes/rasm.slang</code></td></tr>
   <tr><td>The TBN and the derivative frame</td><td><code>getNormalFromMap</code> in <code>shaders/lib/pbr.slang</code></td></tr>
   <tr><td>Normal texture format</td><td><code>loadMaterial</code> in <code>src/assets/material.cpp</code></td></tr>
@@ -985,7 +987,7 @@ B  ∝ (dp/dy · du/dx − dp/dx · du/dy) · sign(det)</code></pre>
     <li><code>tangent.w</code> is +1, −1 or 0, and 0 means "no tangent". A new importer must snap <var>w</var> or leave it 0.</li>
     <li>Normal maps are UNORM: <code>R8G8B8A8_UNORM</code>, or a KTX2 format picked for a data slot. A two-channel format must set <code>MATERIAL_NORMAL_XY</code>, which <code>writeMaterialRow</code> does from the texture's format.</li>
     <li>The authored frame and the derivative frame must agree: <var>B</var> points toward decreasing <var>v</var> in both (<code>B19</code>).</li>
-    <li>Tangents move with the model matrix, normals with <code>normalMatrix</code>, and the sign with the determinant.</li>
+    <li>Tangents move with the model matrix, normals with <code>normalMatrix</code>, and the sign with the determinant: in <code>vertMain</code>, in the <code>Animate</code> pass and in the <code>Skin</code> pass alike.</li>
   </ul>
 </div>
 

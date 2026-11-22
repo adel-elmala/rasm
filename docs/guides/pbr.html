@@ -1199,7 +1199,7 @@ cone   = clamp(cos θ · scale + offset, 0, 1)²</code></pre>
     <rect x="305" y="266" width="420" height="34" rx="17" class="shader"/>
     <text x="320" y="288" class="small">6  return the sum, unbounded; alpha = base color alpha</text>
   </svg>
-  <figcaption>The result goes to a 16-bit float target. A later pass multiplies it by the camera's exposure and tone maps it with AgX (<a href="tone-mapping.html#in-rasm">Tone mapping</a>), into the sRGB swapchain, which does the sRGB encoding. The shader works in linear values only.</figcaption>
+  <figcaption>The result goes to a 16-bit float target. After the MSAA resolve or the TAA pass, when the frame has one, a later pass multiplies it by the camera's exposure and tone maps it with AgX (<a href="tone-mapping.html#in-rasm">Tone mapping</a>), into the sRGB swapchain, which does the sRGB encoding. The shader works in linear values only.</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
@@ -1225,6 +1225,7 @@ cone   = clamp(cos θ · scale + offset, 0, 1)²</code></pre>
   <tr><td>AO</td><td>ambient only</td><td>Ambient only, mixed by the occlusion <code>strength</code>; with IBL it darkens its diffuse and specular alike.</td></tr>
   <tr><td>Emission</td><td>added as it is</td><td><code>emissiveFactor</code> × <code>EMISSIVE_STRENGTH</code> (glTF <samp>KHR_materials_emissive_strength</samp>, multiplied in when the row is written) × the emissive texture, added after the lights.</td></tr>
   <tr><td>Tone mapping</td><td>a separate step on the HDR image</td><td>The same: <code>shadePBR</code> writes unbounded light into a <code>SCENE_COLOR_FORMAT</code> target, and the <code>Tone Map</code> pass applies the camera's <code>exposure</code> and AgX.</td></tr>
+  <tr><td>Texture reads</td><td>one plain sample each</td><td>Every material texture goes through <code>sampleMaterial</code>, which adds <code>SceneData::textureLodBias</code> to the mip level: −1 in a view that TAA jitters, so the textures stay sharp after the frames are blended (<a href="taa.html">TAA</a>), 0 otherwise. A pipeline with <code>RASM_DEBUG_VIEW</code> skips <code>shadePBR</code> and shows a value of the fragment instead (<a href="debug-views.html">Debug views</a>).</td></tr>
   <tr><td>Shadows</td><td>needed for real direct light</td><td>Up to <code>MAX_VIEW_SHADOWS</code> lights per view have a shadow, each named by <code>ShadowDesc::light</code> (<a href="shadow-mapping.html#in-rasm">Shadow mapping</a>, <a href="cascaded-shadows.html">Cascaded shadow maps</a>). Every other light reaches every surface that faces it.</td></tr>
 </table>
 </div>
@@ -1252,7 +1253,7 @@ cone   = clamp(cos θ · scale + offset, 0, 1)²</code></pre>
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>The BRDF terms</td><td><code>D_GGX</code>, <code>F_Schlick</code>, <code>V_SmithGGXCorrelated</code>, <code>Fd_Lambert</code> in <code>shaders/lib/brdf.slang</code>, which the environment bake shares</td></tr>
-  <tr><td>Textures, the light loops, ambient</td><td><code>shadePBR</code>, <code>shadeLight</code> and <code>PBRInfo</code> in <code>shaders/lib/pbr.slang</code>; the environment light in <code>shaders/lib/environment.slang</code></td></tr>
+  <tr><td>Textures, the light loops, ambient</td><td><code>shadePBR</code>, <code>shadeLight</code> and <code>PBRInfo</code> in <code>shaders/lib/pbr.slang</code>; <code>sampleMaterial</code>, <code>sampleBaseColor</code> in <code>shaders/lib/core.slang</code>; the environment light in <code>shaders/lib/environment.slang</code></td></tr>
   <tr><td>Material branch, UV sets, back faces</td><td><code>fragMain</code> in <code>shaders/passes/rasm.slang</code></td></tr>
   <tr><td>GPU light and material structs</td><td><code>Light</code>, <code>LightType</code>, <code>Material</code>, <code>MaterialData</code> in <code>shaders/lib/core.slang</code> and <code>src/renderer/uberMaterialTypes.h</code></td></tr>
   <tr><td>Public light type</td><td><code>Light</code>, <code>LightType</code>, <code>MAX_CLUSTER_LIGHTS</code> in <code>include/rasm/light.h</code>; <code>Engine::createLight</code> and <code>updateLight</code> in <code>src/scene/light.cpp</code></td></tr>

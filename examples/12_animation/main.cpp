@@ -92,7 +92,7 @@ namespace
 
 int main(int argc, char **argv)
 {
-    const ExampleArgs args = parseExampleArgs(argc, argv);
+    ExampleArgs args = parseExampleArgs(argc, argv);
     bool taa = false;
     bool bench = false;
     uint32_t crowd = 0;
@@ -120,6 +120,7 @@ int main(int argc, char **argv)
         .maxInstances = 1u << 18,
         .ui = true};
 
+    applyExampleArgs(args, config);
     rasm::Engine engine(config);
     if (!engine.running())
         return 1;
@@ -192,7 +193,7 @@ int main(int argc, char **argv)
 
     double seconds = 0.0;
     auto lastTime = std::chrono::steady_clock::now();
-    for (uint32_t frame = 0; engine.running(); ++frame)
+    for (uint32_t frame = 0; exampleRunning(engine, args); ++frame)
     {
         const auto now = std::chrono::steady_clock::now();
         seconds += args.fixedStep ? FIXED_STEP_SECONDS : std::chrono::duration<double>(now - lastTime).count();
@@ -226,5 +227,5 @@ int main(int argc, char **argv)
         }
     }
 
-    return 0;
+    return exampleExit(args);
 }

@@ -417,6 +417,7 @@ engine.setSceneEnvironment(scene, rasm::SceneEnvironment{.environment = sunset, 
   <tr><td>Specular</td><td>one roughness per mip</td><td><code>SPECULAR_CUBE_SIZE</code> (256) with <code>SPECULAR_MIPS</code> (6): mip m is roughness m / 5, 256 GGX samples per texel, mip 0 a copy. The shader reads <code>roughness × 5</code>, with perceptual roughness.</td></tr>
   <tr><td>BRDF table</td><td>2 channels, per engine</td><td><code>BRDF_LUT_SIZE</code> (128), 512 samples, in an RGBA16F texture (x and y used), baked in the engine's first frame.</td></tr>
   <tr><td>Rotation, intensity</td><td>—</td><td><code>SceneEnvironment::rotation</code> turns every lookup around +Y in the shader, so turning needs no new bake; <code>intensity</code> scales the light and the sky.</td></tr>
+  <tr><td>Sky</td><td>—</td><td><code>Engine::drawSky</code> draws the environment cube (mip 0) where depth is still 0, after the view's last draw pass. In a target with motion (<a href="taa.html">TAA</a>) the ray takes out the jitter, and the sky writes the motion of the camera's turn only, since it is infinitely far. A <a href="debug-views.html">debug view</a> draws no sky.</td></tr>
   <tr><td>Occlusion</td><td>AO, probes</td><td>Only the material's occlusion texture, on diffuse and specular alike. The environment light is not shadowed (<code>D23</code>).</td></tr>
   <tr><td>Lifetime</td><td>—</td><td>An environment lives until shutdown (<code>D22</code>).</td></tr>
 </table>

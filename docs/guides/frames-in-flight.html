@@ -626,7 +626,7 @@
 <p>RASM uses two slots (<code>MAX_FRAMES_IN_FLIGHT</code> = 2) and one timeline fence per queue: <code>Engine::frameFence</code> for the graphics queue, and <code>Engine::computeFence</code> for the compute queue when <a href="async-compute.html">async compute</a> is on. A slot remembers the last value of each (<code>FrameResources::fenceValue</code>, <code>FrameResources::computeFenceValue</code>), and <code>beginFrame</code> waits for both. <code>frameCount</code> is the slot, 0 or 1, not a frame counter. Everything that writes a slot's resources runs right after the wait in <code>beginFrame</code>.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 360" role="img" aria-label="beginFrame waits on frameFence for the slot's fenceValue, and on computeFence for its computeFenceValue with async compute, then runs updateFrameStats, updateStatsOverlay and syncGpuScene, which write only this slot's buffers, then acquires an image and opens the graphics batch. endFrame submits the frame's batches; each signals the next value of its queue's fence. Only when a submit succeeds do the last value and the slot's value of that fence take the new value. Then frameCount flips.">
+  <svg viewBox="0 0 760 360" role="img" aria-label="beginFrame waits on frameFence for the slot's fenceValue, and on computeFence for its computeFenceValue with async compute, then runs updateFrameStats, updateStatsOverlay (or buildUi, with the UI on) and syncGpuScene, which write only this slot's buffers, then acquires an image and opens the graphics batch. endFrame submits the frame's batches; each signals the next value of its queue's fence. Only when a submit succeeds do the last value and the slot's value of that fence take the new value. Then frameCount flips.">
     <text x="20" y="22" class="title t-cpu">beginFrame</text>
     <rect x="20" y="34" width="170" height="66" rx="6" class="cpu"/>
     <rect x="20" y="34" width="170" height="66" rx="6" class="hot"/>
@@ -635,8 +635,8 @@
     <text x="105" y="90" class="mid small">and computeFenceValue</text>
     <line x1="190" y1="67" x2="218" y2="67" class="arrow" marker-end="url(#ah)"/>
     <rect x="220" y="34" width="310" height="66" rx="6" class="cpu"/>
-    <text x="375" y="54" class="mid mono">updateFrameStats, updateStatsOverlay,</text>
-    <text x="375" y="72" class="mid mono">syncGpuScene</text>
+    <text x="375" y="54" class="mid mono">updateFrameStats, updateStatsOverlay</text>
+    <text x="375" y="72" class="mid mono">or buildUi, syncGpuScene</text>
     <text x="375" y="90" class="mid small">write only this slot's buffers</text>
     <line x1="530" y1="67" x2="558" y2="67" class="arrow" marker-end="url(#ah)"/>
     <rect x="560" y="34" width="180" height="66" rx="6" class="cpu"/>
@@ -678,15 +678,19 @@
 <div class="table-wrap">
 <table>
   <tr><th>Per slot</th><th>Where</th><th>Written by</th></tr>
-  <tr><td>Depth texture, fence values</td><td><code>FrameResources</code> in <code>Engine::frameResources</code></td><td><code>beginFrame</code>, the passes, <code>submitBatches</code></td></tr>
+  <tr><td>Fence values</td><td><code>FrameResources</code> in <code>Engine::frameResources</code></td><td><code>submitBatches</code>; <code>beginFrame</code> waits for them</td></tr>
   <tr><td>Command buffers, one per batch and queue</td><td><code>Engine::batchCommandBuffers</code></td><td>the passes; <code>FrameResources::commandBuffer</code> names the one being recorded</td></tr>
-  <tr><td>GPU scene tables: instances, materials</td><td><code>GpuTable::buffers</code></td><td><code>syncGpuScene</code>, through <code>GpuTable::upload</code></td></tr>
+  <tr><td>GPU tables: instances, materials, lights, animated entities, morph weight overrides</td><td><code>GpuTable::buffers</code></td><td><code>syncGpuScene</code>, through <code>GpuTable::upload</code></td></tr>
   <tr><td>Draw lists, one per scene</td><td><code>SceneDrawList::buffers</code></td><td><code>syncGpuScene</code>, through <code>uploadDrawList</code></td></tr>
   <tr><td>Scene data, one per scene view</td><td><code>GpuScene::sceneData</code> (host-visible)</td><td><code>prepareSceneView</code>, at the start of the view's <code>Cull</code> pass</td></tr>
   <tr><td>Culling: visible lists with their counts, Hi-Z, cull stats</td><td><code>cullStats</code> in <code>GpuScene</code>; <code>visibleDraws</code>, <code>hiz</code> in each <code>SceneView</code></td><td>the culling and Hi-Z passes; the CPU reads <code>cullStats</code> back</td></tr>
+  <tr><td>Light clusters of a shaded view</td><td><code>ViewClusters::buffers</code></td><td>the <code>Light Clusters</code> pass (<a href="clustered-lighting.html#in-rasm">clustered lighting</a>)</td></tr>
+  <tr><td>Posed transforms, joint matrices, morph weights, skinned vertices</td><td><code>transforms</code>, <code>joints</code>, <code>weights</code>, <code>skinnedVertices</code> in <code>GpuAnimation</code></td><td>the <code>Animate</code> and <code>Skin</code> passes; motion vectors read the other slot's skinned vertices, the frame before's (<a href="skinning.html#in-rasm">skinning</a>)</td></tr>
   <tr><td>Attachments of a render target with <code>history</code></td><td><code>RenderTarget::attachments</code></td><td>passes that draw into the target; the next frame reads the copy</td></tr>
   <tr><td>Timestamp queries</td><td><code>FrameStatsSlot::timestamps</code></td><td>the GPU timers; read in <code>updateFrameStats</code></td></tr>
-  <tr><td>Stats overlay text</td><td><code>StatsOverlaySlot::text</code></td><td><code>updateStatsOverlay</code></td></tr>
+  <tr><td>Stats overlay text</td><td><code>StatsOverlaySlot::text</code></td><td><code>updateStatsOverlay</code>, with the UI off</td></tr>
+  <tr><td>Dear ImGui's vertices and indices</td><td><code>UiSlot</code> in <code>Ui::slots</code></td><td><code>buildUi</code>, with <code>EngineConfig::ui</code> (<a href="immediate-mode-ui.html">immediate-mode UI</a>)</td></tr>
+  <tr><td>The Inspect pass's parameters</td><td><code>Inspector::params</code></td><td><code>recordInspect</code> (<a href="inspecting-gpu-resources.html#in-rasm">inspecting GPU resources</a>)</td></tr>
 </table>
 </div>
 
@@ -743,7 +747,7 @@
 
 <p>The visible-draw lists and the Hi-Z have one copy per slot for a second reason: with async compute, <code>Cull 1</code> of the next frame then does not wait for this frame's draws, and can run next to them.</p>
 
-<p>Nothing is freed while frames are in flight, because nothing can be destroyed yet (<b>D4</b>). Resize is the exception: it waits for the device to go idle, then replaces the depth textures and rebuilds the render targets sized from the window (<code>RenderContext::resizeRenderTargets</code>).</p>
+<p>Nothing is freed while frames are in flight, because nothing can be destroyed yet (<b>D4</b>). Resize is the exception: it waits for the device to go idle, then rebuilds the render targets sized from the window (<code>RenderContext::resizeRenderTargets</code>).</p>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
 
@@ -756,7 +760,7 @@
   <tr><td>Where to wait</td><td>start of the frame</td><td>In <code>beginFrame</code>, after input, finished loads and swapchain recreation, before anything writes the slot.</td></tr>
   <tr><td>Value only on success</td><td>store it after the submit</td><td>The same: a failed submit leaves both values, and calls <code>discardRecording</code>.</td></tr>
   <tr><td>Wait timeout</td><td>a timeout</td><td>None: <code>waitForFence</code> waits with <code>UINT64_MAX</code>. A failed wait skips the frame.</td></tr>
-  <tr><td>Readback</td><td><var>N</var> frames late</td><td>The cull stats and GPU timers of a slot are read after its wait, so the overlay shows the frame from two frames ago. <code>FrameStatsSlot::readFenceValue</code> skips a slot whose frame was never submitted.</td></tr>
+  <tr><td>Readback</td><td><var>N</var> frames late</td><td>The cull stats and GPU timers of a slot are read after its wait, so the overlay and the RASM window show the frame from two frames ago. <code>FrameStatsSlot::readFenceValue</code> skips a slot whose frame was never submitted. An image copy (<code>Engine::readFrame</code>, <code>Engine::readTexture</code>) rides in a frame's last graphics batch and keeps that frame's fence value, so <code>isReadbackReady</code> turns true about two frames later, and nothing waits (<a href="headless-readback.html">readback</a>).</td></tr>
   <tr><td>Other users of the timeline idea</td><td>uploads, deletes</td><td><code>UploadManager</code> has its own timeline, "Upload Fence", to free staging space. There is no deferred delete (<b>D4</b>).</td></tr>
   <tr><td>Swapchain images</td><td>separate from slots</td><td>Separate. The swapchain also keeps its own acquire semaphores and its own release timeline, so it does not depend on the frame fence. See <a href="swapchain.html#in-rasm">the swapchain</a>.</td></tr>
 </table>

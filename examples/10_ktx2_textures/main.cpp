@@ -31,7 +31,7 @@ namespace
 
 int main(int argc, char **argv)
 {
-    const ExampleArgs args = parseExampleArgs(argc, argv);
+    ExampleArgs args = parseExampleArgs(argc, argv);
     std::string modelPath = "models/gltf/FlightHelmet/FlightHelmet.gltf";
     bool measure = false;
     for (int i = 1; i < argc; ++i)
@@ -53,6 +53,7 @@ int main(int argc, char **argv)
         .showStats = true,
         .ui = true};
 
+    applyExampleArgs(args, config);
     rasm::Engine engine(config);
     if (!engine.running())
         return 1;
@@ -89,7 +90,7 @@ int main(int argc, char **argv)
 
     // The bunny and the environment first, so the memory the model adds can be told apart.
     engine.waitForLoads();
-    for (uint32_t frame = 0; frame < 4 && engine.running(); ++frame)
+    for (uint32_t frame = 0; frame < 4 && exampleRunning(engine, args); ++frame)
         engine.render(scene, camera);
     const uint64_t vramBefore = engine.getFrameStats().memory.vramUsage;
 
@@ -108,7 +109,7 @@ int main(int argc, char **argv)
     if (args.waitForLoads)
         engine.waitForLoads();
 
-    for (uint32_t frame = 0; engine.running(); ++frame)
+    for (uint32_t frame = 0; exampleRunning(engine, args); ++frame)
     {
         engine.render(scene, camera);
         if (reported)
@@ -135,5 +136,5 @@ int main(int argc, char **argv)
             break;
     }
 
-    return 0;
+    return exampleExit(args);
 }

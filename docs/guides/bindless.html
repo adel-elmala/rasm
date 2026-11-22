@@ -680,7 +680,7 @@ free(slot):
 </dl>
 <h2 id="in-rasm"><span class="n">11</span>In RASM</h2>
 
-<p>RASM has one bindless set for the whole engine: an array of 1024 combined image samplers. A material row on the GPU stores slot numbers, and a texture handle becomes a slot number the first time a material or a pass needs it. Slots are only handed out, never freed.</p>
+<p>RASM has one bindless set for the whole engine: an array of 1024 combined image samplers. A material row on the GPU stores slot numbers, and a texture handle becomes a slot number the first time a material or a pass needs it. Slots are handed out and never freed, with one exception: Dear ImGui's own textures.</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 270" role="img" aria-label="A TextureHandle goes to addBindlessTexture, which calls updateBindlessDescriptorSet. That writes the descriptor at slot nextBindlessTextureIndex and returns the slot, which is stored in bindlessTextureIndexMap. Later writeMaterialRow calls convertToGfxMaterial, which asks getBindlessTextureIndex for each texture and writes the slot numbers into the MaterialData row. fragMain reads the row and samples gTextures at that slot.">
@@ -732,7 +732,7 @@ free(slot):
   <tr><td>Features</td><td>section 4</td><td>All five are required at device creation, plus update-after-bind for storage images. The binding has <code>VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT</code> and <code>VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT</code>; the layout and pool have the matching update-after-bind flags. The variable count is enabled but not used: the size is fixed.</td></tr>
   <tr><td>Non-uniform indexing</td><td>mark per-pixel indices</td><td>Nothing is marked. The index comes from the draw's instance row (<code>materialIndex</code>, passed with <code>nointerpolation</code>), so it is the same for every pixel of one draw, and each draw of the indirect call is its own group. Other users index with a push constant (<code>01_render_graph</code>) or a <code>SceneData</code> field (<code>hiz.slang</code>).</td></tr>
   <tr><td>Slot allocation</td><td>counter + free list</td><td>A counter only (<code>nextBindlessTextureIndex</code> in <code>RenderContext</code>). A caller may name a slot; the counter then moves past it, so automatic slots never land on a named one.</td></tr>
-  <tr><td>Freeing, retire list</td><td>section 6</td><td>None: slots are never freed (<code>D4</code>). <code>RenderContext::destroyTexture</code> frees the image but not its slot. The one reuse is a frame slot's depth texture on resize: the device is idle then, and the new texture takes the old slot.</td></tr>
+  <tr><td>Freeing, retire list</td><td>section 6</td><td>None for materials and assets: their slots are never freed (<code>D4</code>). <code>RenderContext::destroyTexture</code> frees the image but not its slot. A render target that is rebuilt (on resize) or placed again keeps its slots: the device is idle then, and the new textures take the old slots. Dear ImGui's own textures, like its font atlas, have the retire list of section 6: a replaced one becomes a <code>UiRelease</code> with the graphics fence value of the last frame that may draw it, and once the fence passes it, its slot goes to <code>Ui::freeSlots</code> for the next UI texture.</td></tr>
   <tr><td>Missing textures</td><td>"none" value or default textures</td><td>The "none" value: <code>INVALID_TEXTURE_INDEX</code> (0xFFFFFFFF) and a branch on <code>hasTexture</code>. No default textures. The shader uses the factor alone, which is the glTF rule. (The <i>default material</i> is a material, not a texture.)</td></tr>
   <tr><td>Samplers</td><td>combined or separate</td><td>Combined. Six shared samplers, one per <code>SamplerType</code>, picked when the slot is written (<code>LINEAR_REPEAT</code> by default). One handle has one slot, so a glTF image used with two samplers is uploaded twice.</td></tr>
   <tr><td>Placeholder while loading</td><td>gray or checker</td><td>None. A texture from <code>loadTexture</code> may get a slot before its pixels exist, but an entity is not drawn until every texture of its materials is loaded, so the empty image is never read.</td></tr>
@@ -750,6 +750,8 @@ free(slot):
   <tr><td><code>loadMaterial</code> (glTF)</td><td>each uploaded image, once per image, sampler and color space</td><td>from the glTF sampler (<code>toSamplerType</code>)</td></tr>
   <tr><td><code>Engine::finishEnvironmentLoad</code></td><td>an environment's image (<code>LINEAR_REPEAT</code>, since it wraps around) and its three cubes</td><td><code>LINEAR_CLAMP</code></td></tr>
   <tr><td><code>Engine::createEnvironments</code></td><td>the BRDF LUT, once</td><td><code>LINEAR_CLAMP</code></td></tr>
+  <tr><td><code>Engine::getUiTexture</code></td><td>a loaded texture that has no slot yet, for <code>ImGui::Image</code></td><td><code>LINEAR_REPEAT</code></td></tr>
+  <tr><td>The UI (<code>buildUi</code>)</td><td>Dear ImGui's own textures, in a freed UI slot when there is one</td><td><code>LINEAR_CLAMP</code></td></tr>
   <tr><td><code>RenderContext::createRenderTarget</code></td><td>each color texture (of each frame slot's copy, with <code>history</code>); with <code>occlusionCulling</code> (always for a depth-only target or one with a <code>MOTION_FORMAT</code> color), also a <code>D32_SFLOAT</code> depth texture. A rebuilt or re-placed target keeps its slots.</td><td><code>LINEAR_CLAMP</code>, depth <code>NEAREST_CLAMP</code></td></tr>
 </table>
 </div>
@@ -872,7 +874,7 @@ free(slot):
   <ul>
     <li>"No texture" is <code>INVALID_TEXTURE_INDEX</code> in the row, never 0: slot 0 is a real texture. The shader must check <code>hasTexture</code> before it indexes <code>gTextures</code>.</li>
     <li>An image must be in the shader-read layout whenever a draw may sample its slot: the descriptor promises <code>VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL</code>. That is why <code>endPass</code> moves a render target's color attachment there (<code>B10</code>).</li>
-    <li>Do not rewrite a slot that a frame in flight may read. Today only the depth slots are rewritten, with the device idle.</li>
+    <li>Do not rewrite a slot that a frame in flight may read. Today a rebuilt render target rewrites its own slots with the device idle, and a UI texture's slot is reused only after the frames that drew it are done.</li>
     <li>A new texture field in <code>gfx::Material</code> is a CPU↔GPU struct change: see <a href="struct-layout.html">struct layout</a>.</li>
     <li>If an index ever comes from per-pixel data (a G-buffer, a decal list), mark it non-uniform.</li>
   </ul>
@@ -880,7 +882,7 @@ free(slot):
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>No material destruction, and no free list or retire list for slots (<code>D4</code>). <code>RenderContext::destroyTexture</code> exists, but it does not touch the slot or <code>bindlessTextureIndexMap</code>: a texture that a material still uses must not be destroyed. The array size and the 256 materials are fixed at compile time (<code>D15</code>). No default textures. See also <a href="../api/materials.html#bindless">the bindless API</a>.</p>
+  <p>No material destruction, and no free list or retire list for the slots of materials and assets (<code>D4</code>). <code>RenderContext::destroyTexture</code> exists, but it does not touch the slot or <code>bindlessTextureIndexMap</code>: a texture that a material still uses must not be destroyed. The array size and the 256 materials are fixed at compile time (<code>D15</code>). No default textures. See also <a href="../api/materials.html#bindless">the bindless API</a>.</p>
 </div>
 
 <h3>Further reading</h3>

@@ -168,7 +168,7 @@ namespace rasm
         }
     }
 
-    // Startup with EngineConfig::ui: the context, the SDL3 input backend and the pipeline. The font atlas is made by the
+    // Startup with EngineConfig::ui: the context, the SDL3 input backend (none when headless) and the pipeline. The font atlas is made by the
     // first frame's texture requests. A failure leaves the UI off and the engine running.
     bool Engine::createUi()
     {
@@ -222,7 +222,7 @@ namespace rasm
                 texture->SetStatus(ImTextureStatus_Destroyed);
             }
             if (ui->platform)
-                shutdownUiPlatform();
+                shutdownUiPlatform(mainWindow);
             ImGui::GetIO().BackendRendererName = nullptr;
             ImGui::GetIO().BackendFlags &= ~(ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasTextures);
             ImGui::DestroyContext(ui->context);
@@ -238,6 +238,8 @@ namespace rasm
         ui->draws.clear();
         ui->drawn = false;
         inspector->shown = false;
+        // Also while the RASM window is hidden, so it shows fresh numbers when it opens again.
+        ui->statsAge += deltaTime;
         const bool active = config.showStats || static_cast<bool>(ui->callback);
         if (!active)
         {
@@ -247,10 +249,10 @@ namespace rasm
         ZoneScopedN("UI");
         // The UI got no events while it slept: keys would stay down and the mouse would be where it was.
         if (!ui->active)
-            resumeUiInput();
+            resumeUiInput(mainWindow);
         ui->active = true;
 
-        newUiPlatformFrame();
+        newUiPlatformFrame(mainWindow, deltaTime);
         ImGui::NewFrame();
         drawFrozenFrustums(camera);
         if (config.showStats)

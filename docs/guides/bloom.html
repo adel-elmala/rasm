@@ -373,6 +373,8 @@
 
 <pre><code>config.bloom = true;</code></pre>
 
+<p>The chain reads one value per pixel. <code>Engine::render</code> gives it the view's HDR target after anti-aliasing (<code>EngineConfig::antiAliasing</code>): <code>scene_hdr</code> without it, its MSAA resolve <samp>scene_hdr_resolved</samp> (<a href="msaa.html#in-rasm">MSAA</a>), or the TAA result <samp>scene_hdr_taa</samp> (<a href="taa.html">TAA</a>). The tone map reads the same target. A multisampled source logs an error and adds no pass: resolve it first with <code>Engine::addMsaaResolvePass</code>.</p>
+
 <div class="legend">
   <span><i class="gpu"></i>compute passes of the graph</span>
   <span><i class="mem"></i>transient storage targets</span>
@@ -380,10 +382,10 @@
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 300" role="img" aria-label="scene_hdr feeds Bloom Down 1, which writes bloom_down_1. Bloom Down 2 to 6 each read the level before and write the next, down to bloom_down_6. Bloom Up 5 reads bloom_down_5 and bloom_down_6 and writes bloom_up_5; each later up pass reads its down level and the up level below; Bloom Up 1 writes bloom_up_1, divided by the level count. Tone Map reads scene_hdr and bloom_up_1 and draws lerp of them by the camera's bloom strength. All 11 passes share one GPU timer, Bloom.">
+  <svg viewBox="0 0 760 300" role="img" aria-label="The view's HDR target, scene_hdr or its single-sample resolve, feeds Bloom Down 1, which writes bloom_down_1. Bloom Down 2 to 6 each read the level before and write the next, down to bloom_down_6. Bloom Up 5 reads bloom_down_5 and bloom_down_6 and writes bloom_up_5; each later up pass reads its down level and the up level below; Bloom Up 1 writes bloom_up_1, divided by the level count. Tone Map reads the same source and bloom_up_1 and draws lerp of them by the camera's bloom strength. All 11 passes share one GPU timer, Bloom.">
     <rect x="20" y="40" width="110" height="44" rx="6" class="mem"/>
     <text x="75" y="60" class="mid mono small">scene_hdr</text>
-    <text x="75" y="76" class="mid small">full size</text>
+    <text x="75" y="76" class="mid small">or its resolve</text>
     <text x="150" y="26" class="title t-gpu">Bloom Down 1 … 6: firstDownsampleMain, then downsampleMain</text>
     <line x1="130" y1="62" x2="156" y2="62" class="arrow gpu" marker-end="url(#ah-gpu)"/>
     <rect x="158" y="44" width="88" height="36" rx="6" class="mem"/>
@@ -450,6 +452,7 @@
   <tr><th>The pass declares</th><th>The graph records before it</th></tr>
   <tr><td>a compute pass: <code>write(rt)</code> of a target made with <code>RenderTargetDesc::storage</code></td><td>each color of this frame slot → <code>STORAGE</code> (from <code>STORAGE</code>: a write-after-write barrier)</td></tr>
   <tr><td>any pass: <code>read(rt)</code></td><td>each color → <code>SAMPLED</code>; nothing after a draw, whose <code>endPass</code> left it there</td></tr>
+  <tr><td>any pass: <code>readPrevious(rt)</code> of a storage history target</td><td>each color of the last frame's copy → <code>SAMPLED</code>, from the <code>STORAGE</code> the frame before left</td></tr>
   <tr><td>the first pass of a transient target</td><td><code>aliasingBarrier</code>, which also covers compute storage writes; its colors move to <code>STORAGE</code> from <code>UNKNOWN</code>, dropping the old bytes</td></tr>
 </table>
 </div>
@@ -472,7 +475,7 @@
   <tr><td>Up filter</td><td>tent, add, divide by the levels</td><td>The same: <code>upsampleMain</code>; <code>Bloom Up 1</code> multiplies by 1 / levels (<code>BloomPushConstants::scale</code>).</td></tr>
   <tr><td>Mix</td><td>lerp before the curve, no threshold</td><td><code>Tone Map</code> samples the bloom (half size, bilinear) and draws <code>lerp(scene, bloom, Camera::bloomStrength)</code> before the exposure and AgX. Strength 0.04 by default, from 0 to 1 (<code>Engine::setCameraBloomStrength</code>).</td></tr>
   <tr><td>Format</td><td>a float format</td><td><code>SCENE_COLOR_FORMAT</code> (RGBA16F) for every level: a storage format on every target backend.</td></tr>
-  <tr><td>Turning it off</td><td>–</td><td>Strength 0: the passes dispatch nothing (the graph still records their barriers) and the tone map does not sample (<code>Engine::bloomRuns</code>, one rule for both). To drop the passes and their memory, build the graph without them. <code>EngineConfig::bloom</code> is off by default, so an engine update does not change how an application looks.</td></tr>
+  <tr><td>Turning it off</td><td>–</td><td>Strength 0, or while a debug view is shown (<code>Engine::setDebugView</code>): the passes dispatch nothing (the graph still records their barriers) and the tone map does not sample (<code>Engine::bloomRuns</code>, one rule for both). To drop the passes and their memory, build the graph without them. <code>EngineConfig::bloom</code> is off by default, so an engine update does not change how an application looks.</td></tr>
 </table>
 </div>
 

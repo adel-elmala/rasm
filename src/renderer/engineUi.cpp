@@ -8,7 +8,6 @@
 #include "imgui.h"
 
 #include <cfloat>
-#include <chrono>
 #include <string>
 #include <utility>
 
@@ -17,7 +16,7 @@ namespace rasm
     namespace
     {
         // Slow enough for the numbers to be read, like the stats overlay's.
-        constexpr std::chrono::milliseconds STATS_REFRESH(250);
+        constexpr float STATS_REFRESH = 0.25f;
 
         constexpr const char *DEBUG_VIEW_NAMES[] = {"None", "Normals", "UVs", "Overdraw", "LODs", "Culling", "Light count"};
         // The display colors of the views' keys: DEBUG_LOD_COLORS and the culling colors in debugViews.slang and
@@ -132,11 +131,12 @@ namespace rasm
     // and the render graph's dump (F3).
     void Engine::drawEngineWindow()
     {
-        const auto now = std::chrono::steady_clock::now();
-        if (now - ui->statsTime >= STATS_REFRESH)
+        // Counted in frame time (buildUi adds it), so with EngineConfig::fixedDeltaTime the same frames renew the numbers
+        // in every run (C15).
+        if (ui->statsAge >= STATS_REFRESH)
         {
             ui->stats = frameStats->stats;
-            ui->statsTime = now;
+            ui->statsAge = 0.0f;
         }
 
         const float scale = ImGui::GetStyle().FontScaleDpi;

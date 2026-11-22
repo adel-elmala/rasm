@@ -266,7 +266,7 @@
   <tr><td>Block</td><td>a workgroup in shared memory</td><td>1024 keys per group of <code>BLEND_SORT_GROUP_SIZE</code> (256) threads, each doing 2 of the 512 compares per step.</td></tr>
   <tr><td>Plan</td><td>a list of dispatches</td><td><code>getBlendSortDispatches</code>: keys, then per merge past a block its long steps and one local merge, then write. The step's sizes go in the push constant's <code>argument</code> as log<sub>2</sub> <var>k</var> and log<sub>2</sub> <var>j</var>.</td></tr>
   <tr><td>Moving the items</td><td>sort keys, copy once</td><td>The draws are copied aside first (<code>sortDrawsPtr</code>), and <code>sortWriteMain</code> writes them back into the visible draw list, so the Transparent pass draws the run as it is.</td></tr>
-  <tr><td>Which views</td><td>—</td><td>Only views that draw the blend run: shaded views. Shadow maps need no order.</td></tr>
+  <tr><td>Which views</td><td>—</td><td>Only views that draw the blend run: shaded views (<code>SceneView::sortBlend</code>). Shadow maps need no order. With culling frozen (<a href="debug-views.html"><code>Engine::setCullingFrozen</code></a>), a view with occlusion culling runs only its early cull pass, which then also culls the blend run, and those draws go unsorted.</td></tr>
 </table>
 </div>
 
