@@ -44,7 +44,6 @@ namespace rasm
     struct InspectEntry;
     namespace gfx { struct SceneData; }
 
-    constexpr uint32_t MAX_MATERIALS        = 256;
     constexpr uint32_t MAX_CAMERAS          = 8;
     constexpr uint32_t MAX_GPU_TIMERS       = 64;
     constexpr Format   SCENE_COLOR_FORMAT   = Format::R16G16B16A16_SFLOAT;
@@ -92,6 +91,22 @@ namespace rasm
         void                        addEntityToScene(SceneHandle scene, EntityHandle entity);
         void                        addCameraToScene(SceneHandle scene, CameraHandle camera);
         void                        addLightToScene(SceneHandle scene, LightHandle light);
+        void                        removeEntityFromScene(SceneHandle scene, EntityHandle entity);
+        void                        removeLightFromScene(SceneHandle scene, LightHandle light);
+        // Destroying an object makes its handle invalid at once; what the GPU may still use (geometry, textures, bindless
+        // slots) is freed once it has finished the frames in flight, and its rows, ranges and index are reused. What
+        // used it falls back: an entity of a destroyed mesh draws nothing, a destroyed material's users take the entity's or
+        // the default material, a destroyed environment leaves its scenes without one.
+        void                        destroyEntity(EntityHandle entity);
+        // Also destroys the materials and textures its glTF import made, which belong to it.
+        void                        destroyMesh(MeshHandle mesh);
+        void                        destroyMaterial(MaterialHandle material);
+        void                        destroyLight(LightHandle light);
+        void                        destroyEnvironment(EnvironmentHandle environment);
+        // Refused while a render graph draws a view of it: destroy the graph first. Engine::render lets go by itself.
+        void                        destroyCamera(CameraHandle camera);
+        void                        destroyScene(SceneHandle scene);
+        PoolStats                   getPoolStats() const;
         void                        setSceneEnvironment(SceneHandle scene, const SceneEnvironment& environment);
         void                        setAnimationTime(double seconds);
         void                        playAnimation(EntityHandle entity, const AnimationPlay& play);
@@ -357,7 +372,7 @@ namespace rasm
         void                        updateDrawModes(EntityHandle entity);
         void                        refreshEntitiesAfterMaterialChange();
         void                        writeMaterialRow(MaterialHandle material);
-        void                        addEntityToDrawList(SceneHandle scene, EntityHandle entity);
+        bool                        addEntityToDrawList(SceneHandle scene, EntityHandle entity);
         void                        markDrawListsDirty(EntityHandle entity);
         void                        rebuildDrawList(SceneHandle scene);
         void                        uploadDrawList(SceneDrawList& drawList);
@@ -427,13 +442,18 @@ namespace rasm
         bool                        isLive(const LightHandle& light) const;
         bool                        isLive(const SceneHandle& scene) const;
         bool                        isLive(const EnvironmentHandle& environment) const;
+        void                        releaseEntityRows(EntityHandle entity);
+        void                        releaseEntityAnimation(EntityHandle entity);
+        void                        releaseMeshAnimation(MeshHandle mesh);
+        void                        detachMaterial(MaterialHandle material);
+        bool                        viewHolds(SceneHandle scene, CameraHandle camera, const char* caller);
 
         // Each object vector is indexed by handle index and holds a slot for every index its pool handed out.
         struct Registry
         {
             HandlePool               entityHandles          = HandlePool(MAX_ENTITIES);
             HandlePool               meshHandles;
-            HandlePool               materialHandles        = HandlePool(MAX_MATERIALS);
+            HandlePool               materialHandles;                                       // EngineConfig::maxMaterials + 1, set by the constructor
             HandlePool               cameraHandles          = HandlePool(MAX_CAMERAS);
             HandlePool               lightHandles;                                          // EngineConfig::maxLights + 1, set by the constructor
             HandlePool               sceneHandles           = HandlePool(MAX_SCENES);
@@ -449,6 +469,9 @@ namespace rasm
             std::unordered_map<std::string, MeshHandle>                 loadedMeshes;
             std::unordered_map<std::string, TextureHandle>              loadedTextures;
             std::vector<std::string>                                    textureCacheKeys;   // by texture index: its loadedTextures key, for destroyTexture
+            std::vector<std::string>                                    meshPaths;          // by mesh index: its loadedMeshes key, for destroyMesh
+            std::vector<uint32_t>                                       materialUsers;      // by material index: entities made with it
+            std::vector<MeshHandle>                                     materialOwners;     // by material index: the mesh whose glTF import made it
         };
 
         Registry registry = {};

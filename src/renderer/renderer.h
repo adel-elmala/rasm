@@ -25,6 +25,8 @@ namespace rasm
     public:
         explicit                    Renderer(Engine& owner);
         void                        render(const RenderView& view);
+        // Lets go of its graph when it draws this scene or camera, so they can be destroyed.
+        void                        release(SceneHandle scene, CameraHandle camera);
 
     private:
         Engine&                     engine;

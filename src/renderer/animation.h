@@ -4,6 +4,7 @@
 #include "rasm/animation.h"
 #include "rasm/handle.h"
 #include "rasm/types.h"
+#include "core/rangeAllocator.h"
 #include "renderer/gpuTable.h"
 #include "renderer/uberMaterialTypes.h"
 
@@ -17,6 +18,8 @@ namespace rasm
     struct MeshAnimation
     {
         uint64_t                        address                                         = 0;        // its gfx::AnimationMeshData
+        uint64_t                        poolOffset                                      = 0;        // its range of the pool, freed with the mesh
+        uint64_t                        poolBytes                                       = 0;
         uint32_t                        nodeCount                                       = 0;
         std::vector<int32_t>            subMeshTransforms;                                          // per sub-mesh: its row among the entity's transforms, -1: static
         std::vector<uint8_t>            subMeshMirrors;                                             // per sub-mesh: 1 when a clip can mirror it (a scale through 0)
@@ -46,27 +49,28 @@ namespace rasm
     struct GpuAnimation
     {
         BufferHandle                    pool                                            = {};
-        uint64_t                        poolUsed                                        = 0;
+        RangeAllocator                  poolRanges;                                                 // bytes, in ranges of 16
         std::vector<MeshAnimation>      meshes;                                                     // by mesh index
         GpuTable                        entities;
-        uint32_t                        entityRows                                      = 0;
+        uint32_t                        entityRows                                      = 0;        // rows ever used: the passes' dispatch size
+        std::vector<uint32_t>           freeRows;                                                   // rows of destroyed entities, written as stopped
         std::vector<EntityAnimation>    entityStates;                                               // by entity index
         BufferHandle                    transforms[MAX_FRAMES_IN_FLIGHT]                = {};
         uint32_t                        transformCapacity                               = 0;
-        uint32_t                        transformCount                                  = 0;
+        RangeAllocator                  transformRanges;
         BufferHandle                    pose                                            = {};
         uint32_t                        poseCapacity                                    = 0;        // nodes
-        uint32_t                        poseCount                                       = 0;
+        RangeAllocator                  poseRanges;
         BufferHandle                    joints[MAX_FRAMES_IN_FLIGHT]                    = {};       // 3 rows per joint matrix
         uint32_t                        jointCapacity                                   = 0;
-        uint32_t                        jointCount                                      = 0;
+        RangeAllocator                  jointRanges;
         BufferHandle                    skinnedVertices[MAX_FRAMES_IN_FLIGHT]           = {};       // what the Skin pass writes, skinned and morphed
         uint32_t                        skinnedCapacity                                 = 0;
-        uint32_t                        skinnedCount                                    = 0;
+        RangeAllocator                  skinnedRanges;
         uint32_t                        maxSkinnedVertices                              = 0;        // the most of one entity
         GpuTable                        weightOverrides;                                            // setMorphWeights's, one float per row, NaN: the clip's
         BufferHandle                    weights[MAX_FRAMES_IN_FLIGHT]                   = {};       // the morph weights the Animate pass writes
-        uint32_t                        weightCount                                     = 0;
+        RangeAllocator                  weightRanges;
         BufferHandle                    frames[MAX_FRAMES_IN_FLIGHT]                    = {};
         PipelineHandle                  pipeline                                        = {};
         PipelineHandle                  skinPipeline                                    = {};

@@ -1544,6 +1544,29 @@ namespace rasm
         impl->releases.tag(values);
     }
 
+    void RenderContext::releaseAfterGpu(std::function<void()> free)
+    {
+        impl->releases.release(std::move(free));
+    }
+
+    uint32_t RenderContext::getReleasesWaiting() const
+    {
+        return impl->releases.waitingCount();
+    }
+
+    uint32_t RenderContext::getTextureCount() const
+    {
+        return static_cast<uint32_t>(impl->textures.handles.liveCount());
+    }
+
+    uint32_t RenderContext::getBindlessTextureCount() const
+    {
+        uint32_t count = 0;
+        for (const TextureHandle &texture : impl->slotTextures)
+            count += texture.isValid() ? 1 : 0;
+        return count;
+    }
+
     // Frees what every queue is done with. Nothing waits: the fence values are only read.
     void RenderContext::collectReleases()
     {

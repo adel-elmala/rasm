@@ -4,6 +4,7 @@
 #include "assets/meshImport.h"
 #include "assets/meshLod.h"
 #include "platform/paths.h"
+#include "renderer/animation.h"
 #include "renderer/geometryPool.h"
 
 #include "spdlog/spdlog.h"
@@ -72,8 +73,16 @@ namespace rasm
 
         // The handle is taken once the geometry is in the pool, so a mesh that does not fit uses no index.
         Mesh mesh{.state = MeshState::READY, .subMeshes = {SubMesh{.transform = glm::mat4(1.0f)}}};
-        if (!geometryPool->upload(ctx, raw, mesh.subMeshes[0].geometry))
+        if (!geometryPool->allocate(raw, mesh.subMeshes[0].geometry))
+        {
+            geometryPool->logFull(1);
             return {};
+        }
+        if (!geometryPool->write(ctx, raw, mesh.subMeshes[0].geometry))
+        {
+            geometryPool->free(mesh.subMeshes[0].geometry);
+            return {};
+        }
 
         const HandleSlot slot = registry.meshHandles.allocate();
         const MeshHandle handle{slot.index, slot.generation};
@@ -121,6 +130,8 @@ namespace rasm
             handle = {slot.index, slot.generation};
             registry.loadedMeshes[path] = handle;
             registry.meshes.resize(registry.meshHandles.size());
+            registry.meshPaths.resize(registry.meshHandles.size());
+            registry.meshPaths[handle.index] = path;
         }
         registry.meshes[handle.index] = Mesh{};
 
@@ -159,69 +170,157 @@ namespace rasm
         // The CPU copy of the geometry and the glTF model are freed when raw goes out of scope (P6).
         const auto mainThreadStart = std::chrono::steady_clock::now();
         GLTFRaw raw = load.result.get();
-        Mesh &mesh = registry.meshes[load.handle.index];
-        mesh.state = MeshState::FAILED;
+        // Destroyed while it loaded: the result is dropped.
+        if (!isLive(load.handle))
+            return;
+        registry.meshes[load.handle.index].state = MeshState::FAILED;
         if (!raw.loaded)
             return;
 
-        // The whole mesh must fit before anything is created: nothing is freed from the pool, so a mesh failing
-        // halfway would leak the geometry, materials and bindless slots of its first sub-meshes.
-        size_t vertexCount = 0;
-        size_t indexCount = 0;
-        size_t colorCount = 0;
-        size_t skinCount = 0;
-        size_t morphCount = 0;
-        for (const auto &sub : raw.subGltfRaws)
+        // Every sub-mesh's ranges are taken before anything is created, so a mesh that does not fit takes nothing.
+        const size_t subMeshCount = raw.subGltfRaws.size();
+        std::vector<MeshGeometry> geometries(subMeshCount);
+        for (size_t i = 0; i < subMeshCount; ++i)
         {
-            vertexCount += sub.objRaw.vertices.size();
-            indexCount += sub.objRaw.indices.size();
-            colorCount += sub.objRaw.colors.size();
-            skinCount += sub.objRaw.skin.size();
-            morphCount += sub.objRaw.morphs.size();
-            for (const auto &lod : sub.objRaw.lods)
-                indexCount += lod.indices.size();
-        }
-        if (!geometryPool->fits(vertexCount, indexCount, colorCount, skinCount, morphCount, raw.subGltfRaws.size()))
-        {
-            spdlog::error("Failed to upload mesh: {}", load.path);
-            return;
-        }
-        const uint64_t animationBytes = getMeshAnimationBytes(raw);
-        if (animationBytes > config.animationPoolBytes - getAnimationPoolUsed())
-        {
-            spdlog::error("The animation pool is full: mesh {} needs {} B ({}/{} B in use). EngineConfig::animationPoolBytes sets its size.",
-                          load.path, animationBytes, getAnimationPoolUsed(), config.animationPoolBytes);
-            return;
-        }
-
-        GltfImportCache cache{.raw = &raw};
-        for (const auto &sub : raw.subGltfRaws)
-        {
-            SubMesh subMesh{.transform = sub.transform, .animatedNode = sub.animatedNode};
-            if (raw.model)
-                subMesh.material = loadMaterial(*raw.model, sub.materialIndex, cache);
-            if (!geometryPool->upload(ctx, sub.objRaw, subMesh.geometry))
+            if (!geometryPool->allocate(raw.subGltfRaws[i].objRaw, geometries[i]))
             {
+                for (size_t j = 0; j < i; ++j)
+                    geometryPool->free(geometries[j]);
+                geometryPool->logFull(subMeshCount);
                 spdlog::error("Failed to upload mesh: {}", load.path);
-                mesh.subMeshes.clear();
                 return;
             }
-            mesh.subMeshes.push_back(subMesh);
         }
-
-        if (!uploadMeshAnimation(load.handle, raw))
+        const uint64_t animationBytes = getMeshAnimationBytes(raw);
+        if (animationBytes > gpuAnimation->poolRanges.largestFree())
         {
-            spdlog::error("Failed to upload the animations of mesh {}", load.path);
-            mesh.subMeshes.clear();
+            for (const MeshGeometry &geometry : geometries)
+                geometryPool->free(geometry);
+            spdlog::error("The animation pool is full: mesh {} needs {} B ({}/{} B in use, the largest free range {} B). EngineConfig::animationPoolBytes sets its size.",
+                          load.path, animationBytes, getAnimationPoolUsed(), config.animationPoolBytes, gpuAnimation->poolRanges.largestFree());
             return;
         }
+
+        // A failure past here gives back what was made: no frame has used any of it yet.
+        GltfImportCache cache{.raw = &raw};
+        auto fail = [&](const char *what)
+        {
+            spdlog::error("Failed to upload the {} of mesh {}", what, load.path);
+            for (const MeshGeometry &geometry : geometries)
+                geometryPool->free(geometry);
+            for (const auto &[index, material] : cache.materials)
+            {
+                if (isLive(material))
+                    destroyMaterial(material);
+            }
+            for (const auto &[key, texture] : cache.imageTextures)
+            {
+                if (ctx.isAlive(texture))
+                    destroyTexture(texture);
+            }
+            registry.meshes[load.handle.index].subMeshes.clear();
+        };
+        for (size_t i = 0; i < subMeshCount; ++i)
+        {
+            const SubGLTFRaw &sub = raw.subGltfRaws[i];
+            SubMesh subMesh{.geometry = geometries[i], .transform = sub.transform, .animatedNode = sub.animatedNode};
+            if (raw.model)
+                subMesh.material = loadMaterial(*raw.model, sub.materialIndex, cache);
+            registry.meshes[load.handle.index].subMeshes.push_back(subMesh);
+            if (!geometryPool->write(ctx, sub.objRaw, subMesh.geometry))
+            {
+                fail("geometry");
+                return;
+            }
+        }
+        if (!uploadMeshAnimation(load.handle, raw))
+        {
+            fail("animations");
+            return;
+        }
+
+        Mesh &mesh = registry.meshes[load.handle.index];
         for (const AnimationClipRaw &clip : raw.animation.clips)
             mesh.animations.push_back(clip.info);
         mesh.morphTargetNames = raw.animation.morphTargetNames;
+        // What the import made belongs to the mesh, and goes with it (destroyMesh).
+        registry.materialOwners.resize(registry.materials.size());
+        for (const auto &[index, material] : cache.materials)
+        {
+            if (!material.isValid())
+                continue;
+            mesh.ownedMaterials.push_back(material);
+            registry.materialOwners[material.index] = load.handle;
+        }
+        for (const auto &[key, texture] : cache.imageTextures)
+        {
+            if (texture.isValid())
+                mesh.ownedTextures.push_back(texture);
+        }
 
         mesh.state = MeshState::READY;
+        const GeometryPoolStats pool = geometryPool->stats();
         spdlog::info("Loaded mesh {} ({:.1f} ms on the main thread): {} sub-meshes, geometry pool at {}/{} vertices and {}/{} indices.",
-                     load.path, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - mainThreadStart).count(), mesh.subMeshes.size(), geometryPool->vertexCount(), config.geometryPoolVertices, geometryPool->indexCount(), config.geometryPoolIndices);
+                     load.path, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - mainThreadStart).count(), mesh.subMeshes.size(), pool.vertices,
+                     config.geometryPoolVertices, pool.indices, config.geometryPoolIndices);
+    }
+
+    // Entities that use the mesh keep living and draw nothing. Its geometry ranges, table rows and animation pool range
+    // wait for the frames in flight, which may still draw it; its materials and textures go with it.
+    void Engine::destroyMesh(MeshHandle mesh)
+    {
+        if (!isLive(mesh))
+        {
+            spdlog::error("destroyMesh: mesh handle {{{}, {}}} is invalid or was destroyed.", mesh.index, mesh.generation);
+            return;
+        }
+        Mesh &meshRef = registry.meshes[mesh.index];
+        // The usual order destroys the entities first, and then nothing is searched.
+        for (size_t i = 1; meshRef.users > 0 && i < registry.entities.size(); ++i)
+        {
+            Entity &entity = registry.entities[i];
+            if (!(entity.mesh == mesh) || !isLive(entity.handle))
+                continue;
+            releaseEntityRows(entity.handle);
+            entity.mesh = {};
+            --meshRef.users;
+        }
+
+        std::vector<MeshGeometry> geometries;
+        for (const SubMesh &subMesh : meshRef.subMeshes)
+        {
+            if (subMesh.geometry.allocated)
+                geometries.push_back(subMesh.geometry);
+        }
+        if (!geometries.empty())
+            ctx.releaseAfterGpu([this, geometries]()
+                                {
+                                    for (const MeshGeometry &geometry : geometries)
+                                        geometryPool->free(geometry); });
+        releaseMeshAnimation(mesh);
+
+        const std::vector<MaterialHandle> materials = std::move(meshRef.ownedMaterials);
+        const std::vector<TextureHandle> textures = std::move(meshRef.ownedTextures);
+        if (mesh.index < registry.meshPaths.size() && !registry.meshPaths[mesh.index].empty())
+        {
+            auto it = registry.loadedMeshes.find(registry.meshPaths[mesh.index]);
+            if (it != registry.loadedMeshes.end() && it->second == mesh)
+                registry.loadedMeshes.erase(it);
+            registry.meshPaths[mesh.index].clear();
+        }
+        registry.meshes[mesh.index] = Mesh{};
+        registry.meshHandles.release(mesh.index, mesh.generation);
+
+        for (MaterialHandle material : materials)
+        {
+            if (isLive(material))
+                destroyMaterial(material);
+        }
+        for (TextureHandle texture : textures)
+        {
+            if (ctx.isAlive(texture))
+                destroyTexture(texture);
+        }
     }
 
     MeshSize Engine::getMeshByteSize(const MeshHandle &handle) const

@@ -144,7 +144,18 @@ namespace rasm
             SceneLightList &list = gpuLights->lists[i];
             if (list.rebuild)
             {
-                const Scene &scene = registry.scenes[i];
+                // Removing a light clears its scene bit only, so the scene's list is compacted here: an entry stays while
+                // its light lives and is in the scene, once.
+                Scene &scene = registry.scenes[i];
+                const uint32_t stamp = ++gpuLights->rebuildStamp;
+                gpuLights->listStamps.resize(registry.lights.size(), 0);
+                std::erase_if(scene.lights, [this, i, stamp](const LightHandle &light)
+                              {
+                                  if (!isLive(light) || light.index >= gpuLights->lightScenes.size() || (gpuLights->lightScenes[light.index] & (1u << i)) == 0 ||
+                                      gpuLights->listStamps[light.index] == stamp)
+                                      return true;
+                                  gpuLights->listStamps[light.index] = stamp;
+                                  return false; });
                 list.globalCount = buildSceneLightList(registry.lights.data(), scene.lights.data(), static_cast<uint32_t>(scene.lights.size()), list.rows);
                 list.rebuild = false;
                 list.staleSlots = static_cast<uint8_t>((1u << MAX_FRAMES_IN_FLIGHT) - 1);

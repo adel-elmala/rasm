@@ -4,6 +4,7 @@
 #include "rasm/handle.h"
 #include "rasm/mesh.h"
 #include "rasm/types.h"
+#include "core/rangeAllocator.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -13,20 +14,32 @@ namespace rasm
 
     class RenderContext;
 
+    struct GeometryPoolStats
+    {
+        uint64_t                vertices                = 0;
+        uint64_t                indices                 = 0;
+        uint64_t                subMeshes               = 0;
+        uint64_t                largestFreeVertices     = 0;
+        uint64_t                largestFreeIndices      = 0;
+    };
+
+    // Every mesh's geometry in a few engine-wide buffers. Each stream hands out ranges with a RangeAllocator, so a destroyed
+    // mesh's ranges and table rows are reused (Engine::destroyMesh frees them once the GPU is done with them).
     class GeometryPool
     {
     public:
         bool                    create(RenderContext& ctx, const EngineConfig& config);
-        bool                    fits(size_t vertexCount, size_t indexCount, size_t colorCount, size_t skinCount, size_t morphCount, size_t subMeshCount) const;
-        bool                    upload(RenderContext& ctx, const ObjRaw& raw, MeshGeometry& geometry);
+        bool                    allocate(const ObjRaw& raw, MeshGeometry& geometry);
+        bool                    write(RenderContext& ctx, const ObjRaw& raw, const MeshGeometry& geometry);
+        void                    free(const MeshGeometry& geometry);
+        void                    logFull(size_t subMeshCount) const;
         BufferHandle            vertexBuffer() const;
         BufferHandle            indexBuffer() const;
         BufferHandle            colorBuffer() const;
         BufferHandle            skinBuffer() const;
         BufferHandle            morphBuffer() const;
         BufferHandle            tableBuffer() const;
-        uint32_t                vertexCount() const;
-        uint32_t                indexCount() const;
+        GeometryPoolStats       stats() const;
 
     private:
         BufferHandle            vertices                = {};
@@ -35,18 +48,12 @@ namespace rasm
         BufferHandle            skins                   = {};
         BufferHandle            morphs                  = {};
         BufferHandle            table                   = {};
-        uint32_t                vertexCapacity          = 0;
-        uint32_t                indexCapacity           = 0;
-        uint32_t                colorCapacity           = 0;
-        uint32_t                skinCapacity            = 0;
-        uint32_t                morphCapacity           = 0;
-        uint32_t                subMeshCapacity         = 0;
-        uint32_t                usedVertices            = 0;
-        uint32_t                usedIndices             = 0;
-        uint32_t                usedColors              = 0;
-        uint32_t                usedSkins               = 0;
-        uint32_t                usedMorphs              = 0;
-        uint32_t                usedSubMeshes           = 0;
+        RangeAllocator          vertexRanges;
+        RangeAllocator          indexRanges;
+        RangeAllocator          colorRanges;
+        RangeAllocator          skinRanges;
+        RangeAllocator          morphRanges;
+        RangeAllocator          subMeshRows;
     };
 
 }

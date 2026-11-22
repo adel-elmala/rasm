@@ -320,12 +320,21 @@ namespace rasm
 
     bool Engine::createGpuScene()
     {
-        if (!gpuScene->instances.create(ctx, "Instance Table", sizeof(gfx::InstanceData), config.maxInstances) ||
-            !gpuScene->materials.create(ctx, "Material Table", sizeof(gfx::MaterialData), MAX_MATERIALS))
+        // Material rows are indexed by handle, from 1, so the table has a row for each of maxMaterials materials and row 0.
+        if (config.maxMaterials == 0 || config.maxMaterials == UINT32_MAX)
         {
-            spdlog::error("Failed to create the GPU scene tables.");
+            spdlog::error("EngineConfig::maxMaterials is {}; it must be 1 to {}.", config.maxMaterials, UINT32_MAX - 1);
             return false;
         }
+        if (!gpuScene->instances.create(ctx, "Instance Table", sizeof(gfx::InstanceData), config.maxInstances) ||
+            !gpuScene->materials.create(ctx, "Material Table", sizeof(gfx::MaterialData), config.maxMaterials + 1))
+        {
+            spdlog::error("Failed to create the GPU scene tables (EngineConfig::maxInstances = {}, maxMaterials = {}).", config.maxInstances, config.maxMaterials);
+            return false;
+        }
+        gpuScene->instanceRows.reset(config.maxInstances);
+        gpuScene->instanceCullModes.assign(config.maxInstances, CullMode::NONE);
+        gpuScene->instanceAlphaModes.assign(config.maxInstances, AlphaMode::NONE);
 
         // The CPU rewrites each view's SceneData every frame, so it stays host-visible.
         for (auto &buffer : gpuScene->sceneData)
@@ -360,14 +369,18 @@ namespace rasm
         // Motion: entities that moved before the last sync and not since stopped, so their rows' previousWorld becomes
         // their world. Those that moved since the last sync draw their new matrix in this frame, which the next frame's
         // previousWorld is.
+        // A destroyed entity left its rows; the lists still name it until here.
         const uint32_t window = gpuScene->syncCount++;
         for (EntityHandle entity : gpuScene->settlingEntities)
         {
-            if (gpuScene->entities[entity.index].movedSync != window)
+            if (isLive(entity) && gpuScene->entities[entity.index].movedSync != window)
                 writeInstanceRows(entity, false);
         }
         for (EntityHandle entity : gpuScene->movedEntities)
-            gpuScene->entities[entity.index].syncedMatrix = registry.entities[entity.index].transform.toMatrix();
+        {
+            if (isLive(entity))
+                gpuScene->entities[entity.index].syncedMatrix = registry.entities[entity.index].transform.toMatrix();
+        }
         gpuScene->settlingEntities = std::move(gpuScene->movedEntities);
         gpuScene->movedEntities.clear();
 
@@ -375,26 +388,29 @@ namespace rasm
         for (size_t i = 0; i < waitingForMesh.size();)
         {
             const EntityHandle entity = waitingForMesh[i];
+            const bool alive = isLive(entity);
             const Entity &entityRef = registry.entities[entity.index];
-            const bool meshKnown = isLive(entityRef.mesh);
-            if (meshKnown && registry.meshes[entityRef.mesh.index].state == MeshState::LOADING)
+            if (alive && isLive(entityRef.mesh) && registry.meshes[entityRef.mesh.index].state == MeshState::LOADING)
             {
                 ++i;
                 continue;
             }
 
-            if (!isLoaded(entityRef.mesh))
+            // A destroyed entity, or one whose mesh was destroyed (destroyMesh cleared it), just leaves the list.
+            const bool hasMesh = alive && entityRef.mesh.isValid();
+            if (hasMesh && !isLoaded(entityRef.mesh))
             {
                 spdlog::warn("Entity {} is not drawn: its mesh failed to load.", entity.index);
             }
-            else
+            else if (hasMesh)
             {
                 const Mesh &mesh = registry.meshes[entityRef.mesh.index];
                 const auto rowCount = static_cast<uint32_t>(mesh.subMeshes.size());
-                if (rowCount > gpuScene->instances.capacity() - gpuScene->instanceCount)
+                uint64_t firstRow = 0;
+                if (!gpuScene->instanceRows.allocate(rowCount, firstRow))
                 {
-                    spdlog::error("The instance table is full: entity {} needs {} rows ({}/{} in use). EngineConfig::maxInstances sets its size.",
-                                  entity.index, rowCount, gpuScene->instanceCount, gpuScene->instances.capacity());
+                    spdlog::error("The instance table is full: entity {} needs {} rows ({}/{} in use, the largest free range {}). EngineConfig::maxInstances sets its size.",
+                                  entity.index, rowCount, gpuScene->instanceRows.used(), gpuScene->instances.capacity(), gpuScene->instanceRows.largestFree());
                 }
                 else
                 {
@@ -405,16 +421,18 @@ namespace rasm
                                          entity.index, subMesh.geometry.vertexCount, subMesh.geometry.indexCount);
                     }
 
-                    // Rows are never freed: entities are not destroyed yet (D4).
+                    // The rows go back when the entity or its mesh is destroyed (releaseEntityRows).
                     if (gpuScene->entities.size() <= entity.index)
                         gpuScene->entities.resize(entity.index + 1);
                     EntityDrawState &state = gpuScene->entities[entity.index];
-                    state.firstInstance = gpuScene->instanceCount;
+                    state.firstInstance = static_cast<uint32_t>(firstRow);
                     state.instanceCount = rowCount;
                     state.waitingForTextures = !texturesLoaded(*this, entityRef, mesh);
-                    gpuScene->instanceCount += rowCount;
-                    gpuScene->instanceCullModes.resize(gpuScene->instanceCount, CullMode::NONE);
-                    gpuScene->instanceAlphaModes.resize(gpuScene->instanceCount, AlphaMode::NONE);
+                    for (uint32_t r = 0; r < rowCount; ++r)
+                    {
+                        gpuScene->instanceCullModes[firstRow + r] = CullMode::NONE;
+                        gpuScene->instanceAlphaModes[firstRow + r] = AlphaMode::NONE;
+                    }
                     state.syncedMatrix = entityRef.transform.toMatrix();
                     writeInstanceRows(entity, false);
                     startPendingAnimation(entity);
@@ -439,6 +457,13 @@ namespace rasm
             {
                 const EntityHandle entity = waitingForTextures[i];
                 const Entity &entityRef = registry.entities[entity.index];
+                // Destroyed, or its rows released with its mesh: it waits no more.
+                if (!isLive(entity) || gpuScene->entities[entity.index].instanceCount == 0 || !gpuScene->entities[entity.index].waitingForTextures)
+                {
+                    waitingForTextures[i] = waitingForTextures.back();
+                    waitingForTextures.pop_back();
+                    continue;
+                }
                 if (!texturesLoaded(*this, entityRef, registry.meshes[entityRef.mesh.index]))
                 {
                     ++i;
@@ -568,16 +593,38 @@ namespace rasm
         gpuScene->materials.setRow(static_cast<uint32_t>(material.index), &row);
     }
 
-    void Engine::addEntityToDrawList(SceneHandle scene, EntityHandle entity)
+    // The rows are free for another entity at once: each frame slot has its own copy of the table, written only after its
+    // fence, and the draw lists that name them are rebuilt first.
+    void Engine::releaseEntityRows(EntityHandle entity)
+    {
+        if (entity.index >= gpuScene->entities.size())
+            return;
+        EntityDrawState &state = gpuScene->entities[entity.index];
+        if (state.instanceCount > 0)
+        {
+            markDrawListsDirty(entity);
+            gpuScene->instanceRows.free(state.firstInstance, state.instanceCount);
+        }
+        state.firstInstance = 0;
+        state.instanceCount = 0;
+        state.waitingForTextures = false;
+        releaseEntityAnimation(entity);
+    }
+
+    bool Engine::addEntityToDrawList(SceneHandle scene, EntityHandle entity)
     {
         if (gpuScene->entities.size() <= entity.index)
             gpuScene->entities.resize(entity.index + 1);
         EntityDrawState &state = gpuScene->entities[entity.index];
-        state.scenes |= static_cast<uint16_t>(1u << scene.index);
+        const auto bit = static_cast<uint16_t>(1u << scene.index);
+        if ((state.scenes & bit) != 0)
+            return false;
+        state.scenes |= bit;
 
         // An entity whose mesh or textures still load joins the draw list when they finish (syncGpuScene).
         if (state.instanceCount > 0 && !state.waitingForTextures)
             gpuScene->drawLists[scene.index].rebuild = true;
+        return true;
     }
 
     void Engine::markDrawListsDirty(EntityHandle entity)
@@ -600,10 +647,23 @@ namespace rasm
         drawList.runs.clear();
         drawList.triangleCount = 0;
 
-        for (auto entity : registry.scenes[scene.index].entities)
+        // Removing an entity only clears its scene bit, so the list is compacted here, where it is walked anyway: an
+        // entry stays while its entity lives and is in the scene, once (removed and added again, it may be there twice).
+        const auto bit = static_cast<uint16_t>(1u << scene.index);
+        const uint32_t stamp = ++gpuScene->rebuildStamp;
+        std::vector<EntityHandle> &entities = registry.scenes[scene.index].entities;
+        std::erase_if(entities, [this, bit, stamp](const EntityHandle &entity)
+                      {
+                          if (!isLive(entity) || entity.index >= gpuScene->entities.size())
+                              return true;
+                          EntityDrawState &state = gpuScene->entities[entity.index];
+                          if ((state.scenes & bit) == 0 || state.listStamp == stamp)
+                              return true;
+                          state.listStamp = stamp;
+                          return false; });
+
+        for (auto entity : entities)
         {
-            if (!entity.isValid() || entity.index >= gpuScene->entities.size())
-                continue;
             const EntityDrawState &state = gpuScene->entities[entity.index];
             if (state.instanceCount == 0 || state.waitingForTextures)
                 continue;
@@ -1374,7 +1434,7 @@ namespace rasm
         for (uint32_t s = 0; s < view.shadowCount; ++s)
         {
             const SceneShadow &shadow = view.shadows[s];
-            const bool inScene = shadow.light.index < lightScenes.size() && (lightScenes[shadow.light.index] & (1u << view.scene.index)) != 0;
+            const bool inScene = isLive(shadow.light) && shadow.light.index < lightScenes.size() && (lightScenes[shadow.light.index] & (1u << view.scene.index)) != 0;
             shadowLit[s] = inScene && getShadowMaps(registry.lights[shadow.light.index], cameraRef, cameraProjection, cameraView, shadow, ctx.getRenderTarget(shadow.maps[0]).width, view.face, shadowMaps[s], splits[s]);
         }
         if (shadowView && !shadowLit[0])

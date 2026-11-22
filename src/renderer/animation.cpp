@@ -324,6 +324,12 @@ namespace rasm
         animation.transformCapacity = FIRST_TRANSFORM_CAPACITY;
         animation.jointCapacity = FIRST_JOINT_CAPACITY;
         animation.skinnedCapacity = FIRST_SKINNED_CAPACITY;
+        animation.poolRanges.reset(config.animationPoolBytes);
+        animation.poseRanges.reset(FIRST_POSE_CAPACITY);
+        animation.transformRanges.reset(FIRST_TRANSFORM_CAPACITY);
+        animation.jointRanges.reset(FIRST_JOINT_CAPACITY);
+        animation.skinnedRanges.reset(FIRST_SKINNED_CAPACITY);
+        animation.weightRanges.reset(config.maxMorphWeights);
         bool created = animation.pool.isValid() && animation.pose.isValid();
         for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
@@ -344,7 +350,7 @@ namespace rasm
         return true;
     }
 
-    // A mesh's animations take one range of the pool, which is never freed (D4), like its geometry.
+    // A mesh's animations take one range of the pool, freed with the mesh once the GPU is done with it.
     uint64_t Engine::getMeshAnimationBytes(const GLTFRaw &raw) const
     {
         return getAnimationPoolBytes(raw.animation, countAnimatedSubMeshes(raw), countJointSpheres(raw), countMorphRadii(raw));
@@ -352,7 +358,7 @@ namespace rasm
 
     uint64_t Engine::getAnimationPoolUsed() const
     {
-        return gpuAnimation->poolUsed;
+        return gpuAnimation->poolRanges.used();
     }
 
     bool Engine::uploadMeshAnimation(MeshHandle mesh, const GLTFRaw &raw)
@@ -398,12 +404,22 @@ namespace rasm
                 info.skinnedVertexCount = firstSkinnedVertex + subMeshes[i].geometry.vertexCount;
         }
         info.transformCount = static_cast<uint32_t>(animated.size());
-        info.address = ctx.getBufferDeviceAddress(animation.pool) + animation.poolUsed;
+        // Every range is a multiple of 16 B, so every offset is too.
+        if (!animation.poolRanges.allocate(bytes, info.poolOffset))
+        {
+            spdlog::error("The animation pool has no free range of {} B ({}/{} B in use, the largest free range {} B). EngineConfig::animationPoolBytes sets its size.", bytes,
+                          animation.poolRanges.used(), animation.poolRanges.capacity(), animation.poolRanges.largestFree());
+            return false;
+        }
+        info.poolBytes = bytes;
+        info.address = ctx.getBufferDeviceAddress(animation.pool) + info.poolOffset;
         const std::vector<uint8_t> data = buildAnimationPoolData(raw.animation, animated.data(), info.transformCount, spheres.data(), static_cast<uint32_t>(spheres.size()),
                                                                  radii.data(), static_cast<uint32_t>(radii.size()), info.address);
-        if (!ctx.fillBuffer(animation.pool, data.data(), data.size(), animation.poolUsed))
+        if (!ctx.fillBuffer(animation.pool, data.data(), data.size(), info.poolOffset))
+        {
+            animation.poolRanges.free(info.poolOffset, bytes);
             return false;
-        animation.poolUsed += bytes;
+        }
         if (animation.meshes.size() <= mesh.index)
             animation.meshes.resize(mesh.index + 1);
         animation.meshes[mesh.index] = std::move(info);
@@ -646,7 +662,7 @@ namespace rasm
     }
 
     // The entity's first pose takes a table row and its ranges of transforms, pose nodes, joints, skinned vertices and
-    // morph weights, which it keeps (D4).
+    // morph weights, which it keeps until it or its mesh is destroyed (releaseEntityAnimation).
     bool Engine::takeAnimationRow(EntityHandle entity, uint32_t firstSync)
     {
         GpuAnimation &animation = *gpuAnimation;
@@ -660,39 +676,106 @@ namespace rasm
                               MAX_SKIN_GROUPS * SKIN_GROUP_SIZE);
                 return false;
             }
-            if (info.weightCount > animation.weightOverrides.capacity() - animation.weightCount)
+            if (animation.entityRows >= animation.entities.capacity() && animation.freeRows.empty())
             {
-                spdlog::error("The morph weight table is full: entity {} cannot be posed ({} weights, {}/{} in use). EngineConfig::maxMorphWeights sets its size.",
-                              entity.index, info.weightCount, animation.weightCount, animation.weightOverrides.capacity());
+                spdlog::error("The animated entity table is full: entity {} cannot be posed ({} rows in use). EngineConfig::maxAnimatedEntities sets its size.",
+                              entity.index, animation.entities.capacity());
                 return false;
             }
-            if (animation.entityRows >= animation.entities.capacity())
+            uint64_t firstWeight = 0;
+            if (!animation.weightRanges.allocate(info.weightCount, firstWeight))
             {
-                spdlog::error("The animated entity table is full: entity {} cannot be posed ({}/{} rows in use). EngineConfig::maxAnimatedEntities sets its size.",
-                              entity.index, animation.entityRows, animation.entities.capacity());
+                spdlog::error("The morph weight table is full: entity {} cannot be posed ({} weights, {}/{} in use, the largest free range {}). EngineConfig::maxMorphWeights sets its size.",
+                              entity.index, info.weightCount, animation.weightRanges.used(), animation.weightRanges.capacity(), animation.weightRanges.largestFree());
                 return false;
             }
-            if (!growAnimationBuffers(animation.transformCount + info.transformCount, animation.poseCount + info.nodeCount, animation.jointCount + info.jointCount,
-                                      animation.skinnedCount + info.skinnedVertexCount, firstSync))
+            // The buffers grow when a range does not fit: by the range, at least twice the capacity.
+            uint64_t firstTransform = 0;
+            uint64_t firstNode = 0;
+            uint64_t firstJoint = 0;
+            uint64_t firstSkinned = 0;
+            const bool transformFits = animation.transformRanges.allocate(info.transformCount, firstTransform);
+            const bool poseFits = animation.poseRanges.allocate(info.nodeCount, firstNode);
+            const bool jointFits = animation.jointRanges.allocate(info.jointCount, firstJoint);
+            const bool skinnedFits = animation.skinnedRanges.allocate(info.skinnedVertexCount, firstSkinned);
+            if (!transformFits || !poseFits || !jointFits || !skinnedFits)
             {
-                spdlog::error("Entity {} cannot be posed: the animation buffers cannot grow.", entity.index);
-                return false;
+                if (transformFits)
+                    animation.transformRanges.free(firstTransform, info.transformCount);
+                if (poseFits)
+                    animation.poseRanges.free(firstNode, info.nodeCount);
+                if (jointFits)
+                    animation.jointRanges.free(firstJoint, info.jointCount);
+                if (skinnedFits)
+                    animation.skinnedRanges.free(firstSkinned, info.skinnedVertexCount);
+                if (!growAnimationBuffers(animation.transformCapacity + (transformFits ? 0 : info.transformCount), animation.poseCapacity + (poseFits ? 0 : info.nodeCount),
+                                          animation.jointCapacity + (jointFits ? 0 : info.jointCount), animation.skinnedCapacity + (skinnedFits ? 0 : info.skinnedVertexCount),
+                                          firstSync) ||
+                    !animation.transformRanges.allocate(info.transformCount, firstTransform) || !animation.poseRanges.allocate(info.nodeCount, firstNode) ||
+                    !animation.jointRanges.allocate(info.jointCount, firstJoint) || !animation.skinnedRanges.allocate(info.skinnedVertexCount, firstSkinned))
+                {
+                    animation.weightRanges.free(firstWeight, info.weightCount);
+                    spdlog::error("Entity {} cannot be posed: the animation buffers cannot grow.", entity.index);
+                    return false;
+                }
             }
-            state.row = animation.entityRows++;
-            state.firstTransform = animation.transformCount;
-            state.firstNode = animation.poseCount;
-            state.firstJoint = animation.jointCount;
-            state.firstSkinnedVertex = animation.skinnedCount;
-            state.firstWeight = animation.weightCount;
-            animation.transformCount += info.transformCount;
-            animation.poseCount += info.nodeCount;
-            animation.jointCount += info.jointCount;
-            animation.skinnedCount += info.skinnedVertexCount;
-            animation.weightCount += info.weightCount;
+            if (animation.freeRows.empty())
+                state.row = animation.entityRows++;
+            else
+            {
+                state.row = animation.freeRows.back();
+                animation.freeRows.pop_back();
+            }
+            state.firstTransform = static_cast<uint32_t>(firstTransform);
+            state.firstNode = static_cast<uint32_t>(firstNode);
+            state.firstJoint = static_cast<uint32_t>(firstJoint);
+            state.firstSkinnedVertex = static_cast<uint32_t>(firstSkinned);
+            state.firstWeight = static_cast<uint32_t>(firstWeight);
             animation.maxSkinnedVertices = std::max(animation.maxSkinnedVertices, info.skinnedVertexCount);
             writeMorphWeightRows(entity);
         }
         return true;
+    }
+
+    // The row is written as stopped (clip -1), which the Animate and Skin passes skip, and goes on the free list with the
+    // ranges. Both are reused at once: every frame slot has its own copy of the table, and the passes write the ranges
+    // anew each frame for the entity that holds them, whose first frame has no motion from the frame before (resetSync).
+    void Engine::releaseEntityAnimation(EntityHandle entity)
+    {
+        GpuAnimation &animation = *gpuAnimation;
+        if (entity.index >= animation.entityStates.size())
+            return;
+        EntityAnimation &state = animation.entityStates[entity.index];
+        if (state.row != UINT32_MAX)
+        {
+            const MeshAnimation &info = animation.meshes[registry.entities[entity.index].mesh.index];
+            const gfx::AnimatedEntity stopped{.clip = -1};
+            animation.entities.setRow(state.row, &stopped);
+            animation.freeRows.push_back(state.row);
+            animation.transformRanges.free(state.firstTransform, info.transformCount);
+            animation.poseRanges.free(state.firstNode, info.nodeCount);
+            animation.jointRanges.free(state.firstJoint, info.jointCount);
+            animation.skinnedRanges.free(state.firstSkinnedVertex, info.skinnedVertexCount);
+            animation.weightRanges.free(state.firstWeight, info.weightCount);
+        }
+        state = {};
+    }
+
+    // The pool range holds data the GPU reads in frames still in flight, so it waits for them.
+    void Engine::releaseMeshAnimation(MeshHandle mesh)
+    {
+        GpuAnimation &animation = *gpuAnimation;
+        if (mesh.index >= animation.meshes.size())
+            return;
+        const MeshAnimation &info = animation.meshes[mesh.index];
+        if (info.poolBytes > 0)
+        {
+            const uint64_t offset = info.poolOffset;
+            const uint64_t bytes = info.poolBytes;
+            ctx.releaseAfterGpu([this, offset, bytes]()
+                                { gpuAnimation->poolRanges.free(offset, bytes); });
+        }
+        animation.meshes[mesh.index] = {};
     }
 
     // Both slots' transforms and skinned vertices grow at once, after the GPU is done with them: a frame reads the other
@@ -734,6 +817,7 @@ namespace rasm
                     return false;
             }
             animation.transformCapacity = transformCapacity;
+            animation.transformRanges.grow(transformCapacity);
         }
         if (skinnedCount > animation.skinnedCapacity)
         {
@@ -743,6 +827,7 @@ namespace rasm
                     return false;
             }
             animation.skinnedCapacity = skinnedCapacity;
+            animation.skinnedRanges.grow(skinnedCapacity);
             spdlog::info("The skinned vertex buffers hold {} vertices: {:.1f} MiB, {} B per vertex in each of the {} frame slots.", skinnedCapacity,
                          static_cast<double>(skinnedCapacity) * sizeof(Vertex) * MAX_FRAMES_IN_FLIGHT / (1024.0 * 1024.0), sizeof(Vertex), MAX_FRAMES_IN_FLIGHT);
         }
@@ -754,12 +839,14 @@ namespace rasm
                     return false;
             }
             animation.jointCapacity = jointCapacity;
+            animation.jointRanges.grow(jointCapacity);
         }
         if (poseCount > animation.poseCapacity)
         {
             if (!ctx.resizeBuffer(animation.pose, uint64_t{poseCapacity} * POSE_BYTES_PER_NODE))
                 return false;
             animation.poseCapacity = poseCapacity;
+            animation.poseRanges.grow(poseCapacity);
         }
         return true;
     }
@@ -879,9 +966,9 @@ namespace rasm
             return;
         if (!animation.pipeline.isValid())
             animation.pipeline = createComputePipeline("animate", readFile(pathFromUtf8(config.shaderDir) / "passes/animate.slang"), "animateMain");
-        if (animation.skinnedCount > 0 && !animation.skinPipeline.isValid())
+        if (animation.skinnedRanges.used() > 0 && !animation.skinPipeline.isValid())
             animation.skinPipeline = createComputePipeline("skin", readFile(pathFromUtf8(config.shaderDir) / "passes/skin.slang"), "skinMain");
-        if (!animation.pipeline.isValid() || (animation.skinnedCount > 0 && !animation.skinPipeline.isValid()))
+        if (!animation.pipeline.isValid() || (animation.skinnedRanges.used() > 0 && !animation.skinPipeline.isValid()))
         {
             spdlog::error("Failed to create the animation pipelines; animated meshes are not posed until they compile.");
             return;
@@ -922,7 +1009,7 @@ namespace rasm
     {
         ZoneScoped;
         const GpuAnimation &animation = *gpuAnimation;
-        if (animation.skinnedCount == 0 || animation.recordedSync != gpuScene->syncCount)
+        if (animation.skinnedRanges.used() == 0 || animation.recordedSync != gpuScene->syncCount)
             return;
         const auto frame = static_cast<uint32_t>(frameCount);
         const auto commandBuffer = frameResources[frame].commandBuffer;

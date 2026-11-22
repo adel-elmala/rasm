@@ -59,18 +59,18 @@ namespace rasm
             return false;
         }
 
-        vertexCapacity = config.geometryPoolVertices;
-        indexCapacity = config.geometryPoolIndices;
-        colorCapacity = config.geometryPoolColors;
-        skinCapacity = config.geometryPoolSkins;
-        morphCapacity = config.geometryPoolMorphs;
-        subMeshCapacity = config.geometryPoolSubMeshes;
-        vertices = ctx.createBuffer({.name = "Geometry Vertex Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(vertexCapacity) * sizeof(Vertex)});
-        indices = ctx.createBuffer({.name = "Geometry Index Pool", .usage = BufferUsage::INDEX, .size = static_cast<uint64_t>(indexCapacity) * sizeof(uint32_t)});
-        colors = ctx.createBuffer({.name = "Geometry Color Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(colorCapacity) * sizeof(uint32_t)});
-        skins = ctx.createBuffer({.name = "Geometry Skin Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(skinCapacity) * sizeof(SkinVertex)});
-        morphs = ctx.createBuffer({.name = "Geometry Morph Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(morphCapacity) * sizeof(MorphDelta)});
-        table = ctx.createBuffer({.name = "Geometry Table", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(subMeshCapacity) * sizeof(gfx::GeometryData)});
+        vertexRanges.reset(config.geometryPoolVertices);
+        indexRanges.reset(config.geometryPoolIndices);
+        colorRanges.reset(config.geometryPoolColors);
+        skinRanges.reset(config.geometryPoolSkins);
+        morphRanges.reset(config.geometryPoolMorphs);
+        subMeshRows.reset(config.geometryPoolSubMeshes);
+        vertices = ctx.createBuffer({.name = "Geometry Vertex Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(config.geometryPoolVertices) * sizeof(Vertex)});
+        indices = ctx.createBuffer({.name = "Geometry Index Pool", .usage = BufferUsage::INDEX, .size = static_cast<uint64_t>(config.geometryPoolIndices) * sizeof(uint32_t)});
+        colors = ctx.createBuffer({.name = "Geometry Color Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(config.geometryPoolColors) * sizeof(uint32_t)});
+        skins = ctx.createBuffer({.name = "Geometry Skin Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(config.geometryPoolSkins) * sizeof(SkinVertex)});
+        morphs = ctx.createBuffer({.name = "Geometry Morph Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(config.geometryPoolMorphs) * sizeof(MorphDelta)});
+        table = ctx.createBuffer({.name = "Geometry Table", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(config.geometryPoolSubMeshes) * sizeof(gfx::GeometryData)});
         if (!vertices.isValid() || !indices.isValid() || !colors.isValid() || !skins.isValid() || !morphs.isValid() || !table.isValid())
         {
             spdlog::error("Failed to create the geometry pool.");
@@ -79,23 +79,9 @@ namespace rasm
         return true;
     }
 
-    bool GeometryPool::fits(size_t vertexCount, size_t indexCount, size_t colorCount, size_t skinCount, size_t morphCount, size_t subMeshCount) const
-    {
-        if (vertexCount <= vertexCapacity - usedVertices && indexCount <= indexCapacity - usedIndices && colorCount <= colorCapacity - usedColors &&
-            skinCount <= skinCapacity - usedSkins && morphCount <= morphCapacity - usedMorphs && subMeshCount <= subMeshCapacity - usedSubMeshes)
-            return true;
-        spdlog::error("The geometry pool is full: {} vertices, {} indices, {} colors, {} skins, {} morph deltas and {} sub-meshes do not fit ({}/{} vertices, "
-                      "{}/{} indices, {}/{} colors, {}/{} skins, {}/{} morph deltas and {}/{} sub-meshes in use). EngineConfig::geometryPoolVertices, "
-                      "geometryPoolIndices, geometryPoolColors, geometryPoolSkins, geometryPoolMorphs and geometryPoolSubMeshes set its size.",
-                      vertexCount, indexCount, colorCount, skinCount, morphCount, subMeshCount, usedVertices, vertexCapacity, usedIndices, indexCapacity, usedColors,
-                      colorCapacity, usedSkins, skinCapacity, usedMorphs, morphCapacity, usedSubMeshes, subMeshCapacity);
-        return false;
-    }
-
-    // Appends the sub-mesh and its table row: the vertices, then LOD 0's indices followed by the coarser LODs'.
-    // Nothing is ever freed: meshes are not destroyed yet (D4). No frame has read the new row yet, so the table
-    // needs one copy, not one per frame slot.
-    bool GeometryPool::upload(RenderContext &ctx, const ObjRaw &raw, MeshGeometry &geometry)
+    // Takes a range of each stream the sub-mesh uses and a row of the table: all of them or none, so a mesh that does not
+    // fit takes nothing. A range is free when no frame uses it: Engine::destroyMesh frees them after the GPU is done.
+    bool GeometryPool::allocate(const ObjRaw &raw, MeshGeometry &geometry)
     {
         const size_t lodCount = std::min<size_t>(raw.lods.size() + 1, MAX_MESH_LODS);
         size_t lodIndexCount = 0;
@@ -116,24 +102,79 @@ namespace rasm
             spdlog::error("A sub-mesh has {} morph deltas for {} targets of {} vertices.", raw.morphs.size(), raw.morphTargetCount, raw.vertices.size());
             return false;
         }
-        if (!fits(raw.vertices.size(), raw.indices.size() + lodIndexCount, raw.colors.size(), raw.skin.size(), raw.morphs.size(), 1))
-            return false;
 
-        geometry = {.firstVertex = usedVertices,
-                    .vertexCount = static_cast<uint32_t>(raw.vertices.size()),
-                    .firstIndex = usedIndices,
+        geometry = {.vertexCount = static_cast<uint32_t>(raw.vertices.size()),
                     .indexCount = static_cast<uint32_t>(raw.indices.size()),
                     .lodIndexCount = static_cast<uint32_t>(lodIndexCount),
-                    .firstColor = usedColors,
                     .colorCount = static_cast<uint32_t>(raw.colors.size()),
-                    .firstSkin = usedSkins,
                     .skinCount = static_cast<uint32_t>(raw.skin.size()),
-                    .firstMorph = usedMorphs,
                     .morphCount = static_cast<uint32_t>(raw.morphs.size()),
-                    .morphTargetCount = raw.morphs.empty() ? 0 : raw.morphTargetCount,
-                    .geometryIndex = usedSubMeshes};
+                    .morphTargetCount = raw.morphs.empty() ? 0 : raw.morphTargetCount};
+        uint64_t firstVertex = 0;
+        uint64_t firstIndex = 0;
+        uint64_t firstColor = 0;
+        uint64_t firstSkin = 0;
+        uint64_t firstMorph = 0;
+        uint64_t row = 0;
+        const bool vertex = vertexRanges.allocate(geometry.vertexCount, firstVertex);
+        const bool index = vertex && indexRanges.allocate(static_cast<uint64_t>(geometry.indexCount) + geometry.lodIndexCount, firstIndex);
+        const bool color = index && colorRanges.allocate(geometry.colorCount, firstColor);
+        const bool skin = color && skinRanges.allocate(geometry.skinCount, firstSkin);
+        const bool morph = skin && morphRanges.allocate(geometry.morphCount, firstMorph);
+        const bool tableRow = morph && subMeshRows.allocate(1, row);
+        if (!tableRow)
+        {
+            if (vertex)
+                vertexRanges.free(firstVertex, geometry.vertexCount);
+            if (index)
+                indexRanges.free(firstIndex, static_cast<uint64_t>(geometry.indexCount) + geometry.lodIndexCount);
+            if (color)
+                colorRanges.free(firstColor, geometry.colorCount);
+            if (skin)
+                skinRanges.free(firstSkin, geometry.skinCount);
+            if (morph)
+                morphRanges.free(firstMorph, geometry.morphCount);
+            return false;
+        }
+        geometry.firstVertex = static_cast<uint32_t>(firstVertex);
+        geometry.firstIndex = static_cast<uint32_t>(firstIndex);
+        geometry.firstColor = static_cast<uint32_t>(firstColor);
+        geometry.firstSkin = static_cast<uint32_t>(firstSkin);
+        geometry.firstMorph = static_cast<uint32_t>(firstMorph);
+        geometry.geometryIndex = static_cast<uint32_t>(row);
+        geometry.allocated = true;
         computeBounds(raw.vertices, geometry);
+        return true;
+    }
 
+    void GeometryPool::free(const MeshGeometry &geometry)
+    {
+        if (!geometry.allocated)
+            return;
+        vertexRanges.free(geometry.firstVertex, geometry.vertexCount);
+        indexRanges.free(geometry.firstIndex, static_cast<uint64_t>(geometry.indexCount) + geometry.lodIndexCount);
+        colorRanges.free(geometry.firstColor, geometry.colorCount);
+        skinRanges.free(geometry.firstSkin, geometry.skinCount);
+        morphRanges.free(geometry.firstMorph, geometry.morphCount);
+        subMeshRows.free(geometry.geometryIndex, 1);
+    }
+
+    void GeometryPool::logFull(size_t subMeshCount) const
+    {
+        spdlog::error("The geometry pool is full: a mesh of {} sub-meshes does not fit. In use: {}/{} vertices, {}/{} indices, {}/{} colors, {}/{} skins, {}/{} "
+                      "morph deltas, {}/{} sub-meshes; the largest free ranges are {} vertices and {} indices. EngineConfig::geometryPoolVertices, "
+                      "geometryPoolIndices, geometryPoolColors, geometryPoolSkins, geometryPoolMorphs and geometryPoolSubMeshes set its size.",
+                      subMeshCount, vertexRanges.used(), vertexRanges.capacity(), indexRanges.used(), indexRanges.capacity(), colorRanges.used(), colorRanges.capacity(),
+                      skinRanges.used(), skinRanges.capacity(), morphRanges.used(), morphRanges.capacity(), subMeshRows.used(), subMeshRows.capacity(),
+                      vertexRanges.largestFree(), indexRanges.largestFree());
+    }
+
+    // Writes the sub-mesh's streams and its table row: the vertices, then LOD 0's indices followed by the coarser LODs'.
+    // No frame reads the ranges or the row before this (a reused one only after the GPU finished every frame that read
+    // its last mesh), so one copy of the table is enough.
+    bool GeometryPool::write(RenderContext &ctx, const ObjRaw &raw, const MeshGeometry &geometry)
+    {
+        const size_t lodCount = std::min<size_t>(raw.lods.size() + 1, MAX_MESH_LODS);
         gfx::GeometryData row{.vertexOffset = static_cast<int32_t>(geometry.firstVertex),
                               .boundsCenter = geometry.boundsCenter,
                               .boundsRadius = geometry.boundsRadius,
@@ -168,16 +209,7 @@ namespace rasm
             if (!lodIndices.empty() && !ctx.fillBuffer(indices, lodIndices.data(), lodIndices.size() * sizeof(uint32_t), static_cast<size_t>(row.lods[i].firstIndex) * sizeof(uint32_t)))
                 return false;
         }
-        if (!ctx.fillBuffer(table, &row, sizeof(row), static_cast<size_t>(usedSubMeshes) * sizeof(row)))
-            return false;
-
-        usedVertices += geometry.vertexCount;
-        usedIndices += geometry.indexCount + geometry.lodIndexCount;
-        usedColors += geometry.colorCount;
-        usedSkins += geometry.skinCount;
-        usedMorphs += geometry.morphCount;
-        ++usedSubMeshes;
-        return true;
+        return ctx.fillBuffer(table, &row, sizeof(row), static_cast<size_t>(geometry.geometryIndex) * sizeof(row));
     }
 
     BufferHandle GeometryPool::vertexBuffer() const
@@ -210,13 +242,12 @@ namespace rasm
         return table;
     }
 
-    uint32_t GeometryPool::vertexCount() const
+    GeometryPoolStats GeometryPool::stats() const
     {
-        return usedVertices;
-    }
-
-    uint32_t GeometryPool::indexCount() const
-    {
-        return usedIndices;
+        return {.vertices = vertexRanges.used(),
+                .indices = indexRanges.used(),
+                .subMeshes = subMeshRows.used(),
+                .largestFreeVertices = vertexRanges.largestFree(),
+                .largestFreeIndices = indexRanges.largestFree()};
     }
 }

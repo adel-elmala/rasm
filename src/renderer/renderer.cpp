@@ -70,4 +70,13 @@ namespace rasm
         }
         graph.execute(view.camera);
     }
+
+    void Renderer::release(SceneHandle scene, CameraHandle camera)
+    {
+        if (!built || !(graphView.scene == scene || graphView.camera == camera))
+            return;
+        graph = engine.createRenderGraph();
+        built = false;
+        graphView = {};
+    }
 }
