@@ -3,6 +3,8 @@
 
 #include "rasm/rasm.h"
 
+#include "allocationCounter.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -24,6 +26,8 @@
 //   --update             write the rendered images as the new goldens instead of comparing
 //   --sponza <file>      Sponza.gltf, which tools/image_tests.py fetches (it is not in the repository)
 //   --list               print the tests and quit
+// After its frame is read, a test renders STEADY_FRAMES more and fails if the main thread allocates on the heap in them
+// (Windows only, allocationCounter.cpp).
 
 namespace
 {
@@ -32,6 +36,9 @@ namespace
     constexpr float ENVIRONMENT_ROTATION = 1.15f;
     constexpr uint32_t GRID_LIGHTS = 32; // per side: 1024 point lights
     constexpr uint32_t STRESS_TARGETS = 8;
+    // After the frame is read: frames that let the readback settle, then frames that must not allocate (P27).
+    constexpr uint32_t SETTLE_FRAMES = 2;
+    constexpr uint32_t STEADY_FRAMES = 4;
 
     struct Options
     {
@@ -497,7 +504,8 @@ namespace
         return (!test.bloom || bloom.isValid()) && engine.addToneMapPass(graph, resolved, camera, bloom);
     }
 
-    bool renderTest(rasm::Engine &engine, const Assets &assets, rasm::CameraHandle camera, const ImageTest &test, std::vector<BuiltContent> &built, rasm::ReadbackImage &image)
+    bool renderTest(rasm::Engine &engine, const Assets &assets, rasm::CameraHandle camera, const ImageTest &test, std::vector<BuiltContent> &built, rasm::ReadbackImage &image,
+                    AllocationCount &steady)
     {
         const Content *content = getContent(engine, assets, camera, test.build, built);
         if (!content)
@@ -528,8 +536,19 @@ namespace
             engine.setAnimationTime(test.time);
             graph.execute(camera);
         }
+        if (!engine.takeReadback(copy, image))
+            return false;
+        // A steady frame makes no heap allocation on the main thread.
+        for (uint32_t frame = 0; frame < SETTLE_FRAMES + STEADY_FRAMES; ++frame)
+        {
+            if (frame == SETTLE_FRAMES)
+                startCountingAllocations();
+            engine.setAnimationTime(test.time);
+            graph.execute(camera);
+        }
+        steady = stopCountingAllocations();
         engine.setDebugView(rasm::DebugView::NONE);
-        return engine.takeReadback(copy, image);
+        return true;
     }
 
     std::string joinPath(const std::string &dir, const std::string &file)
@@ -556,11 +575,19 @@ namespace
     {
         const auto start = std::chrono::steady_clock::now();
         rasm::ReadbackImage actual;
-        const bool renderedOk = renderTest(engine, assets, camera, test, built, actual);
+        AllocationCount steady;
+        const bool renderedOk = renderTest(engine, assets, camera, test, built, actual, steady);
         const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
         if (!renderedOk)
         {
             std::printf("%-14s %-6s %10s %8s %8.1f  (it did not render)\n", test.name, "FAIL", "-", "-", seconds);
+            return false;
+        }
+        if (steady.count > 0)
+        {
+            std::printf("%-14s %-6s %10s %8s %8.1f  (%llu heap allocations, %llu bytes, in %u steady frames; the first of %llu bytes)\n", test.name, "FAIL", "-", "-", seconds,
+                        static_cast<unsigned long long>(steady.count), static_cast<unsigned long long>(steady.bytes), STEADY_FRAMES,
+                        static_cast<unsigned long long>(steady.firstSize));
             return false;
         }
         if (options.update)
@@ -581,7 +608,7 @@ namespace
                                       { return r.name == test.sameAs; });
             if (found != rendered.end())
                 expected = found->image;
-            else if (renderTest(engine, assets, camera, *findTest(test.sameAs), built, expected))
+            else if (AllocationCount ignored; renderTest(engine, assets, camera, *findTest(test.sameAs), built, expected, ignored))
                 rendered.push_back({test.sameAs, expected});
         }
         else
@@ -668,6 +695,8 @@ int main(int argc, char **argv)
 
     uint32_t run = 0;
     uint32_t failed = 0;
+    if (!allocationCountingWorks())
+        std::printf("The steady frames' allocations are not counted on this platform or build.\n");
     std::printf("%-14s %-6s %10s %8s %8s\n", "test", "result", "differing", "max diff", "seconds");
     const bool any = std::any_of(std::begin(TESTS), std::end(TESTS), [&](const ImageTest &test)
                                  { return isRun(options, test); });

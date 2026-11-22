@@ -22,6 +22,7 @@
 #include <bit>
 #include <cmath>
 #include <cstddef>
+#include <utility>
 #include <vector>
 
 namespace rasm
@@ -378,7 +379,8 @@ namespace rasm
         }
         for (EntityHandle entity : gpuScene->movedEntities)
             gpuScene->entities[entity.index].syncedMatrix = registry.entities[entity.index].transform.toMatrix();
-        gpuScene->settlingEntities = std::move(gpuScene->movedEntities);
+        // A swap, not a move: both lists keep their capacity, so a frame that moves entities allocates nothing.
+        std::swap(gpuScene->settlingEntities, gpuScene->movedEntities);
         gpuScene->movedEntities.clear();
 
         auto &waitingForMesh = gpuScene->entitiesWaitingForMesh;
@@ -1268,7 +1270,9 @@ namespace rasm
         {
             DebugPipelines &debug = debugView == DebugView::OVERDRAW ? shaded.overdraw : shaded.debug;
             const BlendMode blendMode = debugView == DebugView::OVERDRAW ? BlendMode::ADDITIVE : BlendMode::NONE;
-            const std::string defines = getMotionDefine(ctx, view) + std::string("#define RASM_DEBUG_VIEW 1\n");
+            // Only made while a pipeline is missing: a string this long allocates, and this runs every frame (P27).
+            const bool missing = !debug.pipeline.isValid() || (hasMask && !debug.maskPipeline.isValid()) || (hasBlend && !debug.blendPipeline.isValid());
+            const std::string defines = missing ? getMotionDefine(ctx, view) + std::string("#define RASM_DEBUG_VIEW 1\n") : std::string();
             if (!debug.pipeline.isValid())
                 debug.pipeline = createScenePipeline("rasmDebug", "passes/rasm.slang", defines, view.renderTarget, "vertMain", "fragMain", blendMode, true);
             if (hasMask && !debug.maskPipeline.isValid())

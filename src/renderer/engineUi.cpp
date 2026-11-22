@@ -7,7 +7,10 @@
 #include "glm/glm.hpp"
 #include "imgui.h"
 
+#include <algorithm>
 #include <cfloat>
+#include <cstdio>
+#include <cstring>
 #include <string>
 #include <utility>
 
@@ -63,13 +66,15 @@ namespace rasm
             const uint64_t saved = stats.trianglesVisibleLod0 > stats.trianglesVisible ? stats.trianglesVisibleLod0 - stats.trianglesVisible : 0;
             const double savedPercent = stats.trianglesVisibleLod0 > 0 ? 100.0 * static_cast<double>(saved) / static_cast<double>(stats.trianglesVisibleLod0) : 0.0;
             ImGui::Text("LOD saved  %s (%.0f%%)", formatCount(saved).c_str(), savedPercent);
-            std::string lodDraws = "LOD draws ";
+            // In a buffer on the stack: a std::string this long would allocate in every frame the window is open.
+            char lodDraws[160] = "LOD draws ";
+            size_t used = std::strlen(lodDraws);
             uint32_t lodsUsed = 1;
             for (uint32_t i = 0; i < MAX_MESH_LODS; ++i)
                 lodsUsed = stats.drawsPerLod[i] > 0 ? i + 1 : lodsUsed;
-            for (uint32_t i = 0; i < lodsUsed; ++i)
-                lodDraws += " " + formatCount(stats.drawsPerLod[i]);
-            ImGui::TextUnformatted(lodDraws.c_str());
+            for (uint32_t i = 0; i < lodsUsed && used < sizeof(lodDraws); ++i)
+                used += static_cast<size_t>(std::max(0, std::snprintf(lodDraws + used, sizeof(lodDraws) - used, " %s", formatCount(stats.drawsPerLod[i]).c_str())));
+            ImGui::TextUnformatted(lodDraws);
             ImGui::Text("Lights     %s visible, %s global", formatCount(stats.lightsVisible).c_str(), formatCount(stats.lightsGlobal).c_str());
             if (stats.lightsDropped > 0)
                 ImGui::Text("Dropped    %s (full clusters)", formatCount(stats.lightsDropped).c_str());

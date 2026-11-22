@@ -70,7 +70,7 @@ namespace rasm
         glm::uvec2                          getSwapchainExtent();
         uint64_t                            getBufferDeviceAddress(const BufferHandle& buffer);
         BufferDesc                          getBufferDesc(const BufferHandle& buffer);
-        TextureDesc                         getTextureDesc(const TextureHandle& texture);
+        const TextureDesc&                  getTextureDesc(const TextureHandle& texture);
         VRAMStats                           queryVRAMStats();
         uint32_t                            updateBindlessDescriptorSet(const DescriptorSetHandle& bindlessSet, const TextureHandle& texture, SamplerType sampler = SamplerType::LINEAR_REPEAT, uint32_t slot = MAX_BINDLESS_TEXTURES);
         // The texture's slot in binding 0 of the bindless set, or UINT32_MAX for none.

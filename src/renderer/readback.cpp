@@ -222,7 +222,7 @@ namespace rasm
 
     ReadbackHandle Engine::readTexture(const TextureHandle &texture, ReadbackFormat format, uint32_t layer, uint32_t mip)
     {
-        const TextureDesc desc = ctx.getTextureDesc(texture);
+        const TextureDesc &desc = ctx.getTextureDesc(texture);
         if (desc.format == Format::UNKNOWN)
             return {};
         if (!desc.readable)
@@ -311,7 +311,7 @@ namespace rasm
             if (pending.recorded || pending.failed)
                 continue;
             const TextureHandle texture = pending.texture.isValid() ? pending.texture : swapchain.imageHandles[imageIdx];
-            const TextureDesc desc = ctx.getTextureDesc(texture);
+            const TextureDesc &desc = ctx.getTextureDesc(texture);
             pending.sourceFormat = desc.format;
             pending.width = std::max(1u, desc.width >> pending.mip);
             pending.height = std::max(1u, desc.height >> pending.mip);

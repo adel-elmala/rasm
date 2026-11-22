@@ -250,7 +250,7 @@ namespace rasm
         // The texture was destroyed through RenderContext while it decoded, so there is nothing to fill.
         if (!ctx.isAlive(load.handle))
             return true;
-        const TextureDesc desc = ctx.getTextureDesc(load.handle);
+        const TextureDesc &desc = ctx.getTextureDesc(load.handle);
 
         // A material may already sample the texture, so a failed decode or upload leaves it plain (white, or a flat
         // normal for a two-channel format) instead of undefined: an image makes its mips from white pixels, a block
