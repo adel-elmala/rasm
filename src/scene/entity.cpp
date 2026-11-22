@@ -74,6 +74,12 @@ namespace rasm
         }
         releaseEntityRows(entity);
         EntityDrawState &state = gpuScene->entities[entity.index];
+        // Only an entity that moved can be on the motion lists, which syncGpuScene walks every frame without checks.
+        if (state.movedSync != UINT32_MAX)
+        {
+            std::erase(gpuScene->movedEntities, entity);
+            std::erase(gpuScene->settlingEntities, entity);
+        }
         for (uint32_t i = 0; i < MAX_SCENES; ++i)
         {
             if ((state.scenes & (1u << i)) != 0)

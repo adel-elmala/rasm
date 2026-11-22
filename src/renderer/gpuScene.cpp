@@ -369,18 +369,15 @@ namespace rasm
         // Motion: entities that moved before the last sync and not since stopped, so their rows' previousWorld becomes
         // their world. Those that moved since the last sync draw their new matrix in this frame, which the next frame's
         // previousWorld is.
-        // A destroyed entity left its rows; the lists still name it until here.
+        // destroyEntity takes a destroyed entity off both lists, so they hold live entities only.
         const uint32_t window = gpuScene->syncCount++;
         for (EntityHandle entity : gpuScene->settlingEntities)
         {
-            if (isLive(entity) && gpuScene->entities[entity.index].movedSync != window)
+            if (gpuScene->entities[entity.index].movedSync != window)
                 writeInstanceRows(entity, false);
         }
         for (EntityHandle entity : gpuScene->movedEntities)
-        {
-            if (isLive(entity))
-                gpuScene->entities[entity.index].syncedMatrix = registry.entities[entity.index].transform.toMatrix();
-        }
+            gpuScene->entities[entity.index].syncedMatrix = registry.entities[entity.index].transform.toMatrix();
         gpuScene->settlingEntities = std::move(gpuScene->movedEntities);
         gpuScene->movedEntities.clear();
 
