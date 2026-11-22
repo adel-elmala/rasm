@@ -186,6 +186,8 @@ namespace rasm
         uint32_t     maxAnimatedEntities     = 1u << 14; // entities that play a clip, 120 B each, twice
         uint32_t     animationPoolBytes      = 16u << 20; // the nodes, key times and values of every loaded animation
         uint32_t     maxMorphWeights         = 1u << 16; // the morph weights of every posed entity, 4 B each, four times
+        uint32_t     loadThreads             = 0;        // workers that read and decode loads; 0: the hardware's threads minus one for the main thread (at least 1). A game with threads of its own sets fewer
+        uint64_t     loadMemoryBudget        = 512ull << 20; // decoded loads in memory at once (in jobs, or waiting for upload); a load that would pass it waits in the queue
         bool         showStats               = false;
         float        fixedDeltaTime          = 0.0f;     // seconds per frame for the cameras, the UI and the stats' refresh; 0: the measured frame time
         bool         occlusionCulling        = true;     // two-pass Hi-Z culling in the scene passes; false keeps frustum culling only
@@ -216,6 +218,16 @@ namespace rasm
         uint64_t     instances               = 0;        // instance rows, of maxInstances
         uint64_t     animationPoolBytes      = 0;        // of animationPoolBytes
         uint32_t     releasesWaiting         = 0;        // destroyed objects the GPU may still use
+    };
+
+    // The load workers now. Decoded bytes are those of the loads that started and are not uploaded yet.
+    struct LoadStats
+    {
+        uint32_t     workers                 = 0;
+        uint32_t     queued                  = 0;        // jobs that wait for a worker or for the budget
+        uint32_t     running                 = 0;
+        uint64_t     decodedBytes            = 0;        // of EngineConfig::loadMemoryBudget
+        uint64_t     peakDecodedBytes        = 0;        // since the engine started
     };
 
     struct FrameResources

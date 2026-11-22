@@ -1,8 +1,10 @@
 #include "rasm/mesh.h"
 #include "rasm/engine.h"
 #include "assets/ktxImage.h"
+#include "assets/loadJobs.h"
 #include "assets/meshImport.h"
 #include "assets/meshLod.h"
+#include "core/workerPool.h"
 #include "platform/paths.h"
 #include "renderer/animation.h"
 #include "renderer/geometryPool.h"
@@ -15,7 +17,7 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
-#include <future>
+#include <memory>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -35,6 +37,80 @@ namespace rasm
         {
             linear = std::clamp(linear, 0.0f, 1.0f);
             return linear <= 0.0031308f ? linear * 12.92f : 1.055f * std::pow(linear, 1.0f / 2.4f) - 0.055f;
+        }
+
+        // What a load's result holds in memory until finishMeshLoad: geometry, LODs and texture levels.
+        uint64_t getRawBytes(const GLTFRaw &raw)
+        {
+            uint64_t bytes = 0;
+            for (const SubGLTFRaw &sub : raw.subGltfRaws)
+            {
+                const ObjRaw &obj = sub.objRaw;
+                bytes += obj.vertices.size() * sizeof(Vertex) + obj.indices.size() * sizeof(uint32_t) + obj.colors.size() * sizeof(uint32_t) +
+                         obj.skin.size() * sizeof(SkinVertex) + obj.morphs.size() * sizeof(MorphDelta);
+                for (const MeshLod &lod : obj.lods)
+                    bytes += lod.indices.size() * sizeof(uint32_t);
+            }
+            for (const auto &[key, levels] : raw.ktxImages)
+                bytes += levels->levels.size();
+            for (const auto &[key, levels] : raw.imageLevels)
+                bytes += levels->levels.size();
+            return bytes;
+        }
+
+        // Runs on the job that ends last. A dropped load skips the work but still ends, so its bytes go back.
+        void completeMeshLoad(MeshLoadJob &job, WorkerPool *pool)
+        {
+            if (!job.ticket.cancelled)
+                finishImageWork(job.raw);
+            job.images.clear();
+            pool->setLoadBytes(job.ticket, getRawBytes(job.raw));
+            pool->finishLoad(job.ticket);
+        }
+
+        void endMeshChildJob(const std::shared_ptr<MeshLoadJob> &job, WorkerPool *pool)
+        {
+            if (job->remaining.fetch_sub(1, std::memory_order_acq_rel) == 1)
+                completeMeshLoad(*job, pool);
+        }
+
+        // The import job: it reads the file and plans the images, then each image and each sub-mesh's LODs become a
+        // child job. It waits for none of them; the last one to end finishes the load, so no worker is ever held.
+        void runMeshImport(const std::shared_ptr<MeshLoadJob> &job, WorkerPool *pool, const std::string &path, bool lods, uint64_t textureFormats)
+        {
+            ZoneScoped;
+
+            if (job->ticket.cancelled)
+            {
+                pool->finishLoad(job->ticket);
+                return;
+            }
+            job->raw = parseMeshFile(path, textureFormats, job->images);
+            uint64_t imageBytes = 0;
+            for (const GltfImageWork &work : job->images)
+                imageBytes += work.bytes;
+            pool->setLoadBytes(job->ticket, getRawBytes(job->raw) + imageBytes);
+
+            const auto imageCount = static_cast<uint32_t>(job->images.size());
+            const auto lodCount = lods ? static_cast<uint32_t>(job->raw.subGltfRaws.size()) : 0u;
+            if (imageCount + lodCount == 0 || job->ticket.cancelled)
+            {
+                completeMeshLoad(*job, pool);
+                return;
+            }
+            job->remaining = imageCount + lodCount;
+            for (uint32_t i = 0; i < imageCount; ++i)
+                pool->pushChild([job, pool, i]()
+                                {
+                                    if (!job->ticket.cancelled)
+                                        runImageWork(*job->raw.model, job->images[i]);
+                                    endMeshChildJob(job, pool); });
+            for (uint32_t i = 0; i < lodCount; ++i)
+                pool->pushChild([job, pool, i]()
+                                {
+                                    if (!job->ticket.cancelled)
+                                        buildMeshLods(job->raw.subGltfRaws[i].objRaw);
+                                    endMeshChildJob(job, pool); });
         }
     }
 
@@ -139,20 +215,18 @@ namespace rasm
         const uint32_t users = registry.meshes[handle.index].users;
         registry.meshes[handle.index] = Mesh{.users = users};
 
-        // The worker reads and decodes the file and builds the LODs; beginFrame uploads the result (finishLoads).
+        // The workers read and decode the file and build the LODs; beginFrame uploads the result (finishLoads). Until the
+        // file is parsed, its size stands for what it will hold.
         const bool lods = config.meshLods;
         const uint64_t textureFormats = getSupportedTextureFormats(ctx);
-        auto import = [path, lods, textureFormats]()
-        {
-            GLTFRaw raw = importMeshFile(path, textureFormats);
-            if (lods)
-            {
-                for (auto &sub : raw.subGltfRaws)
-                    buildMeshLods(sub.objRaw);
-            }
-            return raw;
-        };
-        pendingMeshes.push_back({handle, path, std::async(std::launch::async, import)});
+        auto job = std::make_shared<MeshLoadJob>();
+        WorkerPool *pool = workers.get();
+        const uint64_t fileBytes = std::filesystem::file_size(pathFromUtf8(path), error);
+        pool->push({.run = [job, pool, path, lods, textureFormats]()
+                    { runMeshImport(job, pool, path, lods, textureFormats); },
+                    .bytes = error ? 0 : fileBytes,
+                    .ticket = std::shared_ptr<LoadTicket>(job, &job->ticket)});
+        pendingMeshes.push_back({handle, path, std::move(job)});
 
         return handle;
     }
@@ -181,7 +255,7 @@ namespace rasm
 
         // The CPU copy of the geometry and the glTF model are freed when raw goes out of scope (P6).
         const auto mainThreadStart = std::chrono::steady_clock::now();
-        GLTFRaw raw = load.result.get();
+        GLTFRaw raw = std::move(load.job->raw);
         // Destroyed while it loaded: the result is dropped.
         if (!isLive(load.handle))
             return;
@@ -293,6 +367,16 @@ namespace rasm
         {
             spdlog::error("destroyMesh: mesh handle {{{}, {}}} is invalid or was destroyed.", mesh.index, mesh.generation);
             return;
+        }
+        // A load still in the pool is dropped: a queued job never runs, a running one gives its result up.
+        for (auto it = pendingMeshes.begin(); it != pendingMeshes.end(); ++it)
+        {
+            if (it->handle == mesh)
+            {
+                workers->dropLoad(it->job->ticket);
+                pendingMeshes.erase(it);
+                break;
+            }
         }
         Mesh &meshRef = registry.meshes[mesh.index];
         // The usual order destroys the entities first, and then nothing is searched.
