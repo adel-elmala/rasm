@@ -128,93 +128,59 @@ jobs:
         if: ${{ !cancelled() && steps.build-release.outcome == 'success' }}
         run: ctest --preset ${{ matrix.release }}
 
-      # TEMPORARY probe of lavapipe (Mesa's CPU Vulkan driver) for the image tests. Removed before the PR is ready.
-      - name: Restore Mesa cache
+      # The golden-image tests run on lavapipe, Mesa's CPU Vulkan driver, which the goldens come from. The script fetches
+      # it and Sponza, both pinned by SHA-256; the cache keeps them between runs.
+      - name: Restore the image test assets
         if: runner.os == 'Windows'
         uses: actions/cache@v4
         with:
-          path: ~/mesa
-          key: mesa-26.3.0-c505fcc77e8f63a09d7ddac086591d2f542c0698d37fc9e3094685a34d0d9991
+          path: build/test-assets
+          key: image-test-assets-${{ hashFiles('tools/image_tests.py') }}
+          restore-keys: image-test-assets-
 
-      # The runner's processes are elevated, and an elevated process's Vulkan loader ignores VK_DRIVER_FILES and
-      # VK_LAYER_PATH, so the driver and the validation layer are registered instead.
-      - name: Register lavapipe and the validation layer
+      # The runner's processes are elevated, and the Vulkan loader of an elevated process ignores VK_DRIVER_FILES and
+      # VK_LAYER_PATH, so lavapipe and the validation layer are registered instead.
+      - name: Install lavapipe
+        id: lavapipe
         if: ${{ runner.os == 'Windows' && !cancelled() && steps.build-release.outcome == 'success' }}
         shell: pwsh
         run: |
-          $mesa = Join-Path $HOME 'mesa'
-          if (-not (Test-Path "$mesa/mesa.7z")) {
-            New-Item -ItemType Directory -Force $mesa | Out-Null
-            Invoke-WebRequest -Uri 'https://github.com/pal1000/mesa-dist-win/releases/download/26.3.0/mesa3d-26.3.0-release-msvc.7z' -OutFile "$mesa/mesa.7z"
-          }
-          $hash = (Get-FileHash "$mesa/mesa.7z" -Algorithm SHA256).Hash.ToLower()
-          if ($hash -ne 'c505fcc77e8f63a09d7ddac086591d2f542c0698d37fc9e3094685a34d0d9991') { throw "mesa.7z SHA-256 is $hash" }
-          if (Test-Path "$mesa/x") { Remove-Item -Recurse -Force "$mesa/x" }
-          7z x -y "-o$mesa/x" "$mesa/mesa.7z" | Out-Null
-          $icd = (Get-ChildItem -Recurse "$mesa/x" -Filter 'lvp_icd.x86_64.json' | Select-Object -First 1).FullName
+          $icd = (python tools/image_tests.py --lavapipe --fetch-only | Select-Object -Last 1)
+          if (-not (Test-Path $icd)) { throw "no lavapipe manifest: $icd" }
           $layer = (Get-ChildItem -Recurse $env:VULKAN_SDK -Filter 'VkLayer_khronos_validation.json' | Select-Object -First 1).FullName
-          New-Item -Path 'HKLM:\SOFTWARE\Khronos\Vulkan\Drivers' -Force | Out-Null
-          New-ItemProperty -Path 'HKLM:\SOFTWARE\Khronos\Vulkan\Drivers' -Name $icd -Value 0 -PropertyType DWord -Force | Out-Null
-          New-Item -Path 'HKLM:\SOFTWARE\Khronos\Vulkan\ExplicitLayers' -Force | Out-Null
-          New-ItemProperty -Path 'HKLM:\SOFTWARE\Khronos\Vulkan\ExplicitLayers' -Name $layer -Value 0 -PropertyType DWord -Force | Out-Null
-          Write-Output "Registered $icd and $layer"
+          foreach ($entry in @(@('Drivers', $icd), @('ExplicitLayers', $layer))) {
+            $key = "HKLM:\SOFTWARE\Khronos\Vulkan\$($entry[0])"
+            New-Item -Path $key -Force | Out-Null
+            New-ItemProperty -Path $key -Name $entry[1] -Value 0 -PropertyType DWord -Force | Out-Null
+          }
+          & "$env:VULKAN_SDK\Bin\vulkaninfoSDK.exe" --summary | Select-String -Pattern 'deviceName|driverInfo|apiVersion'
 
-      - name: Probe lavapipe
-        if: ${{ runner.os == 'Windows' && !cancelled() && steps.build-release.outcome == 'success' }}
-        timeout-minutes: 40
-        shell: pwsh
-        env:
-          LP_NATIVE_VECTOR_WIDTH: 256
-        run: |
-          $ErrorActionPreference = 'Continue'
-          New-Item -ItemType Directory -Force probe | Out-Null
-          python tools/image_tests.py --lavapipe --fetch-only
-          $exe = 'build/x64-release/tests/rasm_image_tests.exe'
-          $drivers = 'HKLM:\SOFTWARE\Khronos\Vulkan\Drivers'
-          function Use-Mesa($ver, $sha) {
-            $dir = Join-Path $HOME "mesa-$ver"
-            New-Item -ItemType Directory -Force $dir | Out-Null
-            Invoke-WebRequest "https://github.com/pal1000/mesa-dist-win/releases/download/$ver/mesa3d-$ver-release-msvc.7z" -OutFile "$dir/m.7z"
-            if ((Get-FileHash "$dir/m.7z").Hash.ToLower() -ne $sha) { throw "hash of $ver" }
-            7z x -y "-o$dir/x" "$dir/m.7z" | Out-Null
-            $icd = (Get-ChildItem -Recurse "$dir/x" -Filter 'lvp_icd.x86_64.json' | Select-Object -First 1).FullName
-            Remove-Item -Path $drivers -Recurse -Force -ErrorAction SilentlyContinue
-            New-Item -Path $drivers -Force | Out-Null
-            New-ItemProperty -Path $drivers -Name $icd -Value 0 -PropertyType DWord -Force | Out-Null
-          }
-          function Run-Scene($label, $scene) {
-            $start = Get-Date
-            $p = Start-Process -FilePath $exe -ArgumentList @('--update', '--golden-dir', "probe/$label", '--scenes', $scene) -NoNewWindow -Wait -PassThru -RedirectStandardOutput "probe/$label-$scene.log" -RedirectStandardError "probe/$label-$scene.err"
-            $device = (Select-String -Path "probe/$label-$scene.log" -Pattern 'name: (.+?) --' | Select-Object -First 1).Matches.Groups[1].Value
-            "PROBE $label $scene exit=$($p.ExitCode) seconds=$([int]((Get-Date) - $start).TotalSeconds) device=$device"
-          }
-          foreach ($v in @(@('26.3.0', 'c505fcc77e8f63a09d7ddac086591d2f542c0698d37fc9e3094685a34d0d9991'), @('26.2.7', 'e61153fb1a8e58b9d80b403030cda619eaffbddd9ff99b34163b996ead03d596'), @('25.3.6', 'ca56d92bb2254a9a25557c95cfe27f02071a77b26daff4cbf9bc125ed3347fb5'))) {
-            Use-Mesa $v[0] $v[1]
-            Run-Scene "m$($v[0])" 'alpha_modes'
-            Run-Scene "m$($v[0])" 'sponza'
-          }
-          Use-Mesa '26.3.0' 'c505fcc77e8f63a09d7ddac086591d2f542c0698d37fc9e3094685a34d0d9991'
-          $core = 'shaders/lib/core.slang'
-          $pass = 'shaders/passes/rasm.slang'
-          (Get-Content -Raw $core).Replace('sampleMaterial(gTextures[texture], uv).a', 'sampleMaterial(gTextures[NonUniformResourceIndex(texture)], uv).a') | Set-Content -NoNewline $core
-          Run-Scene 'nonuniform' 'alpha_modes'
-          git checkout -- shaders
-          (Get-Content -Raw $pass) -replace 'if \(alpha < model->alphaCutoff\)\s+discard;', 'if (alpha < -1.0) discard;' | Set-Content -NoNewline $pass
-          Run-Scene 'killnever' 'alpha_modes'
-          git checkout -- shaders
-          (Get-Content -Raw $pass) -replace 'if \(alpha < model->alphaCutoff\)\s+discard;', '' | Set-Content -NoNewline $pass
-          Run-Scene 'nokill' 'alpha_modes'
-          Run-Scene 'nokill' 'sponza'
-          git checkout -- shaders
-          git status --short
+      - name: Image tests
+        if: ${{ !cancelled() && steps.lavapipe.outcome == 'success' }}
+        run: python tools/image_tests.py --lavapipe --preset ${{ matrix.release }}
 
-      - name: Upload the probe images
-        if: ${{ runner.os == 'Windows' && !cancelled() }}
+      - name: Upload the image test failures
+        if: ${{ failure() && steps.lavapipe.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
-          name: lavapipe-probe
-          path: probe/
+          name: image-test-failures
+          path: build/${{ matrix.release }}/image-tests/
           if-no-files-found: ignore
+
+      # TEMPORARY: the noise of one runner, and the goldens of this run. Removed before the PR is ready.
+      - name: Measure the noise
+        if: ${{ !cancelled() && steps.lavapipe.outcome == 'success' }}
+        run: |
+          python tools/image_tests.py --lavapipe --preset ${{ matrix.release }} --update || true
+          python tools/image_tests.py --lavapipe --preset ${{ matrix.release }} || true
+          powershell -NoProfile -Command "(Get-CimInstance Win32_Processor).Name"
+
+      - name: Upload the goldens of this run
+        if: ${{ !cancelled() && steps.lavapipe.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: goldens-run
+          path: tests/golden/lavapipe/
 
       - name: Check for new vcpkg packages
         id: vcpkg-packages
