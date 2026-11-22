@@ -12,7 +12,7 @@ namespace rasm
     // picked up while the application runs. Until then the pass draws nothing and the frame shows the clear color.
     bool Engine::addToneMapPass(RenderGraph &graph, const RenderTargetHandle &source, CameraHandle camera, const RenderTargetHandle &bloom)
     {
-        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        if (!isLive(camera))
         {
             spdlog::error("addToneMapPass needs a valid camera handle.");
             return false;

@@ -214,7 +214,8 @@ namespace rasm
             spdlog::error("readFrame: the window's surface does not allow copies from its images (no TRANSFER_SRC in its supported usage). A headless engine (EngineConfig::platform) can always be read.");
             return {};
         }
-        const ReadbackHandle handle = handleManager.getNextReadbackHandle();
+        const HandleSlot slot = registry.readbackHandles.allocate();
+        const ReadbackHandle handle{slot.index, slot.generation};
         readbacks->pending.push_back({.handle = handle, .format = format});
         return handle;
     }
@@ -245,7 +246,8 @@ namespace rasm
             spdlog::error("readTexture: texture '{}' has no layer {}.", desc.name, layer);
             return {};
         }
-        const ReadbackHandle handle = handleManager.getNextReadbackHandle();
+        const HandleSlot slot = registry.readbackHandles.allocate();
+        const ReadbackHandle handle{slot.index, slot.generation};
         readbacks->pending.push_back({.handle = handle, .texture = texture, .layer = layer, .mip = mip, .format = format});
         return handle;
     }
@@ -285,6 +287,7 @@ namespace rasm
         }
         if (it->buffer.isValid())
             ctx.destroyBuffer(it->buffer);
+        registry.readbackHandles.release(readback.index, readback.generation);
         readbacks->pending.erase(it);
         return taken;
     }

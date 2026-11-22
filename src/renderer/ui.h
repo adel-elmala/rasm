@@ -16,14 +16,6 @@ struct ImGuiContext;
 namespace rasm
 {
 
-    // A UI texture's bindless slot is reused once no frame in flight can sample it.
-    struct UiRelease
-    {
-        TextureHandle                   texture;
-        uint32_t                        slot                = 0;
-        uint64_t                        fenceValue          = 0;    // the graphics fence value of the last frame that may draw with it
-    };
-
     struct UiScissor
     {
         int32_t                         x                   = 0;
@@ -58,8 +50,6 @@ namespace rasm
         UiSlot                                          slots[MAX_FRAMES_IN_FLIGHT];
         std::vector<UiDraw>                             draws;                                      // this frame's, recorded by the UI pass
         std::unordered_map<uint32_t, TextureHandle>     textures;                                   // ImGui's textures by bindless slot
-        std::vector<uint32_t>                           freeSlots;                                  // bindless slots of released UI textures
-        std::vector<UiRelease>                          releases;
         std::vector<uint8_t>                            expanded;                                   // an Alpha8 texture's pixels as RGBA8
         std::function<void()>                           callback;
         FrameStats                                      stats;                                      // what the RASM window shows, renewed every 250 ms of frame time
@@ -74,8 +64,6 @@ namespace rasm
     bool                                getUiScissor(const float clip[4], const float displayPos[2], const float framebufferScale[2], uint32_t width, uint32_t height, UiScissor& scissor);
     // The capacity to grow a UI buffer to: the next power of two that holds size bytes, at least minimum.
     uint64_t                            growUiCapacity(uint64_t size, uint64_t minimum);
-    // Moves the releases whose fence value the graphics fence has reached (completedValue) from releases into done.
-    void                                takeUiReleases(std::vector<UiRelease>& releases, uint64_t completedValue, std::vector<UiRelease>& done);
     // The heat colors of a count (lib/heat.slang) as a row of swatches, in the current ImGui window.
     void                                drawHeatKey();
 

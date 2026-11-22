@@ -2,6 +2,7 @@
 
 #include "assets/ktxImage.h"
 #include "platform/paths.h"
+#include "renderer/gpuScene.h"
 
 #include "spdlog/spdlog.h"
 #include "tracy/Tracy.hpp"
@@ -119,6 +120,8 @@ namespace rasm
         }
 
         registry.loadedTextures[cacheKey] = textureHandle;
+        registry.textureCacheKeys.resize(std::max<size_t>(registry.textureCacheKeys.size(), textureHandle.index + 1));
+        registry.textureCacheKeys[textureHandle.index] = cacheKey;
         auto result = extension == "ktx2" ? std::async(std::launch::async, decodeKtxFile, path, desc.format) : std::async(std::launch::async, decodeTexture, path);
         pendingTextures.emplace(textureHandle, PendingTextureLoad{textureHandle, path, std::move(result)});
         return textureHandle;
@@ -126,7 +129,50 @@ namespace rasm
 
     bool Engine::isLoaded(TextureHandle texture) const
     {
-        return texture.isValid() && !pendingTextures.contains(texture);
+        return ctx.isAlive(texture) && !pendingTextures.contains(texture);
+    }
+
+    // Materials sample by slot number, so each one that uses the texture loses it before the slot can take another
+    // texture. A load still decoding is dropped when it finishes (finishTextureLoad).
+    void Engine::destroyTexture(const TextureHandle &texture)
+    {
+        if (!ctx.isAlive(texture))
+        {
+            spdlog::error("destroyTexture: texture handle {{{}, {}}} is invalid or was destroyed.", texture.index, texture.generation);
+            return;
+        }
+
+        bool changed = false;
+        for (uint64_t i = 1; i < registry.materials.size(); ++i)
+        {
+            Material &material = registry.materials[i];
+            if (!isLive(material.handle))
+                continue;
+            bool used = false;
+            for (TextureHandle &slot : material.textures)
+            {
+                if (slot == texture)
+                {
+                    slot = {};
+                    used = true;
+                }
+            }
+            if (used)
+            {
+                writeMaterialRow(material.handle);
+                changed = true;
+            }
+        }
+        // An entity that waited for this texture may be drawable now.
+        if (changed)
+            gpuScene->texturesFinished = true;
+
+        if (texture.index < registry.textureCacheKeys.size() && !registry.textureCacheKeys[texture.index].empty())
+        {
+            registry.loadedTextures.erase(registry.textureCacheKeys[texture.index]);
+            registry.textureCacheKeys[texture.index].clear();
+        }
+        ctx.destroyTexture(texture);
     }
 
     bool Engine::fillTextureLevels(TextureHandle texture, const TextureRaw &raw)
@@ -146,14 +192,14 @@ namespace rasm
         ZoneScoped;
 
         TextureRaw raw = load.result.get();
-        const TextureDesc desc = ctx.getTextureDesc(load.handle);
 
         // The app destroyed the texture while it decoded, so there is nothing to fill.
-        if (desc.width == 0 || desc.height == 0)
+        if (!ctx.isAlive(load.handle))
         {
             stbi_image_free(raw.data);
             return;
         }
+        const TextureDesc desc = ctx.getTextureDesc(load.handle);
 
         // A material may already sample the texture, so a failed decode or upload leaves it plain (white, or a flat
         // normal for a two-channel format) instead of undefined: an image makes its mips from white pixels, a KTX2

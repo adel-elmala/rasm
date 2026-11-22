@@ -240,12 +240,13 @@ namespace rasm
         if (!isValidProjection(projection))
             return {};
 
-        auto handle = handleManager.getNextCameraHandle();
-        if (handle.index >= MAX_CAMERAS)
+        const HandleSlot slot = registry.cameraHandles.allocate();
+        if (slot.index == 0)
         {
-            spdlog::warn("Exceeded maximum number of cameras.");
+            spdlog::warn("Exceeded maximum number of cameras ({} alive, MAX_CAMERAS).", registry.cameraHandles.liveCount());
             return {};
         }
+        const CameraHandle handle{slot.index, slot.generation};
 
         // Initialize the trackball so the orbit formula reproduces the given transform:
         // position = center + radius * (rotation * +Z). Placing the center one radius
@@ -253,7 +254,7 @@ namespace rasm
         const float radius = 1.0f;
         const glm::vec3 forward = transform.rotation * glm::vec3(0.0f, 0.0f, -1.0f);
 
-        registry.cameras.resize(handle.index + 1);
+        registry.cameras.resize(registry.cameraHandles.size());
         registry.cameras[handle.index] = Camera{
             .projection = projection,
             .controller = CameraController{.type = CameraController::Type::TRACK_BALL,
@@ -271,7 +272,7 @@ namespace rasm
 
     void Engine::setCameraTransform(CameraHandle camera, Transform transform)
     {
-        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        if (!isLive(camera))
         {
             spdlog::error("Invalid camera handle.");
             return;
@@ -284,7 +285,7 @@ namespace rasm
 
     void Engine::setCameraProjection(CameraHandle camera, CameraProjection projection)
     {
-        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        if (!isLive(camera))
         {
             spdlog::error("Invalid camera handle.");
             return;
@@ -297,7 +298,7 @@ namespace rasm
 
     void Engine::setCameraController(CameraHandle camera, CameraController controller)
     {
-        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        if (!isLive(camera))
         {
             spdlog::error("Invalid camera handle.");
             return;
@@ -322,7 +323,7 @@ namespace rasm
 
     void Engine::setCameraExposure(CameraHandle camera, float exposure)
     {
-        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        if (!isLive(camera))
         {
             spdlog::error("Invalid camera handle.");
             return;
@@ -338,7 +339,7 @@ namespace rasm
 
     float Engine::getCameraExposure(CameraHandle camera)
     {
-        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        if (!isLive(camera))
         {
             spdlog::error("Invalid camera handle.");
             return 1.0f;
@@ -349,7 +350,7 @@ namespace rasm
 
     void Engine::setCameraBloomStrength(CameraHandle camera, float strength)
     {
-        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        if (!isLive(camera))
         {
             spdlog::error("Invalid camera handle.");
             return;
@@ -366,7 +367,7 @@ namespace rasm
     // addTaaPass compares the count with the one it saw last frame, so the camera's next frame drops its history.
     void Engine::resetCameraHistory(CameraHandle camera)
     {
-        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        if (!isLive(camera))
         {
             spdlog::error("Invalid camera handle.");
             return;
@@ -376,7 +377,7 @@ namespace rasm
 
     float Engine::getCameraBloomStrength(CameraHandle camera)
     {
-        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        if (!isLive(camera))
         {
             spdlog::error("Invalid camera handle.");
             return 0.0f;
@@ -387,7 +388,7 @@ namespace rasm
 
     CameraController Engine::getCameraController(CameraHandle camera)
     {
-        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        if (!isLive(camera))
         {
             spdlog::error("Invalid camera handle.");
             return CameraController{};
@@ -398,7 +399,7 @@ namespace rasm
 
     Transform Engine::getCameraTransform(CameraHandle camera)
     {
-        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        if (!isLive(camera))
         {
             spdlog::error("Invalid camera handle.");
             return Transform{};
@@ -409,7 +410,7 @@ namespace rasm
 
     CameraProjection Engine::getCameraProjection(CameraHandle camera)
     {
-        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        if (!isLive(camera))
         {
             spdlog::error("Invalid camera handle.");
             return CameraProjection{};
@@ -428,7 +429,7 @@ namespace rasm
 
     glm::mat4 Engine::getProjectionMatrix(CameraHandle camera)
     {
-        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        if (!isLive(camera))
         {
             spdlog::error("Invalid camera handle.");
             return glm::mat4(1.0f);
@@ -439,7 +440,7 @@ namespace rasm
 
     glm::mat4 Engine::getProjectionMatrix(CameraHandle camera, float aspect)
     {
-        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        if (!isLive(camera))
         {
             spdlog::error("Invalid camera handle.");
             return glm::mat4(1.0f);
@@ -452,7 +453,7 @@ namespace rasm
 
     glm::mat4 Engine::getViewMatrix(CameraHandle camera)
     {
-        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        if (!isLive(camera))
         {
             spdlog::error("Invalid camera handle.");
             return glm::mat4(1.0f);
@@ -471,7 +472,7 @@ namespace rasm
 
     void Engine::updateCamera(CameraHandle camera, const CameraInput &input)
     {
-        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        if (!isLive(camera))
         {
             spdlog::error("Invalid camera handle.");
             return;

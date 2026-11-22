@@ -117,6 +117,12 @@ namespace rasm
         TextureHandle               createTexture(const TextureDesc& desc);
         BufferHandle                createBuffer(const BufferDesc& desc);
         RenderTargetHandle          createRenderTarget(const RenderTargetDesc& desc);
+        // The handle is invalid at once; the GPU memory and the bindless slot are freed once the GPU has finished every
+        // frame that may use them, so the call never waits. Materials that use the texture lose it (that slot samples
+        // nothing), and a load that has not finished is dropped. For textures from loadTexture or createTexture.
+        void                        destroyTexture(const TextureHandle& texture);
+        void                        destroyBuffer(const BufferHandle& buffer);
+        void                        destroyRenderTarget(const RenderTargetHandle& renderTarget);
         RenderGraph                 createRenderGraph();
         // Compiles Slang source with vertMain and fragMain entry points. The pipeline has no vertex input and
         // renders to the swapchain's color format with D32_SFLOAT depth (reversed-Z, compare GREATER_OR_EQUAL), and
@@ -281,7 +287,6 @@ namespace rasm
         PipelineHandle                                              bloomUpPipeline                         = {};
         RenderContext                                               ctx;
         std::unique_ptr<ShaderCompiler>                             shaderCompiler                          = {};
-        HandleManager                                               handleManager                           = {};
         std::unique_ptr<Platform>                                   platform                                = {};
         Window                                                      mainWindow                              = {};
         DescriptorSetLayoutHandle                                   bindlessDescriptorSetLayout             = {};
@@ -415,8 +420,25 @@ namespace rasm
         std::unordered_map<TextureHandle, PendingTextureLoad, HandleHash>       pendingTextures;
         std::vector<PendingEnvironmentLoad>                                     pendingEnvironments;
 
+        bool                        isLive(const EntityHandle& entity) const;
+        bool                        isLive(const MeshHandle& mesh) const;
+        bool                        isLive(const MaterialHandle& material) const;
+        bool                        isLive(const CameraHandle& camera) const;
+        bool                        isLive(const LightHandle& light) const;
+        bool                        isLive(const SceneHandle& scene) const;
+        bool                        isLive(const EnvironmentHandle& environment) const;
+
+        // Each object vector is indexed by handle index and holds a slot for every index its pool handed out.
         struct Registry
         {
+            HandlePool               entityHandles          = HandlePool(MAX_ENTITIES);
+            HandlePool               meshHandles;
+            HandlePool               materialHandles        = HandlePool(MAX_MATERIALS);
+            HandlePool               cameraHandles          = HandlePool(MAX_CAMERAS);
+            HandlePool               lightHandles;                                          // EngineConfig::maxLights + 1, set by the constructor
+            HandlePool               sceneHandles           = HandlePool(MAX_SCENES);
+            HandlePool               environmentHandles;
+            HandlePool               readbackHandles;
             std::vector<Entity>      entities;
             std::vector<Material>    materials;
             std::vector<Camera>      cameras;
@@ -426,7 +448,7 @@ namespace rasm
 
             std::unordered_map<std::string, MeshHandle>                 loadedMeshes;
             std::unordered_map<std::string, TextureHandle>              loadedTextures;
-            std::unordered_map<TextureHandle, uint32_t, HandleHash>     bindlessTextureIndexMap; // slot in the bindless descriptor set
+            std::vector<std::string>                                    textureCacheKeys;   // by texture index: its loadedTextures key, for destroyTexture
         };
 
         Registry registry = {};

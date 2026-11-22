@@ -57,6 +57,7 @@ namespace rasm
         RenderTargetHandle                  createTransientRenderTarget(const RenderTargetDesc& desc);
         bool                                placeTransientRenderTargets(const RenderTargetHandle* renderTargets, const uint32_t* firstPasses, const uint32_t* lastPasses, uint32_t count);
         void                                destroyRenderTargets(const RenderTargetHandle* renderTargets, uint32_t count);
+        void                                destroyRenderTarget(const RenderTargetHandle& renderTarget);
         void                                clearNewHistory(const CommandBufferHandle& commandBuffer);
         void                                resizeRenderTargets();
         const RenderTarget&                 getRenderTarget(const RenderTargetHandle& handle);
@@ -71,6 +72,10 @@ namespace rasm
         TextureDesc                         getTextureDesc(const TextureHandle& texture);
         VRAMStats                           queryVRAMStats();
         uint32_t                            updateBindlessDescriptorSet(const DescriptorSetHandle& bindlessSet, const TextureHandle& texture, SamplerType sampler = SamplerType::LINEAR_REPEAT, uint32_t slot = MAX_BINDLESS_TEXTURES);
+        // The texture's slot in binding 0 of the bindless set, or UINT32_MAX for none.
+        uint32_t                            getBindlessTextureIndex(const TextureHandle& texture) const;
+        bool                                isAlive(const TextureHandle& texture) const;
+        bool                                isAlive(const BufferHandle& buffer) const;
         bool                                updateBindlessStorageImage(const DescriptorSetHandle& bindlessSet, uint32_t slot, const TextureHandle& texture, uint32_t mip);
         TextureUsage                        getTextureState(const TextureHandle& texture);
         uint64_t                            getFenceValue(FenceHandle fence);
@@ -101,8 +106,14 @@ namespace rasm
         bool                                hasAsyncCompute() const;
         void                                discardRecording();
         [[nodiscard]] SwapchainStatus       present();
+        // The handle is invalid at once; the GPU object, and a texture's bindless slot, are freed once the GPU is done
+        // with every frame that may use them (tagReleases, collectReleases).
         void                                destroyTexture(const TextureHandle& texture);
         void                                destroyBuffer(const BufferHandle& buffer);
+        // After a frame's submits (dropped or not): what was destroyed since waits for these values and the uploads' last.
+        void                                tagReleases(const FenceValue& graphics, const FenceValue& compute);
+        // Frees what the GPU is done with, without waiting.
+        void                                collectReleases();
         bool                                resizeBuffer(const BufferHandle& buffer, uint64_t size);
         void                                bindPipeline(const CommandBufferHandle& commandBuffer, const PipelineHandle& pipeline);
         void                                bindIndexBuffer(const CommandBufferHandle& commandBuffer, const BufferHandle& buffer, uint64_t offset, Format indexType);

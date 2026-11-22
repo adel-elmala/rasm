@@ -59,24 +59,24 @@ namespace rasm
             return true;
         }
 
-        // Queues the UI texture of id for release. The frames that may draw with it are the ones submitted so far, so it
-        // can go once the graphics fence reaches releaseValue, their last value.
-        void releaseUiTexture(Ui &ui, ImTextureID id, uint64_t releaseValue)
+        // The frames submitted so far may still draw with the UI texture of id, so it and its slot are freed once the GPU
+        // is done with them (RenderContext::destroyTexture), and no new texture takes the slot before.
+        void releaseUiTexture(RenderContext &ctx, Ui &ui, ImTextureID id)
         {
             const auto slot = static_cast<uint32_t>((id & ~SRGB_TEXTURE_ID) - 1);
-            ui.releases.push_back({.texture = ui.textures[slot], .slot = slot, .fenceValue = releaseValue});
+            ctx.destroyTexture(ui.textures[slot]);
             ui.textures.erase(slot);
         }
 
         // A texture ImGui asks for, or one that changed: a new texture with all of its pixels in a slot nobody samples,
         // and the old one released. A texture that can't be made keeps the request, so ImGui's old texture stays drawn
         // and the next frame tries again.
-        void updateUiTexture(Engine &engine, RenderContext &ctx, Ui &ui, ImTextureData &texture, uint64_t releaseValue)
+        void updateUiTexture(Engine &engine, RenderContext &ctx, Ui &ui, ImTextureData &texture)
         {
             if (texture.Status == ImTextureStatus_WantDestroy)
             {
                 if (texture.GetTexID() != ImTextureID_Invalid)
-                    releaseUiTexture(ui, texture.GetTexID(), releaseValue);
+                    releaseUiTexture(ctx, ui, texture.GetTexID());
                 texture.SetTexID(ImTextureID_Invalid);
                 texture.SetStatus(ImTextureStatus_Destroyed);
                 return;
@@ -108,22 +108,14 @@ namespace rasm
                     ctx.destroyTexture(handle);
                 return;
             }
-            uint32_t slot = MAX_BINDLESS_TEXTURES;
-            if (!ui.freeSlots.empty())
-            {
-                slot = ui.freeSlots.back();
-                ui.freeSlots.pop_back();
-            }
-            const uint32_t index = engine.addBindlessTexture(engine.getBindlessDescriptorSet(), handle, SamplerType::LINEAR_CLAMP, slot);
+            const uint32_t index = engine.addBindlessTexture(engine.getBindlessDescriptorSet(), handle, SamplerType::LINEAR_CLAMP);
             if (index == UINT32_MAX)
             {
-                if (slot != MAX_BINDLESS_TEXTURES)
-                    ui.freeSlots.push_back(slot);
                 ctx.destroyTexture(handle);
                 return;
             }
             if (texture.GetTexID() != ImTextureID_Invalid)
-                releaseUiTexture(ui, texture.GetTexID(), releaseValue);
+                releaseUiTexture(ctx, ui, texture.GetTexID());
             ui.textures[index] = handle;
             texture.SetTexID(static_cast<ImTextureID>(index) + 1);
             texture.SetStatus(ImTextureStatus_OK);
@@ -151,21 +143,6 @@ namespace rasm
         while (capacity < size)
             capacity *= 2;
         return capacity;
-    }
-
-    void takeUiReleases(std::vector<UiRelease> &releases, uint64_t completedValue, std::vector<UiRelease> &done)
-    {
-        for (size_t i = 0; i < releases.size();)
-        {
-            if (completedValue >= releases[i].fenceValue)
-            {
-                done.push_back(releases[i]);
-                releases[i] = releases.back();
-                releases.pop_back();
-            }
-            else
-                ++i;
-        }
     }
 
     // Startup with EngineConfig::ui: the context, the SDL3 input backend (none when headless) and the pipeline. The font atlas is made by the
@@ -261,23 +238,13 @@ namespace rasm
             ui->callback();
         ImGui::Render();
 
-        // Released textures that no submitted frame draws with any more give their slot back.
-        std::vector<UiRelease> done;
-        takeUiReleases(ui->releases, ctx.getFenceValue(frameFence), done);
-        for (const UiRelease &release : done)
-        {
-            registry.bindlessTextureIndexMap.erase(release.texture);
-            ctx.destroyTexture(release.texture);
-            ui->freeSlots.push_back(release.slot);
-        }
-
         const ImDrawData *drawData = ImGui::GetDrawData();
         if (drawData->Textures)
         {
             for (ImTextureData *texture : *drawData->Textures)
             {
                 if (texture->Status != ImTextureStatus_OK)
-                    updateUiTexture(*this, ctx, *ui, *texture, frameFenceValue);
+                    updateUiTexture(*this, ctx, *ui, *texture);
             }
         }
         if (drawData->TotalVtxCount == 0 || drawData->TotalIdxCount == 0)

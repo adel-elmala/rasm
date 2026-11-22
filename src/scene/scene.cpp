@@ -11,15 +11,15 @@ namespace rasm
 {
     SceneHandle Engine::createScene()
     {
-        const SceneHandle id = handleManager.getNextSceneHandle();
-
-        if (id.index >= MAX_SCENES)
+        const HandleSlot slot = registry.sceneHandles.allocate();
+        if (slot.index == 0)
         {
-            spdlog::warn("Exceeded maximum number of scenes.");
+            spdlog::warn("Exceeded maximum number of scenes ({} alive, MAX_SCENES).", registry.sceneHandles.liveCount());
             return {};
         }
+        const SceneHandle id{slot.index, slot.generation};
 
-        registry.scenes.resize(id.index + 1);
+        registry.scenes.resize(registry.sceneHandles.size());
         registry.scenes[id.index] = Scene{.handle = id};
 
         return id;
@@ -27,13 +27,13 @@ namespace rasm
 
     void Engine::addEntityToScene(SceneHandle scene, EntityHandle entity)
     {
-        if (!scene.isValid() || scene.index >= MAX_SCENES)
+        if (!isLive(scene))
         {
             spdlog::error("Invalid scene handle for adding entity.");
             return;
         }
 
-        if (!entity.isValid())
+        if (!isLive(entity))
         {
             spdlog::error("Invalid entity handle for adding to scene.");
             return;
@@ -53,13 +53,13 @@ namespace rasm
 
     void Engine::addCameraToScene(SceneHandle scene, CameraHandle camera)
     {
-        if (!scene.isValid() || scene.index >= MAX_SCENES)
+        if (!isLive(scene))
         {
             spdlog::error("Invalid scene handle for adding camera.");
             return;
         }
 
-        if (!camera.isValid())
+        if (!isLive(camera))
         {
             spdlog::error("Invalid camera handle for adding to scene.");
             return;
@@ -78,19 +78,13 @@ namespace rasm
 
     void Engine::addLightToScene(SceneHandle scene, LightHandle light)
     {
-        if (!scene.isValid() || scene.index >= MAX_SCENES)
+        if (!isLive(scene))
         {
             spdlog::error("Invalid scene handle for adding light.");
             return;
         }
 
-        if (!light.isValid())
-        {
-            spdlog::error("Invalid light handle for adding to scene.");
-            return;
-        }
-
-        if (light.index >= registry.lights.size())
+        if (!isLive(light))
         {
             spdlog::error("Invalid light handle {} for adding to scene.", light.index);
             return;
@@ -113,13 +107,13 @@ namespace rasm
 
     void Engine::setSceneEnvironment(SceneHandle scene, const SceneEnvironment &environment)
     {
-        if (!scene.isValid() || scene.index >= registry.scenes.size())
+        if (!isLive(scene))
         {
             spdlog::error("Invalid scene handle for setting the environment.");
             return;
         }
         // An invalid handle is no environment; a handle loadEnvironment never gave is a mistake.
-        if (environment.environment.isValid() && environment.environment.index >= environments->environments.size())
+        if (environment.environment.isValid() && !isLive(environment.environment))
         {
             spdlog::error("Invalid environment handle for scene {}.", scene.index);
             return;

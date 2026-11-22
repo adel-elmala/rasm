@@ -2,103 +2,56 @@
 
 namespace rasm
 {
-    MeshHandle HandleManager::getNextMeshHandle()
+    HandlePool::HandlePool(uint64_t limit) : indexLimit(limit) {}
+
+    HandleSlot HandlePool::allocate()
     {
-        return MeshHandle{nextHandle.mesh++, 1};
+        uint64_t index = 0;
+        if (!freeIndices.empty())
+        {
+            index = freeIndices.back();
+            freeIndices.pop_back();
+        }
+        else if (generations.size() < indexLimit)
+        {
+            index = generations.size();
+            generations.push_back(1);
+            alive.push_back(0);
+        }
+        else
+            return {};
+
+        alive[index] = 1;
+        ++live;
+        return {.index = index, .generation = generations[index]};
     }
 
-    BufferHandle HandleManager::getNextBufferHandle()
+    bool HandlePool::release(uint64_t index, uint64_t generation)
     {
-        return BufferHandle{nextHandle.buffer++, 1};
+        if (!isAlive(index, generation))
+            return false;
+        alive[index] = 0;
+        --live;
+        if (generations[index] < UINT64_MAX)
+        {
+            ++generations[index];
+            freeIndices.push_back(index);
+        }
+        return true;
     }
 
-    TextureHandle HandleManager::getNextTextureHandle()
+    bool HandlePool::isAlive(uint64_t index, uint64_t generation) const
     {
-        return TextureHandle{nextHandle.texture++, 1};
+        return generation != 0 && index < generations.size() && alive[index] != 0 && generations[index] == generation;
     }
 
-    ShaderHandle HandleManager::getNextShaderHandle()
+    uint64_t HandlePool::size() const
     {
-        return ShaderHandle{nextHandle.shader++, 1};
+        return generations.size();
     }
 
-    PipelineHandle HandleManager::getNextPipelineHandle()
+    uint64_t HandlePool::liveCount() const
     {
-        return PipelineHandle{nextHandle.pipeline++, 1};
-    }
-
-    CommandBufferHandle HandleManager::getNextCommandBufferHandle()
-    {
-        return CommandBufferHandle{nextHandle.commandBuffer++, 1};
-    }
-
-    FenceHandle HandleManager::getNextFenceHandle()
-    {
-        return FenceHandle{nextHandle.fence++, 1};
-    }
-
-    SwapchainHandle HandleManager::getNextSwapchainHandle()
-    {
-        return SwapchainHandle{nextHandle.swapchain++, 1};
-    }
-
-    RenderTargetHandle HandleManager::getNextRenderTargetHandle()
-    {
-        return RenderTargetHandle{nextHandle.renderTarget++, 1};
-    }
-
-    DescriptorSetLayoutHandle HandleManager::getNextDescriptorSetLayoutHandle()
-    {
-        return DescriptorSetLayoutHandle{nextHandle.descriptorSetLayout++, 1};
-    }
-
-    DescriptorSetHandle HandleManager::getNextDescriptorSetHandle()
-    {
-        return DescriptorSetHandle{nextHandle.descriptorSet++, 1};
-    }
-
-    DescriptorPoolHandle HandleManager::getNextDescriptorPoolHandle()
-    {
-        return DescriptorPoolHandle{nextHandle.descriptorPool++, 1};
-    }
-
-    MaterialHandle HandleManager::getNextMaterialHandle()
-    {
-        return MaterialHandle{nextHandle.material++, 1};
-    }
-
-    CameraHandle HandleManager::getNextCameraHandle()
-    {
-        return CameraHandle{nextHandle.camera++, 1};
-    }
-
-    EntityHandle HandleManager::getNextEntityHandle()
-    {
-        return EntityHandle{nextHandle.entity++, 1};
-    }
-
-    LightHandle HandleManager::getNextLightHandle()
-    {
-        return LightHandle{nextHandle.light++, 1};
-    }
-
-    EnvironmentHandle HandleManager::getNextEnvironmentHandle()
-    {
-        return EnvironmentHandle{nextHandle.environment++, 1};
-    }
-
-    ReadbackHandle HandleManager::getNextReadbackHandle()
-    {
-        return ReadbackHandle{nextHandle.readback++, 1};
-    }
-
-    SceneHandle HandleManager::getNextSceneHandle()
-    {
-        return SceneHandle{nextHandle.scene++, 1};
-    }
-
-    QueryPoolHandle HandleManager::getNextQueryPoolHandle()
-    {
-        return QueryPoolHandle{nextHandle.queryPool++, 1};
+        return live;
     }
 } // namespace rasm

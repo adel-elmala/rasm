@@ -102,7 +102,7 @@ namespace rasm
             return false;
         }
 
-        void destroyBuffer(RenderContext &ctx, BufferHandle &buffer)
+        void destroyViewBuffer(RenderContext &ctx, BufferHandle &buffer)
         {
             if (buffer.isValid())
                 ctx.destroyBuffer(buffer);
@@ -376,7 +376,7 @@ namespace rasm
         {
             const EntityHandle entity = waitingForMesh[i];
             const Entity &entityRef = registry.entities[entity.index];
-            const bool meshKnown = entityRef.mesh.index < registry.meshes.size();
+            const bool meshKnown = isLive(entityRef.mesh);
             if (meshKnown && registry.meshes[entityRef.mesh.index].state == MeshState::LOADING)
             {
                 ++i;
@@ -681,12 +681,12 @@ namespace rasm
     // they run after the passes that drew them.
     bool Engine::addScenePasses(RenderGraph &graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget, const SceneShadow *shadows, uint32_t shadowCount)
     {
-        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        if (!isLive(camera))
         {
             spdlog::error("addScenePasses needs a valid camera handle.");
             return false;
         }
-        if (!scene.isValid() || scene.index >= MAX_SCENES || scene.index >= registry.scenes.size())
+        if (!isLive(scene))
         {
             spdlog::error("addScenePasses needs a valid scene handle.");
             return false;
@@ -771,17 +771,17 @@ namespace rasm
     // cube is drawn by a view per face. The view that reads the shadow gets it from addScenePasses.
     SceneShadow Engine::addShadowPasses(RenderGraph &graph, SceneHandle scene, CameraHandle camera, const ShadowDesc &desc)
     {
-        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        if (!isLive(camera))
         {
             spdlog::error("addShadowPasses needs a valid camera handle.");
             return {};
         }
-        if (!scene.isValid() || scene.index >= MAX_SCENES || scene.index >= registry.scenes.size())
+        if (!isLive(scene))
         {
             spdlog::error("addShadowPasses needs a valid scene handle.");
             return {};
         }
-        if (!desc.light.isValid() || desc.light.index >= registry.lights.size())
+        if (!isLive(desc.light))
         {
             spdlog::error("addShadowPasses needs a valid light.");
             return {};
@@ -1034,7 +1034,7 @@ namespace rasm
             {
                 spdlog::error("Failed to create the culling buffers of a scene view.");
                 for (auto &buffer : view.visibleDraws)
-                    destroyBuffer(ctx, buffer);
+                    destroyViewBuffer(ctx, buffer);
                 return UINT32_MAX;
             }
         }
@@ -1049,8 +1049,8 @@ namespace rasm
                 spdlog::error("Failed to create the blend sort buffers of a scene view.");
                 for (uint32_t j = 0; j < MAX_FRAMES_IN_FLIGHT; ++j)
                 {
-                    destroyBuffer(ctx, view.visibleDraws[j]);
-                    destroyBuffer(ctx, view.sortBuffers[j]);
+                    destroyViewBuffer(ctx, view.visibleDraws[j]);
+                    destroyViewBuffer(ctx, view.sortBuffers[j]);
                 }
                 return UINT32_MAX;
             }
@@ -1076,10 +1076,10 @@ namespace rasm
                 spdlog::error("Failed to create the occlusion culling buffers of a scene view; it is drawn with frustum culling only.");
                 for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
                 {
-                    destroyBuffer(ctx, view.hiz[i]);
+                    destroyViewBuffer(ctx, view.hiz[i]);
                     view.hizCapacity[i] = 0;
                 }
-                destroyBuffer(ctx, view.visibility);
+                destroyViewBuffer(ctx, view.visibility);
             }
         }
         gpuScene->views[freeSlot] = view;
@@ -1103,11 +1103,11 @@ namespace rasm
             ctx.waitForFence(computeFence, computeFenceValue);
         for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
-            destroyBuffer(ctx, view.visibleDraws[i]);
-            destroyBuffer(ctx, view.hiz[i]);
-            destroyBuffer(ctx, view.sortBuffers[i]);
+            destroyViewBuffer(ctx, view.visibleDraws[i]);
+            destroyViewBuffer(ctx, view.hiz[i]);
+            destroyViewBuffer(ctx, view.sortBuffers[i]);
         }
-        destroyBuffer(ctx, view.visibility);
+        destroyViewBuffer(ctx, view.visibility);
         releaseViewClusters(viewIndex);
         view = {};
     }

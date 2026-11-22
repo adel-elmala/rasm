@@ -90,7 +90,7 @@ namespace rasm
     // still records their barriers).
     RenderTargetHandle Engine::addBloomPasses(RenderGraph &graph, const RenderTargetHandle &source, CameraHandle camera)
     {
-        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        if (!isLive(camera))
         {
             spdlog::error("addBloomPasses needs a valid camera handle.");
             return {};

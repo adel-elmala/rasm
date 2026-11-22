@@ -23,13 +23,13 @@ namespace rasm
         if (!isValidSpotCone(type, innerConeAngle, outerConeAngle))
             return {};
 
-        LightHandle handle = handleManager.getNextLightHandle();
-
-        if (handle.index > config.maxLights)
+        const HandleSlot slot = registry.lightHandles.allocate();
+        if (slot.index == 0)
         {
             spdlog::warn("Exceeded maximum number of lights ({}, EngineConfig::maxLights).", config.maxLights);
             return {};
         }
+        const LightHandle handle{slot.index, slot.generation};
 
         Light light{};
         light.handle = handle;
@@ -42,7 +42,7 @@ namespace rasm
         light.innerConeAngle = innerConeAngle;
         light.outerConeAngle = outerConeAngle;
 
-        registry.lights.resize(handle.index + 1);
+        registry.lights.resize(registry.lightHandles.size());
         registry.lights[handle.index] = light;
         writeLightRow(handle);
 
@@ -51,7 +51,7 @@ namespace rasm
 
     Light Engine::getLight(LightHandle light) const
     {
-        if (!light.isValid() || light.index >= registry.lights.size())
+        if (!isLive(light))
         {
             spdlog::error("Invalid light handle {}.", light.index);
             return {};
@@ -63,7 +63,7 @@ namespace rasm
     // stays: a shadow's maps (addShadowPasses) are made for it, cascades, one map or a cube.
     void Engine::updateLight(LightHandle light, const Light &values)
     {
-        if (!light.isValid() || light.index >= registry.lights.size())
+        if (!isLive(light))
         {
             spdlog::error("Invalid light handle for updating a light.");
             return;
