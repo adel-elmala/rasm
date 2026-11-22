@@ -567,6 +567,63 @@ namespace rasm::rhi
         vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
     }
 
+    // The texture leaves its state for TRANSFER_SRC only around the copy, so the tracked state stays right. The buffer's
+    // bytes are made visible to the host, which reads them once the fence of this submit is reached.
+    void VulkanCommandBuffer::copyFromTexture(Texture *src, TextureUsage state, uint32_t layer, uint32_t mip, Buffer *dst, uint64_t dstOffset)
+    {
+        auto *texture = static_cast<VulkanTexture *>(src);
+        VkImageMemoryBarrier2 toCopy = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                        .dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT,
+                                        .dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT,
+                                        .oldLayout = toVkImageLayout(state),
+                                        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                        .image = texture->image,
+                                        .subresourceRange = {.aspectMask = toVkAspectMask(src->desc.format), .baseMipLevel = mip, .levelCount = 1, .baseArrayLayer = layer, .layerCount = 1}};
+        VkImageMemoryBarrier2 back = toCopy;
+        if (!getSrcScope(state, toCopy.srcAccessMask, toCopy.srcStageMask) || !getDstScope(state, back.dstAccessMask, back.dstStageMask))
+            return;
+        back.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+        back.srcAccessMask = VK_ACCESS_2_NONE;
+        back.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        back.newLayout = toVkImageLayout(state);
+
+        VkDependencyInfo dependencyInfo = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &toCopy};
+        vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+
+        // A depth/stencil texture is copied one aspect at a time; the depth is the one read back.
+        const VkImageAspectFlags aspect = toVkAspectMask(src->desc.format);
+        const VkBufferImageCopy2 region = {.sType = VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2,
+                                           .bufferOffset = dstOffset,
+                                           .imageSubresource = {.aspectMask = (aspect & VK_IMAGE_ASPECT_DEPTH_BIT) != 0 ? VK_IMAGE_ASPECT_DEPTH_BIT : aspect, .mipLevel = mip, .baseArrayLayer = layer, .layerCount = 1},
+                                           .imageExtent = {std::max(1u, src->desc.width >> mip), std::max(1u, src->desc.height >> mip), 1}};
+        const VkCopyImageToBufferInfo2 info = {.sType = VK_STRUCTURE_TYPE_COPY_IMAGE_TO_BUFFER_INFO_2,
+                                               .srcImage = texture->image,
+                                               .srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                               .dstBuffer = static_cast<VulkanBuffer *>(dst)->buffer,
+                                               .regionCount = 1,
+                                               .pRegions = &region};
+        vkCmdCopyImageToBuffer2(commandBuffer, &info);
+
+        const VkBufferMemoryBarrier2 toHost = {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                                               .srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT,
+                                               .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                               .dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
+                                               .dstAccessMask = VK_ACCESS_2_HOST_READ_BIT,
+                                               .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                               .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                               .buffer = static_cast<VulkanBuffer *>(dst)->buffer,
+                                               .offset = dstOffset,
+                                               .size = VK_WHOLE_SIZE};
+        const VkDependencyInfo after = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                                        .bufferMemoryBarrierCount = 1,
+                                        .pBufferMemoryBarriers = &toHost,
+                                        .imageMemoryBarrierCount = 1,
+                                        .pImageMemoryBarriers = &back};
+        vkCmdPipelineBarrier2(commandBuffer, &after);
+    }
+
     // Written once all earlier commands are done, so the time between two timestamps covers the commands
     // between them, without overlap from earlier work.
     void VulkanCommandBuffer::writeTimestamp(QueryPool *queryPool, uint32_t index)

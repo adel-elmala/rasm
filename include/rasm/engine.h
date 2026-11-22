@@ -9,6 +9,7 @@
 #include "rasm/window.h"
 #include "rasm/light.h"
 #include "rasm/mesh.h"
+#include "rasm/readback.h"
 #include "rasm/handle.h"
 #include "rasm/render/renderContext.h"
 
@@ -27,6 +28,7 @@ namespace rasm
 {
 
     class GeometryPool;
+    class Platform;
     class Renderer;
     class ShaderCompiler;
     struct GpuScene;
@@ -38,6 +40,7 @@ namespace rasm
     struct StatsOverlay;
     struct Ui;
     struct Inspector;
+    struct Readbacks;
     struct InspectEntry;
     namespace gfx { struct SceneData; }
 
@@ -179,6 +182,19 @@ namespace rasm
         // copies it runs only while that section is open.
         void                        setInspection(const Inspection& inspection);
         const Inspection&           getInspection() const;
+        // Copies the image this frame shows (the swapchain's, with the UI) to the CPU at the end of the frame. Call it
+        // before or during the frame you want: the copy goes into the next endFrame. Needs a headless engine or a
+        // surface that allows copies; returns invalid otherwise.
+        ReadbackHandle              readFrame(ReadbackFormat format = ReadbackFormat::RGBA8_SRGB);
+        // The same for one layer and mip of a readable texture (TextureDesc::readable), such as a readable render target's
+        // color or depth for this frame slot (getRenderTargetTexture). A depth reads only as RGBA32_FLOAT.
+        ReadbackHandle              readTexture(const TextureHandle& texture, ReadbackFormat format = ReadbackFormat::RGBA8_SRGB, uint32_t layer = 0, uint32_t mip = 0);
+        // True once takeReadback would not wait: the GPU finished the frame that copied it, or the copy failed. With
+        // MAX_FRAMES_IN_FLIGHT frames that is usually two frames after the request; poll it to avoid a stall.
+        bool                        isReadbackReady(ReadbackHandle readback);
+        // Converts the copy into image and frees it. Blocks until the GPU has finished the frame that copied it when it
+        // is not ready yet. Returns false when the copy failed, or no frame has copied it yet (then it stays pending).
+        bool                        takeReadback(ReadbackHandle readback, ReadbackImage& image);
         bool                        running() const;
         bool                        recreateSwapchain();
         void                        setRenderTarget(const RenderTargetHandle& renderTarget, uint32_t face = 0);
@@ -265,6 +281,7 @@ namespace rasm
         RenderContext                                               ctx;
         std::unique_ptr<ShaderCompiler>                             shaderCompiler                          = {};
         HandleManager                                               handleManager                           = {};
+        std::unique_ptr<Platform>                                   platform                                = {};
         Window                                                      mainWindow                              = {};
         DescriptorSetLayoutHandle                                   bindlessDescriptorSetLayout             = {};
         DescriptorPoolHandle                                        bindlessDescriptorPool                  = {};
@@ -285,6 +302,7 @@ namespace rasm
         bool                                                        cullingFrozen                           = false;
         Inspection                                                  inspection                              = {};
         std::unique_ptr<Inspector>                                  inspector                               = {};
+        std::unique_ptr<Readbacks>                                  readbacks                               = {};
 
     private:
         static constexpr Format     DEPTH_FORMAT    = Format::D32_SFLOAT;
@@ -388,6 +406,8 @@ namespace rasm
         void                        recordInspect(const InspectEntry& entry);
         void                        drawBuffersSection();
         void                        drawTablesSection();
+        void                        recordReadbacks();
+        void                        finishReadbackSubmit(bool submitted);
 
         std::vector<PendingMeshLoad>                                            pendingMeshes;
         std::unordered_map<TextureHandle, PendingTextureLoad, HandleHash>       pendingTextures;

@@ -969,11 +969,12 @@ namespace rasm
         return handle;
     }
 
-    // A history target lives across frames, in memory of its own, until the graph is destroyed. Any other is transient:
-    // its memory is the graph's to share.
+    // A history target lives across frames, in memory of its own, until the graph is destroyed. So does a readable one,
+    // which Engine::readTexture copies at the end of the frame, after later passes could have reused shared memory. Any
+    // other is transient: its memory is the graph's to share.
     RenderTargetHandle RenderGraph::createRenderTarget(const RenderTargetDesc &desc)
     {
-        if (desc.history)
+        if (desc.history || desc.readable)
         {
             const RenderTargetHandle handle = engine->createRenderTarget(desc);
             if (handle.isValid())

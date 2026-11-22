@@ -67,6 +67,7 @@ namespace
             src = source;
             copies.insert(copies.end(), list, list + count);
         }
+        void copyFromTexture(Texture *, TextureUsage, uint32_t, uint32_t, Buffer *, uint64_t) override {}
         void copyToTextures(Buffer *source, const TextureCopy *list, uint32_t count) override
         {
             src = source;

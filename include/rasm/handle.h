@@ -53,6 +53,7 @@ namespace rasm
     struct DescriptorSetTag;
     struct QueryPoolTag;
     struct EnvironmentTag;
+    struct ReadbackTag;
 
     using MeshHandle                = Handle<MeshTag>;
     using BufferHandle              = Handle<BufferTag>;
@@ -75,6 +76,7 @@ namespace rasm
     using DescriptorSetHandle       = Handle<DescriptorSetTag>;
     using QueryPoolHandle           = Handle<QueryPoolTag>;
     using EnvironmentHandle         = Handle<EnvironmentTag>;
+    using ReadbackHandle            = Handle<ReadbackTag>;
 
 
     struct HandleCounters
@@ -98,6 +100,7 @@ namespace rasm
         uint64_t camera                 = 1;
         uint64_t light                  = 1;
         uint64_t environment            = 1;
+        uint64_t readback               = 1;
     };
 
     class HandleManager
@@ -126,6 +129,7 @@ namespace rasm
         LightHandle                 getNextLightHandle();
         SceneHandle                 getNextSceneHandle();
         EnvironmentHandle           getNextEnvironmentHandle();
+        ReadbackHandle              getNextReadbackHandle();
 
         private:
             HandleCounters nextHandle = {};

@@ -47,6 +47,7 @@ namespace rasm::rhi
         uint64_t                    acquireReleaseValues[MAX_FRAMES_IN_FLIGHT]  = {};
         VkSemaphore                 releaseTimeline                             = VK_NULL_HANDLE;
         bool                        mutableFormat                               = false;    // made MUTABLE_FORMAT, with a UNORM view per image
+        bool                        readable                                    = false;    // made with TRANSFER_SRC, which the surface allows
         uint64_t                    releaseValue                                = 0;
         uint32_t                    nextAcquireSlot                             = 0;
         uint32_t                    acquiredSlot                                = NO_ACQUIRE;

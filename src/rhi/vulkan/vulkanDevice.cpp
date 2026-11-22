@@ -64,6 +64,10 @@ namespace rasm::rhi
                     instanceBuilder.use_default_debug_messenger();
             }
 
+            // Without a window the instance has no surface extensions, so a device without a presentation engine works.
+            if (desc.window == nullptr)
+                instanceBuilder.set_headless(true);
+
             auto instanceRet = instanceBuilder
                                    .set_app_name(desc.appName.empty() ? "rasm_app" : desc.appName.c_str())
                                    .set_engine_name("rasm")
@@ -144,17 +148,18 @@ namespace rasm::rhi
                 .shaderInt64 = VK_TRUE,
             };
 
+            // A headless device presents nothing, so it needs no surface and no swapchain extension.
+            physDeviceSelector.set_required_features_14(enabledVk14Features)
+                .set_required_features_13(enabledVk13Features)
+                .set_required_features_12(enabledVk12Features)
+                .set_required_features_11(enabledVk11Features)
+                .set_required_features(enabledVk10Features)
+                .add_required_extension(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+            if (surface != VK_NULL_HANDLE)
+                physDeviceSelector.set_surface(surface).add_required_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+
             // select() grabs a PhysicalDevice, By default, this will prefer a discrete GPU.
-            auto physicalDeviceSelectorReturn = physDeviceSelector
-                                                    .set_surface(surface)
-                                                    .set_required_features_14(enabledVk14Features)
-                                                    .set_required_features_13(enabledVk13Features)
-                                                    .set_required_features_12(enabledVk12Features)
-                                                    .set_required_features_11(enabledVk11Features)
-                                                    .set_required_features(enabledVk10Features)
-                                                    .add_required_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME)
-                                                    .add_required_extension(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME)
-                                                    .select();
+            auto physicalDeviceSelectorReturn = physDeviceSelector.select();
 
             if (!physicalDeviceSelectorReturn)
             {
@@ -374,6 +379,8 @@ namespace rasm::rhi
             imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
             imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             imageInfo.usage = toVkImageUsageFlags(desc.usage);
+            if (desc.readable)
+                imageInfo.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
             if (desc.usage == TextureUsage::SAMPLED)
                 imageInfo.usage |= hostCopy ? VK_IMAGE_USAGE_HOST_TRANSFER_BIT : VK_IMAGE_USAGE_TRANSFER_DST_BIT;
             imageInfo.samples = static_cast<VkSampleCountFlagBits>(std::max(desc.samples, 1u));
@@ -461,18 +468,13 @@ namespace rasm::rhi
 
     bool VulkanDevice::initialize(const DeviceDesc &desc)
     {
-        if (desc.window == nullptr)
-        {
-            spdlog::error("The Vulkan device needs a window to present to.");
-            return false;
-        }
-
         auto vkbInstance = initInstance(desc, debugUtilsEnabled);
         if (!vkbInstance)
             return false;
         instance = vkbInstance.value();
 
-        if (!createWindowSurface(*desc.window, instance.instance, &surface))
+        // Headless: no window, so no surface; the frames go to an OffscreenSwapchain.
+        if (desc.window != nullptr && !createWindowSurface(*desc.window, instance.instance, &surface))
             return false;
 
         auto vkbPhysicalDevice = initPhysicalDevice(instance, surface);
@@ -487,7 +489,7 @@ namespace rasm::rhi
         const bool etc2 = physicalDevice.enable_features_if_present(VkPhysicalDeviceFeatures{.textureCompressionETC2 = VK_TRUE});
         spdlog::info("Texture compression: BC {}, ASTC {}, ETC2 {}.", bc ? "yes" : "no", astc ? "yes" : "no", etc2 ? "yes" : "no");
         // A UNORM view of the sRGB swapchain lets the UI blend on the stored sRGB numbers, as Dear ImGui is designed for.
-        swapchainMutable = physicalDevice.enable_extension_if_present(VK_KHR_SWAPCHAIN_MUTABLE_FORMAT_EXTENSION_NAME);
+        swapchainMutable = surface != VK_NULL_HANDLE && physicalDevice.enable_extension_if_present(VK_KHR_SWAPCHAIN_MUTABLE_FORMAT_EXTENSION_NAME);
 
         auto vkbDevice = vkb::DeviceBuilder{physicalDevice}.build();
         if (!vkbDevice)
@@ -1129,6 +1131,11 @@ namespace rasm::rhi
 
     Swapchain *VulkanDevice::createSwapchain(const SwapchainDesc &desc)
     {
+        if (surface == VK_NULL_HANDLE)
+        {
+            spdlog::error("A headless device has no surface to make a swapchain for.");
+            return nullptr;
+        }
         auto *swapchain = new VulkanSwapchain(*this);
         if (!swapchain->initialize(desc))
         {

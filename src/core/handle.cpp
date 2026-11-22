@@ -87,6 +87,11 @@ namespace rasm
         return EnvironmentHandle{nextHandle.environment++, 1};
     }
 
+    ReadbackHandle HandleManager::getNextReadbackHandle()
+    {
+        return ReadbackHandle{nextHandle.readback++, 1};
+    }
+
     SceneHandle HandleManager::getNextSceneHandle()
     {
         return SceneHandle{nextHandle.scene++, 1};

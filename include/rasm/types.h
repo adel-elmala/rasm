@@ -33,6 +33,15 @@ namespace rasm
         WEBGPU
     };
 
+    // Who owns the window and the input. SDL: RASM opens a window and reads its events. HEADLESS: no window and no
+    // events; each frame renders into an offscreen swapchain of windowWidth x windowHeight pixels, which
+    // Engine::readFrame copies back.
+    enum class PlatformType
+    {
+        SDL,
+        HEADLESS,
+    };
+
     enum class Format
     {
         UNKNOWN,
@@ -155,7 +164,8 @@ namespace rasm
     struct EngineConfig
     {
         std::string  appName                 = {};
-        int          windowWidth             = 0;
+        PlatformType platform                = PlatformType::SDL;
+        int          windowWidth             = 0;        // headless: the offscreen swapchain's size in pixels
         int          windowHeight            = 0;
         bool         enableValidation        = false;
         bool         enableSyncValidation    = false;
