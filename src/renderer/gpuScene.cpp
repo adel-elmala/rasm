@@ -393,9 +393,10 @@ namespace rasm
                 continue;
             }
 
-            // A destroyed entity, or one whose mesh was destroyed (destroyMesh cleared it), just leaves the list.
+            // A destroyed entity, or one whose mesh was destroyed (destroyMesh cleared it), just leaves the list. Not
+            // isLoaded: a ready glTF mesh still fills its textures over frames, and the entity waits for them below.
             const bool hasMesh = alive && entityRef.mesh.isValid();
-            if (hasMesh && !isLoaded(entityRef.mesh))
+            if (hasMesh && (!isLive(entityRef.mesh) || registry.meshes[entityRef.mesh.index].state != MeshState::READY))
             {
                 spdlog::warn("Entity {} is not drawn: its mesh failed to load.", entity.index);
             }

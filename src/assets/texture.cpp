@@ -218,10 +218,18 @@ namespace rasm
         if (!decoded)
             spdlog::error("Failed to decode texture {}; it stays plain white.", load.path);
         const bool filled = decoded && fillTextureLevels(load.handle, raw);
-        if (decoded && !filled)
-            spdlog::error("Failed to fill texture {}; it stays plain white.", load.path);
         if (filled)
             return;
+        // A glTF texture's role is its material slot, where white would be a tilted normal or full metal: the materials
+        // drop it instead, and read their defaults.
+        if (load.levels)
+        {
+            spdlog::error("Failed to fill texture {}; its materials go without it.", load.path);
+            destroyTexture(load.handle);
+            return;
+        }
+        if (decoded)
+            spdlog::error("Failed to fill texture {}; it stays plain white.", load.path);
         if (desc.format == Format::R8G8B8A8_SRGB || desc.format == Format::R8G8B8A8_UNORM)
         {
             const std::vector<unsigned char> white(static_cast<size_t>(desc.width) * desc.height * 4, 255);

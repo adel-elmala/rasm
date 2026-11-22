@@ -294,7 +294,9 @@ namespace rasm
             pendingEnvironments.erase(pendingEnvironments.begin() + i);
         }
 
-        for (auto it = pendingTextures.begin(); it != pendingTextures.end() && !overBudget();)
+        // At least one texture a frame, so meshes that use up the budget frame after frame do not hold textures back.
+        bool filledOne = false;
+        for (auto it = pendingTextures.begin(); it != pendingTextures.end() && (!filledOne || !overBudget());)
         {
             if (!wait && !it->second.levels && it->second.result.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
             {
@@ -302,6 +304,7 @@ namespace rasm
                 continue;
             }
             finishTextureLoad(it->second);
+            filledOne = true;
             it = pendingTextures.erase(it);
             // syncGpuScene checks the entities that wait for textures only after one finished.
             gpuScene->texturesFinished = true;

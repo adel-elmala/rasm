@@ -493,8 +493,16 @@ namespace rasm
                     if (basisuSource >= 0 && raw.ktxFormats.contains(getKtxSlotKey(basisuSource, uses[i].slot)))
                         continue;
                     const int source = model.textures[uses[i].texture].source;
-                    if (source < 0 || source >= static_cast<int>(model.images.size()) || model.images[source].as_is)
+                    if (source < 0 || source >= static_cast<int>(model.images.size()))
+                    {
+                        spdlog::error("glTF texture {} has no image RASM can read: its source is {}.", uses[i].texture, source);
                         continue;
+                    }
+                    if (model.images[source].as_is)
+                    {
+                        spdlog::error("glTF image {} is KTX2, but texture {} names it without KHR_texture_basisu; it is not loaded.", source, uses[i].texture);
+                        continue;
+                    }
                     const uint64_t key = getImageLevelsKey(source, uses[i].slot);
                     if (raw.imageLevels.contains(key))
                         continue;
