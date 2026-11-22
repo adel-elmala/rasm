@@ -115,9 +115,9 @@ namespace rasm
                             events.quit = true;
                         }
                         if (event.key.key == SDLK_F1 && !event.key.repeat)
-                            events.toggleStats = true;
+                            ++events.statsToggles;
                         if (event.key.key == SDLK_F2 && !event.key.repeat)
-                            events.nextForcedLod = true;
+                            ++events.forcedLodSteps;
                         if (event.key.key == SDLK_F3 && !event.key.repeat)
                             events.dumpGraph = true;
                         break;

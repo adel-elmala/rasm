@@ -1391,6 +1391,14 @@ namespace rasm
         const TextureUsage state = rhiTexture->state;
         if (!checkArgument(state != TextureUsage::UNKNOWN && state != TextureUsage::PRESENT_SRC, __func__, "the texture holds nothing to copy yet."))
             return false;
+        // A depth/stencil texture gives only its depth, 4 bytes a texel.
+        const TextureDesc &desc = rhiTexture->desc;
+        const uint32_t width = std::max(1u, desc.width >> mip);
+        const uint32_t height = std::max(1u, desc.height >> mip);
+        const bool depthStencil = desc.format == Format::D32_SFLOAT_S8_UINT || desc.format == Format::D24_UNORM_S8_UINT;
+        const uint64_t bytes = depthStencil ? uint64_t{4} * width * height : rhi::getTextureLevelSize(desc.format, width, height);
+        if (!checkArgument(bytes > 0 && rhiBuffer->desc.size >= bytes, __func__, "the buffer is smaller than the copy."))
+            return false;
         rhiCommandBuffer->copyFromTexture(rhiTexture, state, layer, mip, rhiBuffer, 0);
         return true;
     }

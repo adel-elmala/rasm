@@ -238,10 +238,10 @@ namespace rasm
 
         if (events.quit)
             isRunning = false;
-        if (events.toggleStats)
+        if (events.statsToggles % 2 == 1)
             config.showStats = !config.showStats;
         // Cycles by distance (-1), LOD 0, 1, ..., MAX_MESH_LODS - 1, by distance.
-        if (events.nextForcedLod)
+        for (uint32_t i = 0; i < events.forcedLodSteps; ++i)
             config.forcedLod = config.forcedLod + 1 >= static_cast<int32_t>(MAX_MESH_LODS) ? -1 : config.forcedLod + 1;
         if (events.dumpGraph)
             graphDumpRequested = true;
@@ -441,6 +441,8 @@ namespace rasm
             return false;
         if (asyncCompute && !ctx.waitForFence(computeFence, currentFrame.computeFenceValue))
             return false;
+        if (readbackComputeWait > 0 && ctx.getFenceValue(frameFence) >= readbackComputeWait)
+            readbackComputeWait = 0;
 
         // After the wait: they read what the slot's last frame measured and rewrite the tables it read.
         updateFrameStats();
@@ -579,6 +581,10 @@ namespace rasm
             batchOpen[q] = true;
             for (uint32_t x = 0; x < QUEUE_COUNT; ++x)
                 batchWaits[q][x] = 0;
+            // Readback copies run outside any graph, so no graph orders a later compute use of their textures after
+            // them. The frame that made them was submitted before this one, so the wait is on a batch already out.
+            if (queue == QueueType::COMPUTE)
+                batchWaits[q][static_cast<uint32_t>(QueueType::GRAPHICS)] = readbackComputeWait;
         }
         recordingQueue = queue;
         frameResources[frameCount].commandBuffer = commandBuffers[batchesUsed[q] - 1];

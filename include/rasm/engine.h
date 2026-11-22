@@ -260,6 +260,7 @@ namespace rasm
         QueueType                                                   recordingQueue                          = QueueType::GRAPHICS;
         bool                                                        recordingFailed                         = false; // the frame is dropped at endFrame
         bool                                                        asyncCompute                            = false;
+        uint64_t                                                    readbackComputeWait                     = 0;  // graphics value of the last frame with readback copies, which compute batches wait for
         Swapchain                                                   swapchain                               = {};
         std::unique_ptr<GeometryPool>                               geometryPool                            = {};
         std::unique_ptr<GpuScene>                                   gpuScene                                = {};

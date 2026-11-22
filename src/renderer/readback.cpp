@@ -212,9 +212,10 @@ namespace rasm
             spdlog::error("readTexture: texture '{}' has a format a readback can't convert{}.", desc.name, isDepthFormat(desc.format) ? " to RGBA8_SRGB (read a depth as RGBA32_FLOAT)" : "");
             return {};
         }
-        if (layer >= (desc.cube ? CUBE_FACES : 1) || mip >= std::max(desc.mipLevels, 1u))
+        // The mip count is the device's (TextureDesc::mipLevels 0 can mean the full chain): copyTextureToBuffer checks it.
+        if (layer >= (desc.cube ? CUBE_FACES : 1))
         {
-            spdlog::error("readTexture: texture '{}' has no layer {} mip {}.", desc.name, layer, mip);
+            spdlog::error("readTexture: texture '{}' has no layer {}.", desc.name, layer);
             return {};
         }
         const ReadbackHandle handle = handleManager.getNextReadbackHandle();
@@ -285,6 +286,12 @@ namespace rasm
             pending.width = std::max(1u, desc.width >> pending.mip);
             pending.height = std::max(1u, desc.height >> pending.mip);
             const uint64_t size = static_cast<uint64_t>(pending.width) * pending.height * getReadbackTexelSize(desc.format);
+            // A copy a dropped frame took with it is recorded again, into a new buffer if the texture grew since.
+            if (pending.buffer.isValid() && ctx.getBufferDesc(pending.buffer).size < size)
+            {
+                ctx.destroyBuffer(pending.buffer);
+                pending.buffer = {};
+            }
             if (!pending.buffer.isValid() && size > 0)
                 pending.buffer = ctx.createBuffer({.name = "Readback " + std::to_string(pending.handle.index), .usage = BufferUsage::STORAGE, .size = size, .hostReadable = true});
             pending.failed = size == 0 || !pending.buffer.isValid() || !ctx.copyTextureToBuffer(commandBuffer, texture, pending.layer, pending.mip, pending.buffer);
@@ -305,6 +312,8 @@ namespace rasm
             pending.submitted = submitted;
             pending.recorded = submitted;
             pending.fenceValue = frameFenceValue;
+            if (submitted && asyncCompute)
+                readbackComputeWait = frameFenceValue;
         }
     }
 }

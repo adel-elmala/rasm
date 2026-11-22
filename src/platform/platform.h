@@ -14,8 +14,8 @@ namespace rasm
     struct PlatformEvents
     {
         bool                        quit                = false;    // the window closed, or Escape
-        bool                        toggleStats         = false;    // F1
-        bool                        nextForcedLod       = false;    // F2
+        uint32_t                    statsToggles        = 0;        // F1 presses
+        uint32_t                    forcedLodSteps      = 0;        // F2 presses
         bool                        dumpGraph           = false;    // F3
         CameraInput                 camera              = {};
     };
