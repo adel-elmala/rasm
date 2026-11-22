@@ -144,6 +144,9 @@ int main(int argc, char **argv)
     engine.addLightToScene(scene, light);
     engine.addLightToScene(scene, fillLight);
 
+    if (args.waitForLoads)
+        engine.waitForLoads();
+
     // Animation advances per frame, not per second, so a given frame renders the same on every run.
     uint64_t frame = 0;
     int spawnedRows = 0;
@@ -179,5 +182,5 @@ int main(int argc, char **argv)
         ++frame;
     }
 
-    return 0;
+    return exampleExit(args);
 }

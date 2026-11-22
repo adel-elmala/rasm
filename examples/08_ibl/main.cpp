@@ -195,5 +195,5 @@ int main(int argc, char **argv)
     while (exampleRunning(engine, args))
         graph.execute(camera);
 
-    return 0;
+    return exampleExit(args);
 }

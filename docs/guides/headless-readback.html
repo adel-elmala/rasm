@@ -405,7 +405,7 @@
 
 <h3>Every example runs headless</h3>
 
-<p>Each example takes <code class="lang-text">--headless --frames N --out file.png</code> (<code>examples/exampleArgs.h</code>). <code>applyExampleArgs</code> sets <code>PlatformType::HEADLESS</code>, and the frame loop runs on <code>exampleRunning</code> instead of <code>Engine::running</code>: it asks for the copy right before frame N, takes it after frame N, writes the PNG and ends the loop. So a run opens no window, and <code>verify-change</code> checks every example this way.</p>
+<p>Each example takes <code class="lang-text">--headless --frames N --out file.png</code> (<code>examples/exampleArgs.h</code>). <code>applyExampleArgs</code> sets <code>PlatformType::HEADLESS</code>, and the frame loop runs on <code>exampleRunning</code> instead of <code>Engine::running</code>: it asks for the copy right before frame N, takes it after frame N, writes the PNG and ends the loop. <code>main</code> returns <code>exampleExit</code>, which is 1 with an error when the frame was not written (the copy or the write failed, or the loop ended before frame N). So a run opens no window, and <code>verify-change</code> checks every example this way.</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 190" role="img" aria-label="exampleRunning runs before each frame. Frames 1 to N minus 1 render as usual. Before frame N it calls readFrame, so frame N's endFrame records the copy. Before the next frame it calls takeReadback, which waits for frame N's fence, then writePng to the out file, and returns false, so the example exits after N frames.">
@@ -440,7 +440,7 @@
   <tr><td>The copy</td><td><code>VulkanCommandBuffer::copyFromTexture</code>, <code>RenderContext::copyTextureToBuffer</code></td></tr>
   <tr><td>Readbacks and conversion</td><td><code>src/renderer/readback.cpp</code>: <code>Engine::readFrame</code>, <code>readTexture</code>, <code>isReadbackReady</code>, <code>takeReadback</code>, <code>recordReadbacks</code>, <code>convertReadback</code>, <code>writePng</code>, <code>readPng</code></td></tr>
   <tr><td>The example</td><td><code>examples/16_headless/main.cpp</code>: a PNG of the frame and the HDR target's brightest and mean values</td></tr>
-  <tr><td>Every example's flags</td><td><code>parseExampleArgs</code>, <code>applyExampleArgs</code>, <code>exampleRunning</code> in <code>examples/exampleArgs.h</code></td></tr>
+  <tr><td>Every example's flags</td><td><code>parseExampleArgs</code>, <code>applyExampleArgs</code>, <code>exampleRunning</code>, <code>exampleExit</code> in <code>examples/exampleArgs.h</code></td></tr>
   <tr><td>The UI without a window</td><td><code>src/platform/uiPlatform.cpp</code></td></tr>
   <tr><td>Tests</td><td><code>tests/readbackTests.cpp</code>: every conversion, and a PNG written with <code>writePng</code> and read again with <code>readPng</code></td></tr>
 </table>

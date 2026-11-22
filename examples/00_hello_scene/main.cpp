@@ -116,5 +116,5 @@ int main(int argc, char **argv)
         engine.render(scene, camera);
     }
 
-    return 0;
+    return exampleExit(args);
 }

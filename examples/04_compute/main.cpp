@@ -174,11 +174,14 @@ int main(int argc, char **argv)
     engine.addUiPass(graph);
     graph.compile();
 
+    if (args.waitForLoads)
+        engine.waitForLoads();
+
     while (exampleRunning(engine, args))
     {
         graph.execute(camera);
         ++frame;
     }
 
-    return 0;
+    return exampleExit(args);
 }

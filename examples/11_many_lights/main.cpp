@@ -346,6 +346,9 @@ int main(int argc, char **argv)
     std::printf("%u lights of range %.1f, %s. F1: stats.\n", options.lights, range, options.allLights ? "every light per pixel" : "in clusters");
     std::fflush(stdout);
 
+    if (args.waitForLoads)
+        engine.waitForLoads();
+
     // Animation advances per frame, not per second, so a given frame renders the same on every run.
     BenchTimers bench;
     if (options.bench)
@@ -374,5 +377,5 @@ int main(int argc, char **argv)
         }
     }
 
-    return 0;
+    return exampleExit(args);
 }

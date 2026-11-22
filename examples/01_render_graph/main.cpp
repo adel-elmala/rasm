@@ -261,5 +261,5 @@ int main(int argc, char **argv)
         graph.execute(camera);
     }
 
-    return 0;
+    return exampleExit(args);
 }

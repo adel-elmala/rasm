@@ -960,5 +960,5 @@ int main(int argc, char **argv)
         lastTime = now;
     }
 
-    return 0;
+    return exampleExit(args);
 }

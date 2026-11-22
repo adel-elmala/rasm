@@ -16,6 +16,7 @@
 //   --headless         no window and no input (PlatformType::HEADLESS): render --frames frames, write the last to --out, exit
 //   --frames N         frames a headless run renders (60)
 //   --out <file.png>   where a headless run writes its last frame (frame.png in the working directory)
+// main returns exampleExit(args): a headless run that did not write its frame fails.
 struct ExampleArgs
 {
     bool                    fixedStep       = false;
@@ -25,6 +26,7 @@ struct ExampleArgs
     const char*             out             = "frame.png";
     uint32_t                frame           = 0;        // frames exampleRunning let start
     rasm::ReadbackHandle    readback;                   // the copy of the last frame
+    bool                    written         = false;    // the last frame is in --out
 };
 
 inline ExampleArgs parseExampleArgs(int argc, char** argv)
@@ -65,14 +67,23 @@ inline bool exampleRunning(rasm::Engine& engine, ExampleArgs& args)
     {
         ++args.frame;
         rasm::ReadbackImage image;
-        if (!engine.takeReadback(args.readback, image) || !rasm::writePng(args.out, image))
-            std::fprintf(stderr, "Could not write frame %u to %s.\n", args.frames, args.out);
-        else
+        args.written        = engine.takeReadback(args.readback, image) && rasm::writePng(args.out, image);
+        if (args.written)
             std::printf("Wrote frame %u to %s.\n", args.frames, args.out);
         return false;
     }
     if (++args.frame == args.frames)
         args.readback       = engine.readFrame();
     return true;
+}
+
+// The exit status: 1 for a headless run whose frame is not in --out (the copy or the write failed, or the loop ended
+// before frame N).
+inline int exampleExit(const ExampleArgs& args)
+{
+    if (!args.headless || args.written)
+        return 0;
+    std::fprintf(stderr, "error: frame %u was not written to %s.\n", args.frames, args.out);
+    return 1;
 }
 // clang-format on
