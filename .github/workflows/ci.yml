@@ -167,21 +167,6 @@ jobs:
           path: build/${{ matrix.release }}/image-tests/
           if-no-files-found: ignore
 
-      # TEMPORARY: the noise of one runner, and the goldens of this run. Removed before the PR is ready.
-      - name: Measure the noise
-        if: ${{ !cancelled() && steps.lavapipe.outcome == 'success' }}
-        run: |
-          python tools/image_tests.py --lavapipe --preset ${{ matrix.release }} --update || true
-          python tools/image_tests.py --lavapipe --preset ${{ matrix.release }} || true
-          powershell -NoProfile -Command "(Get-CimInstance Win32_Processor).Name"
-
-      - name: Upload the goldens of this run
-        if: ${{ !cancelled() && steps.lavapipe.outcome == 'success' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: goldens-run
-          path: tests/golden/lavapipe/
-
       - name: Check for new vcpkg packages
         id: vcpkg-packages
         if: ${{ !cancelled() }}
