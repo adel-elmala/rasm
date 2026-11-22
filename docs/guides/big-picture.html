@@ -48,7 +48,7 @@
   <ul>
     <li>Layers: application → <code>Engine</code> → <code>RenderContext</code> → <code>rhi::Device</code> → <code>VulkanDevice</code> → GPU.</li>
     <li>Applications include only <code>include/rasm/</code>. Everything in <code>src/</code> is private.</li>
-    <li>Every object is a <b>handle</b>: <code>Handle</code> with an <code>index</code> and a <code>generation</code>. One <code>HandleManager</code> in <code>Engine</code> makes them all.</li>
+    <li>Every object is a <b>handle</b>: <code>Handle</code> with an <code>index</code> and a <code>generation</code>. Each table has a <code>HandlePool</code>, which reuses freed indices with a new generation.</li>
     <li>CPU objects (entities, meshes, materials, cameras, lights, scenes) live in <code>Engine</code>'s registry. GPU objects (buffers, textures, pipelines, ...) live in <code>RenderContext</code>'s tables.</li>
     <li>Shaders, pipelines and descriptor set layouts are deduplicated by their descriptor. Buffers and textures are always new.</li>
   </ul>
@@ -272,15 +272,15 @@
 <p>The application never holds a pointer. It holds a handle: <code>Handle</code>, an <code>index</code> and a <code>generation</code>. A default handle has <code>generation == 0</code> and is invalid (<code>isValid</code>). Its tag makes each handle its own C++ type, so a <code>MeshHandle</code> cannot go where a <code>TextureHandle</code> is expected. Why handles, and what the generation is for, is in <a href="generational-handles.html">Generational handles</a>. This section shows who owns what in RASM.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 320" role="img" aria-label="HandleManager in Engine gives out handles. CPU objects are stored in vectors in Engine's registry at handle.index. GPU objects are stored in unordered maps in RenderContext::Impl, from handle to an rhi object pointer.">
+  <svg viewBox="0 0 760 320" role="img" aria-label="Each table has a HandlePool that gives out handles: an index from 1, reused from a free list, and the slot's generation. CPU objects are stored in vectors in Engine's registry at handle.index. GPU objects are stored in vectors in RenderContext::Impl, at handle.index, as rhi object pointers.">
     <rect x="230" y="12" width="300" height="62" rx="6" class="cpu"/>
-    <text x="380" y="32" class="mid title">HandleManager (in Engine)</text>
-    <text x="380" y="50" class="mid mono">Handle{index, generation = 1}</text>
-    <text x="380" y="66" class="mid small">one counter per type, starts at 1, only grows</text>
+    <text x="380" y="32" class="mid title">HandlePool (one per table)</text>
+    <text x="380" y="50" class="mid mono">Handle{index, generation}</text>
+    <text x="380" y="66" class="mid small">indices from 1, freed ones reused, generation + 1</text>
     <line x1="300" y1="74" x2="195" y2="98" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <text x="226" y="86" class="end mono">getNextEntityHandle()</text>
+    <text x="226" y="86" class="end mono">entityHandles</text>
     <line x1="460" y1="74" x2="565" y2="98" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <text x="534" y="86" class="mono">getNextBufferHandle()</text>
+    <text x="534" y="86" class="mono">buffers.handles</text>
 
     <rect x="20" y="100" width="350" height="208" rx="8" class="zone"/>
     <text x="36" y="122" class="title">Engine::registry · CPU objects</text>
@@ -299,13 +299,13 @@
     <text x="270" y="188" class="mid small">Entity</text>
     <text x="316" y="182" class="mono">…</text>
     <text x="36" y="222" class="small">The same for materials, cameras, meshes, lights, scenes.</text>
-    <text x="36" y="240" class="small">Each create* checks the index against its MAX_* first.</text>
+    <text x="36" y="240" class="small">A capped pool hands out at most MAX_* − 1 live indices.</text>
     <text x="36" y="262" class="small">loadedMeshes, loadedTextures: path → handle cache</text>
-    <text x="36" y="280" class="small">bindlessTextureIndexMap: texture → bindless slot</text>
+    <text x="36" y="280" class="small">every lookup compares the generation first</text>
 
     <rect x="390" y="100" width="350" height="208" rx="8" class="zone"/>
     <text x="406" y="122" class="title">RenderContext::Impl · GPU objects</text>
-    <text x="406" y="144" class="mono">unordered_map&lt;Handle, rhi::Xxx*&gt;</text>
+    <text x="406" y="144" class="mono">vector&lt;rhi::Xxx*&gt;[handle.index]</text>
     <rect x="406" y="156" width="120" height="26" rx="4" class="cpu"/>
     <text x="466" y="173" class="mid mono">buffers</text>
     <line x1="526" y1="169" x2="566" y2="169" class="arrow" marker-end="url(#ah)"/>
@@ -321,10 +321,10 @@
     <line x1="526" y1="237" x2="566" y2="237" class="arrow" marker-end="url(#ah)"/>
     <rect x="568" y="224" width="156" height="26" rx="4" class="mem"/>
     <text x="646" y="241" class="mid mono">VulkanPipeline*</text>
-    <text x="406" y="272" class="small">+ shaders, commandBuffers, fences, queryPools,</text>
-    <text x="406" y="290" class="small">descriptor layouts, pools, sets, renderTargets</text>
+    <text x="406" y="272" class="small">+ shaders, commandBuffers, fences, queryPools, ...</text>
+    <text x="406" y="290" class="small">a texture also keeps its bindless slot</text>
   </svg>
-  <figcaption><code>RenderContext</code> is a friend of <code>Engine</code>, and takes its handles from the same <code>HandleManager</code>. The map values are typed as <code>rhi::</code> pointers; the objects behind them are the backend's derived structs (see <a href="graphics-apis-rhi.html#in-rasm">Graphics APIs and the RHI</a>).</figcaption>
+  <figcaption>A lookup is one compare and one array access, with no hash (<code>P4</code>). The table values are typed as <code>rhi::</code> pointers; the objects behind them are the backend's derived structs (see <a href="graphics-apis-rhi.html#in-rasm">Graphics APIs and the RHI</a>).</figcaption>
 </figure>
 
 <p>The two owners create an object in a different order:</p>
@@ -333,9 +333,8 @@
   <div>
     <h4>CPU object: <code>createEntity</code></h4>
     <ol class="steps">
-      <li><b>Take a handle.</b> <code>getNextEntityHandle</code> gives <code>{3, 1}</code>.</li>
-      <li><b>Check the limit.</b> <code>index &gt;= MAX_ENTITIES</code>? Then warn and return an invalid handle.</li>
-      <li><b>Store the object.</b> <code>registry.entities.resize(4)</code>, then <code>entities[3]</code> = the new <code>Entity</code>.</li>
+      <li><b>Take a handle.</b> <code>registry.entityHandles.allocate()</code> gives <code>{3, 1}</code>, or index 0 when <code>MAX_ENTITIES</code> − 1 are alive: then warn and return an invalid handle.</li>
+      <li><b>Store the object.</b> <code>registry.entities</code> grows to the pool's <code>size</code>, then <code>entities[3]</code> = the new <code>Entity</code>.</li>
       <li><b>Queue its rows.</b> With a mesh: <code>queueInstanceRows</code>, so the GPU scene gives it rows later.</li>
     </ol>
   </div>
@@ -343,9 +342,9 @@
     <h4>GPU object: <code>createBuffer</code></h4>
     <ol class="steps">
       <li><b>Make the object first.</b> <code>device-&gt;createBuffer(desc)</code> returns an <code>rhi::Buffer</code> pointer, or null on failure (then an invalid handle).</li>
-      <li><b>Take a handle.</b> <code>getNextBufferHandle</code> gives <code>{5, 1}</code>.</li>
-      <li><b>Store the pointer.</b> <code>buffers[{5, 1}]</code> = that pointer.</li>
-      <li><b>Look it up later.</b> Every later call looks the handle up, and logs an error if it is not found.</li>
+      <li><b>Take a handle.</b> <code>buffers.handles.allocate()</code> gives <code>{5, 1}</code>.</li>
+      <li><b>Store the pointer.</b> <code>buffers.objects[5]</code> = that pointer.</li>
+      <li><b>Look it up later.</b> Every later call checks the generation, and logs an error for a destroyed or unknown handle.</li>
     </ol>
   </div>
 </div>
@@ -363,12 +362,12 @@
 </table>
 </div>
 
-<p>Indices start at 1 and the check is <code>index &gt;= MAX_*</code>, so slot 0 is never used. That is why only 7 cameras fit in 8.</p>
+<p>Indices start at 1, so slot 0 is never used. That is why 7 cameras are alive at most with <code>MAX_CAMERAS</code> = 8. The limits count objects alive at once: a destroyed object gives its index back.</p>
 
 <div class="callout warn">
   <strong>Known issues</strong>
-  <p><b>D4</b>: nothing can be destroyed before shutdown, and <code>generation</code> is always 1, so a stale handle cannot be detected. Registry slots and bindless slots are never reused. <a href="generational-handles.html#in-rasm">Generational handles</a> shows what is missing.</p>
-  <p><b>B13</b>: a handle index is taken before validation, so a failed create still uses up an index.</p>
+  <p><b>D4</b>: textures, buffers and render targets can be destroyed (<a href="resource-lifetime.html">deferred destruction</a>); meshes, materials, entities, cameras, lights, scenes and environments not yet, so their indices still only grow.</p>
+  <p><b>B13</b>: <code>loadMesh</code> takes its handle before the file is parsed, so a file that does not parse keeps an index.</p>
 </div>
 
 <h2 id="dedup"><span class="n">5</span>Descriptors and creation dedup</h2>
@@ -666,7 +665,7 @@
 <div class="table-wrap">
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
-  <tr><td>Handles, <code>HandleManager</code></td><td><code>include/rasm/handle.h</code>, <code>src/core/handle.cpp</code></td></tr>
+  <tr><td>Handles, <code>HandlePool</code></td><td><code>include/rasm/handle.h</code>, <code>src/core/handle.cpp</code></td></tr>
   <tr><td>The registry</td><td><code>Engine::Registry</code> in <code>include/rasm/engine.h</code></td></tr>
   <tr><td>Create CPU objects</td><td><code>src/scene/scene.cpp</code>, <code>src/scene/entity.cpp</code>, <code>src/scene/camera.cpp</code>, <code>src/scene/light.cpp</code>, <code>src/assets/mesh.cpp</code>, <code>src/assets/material.cpp</code></td></tr>
   <tr><td>Handle → GPU object tables</td><td><code>RenderContext::Impl</code> in <code>src/rhi/renderContext.cpp</code></td></tr>

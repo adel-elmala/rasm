@@ -737,7 +737,7 @@
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>A second backend needs, in this order: shaders without raw pointers and <code>spirv_asm</code> (<b>D12</b>), a window hook that takes native handles (<b>D7</b>), and a transfer queue (<b>D13</b>). Objects are destroyed at once, so only when the GPU is idle or a fence covered their last use; there is no deferred destruction (<b>D4</b>). There is no pipeline cache (<b>P8</b>).</p>
+  <p>A second backend needs, in this order: shaders without raw pointers and <code>spirv_asm</code> (<b>D12</b>), a window hook that takes native handles (<b>D7</b>), and a transfer queue (<b>D13</b>). Buffers, textures and render targets are freed once the frame fences pass the frames that may use them (<a href="resource-lifetime.html">deferred destruction</a>); the other objects live as long as the device. There is no pipeline cache (<b>P8</b>).</p>
 </div>
 
 <h3>Further reading</h3>

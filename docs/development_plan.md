@@ -60,7 +60,7 @@ Goal: the structural changes that every later feature depends on. They get much 
 ### 1.2 RHI
 - [x] Define a backend-neutral device interface: device, buffer, texture, sampler, pipeline, command buffer, queue, swapchain, fence/timeline. Move all `Vk*` code behind it (`D1`, done 2026-11-02). The platform's Vulkan surface hook remains until `D7`.
 - [x] Use typed descriptors (`BufferDesc`, `TextureDesc`, `PipelineDesc`, …) with defaulted equality and a real hash combine (`D5`, done 2026-11-02).
-- [ ] Store objects in generational pools. Make `destroy*` APIs available for every object, with destruction deferred until the GPU has finished the frames that use them (`D4`, `P4`).
+- [ ] Store objects in generational pools. Make `destroy*` APIs available for every object, with destruction deferred until the GPU has finished the frames that use them (`D4`, `P4`). Partly done 2026-11-22: every handle comes from a `HandlePool` (free list, generation bump, stale handles refused), `RenderContext` tables are vectors indexed by handle (`P4`, done), and textures, buffers and render targets are destroyed through a release queue tied to the frame, compute and upload fences, which also reuses bindless slots (`B25`, done); `Engine::destroyTexture`, `destroyBuffer`, `destroyRenderTarget`; example `17_streaming`. Open: destroy calls for meshes (and their geometry pool ranges), materials (`D34`), entities, cameras, lights, scenes and environments (`D22`), with row and range reuse; the remaining waits (`D35`).
 - [ ] Use a single shared pipeline layout (the bindless set + push-constant range), a `VkPipelineCache` persisted to disk, and an on-disk SPIR-V cache keyed by source hash (`P8`).
 - [x] Load Vulkan functions at run time with volk instead of linking `vulkan-1.dll`: a clear error when the loader is missing or older than 1.3, or no GPU has Vulkan 1.4, device calls without the loader's trampoline, and unit tests that start without a Vulkan loader (`D24`, done 2026-11-22).
 
@@ -76,7 +76,7 @@ Goal: the structural changes that every later feature depends on. They get much 
 - [x] Use reversed-Z with an infinite far plane by default. The depth format becomes `D32_SFLOAT`, without stencil unless it is requested (done 2026-11-04).
 
 ### 1.5 Quality
-- [ ] Extend `rasm_tests` to glTF import (done 2026-11-04) and to the handle pools once they exist (`D4`). Handles, descriptor equality and hashing, render-graph sorting, transforms, camera math and glTF import are covered (`D17`).
+- [x] Extend `rasm_tests` to glTF import (done 2026-11-04) and to the handle pools (done 2026-11-22: `HandlePool` and the release queue, `D4`). Handles, descriptor equality and hashing, render-graph sorting, transforms, camera math and glTF import are covered (`D17`).
 - [x] Set up CI: build Windows and macOS presets on every PR, and run unit tests (`D17`, done 2026-11-04). Add image tests once headless rendering exists (phase 4; done 2026-11-22: the Windows job runs the golden-image tests on lavapipe).
 
 **Exit criteria:** examples build against `rasm::rasm` from an install tree, using only public headers. Core code contains no `Vk*` identifiers. Objects can be created and destroyed at runtime without leaks under validation.

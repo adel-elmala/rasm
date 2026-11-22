@@ -33,7 +33,7 @@
 <h2><span class="n">1</span>Handles</h2>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 230" role="img" aria-label="A CameraHandle with index 3 and generation 1 points at slot 3 of the engine's camera list. Slot 0 is never used. Indices count up from 1, so with MAX_CAMERAS of 8 the ninth slot, index 8, is refused and 7 cameras fit.">
+  <svg viewBox="0 0 760 230" role="img" aria-label="A CameraHandle with index 3 and generation 1 points at slot 3 of the engine's camera list. Slot 0 is never used. Indices count up from 1, so with MAX_CAMERAS of 8 the ninth slot, index 8, is refused and 7 cameras are alive at most.">
     <rect x="250" y="10" width="260" height="50" rx="6" class="cpu"/>
     <text x="380" y="32" class="mid mono">CameraHandle</text>
     <text x="380" y="50" class="mid small">index = 3 · generation = 1</text>
@@ -57,7 +57,7 @@
     <text x="700" y="190" class="mid small t-hot">≥ MAX_CAMERAS</text>
 
     <text x="20" y="206" class="small">Each type counts its indices from 1, so slot 0 stays empty and {0, 0} means "no object".</text>
-    <text x="20" y="222" class="small">A limit of 8 holds 7 objects. A refused or failed create still uses up its index.</text>
+    <text x="20" y="222" class="small">A limit of 8 holds 7 live objects. A destroyed object's index comes back, with a new generation.</text>
   </svg>
   <figcaption>A handle is an index into one of the engine's lists. It holds no pointer, so it is cheap to copy and to store.</figcaption>
 </figure>
@@ -76,11 +76,11 @@ struct Handle
     <p>The name of an engine object. <code>Tag</code> is an empty struct that makes each kind a different type, so a <code>MeshHandle</code> cannot be passed where a <code>TextureHandle</code> is expected.</p>
     <dl>
       <dt>index</dt><dd>The slot in the engine's list for that kind of object. Starts at 1.</dd>
-      <dt>generation</dt><dd>1 for every object the engine creates; 0 for a default-constructed handle.</dd>
+      <dt>generation</dt><dd>The generation of the slot when the object was made: 1 the first time, one more each time the slot was reused. 0 for a default-constructed handle.</dd>
       <dt>isValid()</dt><dd><code>generation != 0</code>. Every create function returns an invalid (<code>{}</code>) handle on failure, so check it.</dd>
       <dt>operator==</dt><dd>Equal when both <code>index</code> and <code>generation</code> are equal.</dd>
     </dl>
-    <p><code>isValid()</code> does not tell you that an object still exists: handles are never reused or invalidated, and the generation is always 1 (<code>D4</code>).</p>
+    <p><code>isValid()</code> does not tell you that the object still exists. The engine does: a call with a handle whose object was destroyed logs an error and does nothing, even when a new object took its index.</p>
   </div>
 </div>
 
@@ -134,64 +134,34 @@ struct Handle
 
 <p>Each alias is <code>Handle&lt;XTag&gt;</code> with its own tag: <code>MeshTag</code>, <code>BufferTag</code>, <code>TextureTag</code>, <code>MaterialTag</code>, <code>PipelineTag</code>, <code>CommandBufferTag</code>, <code>FenceTag</code>, <code>SwapchainTag</code>, <code>ShaderTag</code>, <code>SceneTag</code>, <code>EntityTag</code>, <code>CameraTag</code>, <code>WindowTag</code>, <code>ResourceTag</code>, <code>RenderTargetTag</code>, <code>LightTag</code>, <code>DescriptorSetLayoutTag</code>, <code>DescriptorPoolTag</code>, <code>DescriptorSetTag</code>, <code>QueryPoolTag</code>, <code>EnvironmentTag</code>, <code>ReadbackTag</code>. The tags are only declared, never defined.</p>
 
-<div class="api" id="HandleManager">
-  <pre class="sig">class HandleManager
+<div class="api" id="HandlePool">
+  <pre class="sig">struct HandleSlot
+{
+    uint64_t    index       = 0;
+    uint64_t    generation  = 0;
+};
+
+class HandlePool
 {
 public:
-    MeshHandle                getNextMeshHandle();
-    ShaderHandle              getNextShaderHandle();
-    BufferHandle              getNextBufferHandle();
-    TextureHandle             getNextTextureHandle();
-    PipelineHandle            getNextPipelineHandle();
-    CommandBufferHandle       getNextCommandBufferHandle();
-    FenceHandle               getNextFenceHandle();
-    SwapchainHandle           getNextSwapchainHandle();
-    RenderTargetHandle        getNextRenderTargetHandle();
-    DescriptorSetLayoutHandle getNextDescriptorSetLayoutHandle();
-    DescriptorPoolHandle      getNextDescriptorPoolHandle();
-    DescriptorSetHandle       getNextDescriptorSetHandle();
-    QueryPoolHandle           getNextQueryPoolHandle();
-    MaterialHandle            getNextMaterialHandle();
-    CameraHandle              getNextCameraHandle();
-    EntityHandle              getNextEntityHandle();
-    LightHandle               getNextLightHandle();
-    SceneHandle               getNextSceneHandle();
-    EnvironmentHandle         getNextEnvironmentHandle();
-    ReadbackHandle            getNextReadbackHandle();
+                HandlePool() = default;
+    explicit    HandlePool(uint64_t limit);                         // indices 1 .. limit - 1
 
-private:
-    HandleCounters nextHandle = {};
+    HandleSlot  allocate();                                         // {0, 0} when every index is in use
+    bool        release(uint64_t index, uint64_t generation);       // false for a stale or invalid handle
+    bool        isAlive(uint64_t index, uint64_t generation) const;
+    uint64_t    size() const;                                       // one past the highest index handed out
+    uint64_t    liveCount() const;
 };</pre>
   <div class="body">
-    <p>The engine's handle source. Each <code>getNext…Handle</code> returns <code>{counter, 1}</code> and adds 1 to that kind's counter. Applications never call it: the engine owns one and the create functions use it.</p>
-  </div>
-</div>
-
-<div class="api" id="HandleCounters">
-  <pre class="sig">struct HandleCounters
-{
-    uint64_t scene               = 1;
-    uint64_t entity              = 1;
-    uint64_t mesh                = 1;
-    uint64_t texture             = 1;
-    uint64_t material            = 1;
-    uint64_t buffer              = 1;
-    uint64_t pipeline            = 1;
-    uint64_t shader              = 1;
-    uint64_t commandBuffer       = 1;
-    uint64_t fence               = 1;
-    uint64_t swapchain           = 1;
-    uint64_t renderTarget        = 1;
-    uint64_t descriptorSetLayout = 1;
-    uint64_t descriptorPool      = 1;
-    uint64_t descriptorSet       = 1;
-    uint64_t queryPool           = 1;
-    uint64_t camera              = 1;
-    uint64_t light               = 1;
-    uint64_t environment         = 1;
-};</pre>
-  <div class="body">
-    <p>The next index of each handle kind, all starting at 1. This is why slot 0 is never used.</p>
+    <p>Where handles come from. Each of the engine's tables has one: the registry's entities, meshes, materials, cameras, lights, scenes, environments and readbacks, and each kind of <code>RenderContext</code> object. Applications never use one: the create functions do.</p>
+    <dl>
+      <dt>allocate</dt><dd>The index released last, if there is one (a stack), else a new index. The handle takes the slot's current generation. Index 0 means the pool is full: a pool made with a <code>limit</code> holds at most <code>limit</code> − 1 live indices, which is how the <code>MAX_*</code> limits work.</dd>
+      <dt>release</dt><dd>Frees the index and adds 1 to its generation, so every handle made for it before is stale. A slot whose generation reaches the maximum is never reused.</dd>
+      <dt>isAlive</dt><dd>True only for the handle the slot gave out last, while it is not released. Generation 0 is never alive.</dd>
+      <dt>size</dt><dd>One past the highest index handed out: a table indexed by handle needs this many rows. Reuse keeps it at the peak number of live objects.</dd>
+    </dl>
+    <p>The design, and why it finds a stale handle, is the guide <a href="../guides/generational-handles.html">Generational handles</a>.</p>
   </div>
 </div>
 
@@ -631,14 +601,14 @@ if (rasm::readPng("golden.png", golden) &amp;&amp; golden.width == image.width)
 
 <h2><span class="n">4</span>Constants and limits</h2>
 
-<p>All are <code>constexpr</code> in the public headers. Exceeding a <code>create</code> limit logs a warning or error and returns an invalid handle. Because handle indices start at 1 and are never reused, the limits on handle indices hold one object less than their value, and a failed create uses up an index too (B13).</p>
+<p>All are <code>constexpr</code> in the public headers. Exceeding a <code>create</code> limit logs a warning or error and returns an invalid handle. Because handle indices start at 1, the limits on handle indices hold one live object less than their value. A destroyed object gives its index back; <code>loadMesh</code> keeps the index of a file that does not parse (B13).</p>
 
 <div class="table-wrap">
 <table>
   <tr><th>Constant and header</th><th>Value</th><th>What it limits</th></tr>
   <tr id="MAX_FRAMES_IN_FLIGHT"><td><code>MAX_FRAMES_IN_FLIGHT</code><br><code>rasm/types.h</code></td><td>2</td><td>Frame slots. The CPU records one frame while the GPU runs the other.</td></tr>
   <tr id="MAX_COLOR_ATTACHMENTS"><td><code>MAX_COLOR_ATTACHMENTS</code><br><code>rasm/types.h</code></td><td>4</td><td>Color attachments of one render target or pipeline. Vulkan guarantees at least 4.</td></tr>
-  <tr id="MAX_BINDLESS_TEXTURES"><td><code>MAX_BINDLESS_TEXTURES</code><br><code>rasm/types.h</code></td><td>1024</td><td>Bindless texture slots in all. Each loaded texture takes 1. A render target takes 1 per color texture, and 1 per depth texture with <code>EngineConfig::occlusionCulling</code>, on a depth-only target or with a <code>MOTION_FORMAT</code> color; a history target twice that. Slots are never freed.</td></tr>
+  <tr id="MAX_BINDLESS_TEXTURES"><td><code>MAX_BINDLESS_TEXTURES</code><br><code>rasm/types.h</code></td><td>1024</td><td>Bindless texture slots in all. Each loaded texture takes 1. A render target takes 1 per color texture, and 1 per depth texture with <code>EngineConfig::occlusionCulling</code>, on a depth-only target or with a <code>MOTION_FORMAT</code> color; a history target twice that. A destroyed texture's slot is reused once the GPU is done with it.</td></tr>
   <tr id="MAX_DESCRIPTOR_TYPES"><td><code>MAX_DESCRIPTOR_TYPES</code><br><code>rasm/types.h</code></td><td>1</td><td>Entries in <code>DescriptorPoolDesc::sizes</code>.</td></tr>
   <tr id="MAX_BINDLESS_STORAGE_IMAGES"><td><code>MAX_BINDLESS_STORAGE_IMAGES</code><br><code>rasm/types.h</code></td><td>1024</td><td>Storage image slots, binding 1 of the bindless set: one mip of a texture each, which compute writes (<a href="low-level.html#updateBindlessStorageImage"><code>updateBindlessStorageImage</code></a>). The first <code>RESERVED_STORAGE_IMAGES</code> (32) are the environment bake's, which uses up to 19 of them for one frame at a time. Each color of a <a href="render-graph.html#RenderTargetDesc">storage render target</a> takes one of the others for the target's life; <a href="engine.html#addBloomPasses"><code>addBloomPasses</code></a> takes 11. A target that does not fit logs an error that names this limit and is not made. Startup checks it against the device (Vulkan: <samp>maxDescriptorSetUpdateAfterBindStorageImages</samp>), with an error that names both numbers.</td></tr>
   <tr id="RESERVED_STORAGE_IMAGES"><td><code>RESERVED_STORAGE_IMAGES</code><br><code>rasm/types.h</code></td><td>32</td><td>Storage image slots 0 to 31, kept for the environment bake. <a href="low-level.html#updateBindlessStorageImage"><code>updateBindlessStorageImage</code></a> with your own slot must stay out of the storage targets' slots too.</td></tr>
@@ -669,7 +639,7 @@ if (rasm::readPng("golden.png", golden) &amp;&amp; golden.width == image.width)
 
 <div class="callout warn">
   <strong>Known limits</strong>
-  <p>The limits are fixed at compile time and spread over several headers (<code>D15</code>). Handles are never reused and objects cannot be destroyed (<code>D4</code>), so a long-running application that creates and drops objects runs into these limits.</p>
+  <p>The limits are fixed at compile time and spread over several headers (<code>D15</code>). Textures, buffers and render targets can be destroyed and their indices and slots are reused; the other objects cannot be destroyed yet (<code>D4</code>), so a long-running application that creates and drops them runs into these limits.</p>
 </div>
 
 </main>

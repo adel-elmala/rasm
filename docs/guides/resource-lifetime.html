@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deferred Destruction · RASM</title>
+<meta name="description" content="How an engine destroys objects the GPU may still use: the handle dies at once, the memory once the GPU has finished every frame that may read it. Fence values per queue and for uploads, the release queue, what can be reused at once and what must wait, and how RASM does it.">
+<meta name="rasm-sources" content="src/rhi/releaseQueue.h src/rhi/releaseQueue.cpp src/rhi/renderContext.cpp include/rasm/render/renderContext.h include/rasm/engine.h src/engine.cpp src/assets/texture.cpp src/renderer/ui.cpp src/rhi/uploadManager.cpp examples/17_streaming/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/resource-lifetime.js"></script>
+</head>
+<body data-root="../" data-page="guides/resource-lifetime.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Foundations</p>
+<h1>Deferred destruction</h1>
+<p class="lead">A program that streams content (map tiles, game levels) destroys textures and buffers all the time. But when the CPU destroys an object, the GPU may still be running a frame that reads it. <b>Deferred destruction</b> splits destroy in two: the name of the object dies at once, and its memory dies later, when the GPU has finished every frame that may use it. This page explains how to know when that is. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>The CPU is one or two frames ahead of the GPU. An object destroyed in frame <var>n</var> may still be read by frames <var>n</var> − 1 and <var>n</var>.</li>
+    <li>Destroy has two parts. The <b>handle</b> dies now, so no new work can use the object. The <b>memory</b> dies later.</li>
+    <li>"Later" is a <b>fence value</b>: the value the queues signal when the frame that was recorded at the destroy is done. Every queue counts, and so do uploads.</li>
+    <li>A <b>release queue</b> holds what waits. Each frame end gives the new entries their values; each frame start frees the entries whose values the fences reached. Nothing waits on the CPU.</li>
+    <li>What the GPU finds by a number (a bindless slot, a pool range, a table row with one copy) waits too. Data with <b>one copy per frame slot</b> can be reused at once.</li>
+    <li>When nothing was destroyed, the queue is empty and costs nothing.</li>
+  </ul>
+</div>
+
+<h2 id="problem"><span class="n">1</span>The problem: the GPU is behind</h2>
+
+<p>With <a href="frames-in-flight.html">frames in flight</a>, the CPU records frame 12 while the GPU still runs frame 11. Look at texture T: frame 11 samples it, and frame 12 has already recorded draws that sample it. Now the program destroys T in frame 12.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="A timeline. The CPU records frames 10, 11, 12 and 13. The GPU runs frame 10, then 11, then 12, one frame later. During frame 12 on the CPU, the program destroys texture T. At that moment the GPU is running frame 11, which samples T, and frame 12 is recorded with draws that sample T. Freeing T at once breaks both. T can be freed when the GPU has finished frame 12.">
+    <text x="70" y="52" class="end small t-cpu">CPU</text>
+    <text x="70" y="112" class="end small t-gpu">GPU</text>
+    <rect x="80"  y="36" width="150" height="26" rx="3" class="cpu"/><text x="155" y="54" class="mid small">record 10</text>
+    <rect x="240" y="36" width="150" height="26" rx="3" class="cpu"/><text x="315" y="54" class="mid small">record 11</text>
+    <rect x="400" y="36" width="150" height="26" rx="3" class="cpu"/><text x="475" y="54" class="mid small">record 12: uses T</text>
+    <rect x="560" y="36" width="150" height="26" rx="3" class="cpu"/><text x="635" y="54" class="mid small">record 13</text>
+    <rect x="240" y="96" width="150" height="26" rx="3" class="gpu"/><text x="315" y="114" class="mid small">run 10: uses T</text>
+    <rect x="400" y="96" width="150" height="26" rx="3" class="gpu"/><text x="475" y="114" class="mid small">run 11: uses T</text>
+    <rect x="560" y="96" width="150" height="26" rx="3" class="gpu"/><text x="635" y="114" class="mid small">run 12: uses T</text>
+    <line x1="540" y1="20" x2="540" y2="150" class="arrow bad dashed"/>
+    <text x="540" y="14" class="mid small t-bad">destroy T</text>
+    <line x1="710" y1="130" x2="710" y2="168" class="arrow ok" marker-end="url(#ah-ok)"/>
+    <text x="710" y="184" class="mid small t-ok">frame 12 done: free T</text>
+    <rect x="400" y="96" width="140" height="26" rx="3" class="hot"/>
+    <text x="300" y="168" class="small t-bad">freed at the red line: frame 11 reads freed memory now,</text>
+    <text x="300" y="184" class="small t-bad">and frame 12 later. Garbage, or a lost device.</text>
+    <text x="20" y="216" class="small">The red line is the destroy call. Two frames still read T after it: the one the GPU runs, and the one being recorded.</text>
+  </svg>
+  <figcaption>The recorded frame matters too: its draws were recorded before the destroy, and they run after it.</figcaption>
+</figure>
+
+<p>Waiting until the GPU is idle at every destroy would work, but it stops the CPU for a whole frame. A program that destroys ten tiles a frame would never overlap the CPU and the GPU again.</p>
+
+<h2 id="two-deaths"><span class="n">2</span>The idea: two deaths</h2>
+
+<div class="split">
+  <div class="bad">
+    <h4>Destroy frees at once</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="The handle and the memory die at the same moment, while the GPU still reads the memory.">
+      <rect x="20" y="30" width="120" height="30" rx="4" class="cpu"/><text x="80" y="50" class="mid small">handle T</text>
+      <rect x="180" y="30" width="120" height="30" rx="4" class="mem"/><text x="240" y="50" class="mid small">image memory</text>
+      <line x1="20" y1="80" x2="300" y2="80" class="arrow bad thick"/>
+      <text x="160" y="100" class="mid small t-bad">both die at the call</text>
+      <text x="160" y="124" class="mid small t-bad">the GPU still reads the memory</text>
+    </svg>
+    <p>Simple, and wrong whenever a frame in flight uses the object.</p>
+  </div>
+  <div class="good">
+    <h4>The handle dies now, the memory later</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="The handle dies at the call. The memory waits in a release queue and dies when the GPU has finished the frames that may use it.">
+      <rect x="20" y="30" width="120" height="30" rx="4" class="cpu"/><text x="80" y="50" class="mid small">handle T</text>
+      <rect x="180" y="30" width="120" height="30" rx="4" class="mem"/><text x="240" y="50" class="mid small">image memory</text>
+      <line x1="20" y1="80" x2="140" y2="80" class="arrow bad thick"/>
+      <text x="80" y="100" class="mid small t-bad">dies now</text>
+      <line x1="180" y1="80" x2="300" y2="80" class="arrow ok thick dashed"/>
+      <text x="240" y="100" class="mid small t-ok">dies when the GPU</text>
+      <text x="240" y="116" class="mid small t-ok">is done with it</text>
+    </svg>
+    <p>New code can't use T: its <a href="generational-handles.html">generational handle</a> is stale. Old frames still can.</p>
+  </div>
+</div>
+
+<div class="callout rule">
+  <strong>The rule</strong>
+  <p>An object may be freed only when every piece of GPU work that was submitted, or recorded, before the destroy has finished.</p>
+</div>
+
+<h2 id="when"><span class="n">3</span>When is "later"? Fence values</h2>
+
+<p>A <b>timeline fence</b> is a counter on the GPU. Each submit signals the next value when its work is done, and the CPU can read the counter without waiting (<a href="frames-in-flight.html#fences">frames in flight</a>). So "later" is a list of values, one per counter that work on the object may be behind:</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The graphics queue's counter: the frame's draws signal value v.">
+      <rect x="20" y="40" width="200" height="34" rx="4" class="gpu"/><text x="120" y="62" class="mid small">draws, copies, readbacks</text>
+      <text x="120" y="100" class="mid small t-gpu">signals graphics value v</text>
+    </svg>
+    <h4>The graphics queue</h4>
+    <p>The frame's last graphics submit. It covers everything the frame drew.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The compute queue's counter: async compute work signals value c.">
+      <rect x="20" y="40" width="200" height="34" rx="4" class="gpu"/><text x="120" y="62" class="mid small">culling, Hi-Z on compute</text>
+      <text x="120" y="100" class="mid small t-gpu">signals compute value c</text>
+    </svg>
+    <h4>Every other queue</h4>
+    <p>Work on a second queue can run after the graphics work. Its own counter says when it is done.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The upload counter: copies from the staging ring into the object signal value u.">
+      <rect x="20" y="40" width="200" height="34" rx="4" class="mem"/><text x="120" y="62" class="mid small">staging copies into it</text>
+      <text x="120" y="100" class="mid small t-faint">signals upload value u</text>
+    </svg>
+    <h4>Uploads</h4>
+    <p>A copy into the object may have been sent after the frame. It must finish before the memory goes.</p>
+  </div>
+</div>
+
+<p>The values to wait for are the ones the counters signal <b>after</b> the destroy: the end of the frame being recorded. They are not known at the destroy call, only once that frame is submitted. So the frame end hands them out:</p>
+
+<ol class="flow">
+  <li class="cpu"><b>destroy</b>The handle dies. The free waits, with no values yet.</li>
+  <li class="cpu"><b>end of the frame</b>After the submits: each waiting free gets the values the counters signal last.</li>
+  <li class="gpu"><b>the GPU runs</b>The counters reach those values, one by one.</li>
+  <li class="cpu"><b>start of a frame</b>Read the counters; free every entry whose values they all reached.</li>
+</ol>
+
+<div class="callout">
+  <strong>A frame that is dropped</strong>
+  <p>A frame whose submit failed, or that was never submitted, runs nothing. Its frees take the values the counters signaled last, from the frames before. They cover all work that was ever sent, so the frees are still safe.</p>
+</div>
+
+<h2 id="queue"><span class="n">4</span>The release queue, step by step</h2>
+
+<p>The release queue is a list of frees in order. New ones wait at the back with no values. Since the values only grow, the queue is sorted by them, and the frame start stops at the first entry that is not done.</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>Frame 12: destroy T</h4>
+    <svg viewBox="0 0 760 120" role="img" aria-label="The release queue holds one entry: free T, with no values yet.">
+      <text x="20" y="24" class="small">release queue</text>
+      <rect x="20" y="36" width="200" height="40" rx="4" class="mem"/><text x="120" y="54" class="mid small">free T</text><text x="120" y="70" class="mid small t-faint">no values yet</text>
+      <text x="260" y="60" class="small">GPU: runs frame 11 (graphics counter at 10)</text>
+    </svg>
+    <p>The handle of T is stale from now on. The image and its slot stay as they are.</p>
+  </div>
+  <div class="step">
+    <h4>End of frame 12: tag</h4>
+    <svg viewBox="0 0 760 120" role="img" aria-label="Frame 12 is submitted and will signal graphics value 12. The entry gets the values 12 and upload value 40.">
+      <text x="20" y="24" class="small">release queue</text>
+      <rect x="20" y="36" width="200" height="40" rx="4" class="mem"/><text x="120" y="54" class="mid small">free T</text><text x="120" y="70" class="mid small">graphics 12, upload 40</text>
+      <text x="260" y="60" class="small">frame 12 is submitted; it will signal 12</text>
+    </svg>
+    <p>The entry gets the values of frame 12's submits, and the uploads' last one.</p>
+  </div>
+  <div class="step">
+    <h4>Start of frame 13: not yet</h4>
+    <svg viewBox="0 0 760 120" role="img" aria-label="The graphics counter reads 11. The entry needs 12, so it stays.">
+      <text x="20" y="24" class="small">release queue</text>
+      <rect x="20" y="36" width="200" height="40" rx="4" class="mem"/><text x="120" y="54" class="mid small">free T</text><text x="120" y="70" class="mid small">graphics 12, upload 40</text>
+      <text x="260" y="60" class="small">counters read: graphics 11, upload 40. 11 &lt; 12: it stays.</text>
+    </svg>
+    <p>Reading a counter does not wait. The frame goes on.</p>
+  </div>
+  <div class="step">
+    <h4>Start of frame 14: free</h4>
+    <svg viewBox="0 0 760 120" role="img" aria-label="The graphics counter reads 12 and the upload counter 40. T's image is destroyed and its slot is free.">
+      <text x="20" y="24" class="small">release queue</text>
+      <rect x="20" y="36" width="200" height="40" rx="4" class="ghost"/><text x="120" y="60" class="mid small t-faint">empty</text>
+      <text x="260" y="52" class="small t-ok">counters read: graphics 12, upload 40. Free T.</text>
+      <text x="260" y="72" class="small">Its image is destroyed, its slot can take a new texture.</text>
+    </svg>
+    <p>With two frames in flight, an object is freed about two frame starts after its destroy.</p>
+  </div>
+</div>
+
+<p>Try it. Destroy a texture, then make a new one, and press "Next frame" until the GPU is done. Then turn the queue off and do the same.</p>
+
+<figure class="lab" data-lab="release-queue" data-title="Destroy, wait, reuse">
+  <figcaption>Destroy a texture, then create one: with the queue on, the new texture waits for a free slot. With the queue off, it takes the slot at once, and a frame in flight samples the wrong texture.</figcaption>
+</figure>
+
+<h2 id="what-waits"><span class="n">5</span>What waits, and what can be reused at once</h2>
+
+<p>Memory is not the only thing the GPU finds again later. Anything the GPU looks up by a number must not change its meaning while a frame in flight may look it up.</p>
+
+<div class="vgrid two">
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A buffer or an image: one copy, read by every frame.">
+      <rect x="60" y="30" width="120" height="50" rx="4" class="mem"/><text x="120" y="60" class="mid small">one image</text>
+      <text x="120" y="108" class="mid small">frames 11 and 12 read it</text>
+    </svg>
+    <h4>Memory: waits</h4>
+    <p>Buffers, images, the heaps they are placed in.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A row of numbered slots; slot 4 is named by a material record.">
+      <rect x="20" y="40" width="40" height="30" class="mem"/><rect x="60" y="40" width="40" height="30" class="mem"/><rect x="100" y="40" width="40" height="30" class="hot"/><rect x="140" y="40" width="40" height="30" class="mem"/><rect x="180" y="40" width="40" height="30" class="mem"/>
+      <text x="120" y="60" class="mid small">4</text>
+      <text x="120" y="100" class="mid small">a record says "slot 4"</text>
+    </svg>
+    <h4>Numbers with one copy: wait</h4>
+    <p>A <a href="bindless.html">bindless slot</a>, a range of a shared pool, a row of a table with one copy.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A table with two copies, one per frame slot. The CPU writes copy 0 while the GPU reads copy 1.">
+      <rect x="30" y="30" width="80" height="50" rx="4" class="mem"/><text x="70" y="60" class="mid small">copy 0</text>
+      <rect x="130" y="30" width="80" height="50" rx="4" class="mem"/><text x="170" y="60" class="mid small">copy 1</text>
+      <text x="70" y="100" class="mid small t-cpu">CPU writes</text><text x="170" y="100" class="mid small t-gpu">GPU reads</text>
+    </svg>
+    <h4>One copy per frame slot: at once</h4>
+    <p>A row may take a new object now. The frame in flight reads its own copy, which is written only after its fence.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A pipeline shared by two users, kept for the program's life.">
+      <rect x="60" y="30" width="120" height="50" rx="4" class="shader"/><text x="120" y="60" class="mid small">pipeline</text>
+      <text x="120" y="100" class="mid small">shared, kept</text>
+    </svg>
+    <h4>Shared immutable objects: kept</h4>
+    <p>A deduplicated pipeline or shader may have other holders. They are few, so they live as long as the device.</p>
+  </div>
+</div>
+
+<h2 id="pitfalls"><span class="n">6</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>Garbage or a lost device a frame after a destroy</dt><dd>The memory was freed while a frame in flight read it. Free through the queue, never at the call.</dd></div>
+  <div><dt>The wrong texture flickers on old objects for one or two frames</dt><dd>A slot or a range was reused before the frames that knew the old meaning were done. Its release must wait too, not only the memory.</dd></div>
+  <div><dt>A free that never happens</dt><dd>It waits for a value nothing will signal: taken before the submit, or for a submit that failed. Tag at the end of the frame with the values the counters really signaled last.</dd></div>
+  <div><dt>Memory grows while the window is minimized</dt><dd>No frame runs, so nothing is collected. The entries are freed at the next frame; a program that must free while hidden waits for the device to be idle.</dd></div>
+  <div><dt>A copy writes into freed memory</dt><dd>An upload sent after the frame still writes the object. Its counter is one of the values to wait for.</dd></div>
+  <div><dt>The frame stalls at a destroy</dt><dd>A wait for the device to be idle at each destroy. Read counters, never wait on them, to decide what to free.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">7</span>In RASM</h2>
+
+<p><code>RenderContext::destroyTexture</code>, <code>destroyBuffer</code> and <code>destroyRenderTargets</code> (and <code>Engine::destroyTexture</code>, <code>Engine::destroyBuffer</code>, <code>Engine::destroyRenderTarget</code> for applications) release the handle at once and give the free to a <code>rhi::ReleaseQueue</code>. <code>Engine::endFrame</code> tags the queue after <code>submitBatches</code>, and <code>Engine::beginFrame</code> collects it after the fence wait of the frame slot. Nothing waits on the CPU.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="destroyTexture releases the handle in the texture pool and pushes a free onto the release queue, untagged. endFrame, after submitBatches, calls tagReleases with frameFenceValue, computeFenceValue and the uploads' last submit. beginFrame, after its fence waits, calls collectReleases, which reads the three fences and runs every free whose values they reached: textureStates.forget, cancelUploads, destroyTexture, and the bindless slot goes back to freeBindlessSlots.">
+    <rect x="20" y="20" width="220" height="70" rx="6" class="cpu"/>
+    <text x="130" y="42" class="mid mono">destroyTexture(T)</text>
+    <text x="130" y="62" class="mid small">pool: release, generation + 1</text>
+    <text x="130" y="78" class="mid small">T's handle is stale at once</text>
+    <line x1="240" y1="55" x2="288" y2="55" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="290" y="20" width="220" height="70" rx="6" class="mem"/>
+    <text x="400" y="42" class="mid mono">ReleaseQueue::release</text>
+    <text x="400" y="62" class="mid small">free the image, give back</text>
+    <text x="400" y="78" class="mid small">the slot: untagged</text>
+    <rect x="540" y="20" width="200" height="70" rx="6" class="cpu"/>
+    <text x="640" y="42" class="mid mono">endFrame</text>
+    <text x="640" y="62" class="mid small">submitBatches, then</text>
+    <text x="640" y="78" class="mid mono">tagReleases</text>
+    <line x1="640" y1="90" x2="640" y2="128" class="arrow" marker-end="url(#ah)"/>
+    <rect x="460" y="130" width="280" height="66" rx="6" class="mem"/>
+    <text x="600" y="150" class="mid small">values: frameFenceValue,</text>
+    <text x="600" y="166" class="mid small">computeFenceValue, the uploads'</text>
+    <text x="600" y="182" class="mid small">lastSubmit (a dropped frame too)</text>
+    <line x1="460" y1="163" x2="322" y2="163" class="arrow" marker-end="url(#ah)"/>
+    <rect x="20" y="130" width="300" height="66" rx="6" class="cpu"/>
+    <text x="170" y="150" class="mid mono">beginFrame: after waitForFence</text>
+    <text x="170" y="168" class="mid mono">collectReleases</text>
+    <text x="170" y="186" class="mid small">reads the 3 fences, never waits</text>
+    <line x1="170" y1="196" x2="170" y2="228" class="arrow ok" marker-end="url(#ah-ok)"/>
+    <rect x="20" y="230" width="720" height="50" rx="6" class="gpu"/>
+    <text x="380" y="250" class="mid small">every entry whose values all three reached: textureStates.forget, cancelUploads, destroyTexture;</text>
+    <text x="380" y="268" class="mid small">the bindless slot goes on freeBindlessSlots, and the next texture that needs a slot takes it</text>
+  </svg>
+  <figcaption>The graphics value covers the frame's compute work, because the frame's last graphics batch waits for it (<a href="async-compute.html">async compute</a>). The compute value still counts, for a frame whose later batches failed after a compute one went out.</figcaption>
+</figure>
+
+<h3>Where RASM follows this page, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Handle</td><td>dies at the call</td><td>The same: the <code>HandlePool</code> of the object's table bumps the generation, so a lookup with the old handle logs an error and fails (<a href="generational-handles.html#in-rasm">generational handles</a>).</td></tr>
+  <tr><td>Counters</td><td>one per queue, and the uploads'</td><td><code>RELEASE_TIMELINES</code> = 3: <code>frameFence</code>, <code>computeFence</code> (only with async compute) and the upload manager's fence.</td></tr>
+  <tr><td>Tag</td><td>at the end of the frame</td><td><code>tagReleases</code> in <code>endFrame</code>, right after <code>submitBatches</code>, also when the frame was dropped.</td></tr>
+  <tr><td>Collect</td><td>at the start of a frame, by reading the counters</td><td><code>collectReleases</code> in <code>beginFrame</code>, after the slot's fence wait. With nothing tagged it returns at once.</td></tr>
+  <tr><td>Free</td><td>a free function per entry</td><td>A <code>std::function</code> per entry, in order. <code>RenderContext::cleanup</code> waits for the device and runs them all (<code>releaseAll</code>).</td></tr>
+  <tr><td>Bindless slots</td><td>wait like memory</td><td>The same. A texture holds one slot; its destroy gives it back through the queue, and <code>updateBindlessDescriptorSet</code> takes freed slots first. <a href="bindless.html#in-rasm">Bindless resources</a> has the details.</td></tr>
+  <tr><td>Materials that use a destroyed texture</td><td>must stop using its slot</td><td><code>Engine::destroyTexture</code> removes the texture from every material that has it and rewrites their rows, so the slot samples nothing before it is reused.</td></tr>
+  <tr><td>Per-slot table rows</td><td>reusable at once</td><td>The rows of a <code>GpuTable</code> (instances, materials, lights) have one copy per frame slot, written only in <code>syncGpuScene</code> after the slot's fence.</td></tr>
+</table>
+</div>
+
+<h3>Code map</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The queue: <code>release</code>, <code>tag</code>, <code>collect</code>, <code>releaseAll</code></td><td><code>src/rhi/releaseQueue.h</code>, <code>src/rhi/releaseQueue.cpp</code></td></tr>
+  <tr><td>Deferred frees of textures, buffers (also the old buffer of <code>resizeBuffer</code>), heaps and storage slots; <code>tagReleases</code>, <code>collectReleases</code></td><td><code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>Tag and collect in the frame</td><td><code>Engine::endFrame</code>, <code>Engine::beginFrame</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Texture destroy for applications</td><td><code>Engine::destroyTexture</code> in <code>src/assets/texture.cpp</code></td></tr>
+  <tr><td>A user: Dear ImGui's textures</td><td><code>releaseUiTexture</code> in <code>src/renderer/ui.cpp</code></td></tr>
+  <tr><td>Unit tests</td><td><code>tests/releaseQueueTests.cpp</code></td></tr>
+  <tr><td>Example: textures streamed through the bindless set</td><td><code>examples/17_streaming</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Rules to keep</strong>
+  <p>Never free a GPU object, a bindless slot or a shared range at the call that destroys it: give the free to the release queue. Never wait on a fence to decide what to free. A table with one copy per frame slot is written only in its slot's frame, so its rows need no queue.</p>
+</div>
+
+<p>Still open: graph teardown (<code>releaseSceneView</code>), re-placing transient render targets and growing the animation buffers still wait for the GPU (<code>D35</code>). Destroy calls for meshes, materials, entities, lights and environments come with <code>D4</code>.</p>
+
+<h3>Further reading</h3>
+<ul>
+  <li><a href="frames-in-flight.html">Frames in flight</a>: slots and timeline fences.</li>
+  <li><a href="generational-handles.html">Generational handles</a>: why the stale handle fails safely.</li>
+  <li><a href="bindless.html">Bindless resources</a>: slot lifetime.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

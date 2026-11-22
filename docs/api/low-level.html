@@ -535,7 +535,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
     <ul>
       <li>The contents are not copied: the new buffer starts undefined.</li>
       <li>The device address changes: fetch it again with <a href="#getBufferDeviceAddress">getBufferDeviceAddress</a>.</li>
-      <li>The old buffer is destroyed at once, with its queued uploads, so the GPU must be done with it, as for <code>destroyBuffer</code>.</li>
+      <li>The old buffer is freed once the GPU has finished the frames that may use it, as for <code>destroyBuffer</code>.</li>
     </ul>
     <p><span class="tag">errors</span> An unknown handle logs <code>resizeBuffer: buffer handle not found.</code> and returns <code>false</code>. When the new buffer cannot be created it returns <code>false</code>, and the old buffer stays.</p>
   </div>
@@ -544,7 +544,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
 <div class="api" id="destroyBuffer">
   <pre class="sig">void destroyBuffer(const BufferHandle&amp; buffer);</pre>
   <div class="body">
-    <p>Destroys the buffer at once and drops its queued uploads. The GPU must be done with it: no frame in flight may still use it. The handle is not reused, but it is not detected as stale either (<code>D4</code>).</p>
+    <p>The handle is invalid at once: a later call with it logs an error, even when a new buffer took its index. The buffer itself, with any upload still queued for it, is freed once the GPU has finished every frame that may use it (<a href="../guides/resource-lifetime.html">deferred destruction</a>), so the call never waits. <a href="engine.html#destroyBuffer"><code>Engine::destroyBuffer</code></a> calls it.</p>
   </div>
 </div>
 
@@ -694,8 +694,15 @@ bool fillTexture(const TextureHandle&amp; texture, const TextureLevel* levels, u
 <div class="api" id="destroyTexture">
   <pre class="sig">void destroyTexture(const TextureHandle&amp; texture);</pre>
   <div class="body">
-    <p>Destroys the texture at once. The GPU must be done with it. A bindless slot that points at it is <b>not</b> freed or cleared, so no shader may sample that slot afterwards.</p>
+    <p>The handle is invalid at once. The texture and its bindless slot are freed once the GPU has finished every frame that may sample them; then a new texture can take the slot. Materials keep the slot number, so use <a href="engine.html#destroyTexture"><code>Engine::destroyTexture</code></a> for a texture a material may use: it removes it from the materials first.</p>
     <p><span class="tag">errors</span> Swapchain images are refused: <code>Swapchain images belong to the swapchain and can't be destroyed.</code></p>
+  </div>
+</div>
+
+<div class="api" id="getBindlessTextureIndex">
+  <pre class="sig">uint32_t getBindlessTextureIndex(const TextureHandle&amp; texture) const;</pre>
+  <div class="body">
+    <p>The texture's slot in binding 0 of the bindless set, or <code>UINT32_MAX</code> (the same value as <code>INVALID_TEXTURE_INDEX</code>) for a texture without one, or one that was destroyed. One array access, no hash. <a href="materials.html#getBindlessTextureIndex">Engine::getBindlessTextureIndex</a> calls it.</p>
   </div>
 </div>
 
@@ -706,11 +713,11 @@ bool fillTexture(const TextureHandle&amp; texture, const TextureLevel* levels, u
     SamplerType sampler = SamplerType::LINEAR_REPEAT,
     uint32_t slot = MAX_BINDLESS_TEXTURES);</pre>
   <div class="body">
-    <p>Writes <code>texture</code> with <code>sampler</code> into a slot of the bindless set and returns the slot, which shaders use as the array index. The descriptor promises the sampled layout, so the texture must be in it when a shader reads it. Prefer <a href="materials.html#addBindlessTexture">Engine::addBindlessTexture</a>, which calls this and also remembers the slot for <code>getBindlessTextureIndex</code>.</p>
+    <p>Writes <code>texture</code> with <code>sampler</code> into a slot of the bindless set and returns the slot, which shaders use as the array index. The descriptor promises the sampled layout, so the texture must be in it when a shader reads it. A texture holds one slot until it is destroyed; <a href="#getBindlessTextureIndex">getBindlessTextureIndex</a> gives it. <a href="materials.html#addBindlessTexture">Engine::addBindlessTexture</a> calls this.</p>
     <dl>
-      <dt>slot</dt><dd><code>MAX_BINDLESS_TEXTURES</code> (the default) takes the next free slot. A smaller value overwrites that slot; later automatic slots go past it. Slots are never given back.</dd>
+      <dt>slot</dt><dd><code>MAX_BINDLESS_TEXTURES</code> (the default): the texture's own slot when it has one (rewritten with the new sampler), else a freed slot, else the next one never used. A smaller value takes that slot: the texture that held it loses it, and the texture gives back the slot it had. Only name a slot no frame in flight samples.</dd>
     </dl>
-    <p><span class="tag">errors</span> All slots used, or a slot above <code>MAX_BINDLESS_TEXTURES</code>, logs <code>Slot index exceeds maximum bindless textures.</code> and returns <code>UINT32_MAX</code>, as does an unknown set or texture.</p>
+    <p><span class="tag">errors</span> When every slot is held or still waits for the GPU, it logs how many wait and returns <code>UINT32_MAX</code>, as does a slot above <code>MAX_BINDLESS_TEXTURES</code> or an unknown set or texture.</p>
   </div>
 </div>
 
@@ -958,9 +965,10 @@ struct BindlessDescriptorSetLayoutDescHash
 </div>
 
 <div class="api" id="destroyRenderTargets">
-  <pre class="sig">void destroyRenderTargets(const RenderTargetHandle* renderTargets, uint32_t count);</pre>
+  <pre class="sig">void destroyRenderTargets(const RenderTargetHandle* renderTargets, uint32_t count);
+void destroyRenderTarget(const RenderTargetHandle&amp; renderTarget);</pre>
   <div class="body">
-    <p>Destroys render targets a graph made, transient or with history: their textures, bindless and storage slots, their handles, and the heaps of each transient group that has no target left. It waits for the device to be idle first, so call it outside the frame loop. Unknown handles are skipped. The <code>RenderGraph</code> destructor (and a move assignment over a graph) calls it for the targets the graph made with <a href="render-graph.html#RenderGraph-createRenderTarget"><code>RenderGraph::createRenderTarget</code></a>.</p>
+    <p>Destroys render targets, transient or with history: their handles at once, and their textures, bindless and storage slots and the heaps of each transient group that has no target left once the GPU has finished the frames that may use them. Nothing waits. Unknown handles are skipped; <code>destroyRenderTarget</code> logs one. The <code>RenderGraph</code> destructor (and a move assignment over a graph) calls it for the targets the graph made with <a href="render-graph.html#RenderGraph-createRenderTarget"><code>RenderGraph::createRenderTarget</code></a>.</p>
   </div>
 </div>
 
@@ -1177,11 +1185,26 @@ void cleanup();</pre>
   </div>
 </div>
 
+<div class="api" id="tagReleases">
+  <pre class="sig">void tagReleases(const FenceValue&amp; graphics, const FenceValue&amp; compute);
+void collectReleases();</pre>
+  <div class="body">
+    <p>The two halves of deferred destruction, which <code>Engine</code> calls; an application does not. <code>endFrame</code> calls <code>tagReleases</code> after the frame's submits, dropped or not: what was destroyed since the last call then waits for the graphics and compute values the queues signaled last, and the uploads' last one. <code>beginFrame</code> calls <code>collectReleases</code> after the slot's fence wait: it reads the three fences, without waiting, and frees every entry they all reached, in order. With nothing tagged it returns at once. See <a href="../guides/resource-lifetime.html#in-rasm">deferred destruction</a>.</p>
+  </div>
+</div>
+
+<div class="api" id="isAlive">
+  <pre class="sig">bool isAlive(const TextureHandle&amp; texture) const;
+bool isAlive(const BufferHandle&amp; buffer) const;</pre>
+  <div class="body">
+    <p>True while the texture or buffer exists: false once it is destroyed, also when a new object took its index, and for an invalid handle. Logs nothing.</p>
+  </div>
+</div>
+
 <div class="callout warn">
   <strong>Known limits</strong>
   <ul>
-    <li>Only buffers and textures can be destroyed, and only by hand; nothing waits for the GPU for you (<code>D4</code>).</li>
-    <li>Each call looks its handles up in a hash map (<code>P4</code>).</li>
+    <li>Buffers, textures and render targets can be destroyed. Shaders, pipelines and descriptor layouts are shared through the dedup caches, so they live as long as the device. Graph teardown and re-placing transient targets still wait for the GPU (<code>D35</code>).</li>
     <li>There is a graphics queue and, with <code>EngineConfig::asyncCompute</code>, a compute queue. There is no transfer queue (<code>D13</code>).</li>
     <li>Async compute does not make the scene passes faster yet, so it is off by default (<code>P11</code>).</li>
   </ul>
