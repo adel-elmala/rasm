@@ -7,11 +7,16 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <string>
 #include <vector>
 
 // Dear ImGui in RASM: the RASM window (F1) with the frame's stats, and a window of the application's own, built in the
 // UI callback, that changes the sun, the exposure and the helmet while the frame runs, and shows a texture with
 // ImGui::Image. Engine::render adds the UI pass after the tone map.
+// --gpu-times prints each GPU timer's mean over frames 300 to 600, then quits; --no-ui runs the same scene with the UI
+// off, for comparison.
 
 namespace
 {
@@ -39,8 +44,16 @@ namespace
     }
 }
 
-int main()
+int main(int argc, char **argv)
 {
+    bool printGpuTimes = false;
+    bool ui = true;
+    for (int i = 1; i < argc; ++i)
+    {
+        printGpuTimes = printGpuTimes || std::strcmp(argv[i], "--gpu-times") == 0;
+        ui = ui && std::strcmp(argv[i], "--no-ui") != 0;
+    }
+
     rasm::EngineConfig config = {
         .appName = "example_15",
         .windowWidth = 1280,
@@ -50,7 +63,7 @@ int main()
         .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
         .shaderDir = RASM_EXAMPLE_SHADER_DIR,
         .showStats = true,
-        .ui = true};
+        .ui = ui};
 
     rasm::Engine engine(config);
     if (!engine.running())
@@ -95,47 +108,71 @@ int main()
     // uploaded.
     bool turn = true;
     float turnSpeed = 0.5f;
-    engine.setUiCallback(
-        [&]()
-        {
-            const float scale = ImGui::GetStyle().FontScaleDpi;
-            ImGui::SetNextWindowPos(ImVec2(static_cast<float>(engine.getMainWindow().width) - 330.0f * scale, 10.0f * scale), ImGuiCond_FirstUseEver);
-            ImGui::SetNextWindowSize(ImVec2(320.0f * scale, 0.0f), ImGuiCond_FirstUseEver);
-            ImGui::Begin("Scene");
-
-            rasm::Light light = engine.getLight(sun);
-            bool lightChanged = ImGui::SliderFloat("Sun intensity", &light.intensity, 0.0f, 10.0f);
-            lightChanged |= ImGui::ColorEdit3("Sun color", &light.color.x);
-            if (lightChanged)
-                engine.updateLight(sun, light);
-
-            float exposure = engine.getCameraExposure(camera);
-            if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 4.0f, "%.2f", ImGuiSliderFlags_Logarithmic))
-                engine.setCameraExposure(camera, exposure);
-            if (ImGui::SliderFloat("Sky light", &environment.intensity, 0.0f, 3.0f))
-                engine.setSceneEnvironment(scene, environment);
-
-            ImGui::Checkbox("Turn the helmet", &turn);
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(-1.0f);
-            ImGui::SliderFloat("##speed", &turnSpeed, 0.0f, 2.0f, "%.2f deg");
-
-            // Any sampled texture with a bindless slot, through its ImTextureID.
-            if (engine.isLoaded(albedo))
+    if (ui)
+        engine.setUiCallback(
+            [&]()
             {
-                ImGui::TextUnformatted("Default_albedo.jpg");
-                const float side = ImGui::GetContentRegionAvail().x;
-                ImGui::Image(ImTextureRef(engine.getUiTexture(albedo)), ImVec2(side, side));
-            }
-            ImGui::End();
-        });
+                const float scale = ImGui::GetStyle().FontScaleDpi;
+                ImGui::SetNextWindowPos(ImVec2(static_cast<float>(engine.getMainWindow().width) - 330.0f * scale, 10.0f * scale), ImGuiCond_FirstUseEver);
+                ImGui::SetNextWindowSize(ImVec2(320.0f * scale, 0.0f), ImGuiCond_FirstUseEver);
+                ImGui::Begin("Scene");
 
-    while (engine.running())
+                rasm::Light light = engine.getLight(sun);
+                bool lightChanged = ImGui::SliderFloat("Sun intensity", &light.intensity, 0.0f, 10.0f);
+                lightChanged |= ImGui::ColorEdit3("Sun color", &light.color.x);
+                if (lightChanged)
+                    engine.updateLight(sun, light);
+
+                float exposure = engine.getCameraExposure(camera);
+                if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 4.0f, "%.2f", ImGuiSliderFlags_Logarithmic))
+                    engine.setCameraExposure(camera, exposure);
+                if (ImGui::SliderFloat("Sky light", &environment.intensity, 0.0f, 3.0f))
+                    engine.setSceneEnvironment(scene, environment);
+
+                ImGui::Checkbox("Turn the helmet", &turn);
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(-1.0f);
+                ImGui::SliderFloat("##speed", &turnSpeed, 0.0f, 2.0f, "%.2f deg");
+
+                // Any sampled texture with a bindless slot, through its ImTextureID.
+                if (engine.isLoaded(albedo))
+                {
+                    ImGui::TextUnformatted("Default_albedo.jpg");
+                    const float side = ImGui::GetContentRegionAvail().x;
+                    ImGui::Image(ImTextureRef(engine.getUiTexture(albedo)), ImVec2(side, side));
+                }
+                ImGui::End();
+            });
+
+    std::vector<std::string> timerNames;
+    std::vector<double> timerSums;
+    for (uint32_t frame = 0; engine.running(); ++frame)
     {
         // A fixed angle per frame, so frame N looks the same in every run.
         if (turn)
             engine.updateTransform(helmetEntity, engine.getTransform(helmetEntity).rotate(glm::vec3(0.0f, 1.0f, 0.0f), glm::radians(turnSpeed)));
         engine.render(scene, camera);
+        if (!printGpuTimes || frame < 300)
+            continue;
+        const rasm::FrameStats &stats = engine.getFrameStats();
+        for (uint32_t i = 0; i < stats.gpuTimerCount; ++i)
+        {
+            size_t t = 0;
+            while (t < timerNames.size() && timerNames[t] != stats.gpuTimers[i].name)
+                ++t;
+            if (t == timerNames.size())
+            {
+                timerNames.push_back(stats.gpuTimers[i].name);
+                timerSums.push_back(0.0);
+            }
+            timerSums[t] += stats.gpuTimers[i].milliseconds;
+        }
+        if (frame == 600)
+        {
+            for (size_t t = 0; t < timerNames.size(); ++t)
+                std::printf("%-20s %.3f ms\n", timerNames[t].c_str(), timerSums[t] / 301.0);
+            break;
+        }
     }
     return 0;
 }
