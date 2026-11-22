@@ -810,7 +810,7 @@ float limit = scene->lodErrorPixels / (pixelsPerUnit * sphere.scale);</code></pr
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>No hysteresis or cross-fade, no quality scale beyond <code>lodErrorPixels</code>, no triangle budget, no per-cluster levels. Levels are always in GPU memory: there is no streaming of fine levels for near objects only (D4). A skinned or morphed mesh's levels ignore its weights and deltas (D29).</p>
+  <p>No hysteresis or cross-fade, no quality scale beyond <code>lodErrorPixels</code>, no triangle budget, no per-cluster levels. Levels are always in GPU memory: there is no streaming of fine levels for near objects only (a whole mesh can be destroyed and loaded again). A skinned or morphed mesh's levels ignore its weights and deltas (D29).</p>
 </div>
 
 <h3>Further reading</h3>

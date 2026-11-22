@@ -165,6 +165,27 @@ public:
   </div>
 </div>
 
+<div class="api" id="PoolStats">
+  <pre class="sig">struct PoolStats
+{
+    uint32_t     entities                = 0;
+    uint32_t     meshes                  = 0;
+    uint32_t     materials               = 0;
+    uint32_t     lights                  = 0;
+    uint32_t     textures                = 0;        // textures and render target attachments
+    uint32_t     bindlessTextures        = 0;        // slots of binding 0 held by a texture
+    uint64_t     vertices                = 0;        // of EngineConfig::geometryPoolVertices
+    uint64_t     indices                 = 0;        // of geometryPoolIndices
+    uint64_t     subMeshes               = 0;        // of geometryPoolSubMeshes
+    uint64_t     instances               = 0;        // instance rows, of maxInstances
+    uint64_t     animationPoolBytes      = 0;        // of animationPoolBytes
+    uint32_t     releasesWaiting         = 0;        // destroyed objects the GPU may still use
+};</pre>
+  <div class="body">
+    <p>What <a href="engine.html#getPoolStats"><code>getPoolStats</code></a> returns: the live objects, and the used part of each engine-wide pool. A destroyed object's share comes back once the GPU has finished the frames that may use it, so the numbers of a streaming application go up and down but do not grow. Compare them with the <code>EngineConfig</code> sizes to budget.</p>
+  </div>
+</div>
+
 <h2><span class="n">2</span>Enums in <code>rasm/types.h</code></h2>
 
 <div class="api" id="Format">
@@ -614,7 +635,7 @@ if (rasm::readPng("golden.png", golden) &amp;&amp; golden.width == image.width)
   <tr id="RESERVED_STORAGE_IMAGES"><td><code>RESERVED_STORAGE_IMAGES</code><br><code>rasm/types.h</code></td><td>32</td><td>Storage image slots 0 to 31, kept for the environment bake. <a href="low-level.html#updateBindlessStorageImage"><code>updateBindlessStorageImage</code></a> with your own slot must stay out of the storage targets' slots too.</td></tr>
   <tr id="PUSH_CONSTANTS_SIZE"><td><code>PUSH_CONSTANTS_SIZE</code><br><code>rasm/types.h</code></td><td>16</td><td>Push constant bytes of every pipeline.</td></tr>
   <tr id="INVALID_TEXTURE_INDEX"><td><code>INVALID_TEXTURE_INDEX</code><br><code>rasm/types.h</code></td><td><code>0xFFFFFFFF</code></td><td>Not a limit: the bindless index written for a material slot with no texture. Shaders must not sample it.</td></tr>
-  <tr id="MAX_MATERIALS"><td><code>MAX_MATERIALS</code><br><code>rasm/engine.h</code></td><td>256</td><td>Materials: 255 fit, and the engine's default material takes one.</td></tr>
+  <tr id="maxMaterials"><td><code>EngineConfig::maxMaterials</code><br><code>rasm/types.h</code></td><td>4096</td><td>Materials alive at once, the engine's default material included. A field, not a constant.</td></tr>
   <tr id="MAX_CAMERAS"><td><code>MAX_CAMERAS</code><br><code>rasm/engine.h</code></td><td>8</td><td>Cameras: 7 fit.</td></tr>
   <tr id="MAX_GPU_TIMERS"><td><code>MAX_GPU_TIMERS</code><br><code>rasm/engine.h</code></td><td>64</td><td>GPU timers per frame: the frame, and 63 for passes and <code>beginGpuTimer</code>. <code>FrameStats::gpuTimers</code> has 63 entries.</td></tr>
   <tr id="SCENE_COLOR_FORMAT"><td><code>SCENE_COLOR_FORMAT</code><br><code>rasm/engine.h</code></td><td><code>Format::R16G16B16A16_SFLOAT</code></td><td>Not a limit: the color format of a target that <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> draws into, linear light with no upper limit. <a href="engine.html#addToneMapPass"><code>addToneMapPass</code></a> brings it to the window.</td></tr>
@@ -639,7 +660,7 @@ if (rasm::readPng("golden.png", golden) &amp;&amp; golden.width == image.width)
 
 <div class="callout warn">
   <strong>Known limits</strong>
-  <p>The limits are fixed at compile time and spread over several headers (<code>D15</code>). Textures, buffers and render targets can be destroyed and their indices and slots are reused; the other objects cannot be destroyed yet (<code>D4</code>), so a long-running application that creates and drops them runs into these limits.</p>
+  <p>The limits are fixed at compile time and spread over several headers (<code>D15</code>). Every object can be destroyed, and its index, rows, ranges and slots are reused, so the limits count what is alive at once (<code>getPoolStats</code>).</p>
 </div>
 
 </main>

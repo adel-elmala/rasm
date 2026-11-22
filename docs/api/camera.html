@@ -308,6 +308,14 @@ engine.setCameraController(camera, rasm::CameraController{
   </div>
 </div>
 
+<div class="api" id="destroyCamera">
+  <pre class="sig">void destroyCamera(CameraHandle camera);</pre>
+  <div class="body">
+    <p>Destroys the camera and takes it out of every scene's camera list. Its index goes to the next <code>createCamera</code>, so at most <code>MAX_CAMERAS</code> − 1 cameras are alive at once.</p>
+    <p><span class="tag">errors</span> Refused while a render graph draws a view with this camera, with an error that names the view: destroy that graph first, or let it go out of scope. The graph of <a href="engine.html#render"><code>render</code></a> lets go by itself.</p>
+  </div>
+</div>
+
 <div class="api" id="getCameraTransform">
   <pre class="sig">Transform getCameraTransform(CameraHandle camera);</pre>
   <div class="body">
@@ -527,7 +535,7 @@ engine.resetCameraHistory(camera);</code></pre>
 
 <div class="callout warn">
   <strong>Known limits</strong>
-  <p>Cameras cannot be destroyed (<code>D4</code>), and handles of refused calls are never reused (B13). The engine reads the window events itself, so applications do not see them (<code>D7</code>). For the math (coordinate system, viewport flip, depth) see the guide <a href="../guides/coordinate-spaces.html">Coordinate spaces</a> and <a href="../guides/projection-depth.html">Projection and reversed-Z depth</a>.</p>
+  <p>A camera that a render graph draws can't be destroyed until the graph goes (<code>destroyCamera</code>). The engine reads the window events itself, so applications do not see them (<code>D7</code>). For the math (coordinate system, viewport flip, depth) see the guide <a href="../guides/coordinate-spaces.html">Coordinate spaces</a> and <a href="../guides/projection-depth.html">Projection and reversed-Z depth</a>.</p>
 </div>
 
 </main>

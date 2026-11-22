@@ -754,7 +754,7 @@ void bindTexture(TextureHandle texture);</code></pre>
   <tr><th>Owner</th><th>Type</th><th>Limit</th><th>Where the limit is</th></tr>
   <tr><td rowspan="6"><code>Engine</code> registry</td><td><code>Entity</code></td><td><code>MAX_ENTITIES</code> = 262,144 (2<sup>18</sup>) (262,143 alive at once)</td><td><code>include/rasm/entity.h</code></td></tr>
   <tr><td><code>Mesh</code></td><td>no count limit; its sub-meshes take rows of the geometry table (<code>EngineConfig::geometryPoolSubMeshes</code> = 16384) and ranges of the geometry pool</td><td><code>include/rasm/types.h</code></td></tr>
-  <tr><td><code>Material</code></td><td><code>MAX_MATERIALS</code> = 256 (255 alive at once)</td><td><code>include/rasm/engine.h</code></td></tr>
+  <tr><td><code>Material</code></td><td><code>EngineConfig::maxMaterials</code> = 4096 alive at once</td><td><code>include/rasm/types.h</code></td></tr>
   <tr><td><code>Camera</code></td><td><code>MAX_CAMERAS</code> = 8 (7 alive at once)</td><td><code>include/rasm/engine.h</code></td></tr>
   <tr><td><code>Light</code></td><td><code>EngineConfig::maxLights</code> = 16384</td><td><code>include/rasm/types.h</code></td></tr>
   <tr><td><code>Scene</code></td><td><code>MAX_SCENES</code> = 16 (15 alive at once)</td><td><code>include/rasm/scene.h</code></td></tr>
@@ -855,9 +855,8 @@ void bindTexture(TextureHandle texture);</code></pre>
 </div>
 
 <div class="callout">
-  <strong>Not done yet</strong>
-  <p><b>D4</b>: entities, meshes, materials, cameras, lights, scenes and environments have no destroy call yet, so their pools only grow. Their handles are checked already, so a stale one is found the day they can be destroyed.</p>
-  <p><b>B13</b>: <code>loadMesh</code> takes its handle before the file is parsed, so a file that does not parse keeps an index (a retry of the same path reuses it).</p>
+  <strong>Every object can be destroyed</strong>
+  <p>Every table frees and reuses its indices. Generations are 64-bit and never wrap in practice; a slot at the maximum is retired. <code>loadMesh</code> needs its handle before the file is parsed (it returns at once), so a file that does not parse keeps its index until <code>destroyMesh</code> frees it.</p>
 </div>
 
 <h3>Further reading</h3>

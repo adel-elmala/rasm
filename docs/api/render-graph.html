@@ -1085,9 +1085,9 @@ graph.addPass(
 <div class="callout warn">
   <strong>Known limits</strong>
   <ul>
-    <li>Only render targets are transient. Textures and buffers from the builder, and history targets, live until shutdown (<code>D4</code>).</li>
+    <li>Only render targets are transient. Textures and buffers from the builder, and history targets, live until you destroy them; a graph destroys the targets it made.</li>
     <li>The graph orders only its own passes. A buffer that two graphs share is not ordered between them, and two graphs that draw the same scene view (scene, camera, target) share its buffers. A graph holds the scene views it added until it is destroyed or replaced.</li>
-    <li>Nothing can be destroyed: render targets, buffers and pipelines live until shutdown (<code>D4</code>).</li>
+    <li>Pipelines live until shutdown: they are shared through the dedup cache. Render targets, buffers and textures can be destroyed.</li>
     <li>Async compute passes overlap little with the scene passes today: each change of queue costs a little, and a frame with uploads overlaps less (<code>P11</code>).</li>
   </ul>
 </div>

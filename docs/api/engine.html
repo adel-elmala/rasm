@@ -101,6 +101,9 @@
   <tr><td><a href="render-graph.html#createPipeline"><code>createPipeline</code></a> / <a href="render-graph.html#createComputePipeline"><code>createComputePipeline</code></a></td><td>your own Slang shaders</td><td>render-graph.html</td></tr>
   <tr><td><a href="render-graph.html#createRenderTarget"><code>createRenderTarget</code></a></td><td>offscreen color + depth</td><td>render-graph.html</td></tr>
   <tr><td><a href="#destroyTexture"><code>destroyTexture</code></a> / <a href="#destroyBuffer"><code>destroyBuffer</code></a> / <a href="#destroyRenderTarget"><code>destroyRenderTarget</code></a></td><td>free GPU resources, once the GPU is done with them</td><td>engine.html</td></tr>
+  <tr><td><a href="scene.html#destroyEntity"><code>destroyEntity</code></a>, <a href="scene.html#destroyMesh"><code>destroyMesh</code></a>, <a href="materials.html#destroyMaterial"><code>destroyMaterial</code></a>, <a href="scene.html#destroyLight"><code>destroyLight</code></a>, <a href="scene.html#destroyEnvironment"><code>destroyEnvironment</code></a>, <a href="camera.html#destroyCamera"><code>destroyCamera</code></a>, <a href="scene.html#destroyScene"><code>destroyScene</code></a></td><td>destroy what you made; rows, ranges and indices are reused</td><td>scene.html, materials.html, camera.html</td></tr>
+  <tr><td><a href="scene.html#removeEntityFromScene"><code>removeEntityFromScene</code></a> / <a href="scene.html#removeLightFromScene"><code>removeLightFromScene</code></a></td><td>take an entity or light out of a scene</td><td>scene.html</td></tr>
+  <tr><td><a href="#getPoolStats"><code>getPoolStats</code></a></td><td>live objects and pool use, for streaming budgets</td><td>engine.html</td></tr>
   <tr><td><a href="render-graph.html#setRenderTarget"><code>setRenderTarget</code></a> / <a href="render-graph.html#resetRenderTarget"><code>resetRenderTarget</code></a></td><td>where the next pass draws</td><td>render-graph.html</td></tr>
   <tr><td><a href="render-graph.html#getRenderTargetTexture"><code>getRenderTargetTexture</code></a></td><td>read a target in a later pass</td><td>render-graph.html</td></tr>
   <tr><td><a href="render-graph.html#getPreviousRenderTargetTexture"><code>getPreviousRenderTargetTexture</code></a></td><td>read last frame's copy of a history target</td><td>render-graph.html</td></tr>
@@ -166,7 +169,7 @@ if (!engine.running())
 <div class="api" id="Engine-destructor">
   <pre class="sig">~Engine();</pre>
   <div class="body">
-    <p>Waits for background loads that are still running, frees every GPU resource, destroys the window and shuts SDL down. Scene objects cannot be destroyed earlier: there is no destroy function for scenes, entities, meshes, materials, cameras or lights yet (<code>D4</code>).</p>
+    <p>Waits for background loads that are still running, frees every GPU resource, destroys the window and shuts SDL down. Objects can be destroyed earlier, one by one: see <code>destroyEntity</code>, <code>destroyMesh</code> and the other <code>destroy*</code> calls in the table above.</p>
   </div>
 </div>
 
@@ -224,7 +227,7 @@ if (!engine.running())
 
 <div class="callout warn">
   <strong>The pools never shrink</strong>
-  <p>Geometry and instance rows are never freed (<code>D4</code>). When a pool is full, the next mesh or entity fails with an error that names the <code>EngineConfig</code> field to raise. Size the pools for everything your program will ever load.</p>
+  <p>A destroyed mesh gives its geometry ranges back, and a destroyed entity its instance rows (<a href="../guides/resource-lifetime.html">deferred destruction</a>). When a pool is full, the next mesh or entity fails with an error that names the <code>EngineConfig</code> field to raise and the largest free range. Size the pools for what is alive at once, with room for fragmentation.</p>
 </div>
 
 <h2 id="frame"><span class="n">3</span>Run a frame</h2>
@@ -1098,6 +1101,13 @@ values.textures[static_cast&lt;uint32_t&gt;(rasm::PbrSlot::ALBEDO)] = texture;
 engine.updateMaterial(tile.material, values);
 engine.destroyTexture(tile.texture);</code></pre>
     <p>From <code>examples/17_streaming/main.cpp</code>, which pushes far more textures through the bindless set than it has slots. How the wait works: <a href="../guides/resource-lifetime.html">Deferred destruction</a>.</p>
+  </div>
+</div>
+
+<div class="api" id="getPoolStats">
+  <pre class="sig">PoolStats getPoolStats() const;</pre>
+  <div class="body">
+    <p>The live objects and the used part of each engine-wide pool (<a href="types.html#PoolStats"><code>PoolStats</code></a>). It walks no object: every number is kept as things are made and destroyed, except the bindless slot count (1024 slots). <code>examples/17_streaming</code> prints it every 120 frames.</p>
   </div>
 </div>
 

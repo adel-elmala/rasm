@@ -231,7 +231,7 @@ int main()
   <tr><td><code>{}</code> is the invalid handle</td><td><code>isValid()</code> is false. Many functions take one as "none", for example <code>createEntity</code> without a material.</td></tr>
   <tr><td>Errors return the invalid handle</td><td>The function logs the reason and returns <code>{}</code>. Check <code>isValid()</code> after creating or loading.</td></tr>
   <tr><td>Each kind has its own type</td><td><code>MeshHandle</code> and <code>TextureHandle</code> do not convert into each other, so you cannot pass the wrong kind.</td></tr>
-  <tr><td>Handles stay valid until the engine is destroyed</td><td>Scenes, entities, meshes, materials, cameras and lights cannot be destroyed, and entities cannot leave a scene (<code>D4</code> in <code>docs/code_review.md</code>). Create objects once and reuse them.</td></tr>
+  <tr><td>A handle is valid until you destroy its object</td><td>Every object has a <code>destroy*</code> call. A call with a destroyed object's handle logs an error and does nothing, even when a new object took its index. What the GPU may still use is freed once it is done (<a href="../guides/resource-lifetime.html">deferred destruction</a>).</td></tr>
 </table>
 </div>
 <p>All handle types are listed in <a href="types.html#Handle">Types, handles and limits</a>, with every limit.</p>

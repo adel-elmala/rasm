@@ -913,7 +913,7 @@
   <strong>Not done yet</strong>
   <ul>
     <li><code>P3</code>: no real instancing. Each entity's sub-mesh is its own draw, even when the mesh is shared.</li>
-    <li><code>D4</code>: nothing can be removed, so draw lists only grow and instance rows are never freed.</li>
+    <li>A destroyed or removed entity leaves the draw lists at their next rebuild, and its instance rows are reused (<a href="resource-lifetime.html">deferred destruction</a>).</li>
     <li><code>D12</code>: <code>getDrawIndex</code> uses <code>spirv_asm</code>, so this path is Vulkan-only today.</li>
   </ul>
 </div>

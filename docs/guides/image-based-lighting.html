@@ -419,7 +419,7 @@ engine.setSceneEnvironment(scene, rasm::SceneEnvironment{.environment = sunset, 
   <tr><td>Rotation, intensity</td><td>—</td><td><code>SceneEnvironment::rotation</code> turns every lookup around +Y in the shader, so turning needs no new bake; <code>intensity</code> scales the light and the sky.</td></tr>
   <tr><td>Sky</td><td>—</td><td><code>Engine::drawSky</code> draws the environment cube (mip 0) where depth is still 0, after the view's last draw pass. In a target with motion (<a href="taa.html">TAA</a>) the ray takes out the jitter, and the sky writes the motion of the camera's turn only, since it is infinitely far. A <a href="debug-views.html">debug view</a> draws no sky.</td></tr>
   <tr><td>Occlusion</td><td>AO, probes</td><td>Only the material's occlusion texture, on diffuse and specular alike. The environment light is not shadowed (<code>D23</code>).</td></tr>
-  <tr><td>Lifetime</td><td>—</td><td>An environment lives until shutdown (<code>D22</code>).</td></tr>
+  <tr><td>Lifetime</td><td>—</td><td>Until <code>destroyEnvironment</code>: its scenes then have none, and its textures and slots go once the GPU is done with them.</td></tr>
 </table>
 </div>
 
