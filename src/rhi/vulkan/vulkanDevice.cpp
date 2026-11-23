@@ -385,10 +385,10 @@ namespace rasm::rhi
 
         // The set and a PUSH_CONSTANTS_SIZE range that every stage of every pipeline sees, so graphics and compute
         // pipelines share one layout (P8).
-        VkPipelineLayout createPipelineLayout(const VolkDeviceTable &vk, VkDevice device, VkDescriptorSetLayout setLayout)
+        VkPipelineLayout createPipelineLayout(const VolkDeviceTable &vk, VkDevice device, VkDescriptorSetLayout setLayout, VkShaderStageFlags pushConstantStages)
         {
             VkPushConstantRange pushConstantRange{
-                .stageFlags = PUSH_CONSTANT_STAGES,
+                .stageFlags = pushConstantStages,
                 .size = PUSH_CONSTANTS_SIZE};
 
             VkDescriptorSetLayout setLayouts[] = {setLayout};
@@ -594,6 +594,9 @@ namespace rasm::rhi
         const bool hostImageCopy = desc.hostImageCopy && physicalDevice.enable_extension_features_if_present(VkPhysicalDeviceVulkan14Features{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES, .hostImageCopy = VK_TRUE});
         // A UNORM view of the sRGB swapchain lets the UI blend on the stored sRGB numbers, as Dear ImGui is designed for.
         swapchainMutable = surface != VK_NULL_HANDLE && physicalDevice.enable_extension_if_present(VK_KHR_SWAPCHAIN_MUTABLE_FORMAT_EXTENSION_NAME);
+        meshShaders = enableMeshShaders();
+        if (meshShaders)
+            pushConstantStages |= MESH_SHADER_STAGES;
 
         auto vkbDevice = vkb::DeviceBuilder{physicalDevice}.build();
         if (!vkbDevice)
@@ -956,9 +959,59 @@ namespace rasm::rhi
         return shader;
     }
 
+    // Task and mesh shaders, where the GPU has them and its limits hold the meshlet passes: a task workgroup of 64
+    // threads (a chunk of 64 meshlets) and a mesh workgroup of 64 threads that writes up to 64 vertices and 124 triangles.
+    // Enabled whenever present, so EngineConfig::meshletPath can change at run time; it costs nothing unused.
+    bool VulkanDevice::enableMeshShaders()
+    {
+        if (!physicalDevice.is_extension_present(VK_EXT_MESH_SHADER_EXTENSION_NAME))
+            return false;
+        VkPhysicalDeviceMeshShaderPropertiesEXT properties = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT};
+        VkPhysicalDeviceProperties2 properties2 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &properties};
+        vkGetPhysicalDeviceProperties2(physicalDevice.physical_device, &properties2);
+        const bool fits = properties.maxTaskWorkGroupInvocations >= 64 && properties.maxMeshWorkGroupInvocations >= 64 && properties.maxMeshOutputVertices >= 64 &&
+                          properties.maxMeshOutputPrimitives >= 124 && properties.maxTaskPayloadSize >= 512 && properties.maxTaskWorkGroupCount[0] >= 65535 &&
+                          properties.maxTaskWorkGroupCount[1] >= 65535;
+        if (!fits || !physicalDevice.enable_extension_features_if_present(VkPhysicalDeviceMeshShaderFeaturesEXT{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT,
+                                                                                                                .taskShader = VK_TRUE,
+                                                                                                                .meshShader = VK_TRUE}))
+        {
+            spdlog::info("Mesh shaders: no (the GPU's limits are too small for the meshlet passes).");
+            return false;
+        }
+        physicalDevice.enable_extension_if_present(VK_EXT_MESH_SHADER_EXTENSION_NAME);
+        spdlog::info("Mesh shaders: yes (preferred workgroups: task {}, mesh {} invocations; at most {} vertices and {} primitives).", properties.maxPreferredTaskWorkGroupInvocations,
+                     properties.maxPreferredMeshWorkGroupInvocations, properties.maxMeshOutputVertices, properties.maxMeshOutputPrimitives);
+        return true;
+    }
+
     Pipeline *VulkanDevice::createGraphicsPipeline(const PipelineDesc &desc, Shader *vertexShader, Shader *fragmentShader, DescriptorSetLayout *layout)
     {
+        const VkPipelineShaderStageCreateInfo stages[] = {
+            {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = static_cast<VulkanShader *>(vertexShader)->module, .pName = vertexShader->desc.entryPoint.c_str()},
+            {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = static_cast<VulkanShader *>(fragmentShader)->module, .pName = fragmentShader->desc.entryPoint.c_str()}};
+        return createRasterPipeline(desc, stages, 2, layout);
+    }
+
+    Pipeline *VulkanDevice::createMeshPipeline(const PipelineDesc &desc, Shader *taskShader, Shader *meshShader, Shader *fragmentShader, DescriptorSetLayout *layout)
+    {
+        if (!meshShaders)
+        {
+            spdlog::error("Pipeline '{}' needs mesh shaders, which the device does not have.", desc.name);
+            return nullptr;
+        }
+        const VkPipelineShaderStageCreateInfo stages[] = {
+            {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_TASK_BIT_EXT, .module = static_cast<VulkanShader *>(taskShader)->module, .pName = taskShader->desc.entryPoint.c_str()},
+            {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_MESH_BIT_EXT, .module = static_cast<VulkanShader *>(meshShader)->module, .pName = meshShader->desc.entryPoint.c_str()},
+            {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = static_cast<VulkanShader *>(fragmentShader)->module, .pName = fragmentShader->desc.entryPoint.c_str()}};
+        return createRasterPipeline(desc, stages, 3, layout);
+    }
+
+    // A mesh pipeline has no vertex input or input assembly: the mesh shader writes the primitives.
+    Pipeline *VulkanDevice::createRasterPipeline(const PipelineDesc &desc, const VkPipelineShaderStageCreateInfo *stages, uint32_t stageCount, DescriptorSetLayout *layout)
+    {
         const VkPipelineLayout pipelineLayout = static_cast<VulkanDescriptorSetLayout *>(layout)->pipelineLayout;
+        const bool mesh = stages[0].stage == VK_SHADER_STAGE_TASK_BIT_EXT;
 
         // With vertex pulling the shader fetches vertices itself, so use an empty vertex input state.
         // This is core Vulkan and avoids VK_EXT_vertex_input_dynamic_state, which MoltenVK doesn't support.
@@ -969,20 +1022,6 @@ namespace rasm::rhi
             .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
             .topology = toVkTopology(desc.topology),
         };
-
-        VkPipelineShaderStageCreateInfo shaderStages[] = {
-            {
-                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                .stage = VK_SHADER_STAGE_VERTEX_BIT,
-                .module = static_cast<VulkanShader *>(vertexShader)->module,
-                .pName = vertexShader->desc.entryPoint.c_str(),
-            },
-            {
-                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-                .module = static_cast<VulkanShader *>(fragmentShader)->module,
-                .pName = fragmentShader->desc.entryPoint.c_str(),
-            }};
 
         VkPipelineViewportStateCreateInfo viewportStateInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
@@ -1067,10 +1106,10 @@ namespace rasm::rhi
         VkGraphicsPipelineCreateInfo pipelineInfo = {
             .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
             .pNext = &pipelineRenderingInfo,
-            .stageCount = 2,
-            .pStages = shaderStages,
-            .pVertexInputState = &vertexInputInfo,
-            .pInputAssemblyState = &inputAssemblyInfo,
+            .stageCount = stageCount,
+            .pStages = stages,
+            .pVertexInputState = mesh ? nullptr : &vertexInputInfo,
+            .pInputAssemblyState = mesh ? nullptr : &inputAssemblyInfo,
             .pViewportState = &viewportStateInfo,
             .pRasterizationState = &rasterizerInfo,
             .pMultisampleState = &multisampleInfo,
@@ -1178,7 +1217,7 @@ namespace rasm::rhi
             delete layout;
             return nullptr;
         }
-        layout->pipelineLayout = createPipelineLayout(vk, device.device, layout->layout);
+        layout->pipelineLayout = createPipelineLayout(vk, device.device, layout->layout, pushConstantStages);
         if (layout->pipelineLayout == VK_NULL_HANDLE)
         {
             vk.vkDestroyDescriptorSetLayout(device.device, layout->layout, nullptr);
@@ -1450,6 +1489,17 @@ namespace rasm::rhi
     bool VulkanDevice::hasTransferQueue() const
     {
         return transferQueue != nullptr;
+    }
+
+    bool VulkanDevice::hasMeshShaders() const
+    {
+        return meshShaders;
+    }
+
+    // Every pipeline layout's push-constant range, which every push must name (vkCmdPushConstants).
+    VkShaderStageFlags VulkanDevice::getPushConstantStages() const
+    {
+        return pushConstantStages;
     }
 
     // The compute queue is taken only with the graphics queue's valid bits.

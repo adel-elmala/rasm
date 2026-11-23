@@ -27,7 +27,8 @@ namespace rasm
     constexpr uint32_t                  CULL_STATS_MESHLETS                                                 = CULL_STATS_LIGHTS_DROPPED + 1;
     constexpr uint32_t                  CULL_STATS_MESHLETS_CULLED                                          = CULL_STATS_MESHLETS + 1;
     constexpr uint32_t                  CULL_STATS_MESHLETS_WHOLE                                           = CULL_STATS_MESHLETS + 2;  // draws past a run's budget, drawn whole
-    constexpr uint32_t                  CULL_STATS_WORDS                                                    = CULL_STATS_MESHLETS_WHOLE + 1;
+    constexpr uint32_t                  CULL_STATS_LOD_TRIANGLES                                            = CULL_STATS_MESHLETS_WHOLE + 1;    // low, high: before meshlet culling
+    constexpr uint32_t                  CULL_STATS_WORDS                                                    = CULL_STATS_LOD_TRIANGLES + 2;
 
     struct EntityDrawState
     {
@@ -86,6 +87,7 @@ namespace rasm
         uint32_t                        chunkCapacity[MAX_FRAMES_IN_FLIGHT]                                 = {};
         BufferHandle                    meshletVisibility                                                   = {};   // a bit per meshlet of an instance, kept across frames like visibility
         uint32_t                        meshletRuns                                                         = 0;    // this frame's runs drawn by meshlets
+        bool                            meshShaders                                                         = false;    // this frame's meshlets: task and mesh shaders, not indirect draws
         uint32_t                        runMeshletFirst[gfx::MAX_DRAW_RUNS]                                 = {};
         uint32_t                        runMeshletSize[gfx::MAX_DRAW_RUNS]                                  = {};
         BufferHandle                    hiz[MAX_FRAMES_IN_FLIGHT]                                           = {};
@@ -128,6 +130,8 @@ namespace rasm
         PipelineHandle                  pipeline                                                            = {};
         PipelineHandle                  maskPipeline                                                        = {};
         PipelineHandle                  blendPipeline                                                       = {};
+        PipelineHandle                  meshPipeline                                                        = {};       // the opaque and MASK runs' meshlets, with mesh shaders
+        PipelineHandle                  meshMaskPipeline                                                    = {};
     };
 
     struct ShadedPipelines
@@ -136,6 +140,8 @@ namespace rasm
         PipelineHandle                  maskPipeline                                                        = {};       // alpha-to-coverage with more than one sample
         PipelineHandle                  blendPipeline                                                       = {};
         PipelineHandle                  skyPipeline                                                         = {};
+        PipelineHandle                  meshPipeline                                                        = {};       // the opaque and MASK runs' meshlets, with mesh shaders
+        PipelineHandle                  meshMaskPipeline                                                    = {};
         DebugPipelines                  debug;
         DebugPipelines                  overdraw;
         PipelineHandle                  ghostPipeline                                                       = {};
@@ -149,6 +155,8 @@ namespace rasm
         ShadedPipelines                 shaded[SAMPLE_VARIANTS + 1]                                         = {};       // by log2 of the target's samples, then MOTION_VARIANT
         PipelineHandle                  depthPipeline                                                       = {};
         PipelineHandle                  depthMaskPipeline                                                   = {};
+        PipelineHandle                  depthMeshPipeline                                                   = {};
+        PipelineHandle                  depthMeshMaskPipeline                                               = {};
         PipelineHandle                  sortPipelines[BLEND_SORT_STEPS]                                     = {};
         PipelineHandle                  cullCountPipeline                                                   = {};
         PipelineHandle                  cullWritePipeline                                                   = {};

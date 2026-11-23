@@ -27,6 +27,8 @@ namespace rasm
         hash = hashCombine(hash, HandleHash()(desc.vertexShader));
         hash = hashCombine(hash, HandleHash()(desc.fragmentShader));
         hash = hashCombine(hash, HandleHash()(desc.computeShader));
+        hash = hashCombine(hash, HandleHash()(desc.taskShader));
+        hash = hashCombine(hash, HandleHash()(desc.meshShader));
         hash = hashCombine(hash, HandleHash()(desc.descriptorSetLayout));
         hash = hashCombine(hash, hashEnum(static_cast<uint32_t>(desc.topology)));
         for (const Format format : desc.colorAttachmentFormats)

@@ -596,7 +596,8 @@ namespace rasm
                                      {"runMeshletFirst", offsetof(gfx::SceneData, runMeshletFirst)},
                                      {"runMeshletBudget", offsetof(gfx::SceneData, runMeshletBudget)},
                                      {"meshletRuns", offsetof(gfx::SceneData, meshletRuns)},
-                                     {"coneRuns", offsetof(gfx::SceneData, coneRuns)}});
+                                     {"coneRuns", offsetof(gfx::SceneData, coneRuns)},
+                                     {"meshletDataPtr", offsetof(gfx::SceneData, meshletDataPtr)}});
 
             valid &= validateStruct(fieldStruct(layouts, scene, "meshletsPtr"), "GeometryMeshlet", sizeof(gfx::GeometryMeshlet),
                                     {{"center", offsetof(gfx::GeometryMeshlet, center)},
@@ -604,7 +605,9 @@ namespace rasm
                                      {"coneAxis", offsetof(gfx::GeometryMeshlet, coneAxis)},
                                      {"coneCutoff", offsetof(gfx::GeometryMeshlet, coneCutoff)},
                                      {"firstIndex", offsetof(gfx::GeometryMeshlet, firstIndex)},
-                                     {"indexCount", offsetof(gfx::GeometryMeshlet, indexCount)}});
+                                     {"indexCount", offsetof(gfx::GeometryMeshlet, indexCount)},
+                                     {"firstData", offsetof(gfx::GeometryMeshlet, firstData)},
+                                     {"vertexCount", offsetof(gfx::GeometryMeshlet, vertexCount)}});
 
             valid &= validateInstanceTransform(fieldStruct(layouts, scene, "animatedTransformsPtr"));
 

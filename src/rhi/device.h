@@ -176,6 +176,7 @@ namespace rasm::rhi
         virtual void                drawIndexed(uint32_t indexCount, uint32_t instanceCount, uint32_t vertexOffset, uint32_t firstIndex, uint32_t firstInstance) = 0;
         virtual void                drawIndexedIndirect(Buffer* buffer, uint64_t offset, uint32_t drawCount, uint32_t stride) = 0;
         virtual void                drawIndexedIndirectCount(Buffer* buffer, uint64_t offset, Buffer* countBuffer, uint64_t countOffset, uint32_t maxDrawCount, uint32_t stride) = 0;
+        virtual void                drawMeshTasksIndirect(Buffer* buffer, uint64_t offset, uint32_t drawCount, uint32_t stride) = 0;
         virtual void                dispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) = 0;
         virtual void                dispatchIndirect(Buffer* buffer, uint64_t offset) = 0;
         virtual void                memoryBarrier(PipelineStage before, PipelineStage after) = 0;
@@ -246,6 +247,7 @@ namespace rasm::rhi
         virtual Shader*                 createShader(const ShaderDesc& desc) = 0;
         virtual Pipeline*               createGraphicsPipeline(const PipelineDesc& desc, Shader* vertexShader, Shader* fragmentShader, DescriptorSetLayout* layout) = 0;
         virtual Pipeline*               createComputePipeline(const PipelineDesc& desc, Shader* computeShader, DescriptorSetLayout* layout) = 0;
+        virtual Pipeline*               createMeshPipeline(const PipelineDesc& desc, Shader* taskShader, Shader* meshShader, Shader* fragmentShader, DescriptorSetLayout* layout) = 0;
         virtual DescriptorSetLayout*    createBindlessDescriptorSetLayout(const BindlessDescriptorSetLayoutDesc& desc) = 0;
         virtual DescriptorPool*         createDescriptorPool(const DescriptorPoolDesc& desc) = 0;
         virtual DescriptorSet*          allocateDescriptorSet(const std::string& name, DescriptorPool* pool, DescriptorSetLayout* layout) = 0;
@@ -269,6 +271,7 @@ namespace rasm::rhi
         virtual Queue*                  getQueue(QueueType queueType) = 0;
         virtual bool                    hasAsyncCompute() const = 0;
         virtual bool                    hasTransferQueue() const = 0;
+        virtual bool                    hasMeshShaders() const = 0;
         // Timestamps on the queue count like the graphics queue's: same valid bits and period.
         virtual bool                    hasTimestamps(QueueType queueType) const = 0;
         virtual bool                    fillBuffer(Buffer* buffer, const void* data, size_t size, size_t offset) = 0;

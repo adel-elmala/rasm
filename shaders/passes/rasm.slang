@@ -3,6 +3,7 @@
 #include "pbr.slang"
 #include "unlit.slang"
 #include "shadow.slang"
+#include "meshletTask.slang"
 #if defined(RASM_DEBUG_VIEW)
 #include "debugViews.slang"
 #endif
@@ -38,21 +39,15 @@ struct VSOutput
 #endif
 };
 
-[shader("vertex")]
-VSOutput vertMain(VSInput input)
+// One vertex of a draw, for vertMain and meshMain alike: vertexID is the sub-mesh's own (the raw index-buffer value),
+// lod and meshletKey only feed the debug views.
+VSOutput getVertexOutput(InstanceData *instance, int vertexOffset, uint vertexID, uint lod, uint meshletKey)
 {
-    // Each draw names its instance row in firstInstance (D6).
-    DrawInfo *draw          = pc.scene->drawInfoPtr + getDrawIndex();
-    InstanceData *instance  = pc.scene->instancesPtr + draw->firstInstance;
-
     float4x4 modelMat       = getWorldMatrix(pc.scene, instance);
     float4x4 viewMat        = pc.scene->view;
     float4x4 projectionMat  = pc.scene->projection;
     float3x3 normalMat      = getNormalMatrix(pc.scene, instance);
-
-    // Slang lowers SV_VertexID to (VertexIndex - BaseVertex) to match D3D semantics, so it is the raw
-    // index-buffer value and the draw's vertexOffset must be added back to address the geometry pool.
-    VertexFull vert = getVertex(pc.scene, instance, draw, input.vertexID);
+    VertexFull vert         = getVertex(pc.scene, instance, vertexOffset, vertexID);
 
     VSOutput output = {};
     output.clipPosition         = mul(projectionMat, mul(viewMat, mul(modelMat, float4(vert.pos, 1.0))));
@@ -65,7 +60,7 @@ VSOutput vertMain(VSInput input)
     float3x3 modelMat3          = (float3x3)modelMat;
     float handedness            = determinant(modelMat3) < 0.0 ? -1.0 : 1.0;
     output.worldTangent         = float4(mul(modelMat3, vert.tangent.xyz), vert.tangent.w * handedness);
-    output.color                = getVertexColor(pc.scene, instance->geometryIndex, input.vertexID);
+    output.color                = getVertexColor(pc.scene, instance->geometryIndex, vertexID);
     output.worldCameraPosition  = pc.scene->cameraWorldPosition;
     output.uv0                  = vert.uv[0];
     output.uv1                  = vert.uv[1];
@@ -74,17 +69,54 @@ VSOutput vertMain(VSInput input)
     output.handedness           = handedness;
 #if defined(RASM_MOTION_VECTORS)
     // The point where the frame before drew it: its last position, world matrix and view.
-    float3 previousPosition     = getPreviousObjectPosition(pc.scene, instance, input.vertexID, vert.pos);
+    float3 previousPosition     = getPreviousObjectPosition(pc.scene, instance, vertexID, vert.pos);
     float3 previousWorld        = getPreviousWorldPosition(pc.scene, instance, float4(previousPosition, 1.0));
     output.currentClip          = removeJitter(pc.scene, output.clipPosition);
     output.previousClip         = mul(pc.scene->previousViewProjection, float4(previousWorld, 1.0));
 #endif
 #if defined(RASM_DEBUG_VIEW)
-    output.lod                  = getDrawLod(pc.scene, instance, draw);
-    output.meshlet              = getDrawMeshletKey(draw);
+    output.lod                  = lod;
+    output.meshlet              = meshletKey;
 #endif
-
     return output;
+}
+
+[shader("vertex")]
+VSOutput vertMain(VSInput input)
+{
+    // Each draw names its instance row in firstInstance (D6). Slang lowers SV_VertexID to (VertexIndex - BaseVertex)
+    // to match D3D semantics, so it is the raw index-buffer value and the draw's vertexOffset is added back to address
+    // the geometry pool.
+    DrawInfo *draw          = pc.scene->drawInfoPtr + getDrawIndex();
+    InstanceData *instance  = pc.scene->instancesPtr + draw->firstInstance;
+    uint lod                = 0;
+    uint meshletKey         = 0;
+#if defined(RASM_DEBUG_VIEW)
+    lod                     = getDrawLod(pc.scene, instance, draw->firstIndex);
+    meshletKey              = getMeshletKey(draw->firstIndex, draw->firstInstance);
+#endif
+    return getVertexOutput(instance, draw->vertexOffset, input.vertexID, lod, meshletKey);
+}
+
+// A visible meshlet (lib/meshletTask.slang): its vertices through getVertexOutput, as vertMain's, and its triangles.
+[shader("mesh")]
+[outputtopology("triangle")]
+[numthreads(MESHLET_CHUNK_SIZE, 1, 1)]
+void meshMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID, in payload MeshletPayload meshletPayload,
+              out indices uint3 triangles[MESHLET_MAX_TRIANGLES], out vertices VSOutput vertices[MESHLET_MAX_VERTICES])
+{
+    MeshletDraw meshlet = getMeshletDraw(pc.scene, meshletPayload, groupId.x);
+    SetMeshOutputCounts(meshlet.vertexCount, meshlet.triangleCount);
+    uint lod            = 0;
+    uint meshletKey     = 0;
+#if defined(RASM_DEBUG_VIEW)
+    lod                 = meshlet.lod;
+    meshletKey          = getMeshletKey(meshlet.firstIndex, meshlet.draw.firstInstance);
+#endif
+    if (threadId.x < meshlet.vertexCount)
+        vertices[threadId.x] = getVertexOutput(meshlet.instance, meshlet.draw.vertexOffset, getMeshletVertex(pc.scene, meshlet, threadId.x), lod, meshletKey);
+    for (uint t = threadId.x; t < meshlet.triangleCount; t += MESHLET_CHUNK_SIZE)
+        triangles[t] = getMeshletTriangle(pc.scene, meshlet, t);
 }
 
 [[vk::binding(0, 0)]]

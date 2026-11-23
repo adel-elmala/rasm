@@ -13,6 +13,7 @@
 // BENCH_WARMUP_FRAMES, printed when the run ends. Run it headless in Release (--headless --frames 600 --bench): the
 // engine then runs without validation and without the UI, whose passes would change the timings.
 constexpr uint32_t BENCH_WARMUP_FRAMES = 120;
+constexpr const char* MESHLET_PATH_NAMES[] = {"off", "vertex pulling", "mesh shaders", "auto"};
 
 struct ExampleBench
 {
@@ -39,13 +40,22 @@ inline bool hasBenchFlag(int argc, char** argv)
     return false;
 }
 
-// --meshlets off|vp: EngineConfig::meshletPath.
+// --meshlets off|vp|mesh|auto: EngineConfig::meshletPath.
 inline void applyMeshletFlag(int argc, char** argv, rasm::EngineConfig& config)
 {
     for (int i = 1; i + 1 < argc; ++i)
     {
         if (std::strcmp(argv[i], "--meshlets") == 0)
-            config.meshletPath = std::strcmp(argv[i + 1], "off") == 0 ? rasm::MeshletPath::OFF : rasm::MeshletPath::VERTEX_PULLING;
+        {
+            const char* path = argv[i + 1];
+            config.meshletPath = rasm::MeshletPath::VERTEX_PULLING;
+            if (std::strcmp(path, "off") == 0)
+                config.meshletPath = rasm::MeshletPath::OFF;
+            if (std::strcmp(path, "mesh") == 0)
+                config.meshletPath = rasm::MeshletPath::MESH_SHADERS;
+            if (std::strcmp(path, "auto") == 0)
+                config.meshletPath = rasm::MeshletPath::AUTO;
+        }
     }
 }
 
@@ -88,7 +98,7 @@ inline void printBench(const ExampleBench& bench, const rasm::EngineConfig& conf
             culling += bench.sums.at(name);
     }
     std::printf("bench, %u frames at %dx%d, meshlets %s:\n", bench.measured, config.windowWidth, config.windowHeight,
-                config.meshletPath == rasm::MeshletPath::OFF ? "off" : "vertex pulling");
+                MESHLET_PATH_NAMES[static_cast<uint32_t>(config.meshletPath)]);
     for (const std::string& name : bench.names)
         std::printf("  %-22s %8.3f ms\n", name.c_str(), bench.sums.at(name) / n);
     std::printf("  %-22s %8.3f ms\n", "GPU frame", bench.gpuMs / n);

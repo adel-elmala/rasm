@@ -41,6 +41,7 @@ namespace rasm
         BufferHandle            skinBuffer() const;
         BufferHandle            morphBuffer() const;
         BufferHandle            meshletBuffer() const;
+        BufferHandle            meshletDataBuffer() const;
         BufferHandle            tableBuffer() const;
         GeometryPoolStats       stats() const;
 
@@ -51,6 +52,7 @@ namespace rasm
         BufferHandle            skins                   = {};
         BufferHandle            morphs                  = {};
         BufferHandle            meshlets                = {};
+        BufferHandle            meshletData             = {};       // with mesh shaders only
         BufferHandle            table                   = {};
         RangeAllocator          vertexRanges;
         RangeAllocator          indexRanges;
@@ -58,6 +60,7 @@ namespace rasm
         RangeAllocator          skinRanges;
         RangeAllocator          morphRanges;
         RangeAllocator          meshletRanges;
+        RangeAllocator          meshletDataRanges;
         RangeAllocator          subMeshRows;
         bool                    meshletsFullLogged      = false;
     };

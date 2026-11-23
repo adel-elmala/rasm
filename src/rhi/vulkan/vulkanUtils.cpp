@@ -105,6 +105,10 @@ namespace rasm::rhi
             return VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         case ShaderType::ALL:
             return VK_SHADER_STAGE_ALL;
+        case ShaderType::TASK:
+            return VK_SHADER_STAGE_TASK_BIT_EXT;
+        case ShaderType::MESH:
+            return VK_SHADER_STAGE_MESH_BIT_EXT;
         default:
             return static_cast<VkShaderStageFlags>(0);
         }

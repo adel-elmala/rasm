@@ -287,6 +287,8 @@ namespace rasm::gfx
         float           coneCutoff;
         uint32_t        firstIndex;                 // in the index pool
         uint32_t        indexCount;
+        uint32_t        firstData;                  // in the meshlet data pool: vertexCount vertices, then a word per triangle
+        uint32_t        vertexCount;
     };
 
     struct GeometryData
@@ -376,6 +378,7 @@ namespace rasm::gfx
         uint32_t         meshletRuns;               // a bit per run whose big draws are drawn by meshlets
         uint32_t         coneRuns;                  // a bit per run culled by face, where the cone test holds
         uint32_t         padding;
+        uint64_t         meshletDataPtr;            // the meshlets' vertices and triangles, for the mesh shaders; 0 without them
     };
 
     struct PushConstants
@@ -505,7 +508,8 @@ namespace rasm::gfx
     static_assert(sizeof(GeometryLod) == 20, "GeometryLod must match the shader's scalar layout");
     static_assert(offsetof(GeometryLod, error) == 8, "GeometryLod must match the shader's scalar layout");
     static_assert(offsetof(GeometryLod, meshletCount) == 16, "GeometryLod must match the shader's scalar layout");
-    static_assert(sizeof(GeometryMeshlet) == 40, "GeometryMeshlet must match the shader's scalar layout");
+    static_assert(sizeof(GeometryMeshlet) == 48, "GeometryMeshlet must match the shader's scalar layout");
+    static_assert(offsetof(GeometryMeshlet, vertexCount) == 44, "GeometryMeshlet must match the shader's scalar layout");
     static_assert(offsetof(GeometryMeshlet, coneCutoff) == 28, "GeometryMeshlet must match the shader's scalar layout");
     static_assert(offsetof(GeometryMeshlet, indexCount) == 36, "GeometryMeshlet must match the shader's scalar layout");
     static_assert(sizeof(GeometryData) == 40 + 20 * MAX_MESH_LODS, "GeometryData must match the shader's scalar layout");
@@ -517,7 +521,8 @@ namespace rasm::gfx
     static_assert(offsetof(GeometryData, boundsRadius) == 16, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, lodCount) == 20, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, lods) == 24, "GeometryData must match the shader's scalar layout");
-    static_assert(sizeof(SceneData) == 2008, "SceneData must match the shader's scalar layout");
+    static_assert(sizeof(SceneData) == 2016, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, meshletDataPtr) == 2008, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, previousSkinnedVertsPtr) == 1816, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, animatedTransformsPtr) == 1800, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, meshletsPtr) == 1824, "SceneData must match the shader's scalar layout");

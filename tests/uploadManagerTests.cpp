@@ -62,6 +62,7 @@ namespace
         void drawIndexedIndirectCount(Buffer *, uint64_t, Buffer *, uint64_t, uint32_t, uint32_t) override {}
         void dispatch(uint32_t, uint32_t, uint32_t) override {}
         void dispatchIndirect(Buffer *, uint64_t) override {}
+        void drawMeshTasksIndirect(Buffer *, uint64_t, uint32_t, uint32_t) override {}
         void memoryBarrier(PipelineStage, PipelineStage) override {}
         void aliasingBarrier() override {}
         void copyBuffers(Buffer *source, const BufferCopy *list, uint32_t count) override
@@ -152,6 +153,7 @@ namespace
         Sampler *createSampler(const SamplerDesc &) override { return nullptr; }
         Shader *createShader(const ShaderDesc &) override { return nullptr; }
         Pipeline *createGraphicsPipeline(const PipelineDesc &, Shader *, Shader *, DescriptorSetLayout *) override { return nullptr; }
+        Pipeline *createMeshPipeline(const PipelineDesc &, Shader *, Shader *, Shader *, DescriptorSetLayout *) override { return nullptr; }
         Pipeline *createComputePipeline(const PipelineDesc &, Shader *, DescriptorSetLayout *) override { return nullptr; }
         DescriptorSetLayout *createBindlessDescriptorSetLayout(const BindlessDescriptorSetLayoutDesc &) override { return nullptr; }
         DescriptorPool *createDescriptorPool(const DescriptorPoolDesc &) override { return nullptr; }
@@ -198,6 +200,7 @@ namespace
         void destroyHeap(Heap *) override {}
         Queue *getQueue(QueueType) override { return &queue; }
         bool hasAsyncCompute() const override { return false; }
+        bool hasMeshShaders() const override { return false; }
         bool hasTransferQueue() const override { return false; }
         bool hasTimestamps(QueueType) const override { return false; }
         bool fillBuffer(Buffer *buffer, const void *data, size_t size, size_t offset) override

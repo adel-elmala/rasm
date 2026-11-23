@@ -754,6 +754,19 @@ namespace rasm
                 return {};
             pipeline = impl->device->createComputePipeline(desc, computeShader, layout);
         }
+        else if (desc.meshShader.isValid())
+        {
+            auto *taskShader = lookup(impl->shaders, desc.taskShader, __func__);
+            auto *meshShader = lookup(impl->shaders, desc.meshShader, __func__);
+            auto *fragmentShader = lookup(impl->shaders, desc.fragmentShader, __func__);
+            if (!taskShader || !meshShader || !fragmentShader)
+                return {};
+            if (!checkArgument(!desc.vertexShader.isValid() && taskShader->desc.type == ShaderType::TASK && meshShader->desc.type == ShaderType::MESH &&
+                                   fragmentShader->desc.type == ShaderType::FRAGMENT,
+                               __func__, "a mesh pipeline has TASK, MESH and FRAGMENT shaders and no vertex shader."))
+                return {};
+            pipeline = impl->device->createMeshPipeline(desc, taskShader, meshShader, fragmentShader, layout);
+        }
         else
         {
             auto *vertexShader = lookup(impl->shaders, desc.vertexShader, __func__);
@@ -2005,6 +2018,11 @@ namespace rasm
         return impl->device->hasAsyncCompute();
     }
 
+    bool RenderContext::hasMeshShaders() const
+    {
+        return impl->device->hasMeshShaders();
+    }
+
     // For commands that were recorded but will not run, a failed submit included: the textures go back to
     // the states they had before them, which is still what the GPU has.
     void RenderContext::discardRecording()
@@ -2146,6 +2164,24 @@ namespace rasm
         auto *rhiCountBuffer = lookup(impl->buffers, countBuffer, __func__);
         if (!impl->skipDraws && rhiCommandBuffer && rhiBuffer && rhiCountBuffer)
             rhiCommandBuffer->drawIndexedIndirectCount(rhiBuffer, offset, rhiCountBuffer, countOffset, maxDrawCount, stride);
+    }
+
+    // drawCount commands of three uint32_t task group counts each, stride bytes apart, read by the GPU; a mesh pipeline
+    // must be bound.
+    void RenderContext::drawMeshTasksIndirect(const CommandBufferHandle &commandBuffer, const BufferHandle &buffer, uint64_t offset, uint32_t drawCount, uint32_t stride)
+    {
+        if (!checkArgument(impl->insidePass, __func__, "draws must be recorded inside a render pass.") ||
+            !checkArgument(impl->device->hasMeshShaders(), __func__, "the device has no mesh shaders (hasMeshShaders).") ||
+            !checkArgument(offset % sizeof(uint32_t) == 0 && stride >= 3 * sizeof(uint32_t) && stride % sizeof(uint32_t) == 0, __func__,
+                           "the offset and the stride must be multiples of 4, and the stride at least 12."))
+            return;
+
+        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        auto *rhiBuffer = lookup(impl->buffers, buffer, __func__);
+        if (!impl->skipDraws && rhiCommandBuffer && rhiBuffer && drawCount > 0 &&
+            checkArgument(rhiBuffer->desc.usage == BufferUsage::INDIRECT, __func__, "the buffer is not an INDIRECT buffer.") &&
+            checkArgument(offset + static_cast<uint64_t>(drawCount - 1) * stride + 3 * sizeof(uint32_t) <= rhiBuffer->desc.size, __func__, "the commands reach past the buffer."))
+            rhiCommandBuffer->drawMeshTasksIndirect(rhiBuffer, offset, drawCount, stride);
     }
 
     void RenderContext::dispatch(const CommandBufferHandle &commandBuffer, uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ)
