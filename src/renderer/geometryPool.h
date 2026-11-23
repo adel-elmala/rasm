@@ -59,6 +59,7 @@ namespace rasm
         RangeAllocator          morphRanges;
         RangeAllocator          meshletRanges;
         RangeAllocator          subMeshRows;
+        bool                    meshletsFullLogged      = false;
     };
 
 }

@@ -372,7 +372,7 @@ namespace rasm::gfx
         glm::vec4        cullViewPoint;             // meshlet cone test: the camera's position (w = 1), or an orthographic view's direction (w = 0)
         uint32_t         runChunkFirst[MAX_DRAW_RUNS];
         uint32_t         runMeshletFirst[MAX_DRAW_RUNS];
-        uint32_t         runMeshletBudget[MAX_DRAW_RUNS]; // a run's meshlet draws past this are drawn whole
+        uint32_t         runMeshletBudget[MAX_DRAW_RUNS];
         uint32_t         meshletRuns;               // a bit per run whose big draws are drawn by meshlets
         uint32_t         coneRuns;                  // a bit per run culled by face, where the cone test holds
         uint32_t         padding;

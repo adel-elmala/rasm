@@ -187,7 +187,8 @@ namespace rasm
                 ImGui::EndCombo();
             }
             const char *meshletPaths[] = {"off", "vertex pulling"};
-            if (ImGui::BeginCombo("Meshlets", meshletPaths[static_cast<uint32_t>(config.meshletPath)]))
+            const uint32_t meshletPath = std::min(static_cast<uint32_t>(config.meshletPath), static_cast<uint32_t>(std::size(meshletPaths) - 1));
+            if (ImGui::BeginCombo("Meshlets", meshletPaths[meshletPath]))
             {
                 for (uint32_t i = 0; i < std::size(meshletPaths); ++i)
                 {

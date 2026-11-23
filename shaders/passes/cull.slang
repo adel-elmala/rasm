@@ -337,7 +337,9 @@ void writeMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
         if (!fits)
         {
             scene->cullSlotsPtr[drawIndex] = packed | CULL_WHOLE;
-            InterlockedAdd(scene->cullStatsPtr[STATS_MESHLETS_WHOLE], 1);
+            // Counted once per frame: by the phase that first draws it.
+            if ((packed & (CULL_DRAWN_EARLY | CULL_EARLY_MESHLETS)) == 0)
+                InterlockedAdd(scene->cullStatsPtr[STATS_MESHLETS_WHOLE], 1);
         }
     }
     else if (packed != CULLED)
@@ -451,7 +453,8 @@ void meshletCountMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThrea
                     InterlockedOr(chunkBits[lane / 32], 1u << (lane % 32));
                 bool drawnEarly = (entry.y & CHUNK_DRAWN_EARLY) != 0 || ((entry.y & CHUNK_EARLY_MESHLETS) != 0 && tested && lastSeen);
                 visible     = seen && !drawnEarly;
-                culled      = !seen;
+                // A draw the early phase drew whole has none culled.
+                culled      = !seen && (entry.y & CHUNK_DRAWN_EARLY) == 0;
             }
             if (culled)
                 InterlockedAdd(chunkCulled, 1);

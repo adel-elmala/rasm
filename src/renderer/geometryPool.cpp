@@ -159,11 +159,20 @@ namespace rasm
         const bool color = index && colorRanges.allocate(geometry.colorCount, firstColor);
         const bool skin = color && skinRanges.allocate(geometry.skinCount, firstSkin);
         const bool morph = skin && morphRanges.allocate(geometry.morphCount, firstMorph);
-        const bool meshlet = morph && meshletRanges.allocate(geometry.meshletCount, firstMeshlet);
-        const bool tableRow = meshlet && subMeshRows.allocate(1, row);
+        // Meshlets are optional: a sub-mesh whose meshlets do not fit is drawn whole, with the same triangles.
+        if (morph && geometry.meshletCount > 0 && !meshletRanges.allocate(geometry.meshletCount, firstMeshlet))
+        {
+            if (!meshletsFullLogged)
+                spdlog::warn("The meshlet pool is full ({}/{} meshlets, EngineConfig::geometryPoolMeshlets): a sub-mesh of {} meshlets is drawn whole.", meshletRanges.used(),
+                             meshletRanges.capacity(), geometry.meshletCount);
+            meshletsFullLogged = true;
+            geometry.meshletCount = 0;
+            geometry.maxLodMeshlets = 0;
+        }
+        const bool tableRow = morph && subMeshRows.allocate(1, row);
         if (!tableRow)
         {
-            if (meshlet)
+            if (morph)
                 meshletRanges.free(firstMeshlet, geometry.meshletCount);
             if (vertex)
                 vertexRanges.free(firstVertex, geometry.vertexCount);
@@ -226,13 +235,15 @@ namespace rasm
                               .skinOffset = geometry.skinCount > 0 ? static_cast<int32_t>(geometry.firstSkin) : -1,
                               .morphOffset = geometry.morphCount > 0 ? static_cast<int32_t>(geometry.firstMorph) : -1,
                               .morphTargetCount = geometry.morphTargetCount};
-        row.lods[0] = {.firstIndex = geometry.firstIndex, .indexCount = geometry.indexCount, .error = 0.0f, .firstMeshlet = geometry.firstMeshlet, .meshletCount = getLodMeshletCount(raw, 0)};
+        // A sub-mesh whose meshlets did not fit the pool (allocate) has none.
+        const bool hasMeshlets = geometry.meshletCount > 0;
+        row.lods[0] = {.firstIndex = geometry.firstIndex, .indexCount = geometry.indexCount, .error = 0.0f, .firstMeshlet = geometry.firstMeshlet, .meshletCount = hasMeshlets ? getLodMeshletCount(raw, 0) : 0u};
         uint32_t nextIndex = geometry.firstIndex + geometry.indexCount;
         uint32_t nextMeshlet = geometry.firstMeshlet + row.lods[0].meshletCount;
         for (size_t i = 1; i < lodCount; ++i)
         {
             const MeshLod &lod = raw.lods[i - 1];
-            row.lods[i] = {.firstIndex = nextIndex, .indexCount = static_cast<uint32_t>(lod.indices.size()), .error = lod.error, .firstMeshlet = nextMeshlet, .meshletCount = getLodMeshletCount(raw, i)};
+            row.lods[i] = {.firstIndex = nextIndex, .indexCount = static_cast<uint32_t>(lod.indices.size()), .error = lod.error, .firstMeshlet = nextMeshlet, .meshletCount = hasMeshlets ? getLodMeshletCount(raw, i) : 0u};
             nextIndex += row.lods[i].indexCount;
             nextMeshlet += row.lods[i].meshletCount;
         }

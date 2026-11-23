@@ -2175,7 +2175,8 @@ namespace rasm
 
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
         auto *rhiBuffer = lookup(impl->buffers, buffer, __func__);
-        if (rhiCommandBuffer && rhiBuffer && checkArgument(rhiBuffer->desc.usage == BufferUsage::INDIRECT, __func__, "the buffer is not an INDIRECT buffer."))
+        if (rhiCommandBuffer && rhiBuffer && checkArgument(rhiBuffer->desc.usage == BufferUsage::INDIRECT, __func__, "the buffer is not an INDIRECT buffer.") &&
+            checkArgument(offset + 3 * sizeof(uint32_t) <= rhiBuffer->desc.size, __func__, "the three group counts at offset reach past the buffer."))
             rhiCommandBuffer->dispatchIndirect(rhiBuffer, offset);
     }
 

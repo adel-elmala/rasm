@@ -597,7 +597,7 @@ constexpr uint32_t MAX_MORPH_TARGETS = 256;</pre>
     <dl>
       <dt>indices</dt><dd>LOD 0, the full detail.</dd>
       <dt>lods</dt><dd>LOD 1 and coarser, from fine to coarse; at most <code>MAX_MESH_LODS</code> − 1. Empty until the engine builds them, and for a sub-mesh under 1024 triangles.</dd>
-      <dt>meshlets, lodMeshletCounts</dt><dd>The <a href="#Meshlet"><code>Meshlet</code></a>s of LOD 0, then of each coarser LOD, and how many each LOD has. Built after the LODs, for a sub-mesh of 512 triangles or more that is not skinned or morphed; building them writes each LOD's indices again in meshlet order (the same triangles). Empty otherwise.</dd>
+      <dt>meshlets, lodMeshletCounts</dt><dd>The <a href="#Meshlet"><code>Meshlet</code></a>s of LOD 0, then of each coarser LOD, and how many each LOD has. Built after the LODs, for a sub-mesh of 1024 triangles or more that is not skinned or morphed; building them writes each LOD's indices again in meshlet order (the same triangles). Empty otherwise.</dd>
       <dt>colors</dt><dd>One packed vertex color per vertex (glTF <code>COLOR_0</code>), or empty.</dd>
       <dt>skin</dt><dd>One <a href="#SkinVertex"><code>SkinVertex</code></a> per vertex (glTF <code>JOINTS_0</code> / <code>WEIGHTS_0</code>) for a skinned primitive, or empty.</dd>
       <dt>morphs, morphTargetCount</dt><dd>The deltas of each morph target, target-major: target <var>t</var>'s delta of vertex <var>v</var> is at <code class="lang-text">t · vertices.size() + v</code>. Empty, and a count of 0, for a primitive without targets, or whose targets move nothing.</dd>

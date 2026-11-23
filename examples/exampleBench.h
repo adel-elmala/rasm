@@ -16,17 +16,17 @@ constexpr uint32_t BENCH_WARMUP_FRAMES = 120;
 
 struct ExampleBench
 {
-    bool                            on              = false;
-    uint32_t                        frame           = 0;
-    uint32_t                        measured        = 0;
-    std::vector<std::string>        names;          // the passes, in the order of their first frame
+    bool                            on                  = false;
+    uint32_t                        frame               = 0;
+    uint32_t                        measured            = 0;
+    std::vector<std::string>        names;              // the passes, in the order of their first frame
     std::map<std::string, double>   sums;
-    double                          gpuMs           = 0.0;
-    double                          triangles       = 0.0;
-    double                          draws           = 0.0;
-    double                          meshlets        = 0.0;
-    double                          meshletsCulled  = 0.0;
-    double                          meshletDrawsWhole = 0.0;
+    double                          gpuMs               = 0.0;
+    double                          triangles           = 0.0;
+    double                          draws               = 0.0;
+    double                          meshlets            = 0.0;
+    double                          meshletsCulled      = 0.0;
+    double                          meshletDrawsWhole   = 0.0;
 };
 
 inline bool hasBenchFlag(int argc, char** argv)

@@ -313,7 +313,7 @@
 
 <h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
 
-<p>Every sub-mesh of at least 512 triangles that is not skinned or morphed gets meshlets of 64 vertices and 124 triangles per LOD when it loads (<code>buildMeshlets</code>, after the LODs, on the same worker job). Each LOD's indices are rewritten in meshlet order, so a meshlet is a range of them, and a whole draw of the LOD draws the same triangles. Drawing by meshlets is <code>EngineConfig::meshletPath</code> (<code>Engine::setMeshletPath</code> at run time): <code>MeshletPath::OFF</code> by default, <code>MeshletPath::VERTEX_PULLING</code> for the indirect draws of section 7.</p>
+<p>Every sub-mesh of at least 1024 triangles that is not skinned or morphed gets meshlets of 64 vertices and 124 triangles per LOD when it loads (<code>buildMeshlets</code>, after the LODs, on the same worker job). Each LOD's indices are rewritten in meshlet order, so a meshlet is a range of them, and a whole draw of the LOD draws the same triangles. Drawing by meshlets is <code>EngineConfig::meshletPath</code> (<code>Engine::setMeshletPath</code> at run time): <code>MeshletPath::OFF</code> by default, <code>MeshletPath::VERTEX_PULLING</code> for the indirect draws of section 7.</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 250" role="img" aria-label="The culling pass of one view and phase. countMain tests each draw and picks its LOD; writeMain writes small draws to the visible draws as before, and draws whose LOD has 8 or more meshlets as chunks of 64 meshlets. meshletCountMain, one group per chunk, tests the meshlets and writes a mask and a group sum. meshletWriteMain writes a DrawInfo per visible meshlet after the draws. The draw pass draws both lists per run.">
@@ -356,7 +356,7 @@
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>Building</td><td>64 / 124, cone weight</td><td><code>meshopt_buildMeshlets</code> with 64 / 124 and cone weight 0.25, then <code>meshopt_optimizeMeshlet</code> and <code>meshopt_computeMeshletBounds</code> per meshlet; <code>MIN_MESHLET_TRIANGLES</code> (512) per sub-mesh.</td></tr>
+  <tr><td>Building</td><td>64 / 124, cone weight</td><td><code>meshopt_buildMeshlets</code> with 64 / 124 and cone weight 0.25, then <code>meshopt_optimizeMeshlet</code> and <code>meshopt_computeMeshletBounds</code> per meshlet; <code>MIN_MESHLET_TRIANGLES</code> (1024) per sub-mesh.</td></tr>
   <tr><td>Storage</td><td>index range or local lists</td><td>An index range (<code>GeometryMeshlet</code>: sphere, cone, <code>firstIndex</code>, <code>indexCount</code>, 40 B) in the geometry pool's meshlet stream (<code>EngineConfig::geometryPoolMeshlets</code>); each <code>GeometryLod</code> names its <code>firstMeshlet</code> and <code>meshletCount</code>.</td></tr>
   <tr><td>Which draws</td><td>big meshes</td><td>A visible draw whose LOD has at least <code>MESHLET_MIN_DRAW</code> (8) meshlets, in a run that is not the blend run (it is sorted per object). Skinned and morphed sub-meshes have none (<code>D37</code>).</td></tr>
   <tr><td>Cone test</td><td>camera in object space</td><td><code>isMeshletBackFacing</code>: the camera (or an orthographic view's direction, <code>SceneData::cullViewPoint</code>) moved by the inverse world matrix, only in runs culled by face (<code>SceneData::coneRuns</code>).</td></tr>
