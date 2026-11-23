@@ -160,7 +160,7 @@ TEST_CASE("a load dropped while queued never runs and takes no bytes")
                .ticket = ticket});
     pool.push({.run = [&after]()
                { after = true; }});
-    pool.dropLoad(*ticket);
+    pool.releaseBytes(pool.dropLoad(*ticket));
     gate.open();
     REQUIRE(waitUntil([&]()
                       { return after.load(); }));
@@ -189,7 +189,7 @@ TEST_CASE("a load dropped while it runs gives its bytes back when it ends; a fin
         REQUIRE(waitUntil([&]()
                           { return pool.stats().running == 1; }));
         CHECK(pool.stats().bytes == 200);
-        pool.dropLoad(*ticket);
+        pool.releaseBytes(pool.dropLoad(*ticket));
         CHECK(ticket->cancelled);
         gate.open();
         REQUIRE(waitUntil([&]()
@@ -209,7 +209,7 @@ TEST_CASE("a load dropped while it runs gives its bytes back when it ends; a fin
                           { return ticket->state == LoadState::DONE; }));
         // A finished load holds its bytes until the main thread takes or drops it.
         CHECK(pool.stats().bytes == 200);
-        pool.dropLoad(*ticket);
+        pool.releaseBytes(pool.dropLoad(*ticket));
         CHECK(pool.stats().bytes == 0);
     }
 }
@@ -267,7 +267,7 @@ TEST_CASE("a load bigger than the budget runs alone, and children are not held b
                .ticket = std::make_shared<LoadTicket>()});
     settle();
     CHECK_FALSE(nextRan);
-    pool.dropLoad(*ticket);
+    pool.releaseBytes(pool.dropLoad(*ticket));
     REQUIRE(waitUntil([&]()
                       { return nextRan.load(); }));
 }
@@ -308,6 +308,44 @@ TEST_CASE("shutdown drops queued jobs and waits for running ones")
                        { ++queuedRan; });
     }
     CHECK(queuedRan == 0);
+}
+
+// Engine::freeOnWorker hands a load's result to a child job: what it holds is freed when the job runs, when shutdown
+// drops it from the queue, or at once when the pool is stopping, never leaked (P26).
+TEST_CASE("a child job's captures are freed whether it runs, is dropped by shutdown, or comes after it")
+{
+    auto ran = std::make_shared<int>(0);
+    auto queued = std::make_shared<int>(0);
+    auto late = std::make_shared<int>(0);
+    Gate gate;
+    {
+        WorkerPool pool(1, UINT64_MAX, "test");
+        pool.pushChild([ran]() {});
+        REQUIRE(waitUntil([&]()
+                          { return ran.use_count() == 1; }));
+
+        // The only worker waits, so this child is still queued when the pool stops. The gate opens on every path, so a
+        // failed check cannot leave the worker blocked and the test hung.
+        std::atomic<bool> started = false;
+        pool.push({.run = [&started, f = gate.future]()
+                   {
+                       started = true;
+                       f.wait();
+                   }});
+        std::thread opener([&gate]()
+                           {
+                               std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                               gate.open(); });
+        CHECK(waitUntil([&]()
+                        { return started.load(); }));
+        pool.pushChild([queued]() {});
+        pool.shutdown();
+        opener.join();
+        CHECK(queued.use_count() == 1);
+
+        pool.pushChild([late]() {});
+        CHECK(late.use_count() == 1);
+    }
 }
 
 TEST_CASE("the destructor stops a pool that still has work")
@@ -356,7 +394,7 @@ TEST_CASE("a load's next step goes before queued loads, adds to its bytes, and i
     // The other load waits until the first gives its bytes back.
     settle();
     CHECK(order.get() == std::vector<int>{1, 2});
-    pool.dropLoad(*ticket);
+    pool.releaseBytes(pool.dropLoad(*ticket));
     REQUIRE(waitUntil([&]()
                       { return order.get().size() == 3; }));
     CHECK(order.get() == std::vector<int>{1, 2, 3});
@@ -383,7 +421,7 @@ TEST_CASE("a load dropped while its next step waits gives back what its first st
                       { return pool.stats().queued == 1 && pool.stats().running == 1; }));
     REQUIRE(waitUntil([&]()
                       { return pool.stats().bytes == 40; }));
-    pool.dropLoad(*ticket);
+    pool.releaseBytes(pool.dropLoad(*ticket));
     gate.open();
     REQUIRE(waitUntil([&]()
                       { return pool.stats().bytes == 0 && pool.stats().queued == 0; }));

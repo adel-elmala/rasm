@@ -34,6 +34,7 @@ const SECTIONS = [
             { path: "guides/generational-handles.html",  title: "Generational handles",                blurb: "Safe references: an index plus a generation." },
             { path: "guides/resource-lifetime.html",     title: "Deferred destruction",                blurb: "Destroy what the GPU may still read: the handle now, the memory later." },
             { path: "guides/job-system.html",            title: "Job systems and worker pools",        blurb: "A few threads, many jobs: split work, never wait inside a job, and cap the memory in flight." },
+            { path: "guides/frame-allocations.html",     title: "Heap memory in the frame",            blurb: "What malloc and free cost, keep a container's capacity, arenas, free big blocks on a worker, and measure first." },
         ],
     },
     {

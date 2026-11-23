@@ -61,7 +61,7 @@ namespace rasm
         void                                    pushChild(std::function<void()> run);
         void                                    setLoadBytes(LoadTicket& ticket, uint64_t bytes);
         void                                    finishLoad(LoadTicket& ticket);
-        void                                    dropLoad(LoadTicket& ticket);
+        uint64_t                                dropLoad(LoadTicket& ticket);
         void                                    releaseBytes(uint64_t bytes);
         uint64_t                                completions() const;
         void                                    waitForCompletion(uint64_t seen);

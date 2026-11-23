@@ -30,6 +30,7 @@ namespace rasm
     class Platform;
     class Renderer;
     class WorkerPool;
+    struct LoadTicket;
     class ShaderCompiler;
     struct GpuScene;
     struct GpuLights;
@@ -380,6 +381,8 @@ namespace rasm
         bool                        bloomRuns(CameraHandle camera) const;
         bool                        createBloomPipelines();
         void                        finishLoads(bool wait);
+        void                        freeOnWorker(std::shared_ptr<const void> result, uint64_t bytes);
+        void                        dropPendingLoad(LoadTicket& ticket, std::shared_ptr<const void> result);
         bool                        finishReadyLoads(bool budgeted);
         void                        publishUploadedLoads();
         void                        dropTextureLoad(TextureHandle texture);

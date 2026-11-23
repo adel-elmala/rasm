@@ -205,14 +205,14 @@ namespace rasm
         // Loads that still run stop at their next step, queued ones are dropped, and the workers end. Jobs never touch
         // the engine, so this could come later; first, so no job outlives what it reads.
         for (PendingMeshLoad &load : pendingMeshes)
-            workers->dropLoad(load.job->ticket);
+            workers->releaseBytes(workers->dropLoad(load.job->ticket));
         for (auto &[handle, load] : pendingTextures)
         {
             if (load.job)
-                workers->dropLoad(load.job->ticket);
+                workers->releaseBytes(workers->dropLoad(load.job->ticket));
         }
         for (PendingEnvironmentLoad &load : pendingEnvironments)
-            workers->dropLoad(load.job->ticket);
+            workers->releaseBytes(workers->dropLoad(load.job->ticket));
         workers->shutdown();
         // Its graph frees what it made through the context.
         renderer.reset();
@@ -310,6 +310,31 @@ namespace rasm
         }
     }
 
+    // A finished load's decoded data is freed on a worker, and its bytes go back to the load budget once it is freed, so
+    // the budget does not count a result as gone while it is still in memory (except a glTF image that two textures
+    // share, P26). Freeing a few MiB gives their pages back to the OS, which took 0.15 to 0.3 ms each on the main
+    // thread (P26). A free that finds the pool stopping happens here, at once.
+    void Engine::freeOnWorker(std::shared_ptr<const void> result, uint64_t bytes)
+    {
+        if (!result)
+        {
+            workers->releaseBytes(bytes);
+            return;
+        }
+        WorkerPool *pool = workers.get();
+        pool->pushChild([pool, result = std::move(result), bytes]() mutable
+                        {
+                            result.reset();
+                            pool->releaseBytes(bytes); });
+    }
+
+    // A queued job never runs and a running one frees its result when it ends; a finished one's result goes to a worker
+    // like a filled one's, its bytes after it (dropLoad returns them, also for a load that finished just now).
+    void Engine::dropPendingLoad(LoadTicket &ticket, std::shared_ptr<const void> result)
+    {
+        freeOnWorker(std::move(result), workers->dropLoad(ticket));
+    }
+
     // Returns whether loads are still pending. Textures come last: a finished glTF adds its textures, each filled on its
     // own (P2), so a big model's copies spread over frames too, and waitForLoads fills them in the same call. What this
     // fills is used only once its copies are done (publishUploadedLoads, in a later frame): a load's uploads need no wait
@@ -338,9 +363,9 @@ namespace rasm
             finishMeshLoad(load);
             if (isLive(load.handle) && registry.meshes[load.handle.index].state == MeshState::LOADING)
                 meshes.push_back(load.handle);
-            // Its textures took their levels' bytes with them (loadMaterial); the rest of the result is freed now.
+            // Its textures took their levels' bytes with them (loadMaterial); the rest of the result is freed on a worker.
             const uint64_t held = load.job->ticket.bytes.exchange(0);
-            workers->releaseBytes(held - std::min(held, load.movedBytes));
+            freeOnWorker(std::move(load.job), held - std::min(held, load.movedBytes));
         }
 
         for (size_t i = 0; i < pendingEnvironments.size() && !overBudget();)
@@ -354,7 +379,8 @@ namespace rasm
             pendingEnvironments.erase(pendingEnvironments.begin() + static_cast<std::ptrdiff_t>(i));
             finishEnvironmentLoad(load);
             uploadedEnvironments.push_back(load.handle);
-            workers->releaseBytes(load.job->ticket.bytes.exchange(0));
+            const uint64_t held = load.job->ticket.bytes.exchange(0);
+            freeOnWorker(std::move(load.job), held);
         }
 
         // At least one part of a texture a frame, so meshes that use up the budget frame after frame do not hold textures
@@ -391,7 +417,14 @@ namespace rasm
                     filledTextures.push_back(std::move(load));
                     continue;
                 }
-                workers->releaseBytes(load.job ? load.job->ticket.bytes.exchange(0) : load.bytes);
+                // A texture has its own job (loadTexture) or its glTF's levels (loadMaterial), never both.
+                if (load.job)
+                {
+                    const uint64_t held = load.job->ticket.bytes.exchange(0);
+                    freeOnWorker(std::move(load.job), held);
+                }
+                else
+                    freeOnWorker(std::move(load.levels), load.bytes);
                 if (ctx.isAlive(load.handle))
                     filledTextures.push_back({.handle = load.handle, .path = std::move(load.path), .filled = true});
                 else

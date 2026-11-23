@@ -1555,10 +1555,13 @@ namespace rasm
         return rhiBuffer ? rhiBuffer->desc : BufferDesc{};
     }
 
-    TextureDesc RenderContext::getTextureDesc(const TextureHandle &texture)
+    // A reference, so a caller in the frame copies no name string. The table holds pointers, so it does not move when
+    // the table grows.
+    const TextureDesc &RenderContext::getTextureDesc(const TextureHandle &texture)
     {
+        static const TextureDesc empty{};
         auto *rhiTexture = lookup(impl->textures, texture, __func__);
-        return rhiTexture ? rhiTexture->desc : TextureDesc{};
+        return rhiTexture ? rhiTexture->desc : empty;
     }
 
     VRAMStats RenderContext::queryVRAMStats()

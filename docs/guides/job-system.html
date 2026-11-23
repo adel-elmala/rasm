@@ -530,7 +530,7 @@
 <p>The engine owns one <code>WorkerPool</code>. Every <code>loadMesh</code>, <code>loadTexture</code> and <code>loadEnvironment</code> is a load job on it; a glTF import splits into a child job per image and per sub-mesh's LODs. The main thread picks up done loads in <code>finishLoads</code> (<a href="asset-streaming.html#in-rasm">streaming assets</a>).</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 330" role="img" aria-label="loadMesh pushes a load job with a ticket and an estimate of its bytes. A worker starts it when the bytes fit the 512 MiB budget. runMeshImport parses the file and plans the images; a next step, queued first and gated by the budget like a load, sets the counter to the number of children and pushes a runImageWork job per image and a buildMeshLods job per sub-mesh. Workers take children first. The child that brings the counter to zero runs completeMeshLoad, which finishes the images and sets the ticket to done. finishLoads on the main thread uses the result and gives the bytes back.">
+  <svg viewBox="0 0 760 330" role="img" aria-label="loadMesh pushes a load job with a ticket and an estimate of its bytes. A worker starts it when the bytes fit the 512 MiB budget. runMeshImport parses the file and plans the images; a next step, queued first and gated by the budget like a load, sets the counter to the number of children and pushes a runImageWork job per image and a buildMeshLods job per sub-mesh. Workers take children first. The child that brings the counter to zero runs completeMeshLoad, which finishes the images and sets the ticket to done. finishLoads on the main thread uses the result, and a worker frees it and gives the bytes back.">
     <text x="20" y="22" class="title t-cpu">main thread</text>
     <rect x="20" y="32" width="190" height="56" rx="6" class="cpu"/>
     <text x="115" y="55" class="mid mono">loadMesh(path)</text>
@@ -560,7 +560,7 @@
     <line x1="410" y1="223" x2="212" y2="223" class="arrow" marker-end="url(#ah)"/>
     <rect x="20" y="198" width="190" height="50" rx="6" class="cpu"/>
     <text x="115" y="219" class="mid mono small">finishLoads</text>
-    <text x="115" y="237" class="mid small">upload, give bytes back</text>
+    <text x="115" y="237" class="mid small">upload; a worker frees it</text>
     <text x="20" y="282" class="small">destroyMesh drops the ticket: a queued load never runs; a running one skips its next steps.</text>
     <text x="20" y="300" class="small">loadTexture and loadEnvironment are one load job each, with no children.</text>
   </svg>
@@ -576,8 +576,8 @@
   <tr><td>Queue</td><td>FIFO, children first, priority</td><td>Two FIFO queues of <code>std::function</code> jobs under one mutex: <code>pushChild</code>, and <code>push</code> (<code>pushNext</code> puts a started load's next step at the front); children are taken first. No priority yet: it would be a sort key of the load queue.</td></tr>
   <tr><td>Split</td><td>a child job per part</td><td><code>spawnMeshChildJobs</code> pushes a <code>runImageWork</code> job per image (decode once, mips per kind of slot, or a KTX2 transcode per format) and a <code>buildMeshLods</code> job per sub-mesh.</td></tr>
   <tr><td>Waiting</td><td>continuation, help, fibers</td><td>Continuation: <code>MeshLoadJob::remaining</code>, and the last child runs <code>completeMeshLoad</code>. The main thread's <code>waitForLoads</code> finishes what is ready, then sleeps in <code>waitForCompletion</code> until another load ends.</td></tr>
-  <tr><td>Budget</td><td>a job starts if its bytes fit, or nothing is held</td><td><code>EngineConfig::loadMemoryBudget</code>, 512 MiB. Estimates from headers; a mesh starts with its file size; after the parse it holds its geometry and its images' file bytes, and its decoded images are a next step (<code>pushNext</code>, first in the load queue) that waits for the budget too, never held back by the load's own bytes. The main thread gives the bytes back when it uses a result; a glTF texture's levels keep their share until that texture is filled. Children are not gated.</td></tr>
-  <tr><td>Cancel</td><td>ticket: flag and state</td><td><code>LoadTicket</code>: <code>cancelled</code>, <code>state</code> (<code>RUNNING</code>, <code>DONE</code>, <code>DROPPED</code>), <code>bytes</code>. <code>destroyMesh</code>, <code>destroyTexture</code> and <code>destroyEnvironment</code> call <code>dropLoad</code> and erase the pending entry at once.</td></tr>
+  <tr><td>Budget</td><td>a job starts if its bytes fit, or nothing is held</td><td><code>EngineConfig::loadMemoryBudget</code>, 512 MiB. Estimates from headers; a mesh starts with its file size; after the parse it holds its geometry and its images' file bytes, and its decoded images are a next step (<code>pushNext</code>, first in the load queue) that waits for the budget too, never held back by the load's own bytes. When the main thread has used a result, a worker frees it, and its bytes go back once it is freed (<code>Engine::freeOnWorker</code>, see <a href="frame-allocations.html">heap memory in the frame</a>); a glTF texture's levels keep their share until that texture is filled. Children are not gated.</td></tr>
+  <tr><td>Cancel</td><td>ticket: flag and state</td><td><code>LoadTicket</code>: <code>cancelled</code>, <code>state</code> (<code>RUNNING</code>, <code>DONE</code>, <code>DROPPED</code>), <code>bytes</code>. <code>destroyMesh</code>, <code>destroyTexture</code> and <code>destroyEnvironment</code> call <code>dropLoad</code> (through <code>Engine::dropPendingLoad</code>) and erase the pending entry at once. For a finished load, <code>dropLoad</code> returns its bytes, which go back once a worker has freed the result.</td></tr>
   <tr><td>Shutdown</td><td>cancel, stop, wake, join</td><td><code>~Engine</code> drops every pending load, then <code>WorkerPool::shutdown</code> empties the queues and joins the threads, before anything else is destroyed.</td></tr>
   <tr><td>Same result</td><td>each job its own slot</td><td>The plan makes every <code>GltfImageTarget</code>'s empty <code>TextureRaw</code> before the jobs start, already in <code>GLTFRaw::ktxImages</code> or <code>imageLevels</code>; a LOD job writes only its own sub-mesh. The images and examples are the same as with one thread.</td></tr>
 </table>
@@ -619,7 +619,7 @@
   <ul>
     <li>No job waits for another job, or for the budget. Split, count down, and let the last one go on.</li>
     <li>A job holds its load's data by <code>shared_ptr</code> and never the engine, the registry or the device.</li>
-    <li>Every byte a load takes from the budget goes back once: the main thread gives back what it used or dropped while <code>DONE</code>; the job gives back what it held when it ends <code>DROPPED</code>.</li>
+    <li>Every byte a load takes from the budget goes back once: what the main thread used or dropped while <code>DONE</code> goes back from the worker that frees it; the job gives back what it held when it ends <code>DROPPED</code>.</li>
     <li>Each job writes only its own output, made before the jobs start; the finish step reads in a fixed order.</li>
     <li>A running job checks its ticket between steps, and every child still counts down when it skips its work.</li>
     <li>The basis transcoder's first use runs alone (<code>decodeKtx</code>): libktx sets up its tables then, with no lock.</li>

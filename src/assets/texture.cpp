@@ -207,16 +207,19 @@ namespace rasm
         ctx.destroyTexture(texture);
     }
 
-    // The load's bytes go back to the budget here or once it is filled (finishLoads).
+    // The load's bytes go back to the budget once a worker freed its data, from here or once it is filled (finishLoads).
     void Engine::dropTextureLoad(TextureHandle texture)
     {
         auto it = pendingTextures.find(texture);
         if (it == pendingTextures.end())
             return;
         if (it->second.job)
-            workers->dropLoad(it->second.job->ticket);
+        {
+            LoadTicket &ticket = it->second.job->ticket;
+            dropPendingLoad(ticket, std::move(it->second.job));
+        }
         else
-            workers->releaseBytes(it->second.bytes);
+            freeOnWorker(std::move(it->second.levels), it->second.bytes);
         pendingTextures.erase(it);
     }
 
@@ -250,7 +253,7 @@ namespace rasm
         // The texture was destroyed through RenderContext while it decoded, so there is nothing to fill.
         if (!ctx.isAlive(load.handle))
             return true;
-        const TextureDesc desc = ctx.getTextureDesc(load.handle);
+        const TextureDesc &desc = ctx.getTextureDesc(load.handle);
 
         // A material may already sample the texture, so a failed decode or upload leaves it plain (white, or a flat
         // normal for a two-channel format) instead of undefined: an image makes its mips from white pixels, a block

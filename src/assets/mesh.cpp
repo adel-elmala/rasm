@@ -273,9 +273,9 @@ namespace rasm
     {
         ZoneScoped;
 
-        // The CPU copy of the geometry and the glTF model are freed when raw goes out of scope (P6).
+        // The CPU copy of the geometry and the glTF model are freed with the job, on a worker (P6, P26).
         const auto mainThreadStart = std::chrono::steady_clock::now();
-        GLTFRaw raw = std::move(load.job->raw);
+        GLTFRaw &raw = load.job->raw;
         // Destroyed while it loaded: the result is dropped.
         if (!isLive(load.handle))
             return;
@@ -396,7 +396,8 @@ namespace rasm
         {
             if (it->handle == mesh)
             {
-                workers->dropLoad(it->job->ticket);
+                LoadTicket &ticket = it->job->ticket;
+                dropPendingLoad(ticket, std::move(it->job));
                 pendingMeshes.erase(it);
                 break;
             }

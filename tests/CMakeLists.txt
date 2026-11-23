@@ -53,7 +53,7 @@ add_test(NAME rasm_tests COMMAND rasm_tests)
 
 # Golden-image tests: render scenes headless and compare them with tests/golden/lavapipe. The goldens are lavapipe's,
 # so tools/image_tests.py runs them on that driver; the presets' ctest leaves out the label "image".
-add_executable(rasm_image_tests "image/imageTests.cpp")
+add_executable(rasm_image_tests "image/imageTests.cpp" "image/allocationCounter.cpp")
 target_link_libraries(rasm_image_tests PRIVATE rasm::rasm)
 target_compile_definitions(rasm_image_tests PRIVATE RASM_IMAGE_TESTS_ASSET_ROOT="${PROJECT_SOURCE_DIR}/assets"
                                                     RASM_IMAGE_TESTS_SHADER_DIR="${PROJECT_SOURCE_DIR}/shaders"

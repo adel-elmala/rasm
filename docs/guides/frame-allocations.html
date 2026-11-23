@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Heap Memory in the Frame · RASM</title>
+<meta name="description" content="Heap allocations in a real-time frame: what malloc and free cost for small and big blocks, where hidden allocations come from, keeping a container's capacity instead of moving it away, per-frame arenas and when they pay off, freeing big blocks on a worker, counting allocations to find them, and what RASM measured and changed.">
+<meta name="rasm-sources" content="src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/engineUi.cpp src/rhi/renderContext.cpp include/rasm/render/renderContext.h src/engine.cpp include/rasm/engine.h src/assets/mesh.cpp src/assets/texture.cpp src/assets/environment.cpp src/core/workerPool.h src/core/workerPool.cpp tests/image/allocationCounter.cpp tests/image/allocationCounter.h tests/image/imageTests.cpp tests/workerPoolTests.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/frame-allocations.js"></script>
+</head>
+<body data-root="../" data-page="guides/frame-allocations.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Foundations</p>
+<h1>Heap memory in the frame</h1>
+<p class="lead">A frame runs the same code many times a second. Each <samp>new</samp>, <samp>malloc</samp> or growing container in that code asks the heap for memory, every frame. This page explains what that costs, where such allocations hide, and the simple tools that remove them: keep a container's capacity, use an arena, free big blocks on another thread. And it shows why you measure before you build any of them. The <a href="#in-rasm">last part</a> shows what RASM measured and changed.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>A <b>small</b> allocation is fast (about 0.1 µs), but takes a lock and has no fixed cost. Many of them every frame add up and make the frame time uneven.</li>
+    <li>A <b>big</b> block (above about half a MiB) comes from the operating system. <b>Freeing</b> it gives the pages back, which costs <b>0.15 to 0.3 ms</b> for a few MiB: a lot in a 16 ms frame.</li>
+    <li>Allocations hide in <b>containers that lose their capacity</b>, long <b>strings</b>, <b>copies</b> of structs with strings, <b>callbacks</b> with big captures and <b>map</b> inserts.</li>
+    <li><b>Keep the capacity</b>: <samp>clear()</samp> or <samp>swap</samp> a list instead of moving it away. After the first frames, it allocates nothing.</li>
+    <li>An <b>arena</b> (linear allocator) hands out memory by moving a pointer and forgets it all at the end of the frame. It pays off for many small temporary objects; not when the data already lives in reused containers.</li>
+    <li><b>Free big blocks on a worker</b>, and count the memory as returned once it is freed.</li>
+    <li><b>Measure first</b>: count the allocations of a frame and find their call sites, then fix only those.</li>
+  </ul>
+</div>
+
+<h2 id="problem"><span class="n">1</span>The problem: a frame that allocates</h2>
+
+<p>Code that runs once per frame looks harmless: a list of the objects that moved, a line of text for the screen, a copy of a texture's description. Each of them may ask the heap for memory. Look at one frame of a city with 5000 moving cars, where the list of moved cars is built again each frame.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="A frame of 1.36 milliseconds on a time line. Inside it, 24 small ticks mark heap allocations: 22 from a list that grows again every frame, 2 from a string. Below, the list's buffer is drawn growing in steps: 1, 2, 3, 4, 6, 9 items and so on up to 5395 items, each step a new block and a copy.">
+    <text x="10" y="30" class="small t-cpu">frame</text>
+    <rect x="60" y="16" width="680" height="26" rx="4" class="cpu"/>
+    <text x="400" y="34" class="mid small">one frame, 1.36 ms</text>
+    <path d="M120,46V58M130,46V58M138,46V58M145,46V58M151,46V58M157,46V58M163,46V58M170,46V58M178,46V58M187,46V58M197,46V58M208,46V58M220,46V58M233,46V58M247,46V58M262,46V58M278,46V58M295,46V58M313,46V58M332,46V58M352,46V58M373,46V58" class="arrow hot"/>
+    <path d="M560,46V58M572,46V58" class="arrow hot"/>
+    <text x="246" y="74" class="mid small t-hot">22 allocations: the moved list grows</text>
+    <text x="566" y="74" class="mid small t-hot">2: a string</text>
+
+    <text x="10" y="112" class="small t-mem">buffer</text>
+    <rect x="60" y="100" width="4" height="18" class="mem"/>
+    <rect x="68" y="100" width="5" height="18" class="mem"/>
+    <rect x="77" y="100" width="6" height="18" class="mem"/>
+    <rect x="87" y="100" width="8" height="18" class="mem"/>
+    <rect x="99" y="100" width="10" height="18" class="mem"/>
+    <rect x="113" y="100" width="13" height="18" class="mem"/>
+    <text x="150" y="114" class="small t-faint">…</text>
+    <rect x="170" y="100" width="40" height="18" class="mem"/>
+    <rect x="216" y="100" width="60" height="18" class="mem"/>
+    <rect x="282" y="100" width="90" height="18" class="mem"/>
+    <rect x="378" y="100" width="135" height="18" class="mem"/>
+    <rect x="519" y="100" width="200" height="18" class="mem"/>
+    <text x="619" y="113" class="mid small">5395 items</text>
+    <text x="60" y="140" class="small">Each step: a new, 1.5 times bigger block, a copy of the items, a free of the old block.</text>
+    <text x="60" y="160" class="small">At the end of the frame the list is moved away, so the next frame starts again from 0.</text>
+    <text x="60" y="186" class="small t-faint">22 allocations and 259 KB per frame; with 16-byte items</text>
+  </svg>
+  <figcaption>Nothing here is wrong in a function that runs once. In a frame it runs over 700 times a second: about 17 000 allocations and 190 MB of heap traffic per second, for a list whose size hardly changes.</figcaption>
+</figure>
+
+<p>Each allocation is cheap alone. The trouble is what they do together:</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Many short ticks that add up to a long bar.">
+      <path d="M20,40V60M32,40V60M44,40V60M56,40V60M68,40V60M80,40V60M92,40V60M104,40V60M116,40V60" class="arrow hot"/>
+      <rect x="20" y="80" width="140" height="18" rx="3" class="hot"/>
+      <text x="166" y="94" class="small">adds up</text>
+    </svg>
+    <h4>Time that adds up</h4>
+    <p>Thousands per frame cost real time, in code that seems to do nothing.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Frame times that are mostly even, with a few tall spikes.">
+      <path d="M20,100H220" class="arrow"/>
+      <path d="M30,100V80M50,100V80M70,100V78M90,100V30M110,100V80M130,100V80M150,100V81M170,100V40M190,100V80M210,100V79" class="arrow cpu thick"/>
+      <text x="90" y="24" class="mid small t-bad">spike</text>
+    </svg>
+    <h4>Uneven frames</h4>
+    <p>Most calls are fast. Now and then one is slow: the heap asks the operating system for pages, or merges free blocks.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two threads waiting for one lock.">
+      <rect x="82" y="45" width="76" height="40" rx="5" class="hot"/>
+      <text x="120" y="70" class="mid small">heap lock</text>
+      <line x1="30" y1="40" x2="78" y2="58" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <line x1="210" y1="40" x2="162" y2="58" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <text x="30" y="32" class="small">main</text>
+      <text x="210" y="32" class="end small">worker</text>
+    </svg>
+    <h4>A shared lock</h4>
+    <p>The heap is shared by all threads. The frame's thread can wait for workers that allocate at the same time.</p>
+  </div>
+</div>
+
+<h2 id="heap"><span class="n">2</span>Small blocks and big blocks</h2>
+
+<p>A general heap treats sizes in two ways. Small blocks come from pages it already holds, through free lists. Big blocks come straight from the operating system, and go straight back to it when they are freed.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Left: the heap's pages hold small blocks; a free list links the free ones; an allocation takes one from the list and a free puts it back, both in user space. Right: a big block is mapped from the operating system as fresh pages; its free unmaps the pages, and every core that runs the program must drop them from its address cache.">
+    <text x="20" y="24" class="title">Small: from the heap's own pages</text>
+    <rect x="20" y="36" width="330" height="110" rx="6" class="zone"/>
+    <rect x="34" y="50" width="40" height="24" rx="3" class="mem"/>
+    <rect x="80" y="50" width="40" height="24" rx="3" class="paper"/>
+    <rect x="126" y="50" width="40" height="24" rx="3" class="mem"/>
+    <rect x="172" y="50" width="40" height="24" rx="3" class="paper"/>
+    <rect x="218" y="50" width="40" height="24" rx="3" class="mem"/>
+    <rect x="264" y="50" width="40" height="24" rx="3" class="paper"/>
+    <path d="M100,78 C110,96 180,96 192,78 M192,78 C202,96 274,96 284,78" class="arrow dashed"/>
+    <text x="34" y="116" class="small">free list: the free blocks, linked</text>
+    <text x="34" y="134" class="small">alloc and free: about 0.1 µs, no system call</text>
+
+    <text x="400" y="24" class="title">Big: from the operating system</text>
+    <rect x="400" y="36" width="340" height="110" rx="6" class="zone"/>
+    <rect x="414" y="50" width="200" height="24" rx="3" class="mem"/>
+    <text x="514" y="66" class="mid small">5.6 MiB = 1400 pages</text>
+    <line x1="630" y1="62" x2="700" y2="62" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="708" y="66" class="small t-hot">OS</text>
+    <text x="414" y="98" class="small">free: unmap the pages, and every core</text>
+    <text x="414" y="116" class="small">drops them from its address cache (TLB)</text>
+    <text x="414" y="134" class="small t-bad">0.15 to 0.3 ms per free</text>
+
+    <text x="20" y="182" class="small">Where "big" starts depends on the heap:</text>
+    <text x="20" y="202" class="small">about 512 KiB in the Windows heap, 128 KiB by default in glibc's malloc (it grows with use).</text>
+    <text x="20" y="228" class="small t-faint">The first write to fresh pages also costs a page fault per page: whoever writes them first pays it.</text>
+  </svg>
+  <figcaption>A big block is not slow to use, only to get and to give back. A thread that decodes an image into a new 5 MiB block pays the page faults; the thread that frees it pays the unmap.</figcaption>
+</figure>
+
+<h2 id="cost"><span class="n">3</span>What it costs</h2>
+
+<p>Numbers from one machine (Windows, 24 threads, Release build), measured by timing every <samp>new</samp> and <samp>delete</samp> of a running program (section 8):</p>
+
+<div class="stats">
+  <div><b>≈ 0.1 µs</b><span>a small allocation or free</span><small>24 allocations + 24 frees took 5.4 µs a frame</small></div>
+  <div><b>0.15–0.3 ms</b><span>freeing a big block of a few MiB</span><small>254 frees of 5.6 MiB on average: 67.6 ms</small></div>
+  <div><b>≈ 1.2 ms</b><span>a load frame's big frees</span><small>4 or 5 decoded images freed per frame</small></div>
+  <div><b>0.4 %</b><span>24 small allocations of a 1.36 ms frame</span><small>noise, until there are thousands</small></div>
+</div>
+
+<div class="callout">
+  <strong>So two different problems</strong>
+  Small allocations in a steady frame cost little time but make the frame's cost depend on the heap. Big frees on the frame's thread cost a millisecond at once. They have different fixes.
+</div>
+
+<h2 id="hidden"><span class="n">4</span>Where allocations hide</h2>
+
+<p>Few frame allocations are a visible <samp>new</samp>. Most come from a container or a library type that allocates for you:</p>
+
+<div class="vgrid">
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A list's buffer handed to another list, leaving the first with none.">
+      <rect x="20" y="30" width="90" height="24" rx="3" class="mem"/>
+      <line x1="114" y1="42" x2="150" y2="42" class="arrow mem" marker-end="url(#ah-mem)"/>
+      <rect x="154" y="30" width="70" height="24" rx="3" class="mem"/>
+      <rect x="20" y="78" width="90" height="24" rx="3" class="paper"/>
+      <text x="65" y="94" class="mid small">capacity 0</text>
+    </svg>
+    <h4>A list moved away</h4>
+    <p><samp>b = std::move(a)</samp> takes the buffer of <samp>a</samp>. Next frame, <samp>a</samp> grows again from 0.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A short string inside the object, a long one on the heap.">
+      <rect x="20" y="30" width="110" height="24" rx="3" class="paper"/>
+      <text x="75" y="46" class="mid small mono">"Draws 812"</text>
+      <rect x="20" y="78" width="200" height="24" rx="3" class="mem"/>
+      <text x="120" y="94" class="mid small mono">"LOD draws  801 7 2 1"</text>
+    </svg>
+    <h4>A long string</h4>
+    <p>A short text fits inside the string (15 characters in Microsoft's library, 22 in libc++). A longer one, built every frame, allocates every frame.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A struct returned by value, with its name string copied.">
+      <rect x="20" y="34" width="90" height="56" rx="3" class="paper"/>
+      <text x="65" y="56" class="mid small">desc</text>
+      <text x="65" y="76" class="mid small mono">name</text>
+      <line x1="114" y1="62" x2="140" y2="62" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <rect x="144" y="34" width="80" height="56" rx="3" class="paper"/>
+      <text x="184" y="66" class="mid small">a copy</text>
+    </svg>
+    <h4>A copy of a struct</h4>
+    <p>A getter that returns a description by value copies its name string, to read one field.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A callback object with captures too big for its inline space.">
+      <rect x="20" y="36" width="120" height="44" rx="5" class="shader"/>
+      <text x="80" y="62" class="mid small">callback</text>
+      <rect x="150" y="36" width="70" height="44" rx="3" class="mem"/>
+      <text x="185" y="62" class="mid small">captures</text>
+    </svg>
+    <h4>A callback</h4>
+    <p>A <samp>std::function</samp> whose captures do not fit its small inline space puts them on the heap.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A hash map with one node per entry.">
+      <rect x="20" y="30" width="40" height="70" rx="3" class="paper"/>
+      <line x1="60" y1="45" x2="100" y2="45" class="arrow"/>
+      <rect x="100" y="34" width="40" height="22" rx="3" class="mem"/>
+      <line x1="60" y1="80" x2="100" y2="80" class="arrow"/>
+      <rect x="100" y="69" width="40" height="22" rx="3" class="mem"/>
+    </svg>
+    <h4>A map insert</h4>
+    <p>Node-based maps and lists allocate a node per insert. Erase and insert again each frame, and it allocates each frame.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A buffer on the stack.">
+      <rect x="20" y="40" width="200" height="30" rx="3" class="cpu"/>
+      <text x="120" y="60" class="mid small">char text[160] on the stack</text>
+    </svg>
+    <h4>The plain fix</h4>
+    <p>Reuse the container, write text into a stack buffer, return a <samp>const&amp;</samp>, build the string only when it is needed.</p>
+  </div>
+</div>
+
+<h2 id="capacity"><span class="n">5</span>Keep the capacity</h2>
+
+<p>A list that is filled again every frame needs no new memory after the first frames, if it keeps its buffer. <samp>clear()</samp> empties a <samp>std::vector</samp> but keeps its capacity. Moving it away does not.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Every frame the list grows from empty: a ladder of growing blocks in each frame.">
+      <text x="10" y="22" class="small">frame 1</text><text x="110" y="22" class="small">frame 2</text><text x="210" y="22" class="small">frame 3</text>
+      <path d="M10,40H20M10,48H24M10,56H30M10,64H40M10,72H55M10,80H78" class="arrow hot thick"/>
+      <path d="M110,40H120M110,48H124M110,56H130M110,64H140M110,72H155M110,80H178" class="arrow hot thick"/>
+      <path d="M210,40H220M210,48H224M210,56H230M210,64H240M210,72H255M210,80H278" class="arrow hot thick"/>
+      <text x="160" y="118" class="mid small t-bad">the same growth, every frame</text>
+    </svg>
+    <h4>Move it away</h4>
+    <pre><code>settling = std::move(moved);
+moved.clear();</code></pre>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="The two lists grow in the first two frames, then never again.">
+      <text x="10" y="22" class="small">frame 1</text><text x="110" y="22" class="small">frame 2</text><text x="210" y="22" class="small">frame 3</text>
+      <path d="M10,40H20M10,48H24M10,56H30M10,64H40M10,72H55M10,80H78" class="arrow hot thick"/>
+      <path d="M110,40H120M110,48H124M110,56H130M110,64H140M110,72H155M110,80H178" class="arrow hot thick"/>
+      <text x="240" y="62" class="mid small t-ok">nothing</text>
+      <text x="160" y="118" class="mid small t-ok">both lists keep their buffers</text>
+    </svg>
+    <h4>Swap, then clear</h4>
+    <pre><code>std::swap(settling, moved);
+moved.clear();</code></pre>
+  </div>
+</div>
+
+<p>With a swap, the two lists trade buffers. Each one grows once, in the first two frames, and then both are big enough. Try it: change how many items a frame adds, and how the list is handed on.</p>
+
+<figure class="lab" data-lab="vector-growth" data-title="A list filled every frame">
+  <figcaption>Start with "moved away" and look at the allocations in frame 10. Then pick "swap + clear". Then change the growth factor: 1.5 is Microsoft's standard library, 2 is libstdc++ and libc++.</figcaption>
+</figure>
+
+<dl class="pitfalls">
+  <div><dt>A list that never shrinks</dt><dd>A burst of 1 million items leaves 1 million items of capacity. That is the point; if memory matters, shrink it after the burst (<samp>shrink_to_fit</samp>), not every frame.</dd></div>
+  <div><dt>A local container in a frame function</dt><dd>It is freed at the end of the function and grows again next frame. Make it a member, or reserve its known size.</dd></div>
+  <div><dt><samp>reserve</samp> every frame</dt><dd>It is free when the capacity is already there. Without capacity it is still one allocation per frame: better than a ladder, worse than none.</dd></div>
+</dl>
+
+<h2 id="arena"><span class="n">6</span>Arenas: one pointer per frame</h2>
+
+<p>An <b>arena</b>, or <b>linear allocator</b>, owns one big block. To allocate, it moves a pointer forward. It never frees one object: at a known point, the end of the frame, it moves the pointer back to the start, and everything is gone at once.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 180" role="img" aria-label="An arena: one block, filled from the left by temporary objects A, B, C and D. An arrow marks the next free byte. At the end of the frame the pointer goes back to the start, and the same bytes are used again next frame.">
+    <rect x="40" y="54" width="680" height="40" rx="4" class="paper"/>
+    <rect x="40" y="54" width="90" height="40" class="mem"/><text x="85" y="79" class="mid small">A</text>
+    <rect x="130" y="54" width="40" height="40" class="mem"/><text x="150" y="79" class="mid small">B</text>
+    <rect x="170" y="54" width="140" height="40" class="mem"/><text x="240" y="79" class="mid small">C</text>
+    <rect x="310" y="54" width="60" height="40" class="mem"/><text x="340" y="79" class="mid small">D</text>
+    <line x1="370" y1="124" x2="370" y2="100" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="370" y="140" class="mid small t-hot">next = next + size</text>
+    <path d="M370,50 C300,28 120,28 46,48" class="arrow cpu dashed" marker-end="url(#ah-cpu)"/>
+    <text x="210" y="18" class="mid small t-cpu">end of frame: next = start</text>
+    <text x="40" y="170" class="small">No free list, no lock (one arena per thread), no per-object free. Each object's lifetime must end with the frame.</text>
+  </svg>
+  <figcaption>An arena turns many allocations into one pointer move each. It also fixes the order of the bytes: objects made together lie together in memory.</figcaption>
+</figure>
+
+<div class="vgrid">
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Many small objects of mixed sizes that live for one frame.">
+      <rect x="20" y="50" width="20" height="24" class="mem"/><rect x="42" y="50" width="34" height="24" class="mem"/><rect x="78" y="50" width="12" height="24" class="mem"/><rect x="92" y="50" width="40" height="24" class="mem"/><rect x="134" y="50" width="18" height="24" class="mem"/><rect x="154" y="50" width="26" height="24" class="mem"/>
+    </svg>
+    <h4>When it pays</h4>
+    <p>Many small objects of mixed types made and dropped in every frame: command lists built per object, scratch arrays of a pass, strings for a debug overlay.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="One list whose buffer is reused each frame.">
+      <rect x="20" y="50" width="200" height="24" rx="3" class="mem"/>
+      <text x="120" y="66" class="mid small">a reused buffer</text>
+    </svg>
+    <h4>When it does not</h4>
+    <p>The data already lives in a few containers that keep their capacity. They allocate nothing after the first frames; an arena would add code and nothing else.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A pointer into the arena used after the reset.">
+      <rect x="20" y="50" width="200" height="24" rx="3" class="paper"/>
+      <line x1="60" y1="100" x2="60" y2="80" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <text x="70" y="104" class="small t-bad">used after the reset</text>
+    </svg>
+    <h4>The risk</h4>
+    <p>A pointer kept past the reset reads next frame's data. Nothing catches it: the memory is still valid, only wrong.</p>
+  </div>
+</div>
+
+<h2 id="big"><span class="n">7</span>Big blocks: free them on another thread</h2>
+
+<p>A loader decodes an image on a worker into a new block of several MiB. The frame's thread copies it into an upload buffer and frees it. The copy is the useful part; the free returns the pages and holds the frame's thread for a fraction of a millisecond. Move the free to a worker: hand it the last reference.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="Two time lines of the frame's thread in a load frame with a fixed time budget. Top: it copies three images and frees each, so the frees use a quarter of the budget. Bottom: it copies four images and hands each free to a worker, which frees them on its own time line below.">
+    <text x="10" y="20" class="title">Free on the frame's thread</text>
+    <text x="10" y="48" class="small t-cpu">main</text>
+    <rect x="70" y="32" width="150" height="26" rx="3" class="cpu"/><text x="145" y="49" class="mid small">copy</text>
+    <rect x="222" y="32" width="50" height="26" rx="3" class="bad"/><text x="247" y="49" class="mid small">free</text>
+    <rect x="274" y="32" width="150" height="26" rx="3" class="cpu"/><text x="349" y="49" class="mid small">copy</text>
+    <rect x="426" y="32" width="50" height="26" rx="3" class="bad"/><text x="451" y="49" class="mid small">free</text>
+    <rect x="478" y="32" width="150" height="26" rx="3" class="cpu"/><text x="553" y="49" class="mid small">copy</text>
+    <rect x="630" y="32" width="50" height="26" rx="3" class="bad"/><text x="655" y="49" class="mid small">free</text>
+    <path d="M70,66V74H690V66" class="arrow hot"/>
+    <text x="380" y="88" class="mid small t-hot">the frame's load budget</text>
+
+    <text x="10" y="120" class="title">Free on a worker</text>
+    <text x="10" y="148" class="small t-cpu">main</text>
+    <rect x="70" y="132" width="150" height="26" rx="3" class="cpu"/><text x="145" y="149" class="mid small">copy</text>
+    <rect x="224" y="132" width="150" height="26" rx="3" class="cpu"/><text x="299" y="149" class="mid small">copy</text>
+    <rect x="378" y="132" width="150" height="26" rx="3" class="cpu"/><text x="453" y="149" class="mid small">copy</text>
+    <rect x="532" y="132" width="150" height="26" rx="3" class="cpu"/><text x="607" y="149" class="mid small">copy</text>
+    <text x="10" y="190" class="small">worker</text>
+    <rect x="224" y="176" width="50" height="22" rx="3" class="ok"/><text x="249" y="191" class="mid small">free</text>
+    <rect x="378" y="176" width="50" height="22" rx="3" class="ok"/><text x="403" y="191" class="mid small">free</text>
+    <rect x="532" y="176" width="50" height="22" rx="3" class="ok"/><text x="557" y="191" class="mid small">free</text>
+    <rect x="686" y="176" width="50" height="22" rx="3" class="ok"/><text x="711" y="191" class="mid small">free</text>
+  </svg>
+  <figcaption>The frame is no shorter, because a load budget sets its length. But it copies more in the same time, so the loads end sooner.</figcaption>
+</figure>
+
+<p>If a memory budget holds loads back (<a href="job-system.html#budget">backpressure</a>), decide when the freed bytes count as returned:</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="The budget counts the bytes as free before the memory is freed, so for a moment the real memory is above the budget line.">
+      <line x1="10" y1="50" x2="310" y2="50" class="arrow hot dashed"/>
+      <text x="306" y="44" class="end small t-hot">budget</text>
+      <path d="M10,110 L80,60 L140,60 L170,30 L210,30 L240,60 L310,60" class="arrow bad"/>
+      <text x="190" y="22" class="mid small t-bad">over</text>
+    </svg>
+    <h4>When the free is handed on</h4>
+    <p>New loads start while the old data is still in memory. The real peak goes over the budget.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="The budget counts the bytes as free only after the memory is freed, so the real memory stays under the line.">
+      <line x1="10" y1="50" x2="310" y2="50" class="arrow hot dashed"/>
+      <text x="306" y="44" class="end small t-hot">budget</text>
+      <path d="M10,110 L80,58 L170,58 L190,90 L220,58 L310,58" class="arrow ok"/>
+    </svg>
+    <h4>When the free is done</h4>
+    <p>The free job frees, then gives the bytes back. The budget never counts data as gone while it is still in memory.</p>
+  </div>
+</div>
+
+<dl class="pitfalls">
+  <div><dt>The free job never runs at shutdown</dt><dd>A pool that stops drops its queue. The dropped job's captures must still be destroyed, which frees the memory then, on the thread that stops the pool. Never let a queued free leak.</dd></div>
+  <div><dt>The worker is not the last owner</dt><dd>With shared ownership, the memory goes when the last reference goes. Hand the worker the last one, or the free happens wherever the other reference dies.</dd></div>
+  <div><dt>Reuse instead of free</dt><dd>A pool of big buffers also saves the page faults of the next decode. It is more code, with its own budget; do it only if the faults show up in a profile.</dd></div>
+</dl>
+
+<h2 id="measure"><span class="n">8</span>Measure first</h2>
+
+<p>Guessing where allocations come from fails often: they hide in library types (section 4). Count them instead.</p>
+
+<ol class="flow">
+  <li class="cpu"><b>count</b>Replace the global <samp>operator new</samp> and <samp>delete</samp> in a test build. Count calls, bytes and the time inside them, per thread and per frame.</li>
+  <li class="cpu"><b>find</b>For a window of steady frames, record each allocation's call stack. Sort the stacks by count and by time, and name them with the debug symbols.</li>
+  <li class="cpu"><b>fix</b>Fix only the stacks that matter, with the plainest tool: keep a capacity, a stack buffer, a reference, a free on a worker.</li>
+  <li class="ok"><b>guard</b>Keep a test that renders a few steady frames and fails if the frame's thread allocates.</li>
+</ol>
+
+<div class="callout warn">
+  <strong>Count only your own thread</strong>
+  A replaced <samp>operator new</samp> on Linux and macOS also serves the shared libraries, such as the GPU driver and the validation layer. A test that counts their allocations fails for reasons outside your code. On Windows each DLL has its own <samp>operator new</samp>, so only the program's own code is counted. Count on one thread only, with a <samp>thread_local</samp> flag, so the workers do not count either.
+</div>
+
+<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
+
+<p>RASM measured first, with a counting hook and Tracy (Release, headless, RTX 3060, 24 threads). Steady frames already allocated little: the render graph is built once, and the GPU tables and draw lists keep their vectors. Four causes made every steady allocation, and the big frees of loads cost a millisecond per load frame. Those were fixed. A per-frame arena and pool allocators for the registries were <b>not needed</b>: there was no transient data left for an arena, and the registries are already <a href="generational-handles.html">handle pools</a> over vectors.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Steady frame (main thread)</th><th>allocations before → after</th><th>bytes per frame</th><th>where they came from</th></tr>
+  <tr><td><samp>05_city</samp></td><td>24 → 0</td><td>259 KB → 0</td><td>the moved-entity list lost its capacity in <code>syncGpuScene</code> (22); the "LOD draws" line of the RASM window (2)</td></tr>
+  <tr><td><samp>11_many_lights</samp></td><td>18 → 0</td><td>51 KB → 0</td><td>the moved-entity list</td></tr>
+  <tr><td><samp>07_lights</samp></td><td>6 → 0</td><td>176 B → 0</td><td><code>beginPass</code> copied a <code>TextureDesc</code> to read <code>cube</code> (5)</td></tr>
+  <tr><td><samp>15_debug_ui</samp> (UI on)</td><td>2 → 0</td><td>96 B → 0</td><td><code>getUiTexture</code> copied a <code>TextureDesc</code>; the moved-entity list</td></tr>
+  <tr><td>a debug view</td><td>1 → 0</td><td>32 B → 0</td><td><code>prepareSceneView</code> built its defines string every frame</td></tr>
+  <tr><td><samp>09</samp>, <samp>00</samp>, <samp>02</samp>, <samp>03</samp>, <samp>06</samp>, <samp>10</samp></td><td>1 to 7 → 0</td><td>tiny</td><td>the same sites</td></tr>
+  <tr><td><samp>01</samp>, <samp>04</samp>, <samp>08</samp>, <samp>12</samp>, <samp>13</samp>, <samp>14</samp></td><td>0 → 0</td><td>0</td><td>—</td></tr>
+</table>
+</div>
+
+<p>The steady frame time did not change (05_city 1.36 → 1.35 ms, GPU bound): 5 µs of 1.36 ms is noise. The win is a frame whose cost does not depend on the heap. Two cases still allocate, both on purpose: Dear ImGui bakes a glyph the first time it draws it and grows its vertex buffers when the text gets longer; and creating or destroying objects allocates (in <samp>17_streaming</samp> about 40 a frame, most of them the example's own mesh building, about 7 in the engine's range allocators: a few µs a frame).</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 220" role="img" aria-label="A load frame of the 300-image burst. finishReadyLoads fills textures up to the 4 millisecond load budget. Before: after each texture, the decoded data was freed on the main thread, 1.2 milliseconds a frame. After: freeOnWorker pushes the last reference as a child job to the worker pool; a worker frees it and gives its bytes back to the load budget.">
+    <text x="10" y="24" class="small t-cpu">main</text>
+    <rect x="70" y="10" width="680" height="28" rx="4" class="zone"/>
+    <rect x="76" y="14" width="120" height="20" rx="3" class="cpu"/><text x="136" y="28" class="mid small">fill texture</text>
+    <rect x="200" y="14" width="120" height="20" rx="3" class="cpu"/><text x="260" y="28" class="mid small">fill texture</text>
+    <rect x="324" y="14" width="120" height="20" rx="3" class="cpu"/><text x="384" y="28" class="mid small">fill texture</text>
+    <rect x="448" y="14" width="120" height="20" rx="3" class="cpu"/><text x="508" y="28" class="mid small">fill texture</text>
+    <text x="660" y="28" class="mid small t-faint">frame</text>
+    <line x1="196" y1="40" x2="196" y2="84" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="320" y1="40" x2="320" y2="84" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="444" y1="40" x2="444" y2="84" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="568" y1="40" x2="568" y2="84" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="606" y="66" class="small">freeOnWorker:</text>
+    <text x="606" y="82" class="small">last reference + bytes</text>
+    <rect x="70" y="88" width="680" height="30" rx="4" class="paper"/>
+    <text x="410" y="108" class="mid small">WorkerPool children queue (runs before new loads)</text>
+    <line x1="300" y1="120" x2="300" y2="150" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="520" y1="120" x2="520" y2="150" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="10" y="172" class="small">workers</text>
+    <rect x="200" y="154" width="200" height="28" rx="3" class="ok"/><text x="300" y="173" class="mid small">free the decoded data</text>
+    <rect x="420" y="154" width="200" height="28" rx="3" class="ok"/><text x="520" y="173" class="mid small">then releaseBytes(bytes)</text>
+    <text x="70" y="208" class="small">A pool that is stopping drops the job: its captures are destroyed then, so the memory is freed, never leaked.</text>
+  </svg>
+  <figcaption>The same path frees a finished mesh's CPU data (<code>MeshLoadJob</code>), an environment's image, a texture's own decode (<code>TextureLoadJob</code>) or a glTF texture's levels, and a finished load that is dropped (<code>dropPendingLoad</code>).</figcaption>
+</figure>
+
+<div class="stats">
+  <div><b>70.5 → 3.5 ms</b><span>main thread in new and delete, 300-image burst</span><small>big frees moved to the workers</small></div>
+  <div><b>1.1 → 0.05 ms</b><span><code>beginFrame</code> self time per burst frame</span><small>Tracy; the budget copies more instead</small></div>
+  <div><b>413 → 335 ms</b><span>burst load time</span><small><samp>tools/load_bench.py</samp>, median of 5</small></div>
+  <div><b>184 → 176 ms</b><span>Sponza load time</span><small>main thread: 12.9 → 0.7 ms in new and delete</small></div>
+</div>
+
+<h3>Where RASM follows this page, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Keep the capacity</td><td>swap, then clear</td><td><code>syncGpuScene</code> swaps <code>settlingEntities</code> and <code>movedEntities</code>.</td></tr>
+  <tr><td>Strings</td><td>a stack buffer</td><td><code>drawCullingSection</code> writes the "LOD draws" line into a <samp>char[160]</samp>; <code>prepareSceneView</code> builds a debug view's defines only while a pipeline is missing.</td></tr>
+  <tr><td>Copies</td><td>return a reference</td><td><code>RenderContext::getTextureDesc</code> returns a <code>const TextureDesc&amp;</code>, valid until the texture is destroyed, its render target is resized or the swapchain is made again.</td></tr>
+  <tr><td>Arenas</td><td>for many small temporary objects</td><td>Not used: measured, nothing needs one.</td></tr>
+  <tr><td>Big frees</td><td>on a worker, bytes back after the free</td><td><code>Engine::freeOnWorker</code> pushes a child job with the last reference; it frees, then calls <code>WorkerPool::releaseBytes</code>. A stopping pool frees on the caller. <code>WorkerPool::dropLoad</code> returns a dropped finished load's bytes, so they follow its free too. One exception: a glTF image that several textures share gives its bytes back with the first of them (<code>P26</code>).</td></tr>
+  <tr><td>Guard</td><td>a test of steady frames</td><td><code>rasm_image_tests</code> renders 2 more frames after each test's readback, then counts 4 frames: any allocation on the main thread fails the test, with the count, the bytes and the size of the first. Windows only, and not with AddressSanitizer (<code>allocationCountingWorks</code>).</td></tr>
+</table>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The moved-entity lists</td><td><code>Engine::syncGpuScene</code>, <code>writeInstanceRows</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Freeing load results</td><td><code>Engine::freeOnWorker</code>, <code>dropPendingLoad</code>, <code>finishReadyLoads</code> in <code>src/engine.cpp</code>; <code>finishMeshLoad</code> in <code>src/assets/mesh.cpp</code></td></tr>
+  <tr><td>The worker pool's child queue</td><td><code>WorkerPool::pushChild</code>, <code>shutdown</code> in <code>src/core/workerPool.cpp</code></td></tr>
+  <tr><td>The guard</td><td><code>startCountingAllocations</code>, <code>stopCountingAllocations</code> in <code>tests/image/allocationCounter.cpp</code>; <code>renderTest</code> in <code>tests/image/imageTests.cpp</code></td></tr>
+  <tr><td>Tests</td><td><code>tests/workerPoolTests.cpp</code>: a child job's captures are freed whether it runs, is dropped or comes after shutdown</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>A steady frame makes no heap allocation on the main thread. A new per-frame list is a member that keeps its capacity, never a local or a moved-away one.</li>
+    <li>Do not keep a <code>getTextureDesc</code> reference across a destroy, a resize or a new swapchain.</li>
+    <li>A finished load's data is freed through <code>freeOnWorker</code>, and its budget bytes go back after the free.</li>
+    <li>Build an arena or a pool only when a measurement shows the need (<code>P27</code>, <code>P26</code> in the code review).</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Microsoft's documentation of the Windows heap (<samp>HeapAlloc</samp>, the low-fragmentation heap) and of <samp>VirtualAlloc</samp> and <samp>VirtualFree</samp>; the glibc manual on <samp>mallopt</samp> and <samp>M_MMAP_THRESHOLD</samp>.</li>
+  <li>The C++ standard on replacing the global <samp>operator new</samp>, and on <samp>std::vector</samp>'s capacity after <samp>clear</samp> and move.</li>
+  <li>Tracy's manual: memory profiling and call stacks.</li>
+  <li>Related guides: <a href="job-system.html">job systems and worker pools</a>, <a href="asset-streaming.html">streaming assets</a>, <a href="frame-loop.html">one frame, step by step</a>, <a href="gpu-timing.html">GPU timing and frame statistics</a>.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>
