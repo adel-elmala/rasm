@@ -52,11 +52,23 @@ namespace rasm
         float                   error       = 0.0f;
     };
 
+    struct Meshlet
+    {
+        glm::vec3               center;
+        float                   radius;
+        glm::vec3               coneAxis;
+        float                   coneCutoff;
+        uint32_t                firstIndex;                 // in its LOD's indices
+        uint32_t                indexCount;
+    };
+
     struct ObjRaw
     {
         std::vector<Vertex>     vertices;
         std::vector<uint32_t>   indices;
         std::vector<MeshLod>    lods;
+        std::vector<Meshlet>    meshlets;                   // LOD 0's, then each coarser LOD's
+        std::vector<uint32_t>   lodMeshletCounts;           // per LOD, empty without meshlets
         std::vector<uint32_t>   colors;
         std::vector<SkinVertex> skin;
         std::vector<MorphDelta> morphs;                     // target-major: target t's delta of vertex v at t * vertices.size() + v
@@ -109,6 +121,9 @@ namespace rasm
         uint32_t            firstMorph       = 0;
         uint32_t            morphCount       = 0;        // MorphDeltas: vertexCount * morphTargetCount
         uint32_t            morphTargetCount = 0;
+        uint32_t            firstMeshlet     = 0;
+        uint32_t            meshletCount     = 0;        // of every LOD
+        uint32_t            maxLodMeshlets   = 0;        // the most of one LOD: an instance's meshlet visibility bits
         uint32_t            geometryIndex    = 0;
         bool                allocated        = false;    // it holds ranges of the geometry pool, freed with the mesh
         glm::vec3           boundsCenter     = glm::vec3(0.0f);

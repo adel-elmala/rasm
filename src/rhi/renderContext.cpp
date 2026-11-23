@@ -2161,6 +2161,24 @@ namespace rasm
             rhiCommandBuffer->dispatch(groupCountX, groupCountY, groupCountZ);
     }
 
+    // The group counts are three uint32_ts at offset, written by the GPU; a buffer of BufferUsage::INDIRECT.
+    void RenderContext::dispatchIndirect(const CommandBufferHandle &commandBuffer, const BufferHandle &buffer, uint64_t offset)
+    {
+        if (!checkArgument(!impl->insidePass, __func__, "dispatches must be recorded outside a render pass (use RenderGraph::addComputePass)."))
+            return;
+
+        if (!checkArgument(impl->computeBound, __func__, "no compute pipeline is bound."))
+            return;
+
+        if (!checkArgument(offset % sizeof(uint32_t) == 0, __func__, "the offset must be a multiple of 4."))
+            return;
+
+        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        auto *rhiBuffer = lookup(impl->buffers, buffer, __func__);
+        if (rhiCommandBuffer && rhiBuffer && checkArgument(rhiBuffer->desc.usage == BufferUsage::INDIRECT, __func__, "the buffer is not an INDIRECT buffer."))
+            rhiCommandBuffer->dispatchIndirect(rhiBuffer, offset);
+    }
+
     void RenderContext::aliasingBarrier(const CommandBufferHandle &commandBuffer)
     {
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);

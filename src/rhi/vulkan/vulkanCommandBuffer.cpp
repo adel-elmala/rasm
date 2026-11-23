@@ -123,8 +123,9 @@ namespace rasm::rhi
         VkPipelineStageFlags2 toVkStageMask(PipelineStage stages)
         {
             VkPipelineStageFlags2 mask = VK_PIPELINE_STAGE_2_NONE;
+            // An indirect dispatch reads its group counts in the draw-indirect stage.
             if (hasStage(stages, PipelineStage::COMPUTE))
-                mask |= VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                mask |= VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
             if (hasStage(stages, PipelineStage::GRAPHICS))
                 mask |= VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
             if (hasStage(stages, PipelineStage::HOST))
@@ -138,7 +139,7 @@ namespace rasm::rhi
         {
             VkAccessFlags2 mask = VK_ACCESS_2_NONE;
             if (hasStage(stages, PipelineStage::COMPUTE))
-                mask |= VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_UNIFORM_READ_BIT;
+                mask |= VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_UNIFORM_READ_BIT | VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
             if (hasStage(stages, PipelineStage::GRAPHICS))
                 mask |= VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_INDEX_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_UNIFORM_READ_BIT;
             if (hasStage(stages, PipelineStage::HOST))
@@ -437,6 +438,11 @@ namespace rasm::rhi
     void VulkanCommandBuffer::dispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ)
     {
         vk.vkCmdDispatch(commandBuffer, groupCountX, groupCountY, groupCountZ);
+    }
+
+    void VulkanCommandBuffer::dispatchIndirect(Buffer *buffer, uint64_t offset)
+    {
+        vk.vkCmdDispatchIndirect(commandBuffer, static_cast<VulkanBuffer *>(buffer)->buffer, offset);
     }
 
     void VulkanCommandBuffer::memoryBarrier(PipelineStage before, PipelineStage after)

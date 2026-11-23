@@ -11,6 +11,7 @@
 #include <cfloat>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 #include <string>
 #include <utility>
 
@@ -21,7 +22,7 @@ namespace rasm
         // Slow enough for the numbers to be read, like the stats overlay's.
         constexpr float STATS_REFRESH = 0.25f;
 
-        constexpr const char *DEBUG_VIEW_NAMES[] = {"None", "Normals", "UVs", "Overdraw", "LODs", "Culling", "Light count"};
+        constexpr const char *DEBUG_VIEW_NAMES[] = {"None", "Normals", "UVs", "Overdraw", "LODs", "Culling", "Light count", "Meshlets"};
         // The display colors of the views' keys: DEBUG_LOD_COLORS and the culling colors in debugViews.slang and
         // debugGhosts.slang (the ghosts' a few layers deep), HEAT_COLORS in lib/heat.slang.
         constexpr float LOD_COLORS[MAX_MESH_LODS][3] = {{0.20f, 0.80f, 0.25f}, {0.65f, 0.85f, 0.15f}, {0.95f, 0.85f, 0.15f}, {1.00f, 0.55f, 0.10f}, {0.95f, 0.20f, 0.15f}, {0.90f, 0.25f, 0.70f}, {0.55f, 0.30f, 0.95f}, {0.20f, 0.45f, 1.00f}};
@@ -63,6 +64,9 @@ namespace rasm
             ImGui::Text("Draws      %s / %s", formatCount(stats.drawsVisible).c_str(), formatCount(stats.draws).c_str());
             ImGui::Text("Culled     %s", formatCount(stats.draws - stats.drawsVisible).c_str());
             ImGui::Text("Triangles  %s / %s", formatCount(stats.trianglesVisible).c_str(), formatCount(stats.triangles).c_str());
+            ImGui::Text("Meshlets   %s drawn, %s culled", formatCount(stats.meshletsVisible).c_str(), formatCount(stats.meshletsCulled).c_str());
+            if (stats.meshletDrawsWhole > 0)
+                ImGui::Text("Whole      %s draws (maxViewMeshlets)", formatCount(stats.meshletDrawsWhole).c_str());
             const uint64_t saved = stats.trianglesVisibleLod0 > stats.trianglesVisible ? stats.trianglesVisibleLod0 - stats.trianglesVisible : 0;
             const double savedPercent = stats.trianglesVisibleLod0 > 0 ? 100.0 * static_cast<double>(saved) / static_cast<double>(stats.trianglesVisibleLod0) : 0.0;
             ImGui::Text("LOD saved  %s (%.0f%%)", formatCount(saved).c_str(), savedPercent);
@@ -106,6 +110,8 @@ namespace rasm
                 drawKey(LOD_COLORS, LOD_LABELS, MAX_MESH_LODS);
             if (view == DebugView::CULLING)
                 drawKey(CULLING_COLORS, CULLING_LABELS, 4);
+            if (view == DebugView::MESHLETS)
+                ImGui::TextDisabled("a color per meshlet; a mesh drawn whole has one");
         }
 
         // The part of a line in front of the camera, in clip space; false when none of it is.
@@ -177,6 +183,16 @@ namespace rasm
                 {
                     if (ImGui::Selectable(("LOD " + std::to_string(lod)).c_str(), config.forcedLod == lod))
                         config.forcedLod = lod;
+                }
+                ImGui::EndCombo();
+            }
+            const char *meshletPaths[] = {"off", "vertex pulling"};
+            if (ImGui::BeginCombo("Meshlets", meshletPaths[static_cast<uint32_t>(config.meshletPath)]))
+            {
+                for (uint32_t i = 0; i < std::size(meshletPaths); ++i)
+                {
+                    if (ImGui::Selectable(meshletPaths[i], static_cast<uint32_t>(config.meshletPath) == i))
+                        setMeshletPath(static_cast<MeshletPath>(i));
                 }
                 ImGui::EndCombo();
             }

@@ -10,6 +10,29 @@ struct Sphere
     float           scale;          // the world matrix's largest stretch, bounded from above
 };
 
+// An object-space sphere of the instance in world space. The radius grows by the matrix's largest stretch: the square
+// root of the largest eigenvalue of transpose(M) * M, whose entries are the dot products of M's columns. Its largest
+// row sum of absolute values bounds that eigenvalue (Gershgorin), exactly when the columns are orthogonal, and never
+// too small when a non-uniform scale is followed by a rotation.
+Sphere getInstanceSphere(SceneData *scene, InstanceData *instance, float3 center, float radius)
+{
+    float4x4 world          = getWorldMatrix(scene, instance);
+    float3x3 world3         = (float3x3)world;
+    float3 c0               = mul(world3, float3(1.0, 0.0, 0.0));
+    float3 c1               = mul(world3, float3(0.0, 1.0, 0.0));
+    float3 c2               = mul(world3, float3(0.0, 0.0, 1.0));
+    float d01               = abs(dot(c0, c1));
+    float d02               = abs(dot(c0, c2));
+    float d12               = abs(dot(c1, c2));
+    float stretch2          = max(max(dot(c0, c0) + d01 + d02, dot(c1, c1) + d01 + d12), dot(c2, c2) + d02 + d12);
+
+    Sphere sphere;
+    sphere.scale            = sqrt(stretch2);
+    sphere.radius           = radius * sphere.scale;
+    sphere.center           = mul(world, float4(center, 1.0)).xyz;
+    return sphere;
+}
+
 // The draw's bounding sphere in world space: its geometry's, or a skinned sub-mesh's around its posed vertices, which
 // the Animate pass writes each frame.
 Sphere getWorldSphere(SceneData *scene, DrawInfo draw)
@@ -27,26 +50,7 @@ Sphere getWorldSphere(SceneData *scene, DrawInfo draw)
             radius          = transform->boundsRadius;
         }
     }
-
-    // The radius grows by the matrix's largest stretch: the square root of the largest eigenvalue of
-    // transpose(M) * M, whose entries are the dot products of M's columns. Its largest row sum of absolute
-    // values bounds that eigenvalue (Gershgorin), exactly when the columns are orthogonal, and never too small
-    // when a non-uniform scale is followed by a rotation.
-    float4x4 world          = getWorldMatrix(scene, instance);
-    float3x3 world3         = (float3x3)world;
-    float3 c0               = mul(world3, float3(1.0, 0.0, 0.0));
-    float3 c1               = mul(world3, float3(0.0, 1.0, 0.0));
-    float3 c2               = mul(world3, float3(0.0, 0.0, 1.0));
-    float d01               = abs(dot(c0, c1));
-    float d02               = abs(dot(c0, c2));
-    float d12               = abs(dot(c1, c2));
-    float stretch2          = max(max(dot(c0, c0) + d01 + d02, dot(c1, c1) + d01 + d12), dot(c2, c2) + d02 + d12);
-
-    Sphere sphere;
-    sphere.scale            = sqrt(stretch2);
-    sphere.radius           = radius * sphere.scale;
-    sphere.center           = mul(world, float4(center, 1.0)).xyz;
-    return sphere;
+    return getInstanceSphere(scene, instance, center, radius);
 }
 
 // A sphere fully outside one of the frustum planes is culled.

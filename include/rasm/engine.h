@@ -73,6 +73,9 @@ namespace rasm
         uint64_t                    trianglesVisible            = 0;
         uint64_t                    trianglesVisibleLod0        = 0;
         uint32_t                    drawsPerLod[MAX_MESH_LODS]  = {};
+        uint32_t                    meshletsVisible             = 0;    // meshlets drawn, in every view
+        uint32_t                    meshletsCulled              = 0;    // meshlets of visible draws that the frustum, the normal cone or the Hi-Z culled
+        uint32_t                    meshletDrawsWhole           = 0;    // draws past a view's EngineConfig::maxViewMeshlets, drawn whole
         uint32_t                    lightsGlobal                = 0;    // directional lights and lights without a range, at every pixel
         uint32_t                    lightsVisible               = 0;    // local lights in a view's frustum
         uint32_t                    lightsDropped               = 0;    // lights left out of a full cluster (MAX_CLUSTER_LIGHTS) or screen tile
@@ -205,6 +208,8 @@ namespace rasm
         uint64_t                    getUiTexture(const TextureHandle& texture);
         void                        setDebugView(DebugView view);
         void                        setCullingFrozen(bool frozen);
+        void                        setMeshletPath(MeshletPath path);
+        MeshletPath                 getMeshletPath() const;
         // What the RASM window's Buffers section shows, as picking it there does (EngineConfig::ui). The pass that
         // copies it runs only while that section is open.
         void                        setInspection(const Inspection& inspection);
@@ -428,6 +433,7 @@ namespace rasm
         void                        releaseSceneView(uint32_t view);
         void                        prepareSceneView(uint32_t view);
         void                        recordSceneCulling(uint32_t view, uint32_t phase);
+        void                        recordMeshletCulling(uint32_t view, uint32_t phase);
         void                        recordHiz(uint32_t view);
         void                        recordBlendSort(uint32_t view);
         void                        drawSceneView(uint32_t view, uint32_t phase);

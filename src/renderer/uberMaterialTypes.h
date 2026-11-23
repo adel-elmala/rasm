@@ -139,6 +139,7 @@ namespace rasm::gfx
         uint32_t        materialIndex;
         glm::vec4       previousWorld[3];           // the rows of the affine world matrix the frame before drew, for motion
         int32_t         animationRow;               // its InstanceTransform in SceneData::animatedTransformsPtr, -1: the matrices above
+        int32_t         meshletVisibility;          // its first word in each view's meshlet visibility bits, -1: none
     };
 
     struct InstanceTransform
@@ -273,6 +274,19 @@ namespace rasm::gfx
         uint32_t        firstIndex;
         uint32_t        indexCount;
         float           error;
+        uint32_t        firstMeshlet;               // in the meshlet pool
+        uint32_t        meshletCount;               // 0: the LOD is culled and drawn whole
+    };
+
+    // A meshlet in the geometry pool's meshlet stream: a range of its LOD's indices and its bounds, in object space.
+    struct GeometryMeshlet
+    {
+        glm::vec3       center;
+        float           radius;
+        glm::vec3       coneAxis;                   // every triangle faces away when the camera is inside the cone behind it
+        float           coneCutoff;
+        uint32_t        firstIndex;                 // in the index pool
+        uint32_t        indexCount;
     };
 
     struct GeometryData
@@ -346,6 +360,22 @@ namespace rasm::gfx
         uint64_t         animatedTransformsPtr;     // this slot's InstanceTransform rows, written by the Animate pass
         uint64_t         skinnedVertsPtr;           // this slot's skinned vertices, written by the Skin pass
         uint64_t         previousSkinnedVertsPtr;   // the other slot's, the frame before's
+        uint64_t         meshletsPtr;               // GeometryMeshlet: the geometry pool's meshlet stream
+        uint64_t         meshletDrawsPtr;           // DrawInfo: the view's visible meshlet draws, each run's at runMeshletFirst; 0: no meshlets
+        uint64_t         meshletChunksPtr;          // uint4 per chunk of up to 64 meshlets of a draw: draw, lod and flags, first meshlet, count
+        uint64_t         chunkMasksPtr;             // uint2 per chunk: its visible meshlets
+        uint64_t         chunkSumsPtr;              // uint per 64 chunks: their visible meshlets
+        uint64_t         meshletArgsPtr;            // uint4 per run: the meshlet dispatches' group counts, then the run's chunk count
+        uint64_t         meshletDrawCountsPtr;      // uint per run: its visible meshlet draws
+        uint64_t         groupMeshletsPtr;          // uint2 per cull group: its chunks and its meshlets
+        uint64_t         meshletVisibilityPtr;      // the view's bits: 1 where a meshlet passed its last occlusion test
+        glm::vec4        cullViewPoint;             // meshlet cone test: the camera's position (w = 1), or an orthographic view's direction (w = 0)
+        uint32_t         runChunkFirst[MAX_DRAW_RUNS];
+        uint32_t         runMeshletFirst[MAX_DRAW_RUNS];
+        uint32_t         runMeshletBudget[MAX_DRAW_RUNS]; // a run's meshlet draws past this are drawn whole
+        uint32_t         meshletRuns;               // a bit per run whose big draws are drawn by meshlets
+        uint32_t         coneRuns;                  // a bit per run culled by face, where the cone test holds
+        uint32_t         padding;
     };
 
     struct PushConstants
@@ -472,23 +502,34 @@ namespace rasm::gfx
     static_assert(offsetof(InstanceData, normalMatrix) == 64, "InstanceData must match the shader's scalar layout");
     static_assert(offsetof(InstanceData, geometryIndex) == 100, "InstanceData must match the shader's scalar layout");
     static_assert(offsetof(InstanceData, materialIndex) == 104, "InstanceData must match the shader's scalar layout");
-    static_assert(sizeof(GeometryLod) == 12, "GeometryLod must match the shader's scalar layout");
+    static_assert(sizeof(GeometryLod) == 20, "GeometryLod must match the shader's scalar layout");
     static_assert(offsetof(GeometryLod, error) == 8, "GeometryLod must match the shader's scalar layout");
-    static_assert(sizeof(GeometryData) == 40 + 12 * MAX_MESH_LODS, "GeometryData must match the shader's scalar layout");
-    static_assert(offsetof(GeometryData, morphOffset) == 32 + 12 * MAX_MESH_LODS, "GeometryData must match the shader's scalar layout");
+    static_assert(offsetof(GeometryLod, meshletCount) == 16, "GeometryLod must match the shader's scalar layout");
+    static_assert(sizeof(GeometryMeshlet) == 40, "GeometryMeshlet must match the shader's scalar layout");
+    static_assert(offsetof(GeometryMeshlet, coneCutoff) == 28, "GeometryMeshlet must match the shader's scalar layout");
+    static_assert(offsetof(GeometryMeshlet, indexCount) == 36, "GeometryMeshlet must match the shader's scalar layout");
+    static_assert(sizeof(GeometryData) == 40 + 20 * MAX_MESH_LODS, "GeometryData must match the shader's scalar layout");
+    static_assert(offsetof(GeometryData, morphOffset) == 32 + 20 * MAX_MESH_LODS, "GeometryData must match the shader's scalar layout");
     static_assert(sizeof(MorphDelta) == 24, "MorphDelta must match the shader's scalar layout");
-    static_assert(offsetof(GeometryData, skinOffset) == 28 + 12 * MAX_MESH_LODS, "GeometryData must match the shader's scalar layout");
-    static_assert(offsetof(GeometryData, colorOffset) == 24 + 12 * MAX_MESH_LODS, "GeometryData must match the shader's scalar layout");
+    static_assert(offsetof(GeometryData, skinOffset) == 28 + 20 * MAX_MESH_LODS, "GeometryData must match the shader's scalar layout");
+    static_assert(offsetof(GeometryData, colorOffset) == 24 + 20 * MAX_MESH_LODS, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, boundsCenter) == 4, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, boundsRadius) == 16, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, lodCount) == 20, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, lods) == 24, "GeometryData must match the shader's scalar layout");
-    static_assert(sizeof(SceneData) == 1824, "SceneData must match the shader's scalar layout");
+    static_assert(sizeof(SceneData) == 2008, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, previousSkinnedVertsPtr) == 1816, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, animatedTransformsPtr) == 1800, "SceneData must match the shader's scalar layout");
-    static_assert(sizeof(InstanceData) == 160, "InstanceData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, meshletsPtr) == 1824, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, meshletVisibilityPtr) == 1888, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, cullViewPoint) == 1896, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, runChunkFirst) == 1912, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, runMeshletBudget) == 1968, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, coneRuns) == 2000, "SceneData must match the shader's scalar layout");
+    static_assert(sizeof(InstanceData) == 164, "InstanceData must match the shader's scalar layout");
     static_assert(offsetof(InstanceData, previousWorld) == 108, "InstanceData must match the shader's scalar layout");
     static_assert(offsetof(InstanceData, animationRow) == 156, "InstanceData must match the shader's scalar layout");
+    static_assert(offsetof(InstanceData, meshletVisibility) == 160, "InstanceData must match the shader's scalar layout");
     static_assert(sizeof(InstanceTransform) == 172, "InstanceTransform must match the shader's scalar layout");
     static_assert(offsetof(InstanceTransform, boundsCenter) == 148, "InstanceTransform must match the shader's scalar layout");
     static_assert(offsetof(InstanceTransform, skinnedMotion) == 168, "InstanceTransform must match the shader's scalar layout");

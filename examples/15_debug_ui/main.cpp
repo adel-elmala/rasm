@@ -19,7 +19,7 @@
 // UI callback, that changes the sun, the exposure and the helmet while the frame runs, and shows a texture with
 // ImGui::Image. Engine::render adds the UI pass after the tone map.
 // --gpu-times prints each GPU timer's mean over frames 300 to 600, then quits; --no-ui runs the same scene with the UI
-// off, for comparison. --debug-view <none|normals|uvs|overdraw|lods|culling|light-count> starts in that debug view, and
+// off, for comparison. --debug-view <none|normals|uvs|overdraw|lods|culling|light-count|meshlets> starts in that debug view, and
 // --freeze-culling freezes culling at frame 30, as the RASM window's Debug views section does.
 
 namespace
@@ -50,7 +50,7 @@ namespace
     // --debug-view's names, in the order of rasm::DebugView.
     rasm::DebugView parseDebugView(const char *name)
     {
-        const char *names[] = {"none", "normals", "uvs", "overdraw", "lods", "culling", "light-count"};
+        const char *names[] = {"none", "normals", "uvs", "overdraw", "lods", "culling", "light-count", "meshlets"};
         for (uint32_t i = 0; i < std::size(names); ++i)
         {
             if (std::strcmp(name, names[i]) == 0)

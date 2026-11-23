@@ -19,6 +19,7 @@ namespace rasm
         uint64_t                vertices                = 0;
         uint64_t                indices                 = 0;
         uint64_t                subMeshes               = 0;
+        uint64_t                meshlets                = 0;
         uint64_t                largestFreeVertices     = 0;
         uint64_t                largestFreeIndices      = 0;
     };
@@ -39,6 +40,7 @@ namespace rasm
         BufferHandle            colorBuffer() const;
         BufferHandle            skinBuffer() const;
         BufferHandle            morphBuffer() const;
+        BufferHandle            meshletBuffer() const;
         BufferHandle            tableBuffer() const;
         GeometryPoolStats       stats() const;
 
@@ -48,12 +50,14 @@ namespace rasm
         BufferHandle            colors                  = {};
         BufferHandle            skins                   = {};
         BufferHandle            morphs                  = {};
+        BufferHandle            meshlets                = {};
         BufferHandle            table                   = {};
         RangeAllocator          vertexRanges;
         RangeAllocator          indexRanges;
         RangeAllocator          colorRanges;
         RangeAllocator          skinRanges;
         RangeAllocator          morphRanges;
+        RangeAllocator          meshletRanges;
         RangeAllocator          subMeshRows;
     };
 
