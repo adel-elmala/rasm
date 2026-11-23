@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meshlets and Cluster Culling · RASM</title>
+<meta name="description" content="How meshlets work: cutting a mesh into small clusters with their own bounds and normal cones, culling each cluster against the frustum, its back faces and the Hi-Z, keeping the draw order, drawing the survivors by indirect draws or mesh shaders, and how RASM does it.">
+<meta name="rasm-sources" content="src/assets/meshlets.cpp src/assets/meshlets.h src/assets/mesh.cpp src/renderer/geometryPool.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/uberMaterialTypes.h shaders/passes/cull.slang shaders/lib/meshletCulling.slang shaders/lib/geometryTypes.slang shaders/lib/debugViews.slang include/rasm/types.h include/rasm/mesh.h examples/18_meshlets/main.cpp examples/exampleBench.h">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/meshlets.js"></script>
+</head>
+<body data-root="../" data-page="guides/meshlets.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Culling and the frame</p>
+<h1>Meshlets and cluster culling</h1>
+<p class="lead">Frustum and occlusion culling keep or drop a whole draw. A big mesh that is only partly seen is then drawn whole. Meshlets fix that: the mesh is cut into small pieces when it loads, each piece gets its own bounds, and the GPU culls each piece again. This page explains the pieces, the three tests and how the survivors are drawn. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>A <b>meshlet</b> (also called a <b>cluster</b>) is a small piece of a mesh: about 64 vertices and 124 triangles that lie close together.</li>
+    <li>Each meshlet has a <b>bounding sphere</b> and a <b>normal cone</b>: every triangle's normal lies inside the cone.</li>
+    <li>Three cheap tests per meshlet: outside the <b>frustum</b>, all triangles <b>facing away</b> (the cone test), or hidden behind the <b>Hi-Z</b>.</li>
+    <li>Culling runs in two levels: first the whole draw (and its LOD), then the meshlets of the draws that pass.</li>
+    <li>The survivors are drawn as <b>one indirect draw per meshlet</b>, or by <b>task and mesh shaders</b> on GPUs that have them.</li>
+    <li>It pays when triangles are the cost: big, dense meshes near the camera. With good LODs there is often little left to save.</li>
+  </ul>
+</div>
+
+<h2 id="why"><span class="n">1</span>Why a draw is too big to cull</h2>
+
+<p>A draw is all or nothing. If one corner of a terrain tile is in view, the GPU runs the vertex shader on every vertex of the tile. A rock in front of the camera shows only its front half, but the back half is drawn too; the rasterizer then throws those triangles away:</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Seen from above: a camera and its view. A large terrain tile crosses the edge of the view, and a rock sits in front. Without meshlets the whole tile and both halves of the rock are drawn.">
+      <polygon points="20,70 170,10 170,130" class="zone"/>
+      <path d="M20,70L170,10M20,70L170,130" class="arrow"/>
+      <circle cx="20" cy="70" r="5" class="cpu"/>
+      <rect x="130" y="80" width="170" height="54" rx="4" class="bad o-50"/>
+      <circle cx="110" cy="52" r="20" class="bad o-50"/>
+      <text x="300" y="20" class="end small t-bad">the whole tile and</text>
+      <text x="300" y="34" class="end small t-bad">the whole rock are drawn</text>
+    </svg>
+    <h4>One test per draw</h4>
+    <p>The tile touches the view, so all of it is drawn. The rock's back half is drawn and then dropped.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="The same scene cut into meshlets. Only the tile's meshlets inside the view and the rock's front meshlets are drawn.">
+      <polygon points="20,70 170,10 170,130" class="zone"/>
+      <path d="M20,70L170,10M20,70L170,130" class="arrow"/>
+      <circle cx="20" cy="70" r="5" class="cpu"/>
+      <path d="M130,80h34v27h-34zM164,80h34v27h-34zM198,80h34v27h-34zM232,80h34v27h-34zM266,80h34v27h-34zM130,107h34v27h-34zM164,107h34v27h-34zM198,107h34v27h-34zM232,107h34v27h-34zM266,107h34v27h-34z" class="grid"/>
+      <rect x="130" y="80" width="68" height="54" class="ok o-50"/>
+      <rect x="198" y="80" width="102" height="54" class="ghost"/>
+      <path d="M110,32A20,20 0 0,0 110,72" class="arrow ok thick"/>
+      <path d="M110,32A20,20 0 0,1 110,72" class="arrow bad dashed"/>
+      <text x="300" y="20" class="end small t-ok">only the pieces that</text>
+      <text x="300" y="34" class="end small t-ok">can be seen are drawn</text>
+    </svg>
+    <h4>One test per meshlet</h4>
+    <p>Pieces outside the view, pieces that face away and pieces hidden behind a hill are skipped before any vertex work.</p>
+  </div>
+</div>
+
+<p>LODs help with far meshes: a far rock is drawn with few triangles. They do not help with a mesh the camera is near or inside, like terrain under the camera: its nearest point decides, so it stays at the finest level. Meshlets cull inside such a mesh.</p>
+
+<h2 id="meshlet"><span class="n">2</span>What a meshlet is</h2>
+
+<p>A tool cuts the mesh into pieces with at most <var>V</var> vertices and <var>T</var> triangles. It grows each piece from a start triangle, adding the neighbour that keeps the piece small and round, so a piece is a compact patch of the surface:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="Left: a grid of triangles cut into four colored patches, each a meshlet. Right: one meshlet stored two ways: as a range of the mesh's index list, three indices per triangle; or as a local vertex list of up to 64 vertices plus small 8-bit triangle indices into it.">
+    <text x="20" y="22" class="title">A mesh cut into meshlets</text>
+    <rect x="20" y="36" width="120" height="80" class="gpu o-50"/>
+    <rect x="140" y="36" width="120" height="80" class="shader o-50"/>
+    <rect x="20" y="116" width="120" height="80" class="mem o-50"/>
+    <rect x="140" y="116" width="120" height="80" class="cpu o-50"/>
+    <path d="M20,36V196M50,36V196M80,36V196M110,36V196M140,36V196M170,36V196M200,36V196M230,36V196M260,36V196M20,36H260M20,76H260M20,116H260M20,156H260M20,196H260M20,76L50,36M50,76L80,36M80,76L110,36M110,76L140,36M140,76L170,36M170,76L200,36M200,76L230,36M230,76L260,36M20,116L50,76M50,116L80,76M80,116L110,76M110,116L140,76M140,116L170,76M170,116L200,76M200,116L230,76M230,116L260,76M20,156L50,116M50,156L80,116M80,156L110,116M110,156L140,116M140,156L170,116M170,156L200,116M200,156L230,116M230,156L260,116M20,196L50,156M50,196L80,156M80,196L110,156M110,196L140,156M140,196L170,156M170,196L200,156M200,196L230,156M230,196L260,156" class="grid"/>
+
+    <text x="320" y="22" class="title">Stored as a range of indices</text>
+    <rect x="320" y="34" width="420" height="30" rx="4" class="mem"/>
+    <rect x="320" y="34" width="105" height="30" class="gpu o-50"/>
+    <rect x="425" y="34" width="105" height="30" class="shader o-50"/>
+    <rect x="530" y="34" width="105" height="30" class="mem o-50"/>
+    <rect x="635" y="34" width="105" height="30" class="cpu o-50"/>
+    <text x="372" y="54" class="mid small mono">372 indices</text>
+    <text x="320" y="82" class="small">firstIndex + indexCount per meshlet: an ordinary indexed draw</text>
+
+    <text x="320" y="120" class="title">Stored for a mesh shader</text>
+    <rect x="320" y="132" width="200" height="30" rx="4" class="mem"/>
+    <text x="420" y="152" class="mid small">≤ 64 vertex numbers (32 bit)</text>
+    <rect x="530" y="132" width="210" height="30" rx="4" class="mem"/>
+    <text x="635" y="152" class="mid small">≤ 124 × 3 local indices (8 bit)</text>
+    <text x="320" y="182" class="small">each workgroup loads its vertices once and</text>
+    <text x="320" y="198" class="small">emits its triangles: no index buffer needed</text>
+  </svg>
+  <figcaption>The same triangles, cut into four meshlets. An indexed draw needs only a range of the index list; a mesh shader wants a small vertex list and 8-bit local indices.</figcaption>
+</figure>
+
+<p>The sizes come from the hardware that draws them. A mesh shader workgroup writes its vertices and triangles into on-chip memory, so the limits are about that memory:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Who</th><th>Vertices</th><th>Triangles</th><th>Why</th></tr>
+  <tr><td>NVIDIA (Turing and later)</td><td>64</td><td>124 to 126</td><td>Output memory is allocated in blocks; 126 fits, and 124 keeps the 8-bit index list a multiple of 4 bytes.</td></tr>
+  <tr><td>AMD (RDNA 2)</td><td>64</td><td>64 to 128</td><td>Older AMD GPUs like the same number of vertices and triangles.</td></tr>
+  <tr><td>Indexed draws (no mesh shaders)</td><td>any</td><td>more is cheaper</td><td>Each meshlet is one draw command; fewer, bigger meshlets mean fewer commands, but they cull less.</td></tr>
+</table>
+</div>
+
+<p>64 vertices and 124 triangles is the usual middle ground, and what meshoptimizer suggests for cone culling. One mesh needs one set of meshlets per LOD.</p>
+
+<h2 id="bounds"><span class="n">3</span>The bounds of a meshlet</h2>
+
+<p>Each meshlet stores two shapes. The <b>sphere</b> is the same kind of bound as a whole mesh's, for the frustum and Hi-Z tests. The <b>normal cone</b> is new: an axis and an angle such that every triangle's normal lies inside it.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="A curved patch of four triangles seen from the side, their normals, the bounding sphere around the patch, and the normal cone: the axis is the average normal, the half angle is the widest normal's angle from it.">
+    <circle cx="200" cy="120" r="78" class="zone"/>
+    <path d="M128,150Q200,90 272,150" class="surface"/>
+    <line x1="146" y1="137" x2="128" y2="104" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="182" y1="119" x2="176" y2="82" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="218" y1="119" x2="224" y2="82" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="254" y1="137" x2="272" y2="104" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="200" y="192" class="mid small">sphere: frustum and Hi-Z tests</text>
+    <text x="300" y="70" class="small t-gpu">triangle normals</text>
+
+    <circle cx="560" cy="150" r="4" class="hot"/>
+    <path d="M560,150L500,48M560,150L620,48" class="arrow hot dashed"/>
+    <path d="M524,86A70,70 0 0,1 596,86" class="arrow hot"/>
+    <line x1="560" y1="150" x2="560" y2="40" class="arrow thick" marker-end="url(#ah)"/>
+    <line x1="560" y1="150" x2="510" y2="66" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="560" y1="150" x2="610" y2="66" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="560" y1="150" x2="540" y2="58" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="560" y1="150" x2="580" y2="58" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="566" y="38" class="small">axis</text>
+    <text x="632" y="70" class="small t-hot">half angle θ</text>
+    <text x="560" y="192" class="mid small">normal cone: every normal is within θ of the axis</text>
+  </svg>
+  <figcaption>The four normals moved to one point show the cone. A flat patch has a narrow cone; a patch that wraps around a corner has a wide one, and a cone of 90° or more can never be culled.</figcaption>
+</figure>
+
+<h2 id="cone"><span class="n">4</span>The cone test: all triangles face away</h2>
+
+<p>A triangle faces away from the camera when the camera is behind its plane. For a whole meshlet: if the camera is far enough behind the cone, it is behind every triangle's plane, and the meshlet can be skipped. With the sphere (center <var>c</var>, radius <var>r</var>), the cone (axis <var>a</var>, cutoff <var>s</var> = sin θ) and the camera at <var>e</var>:</p>
+
+<div class="formula">
+  <p class="eq">dot(<var>c</var> − <var>e</var>, <var>a</var>) ≥ <var>s</var> · |<var>c</var> − <var>e</var>| + <var>r</var> &nbsp;→ culled</p>
+  <dl>
+    <div><dt><var>c</var> − <var>e</var></dt><dd>from the camera to the meshlet</dd></div>
+    <div><dt><var>s</var></dt><dd>the cone's cutoff, sin θ; a wide cone needs the camera far behind it</dd></div>
+    <div><dt><var>r</var></dt><dd>the sphere's radius: the triangles are spread over it, not at its center</dd></div>
+  </dl>
+</div>
+
+<p>An orthographic view (a sun's shadow map) looks the same way from everywhere, so the test is only <code class="lang-text">dot(view direction, a) ≥ s</code>. The test is conservative: it never culls a triangle that faces the camera, and it misses some that face away. Drag the camera around the shape:</p>
+
+<figure class="lab" data-lab="meshlet-cones" data-title="Cull meshlets that face away">
+  <figcaption>Move the camera around the shape and watch which meshlets drop out (dashed). Then make the meshlets bigger: their cones get wider, and fewer of the edges that face away are caught.</figcaption>
+</figure>
+
+<div class="callout warn">
+  <strong>Only for one-sided surfaces</strong>
+  <p>A double-sided material shows its back faces, so its meshlets must never be cone culled. A mirroring transform turns the triangles' winding around; the test must use the same side the rasterizer culls.</p>
+</div>
+
+<h2 id="levels"><span class="n">5</span>Two levels, and occlusion per meshlet</h2>
+
+<p>Meshlets do not replace culling whole draws: that first test is still the cheapest way to drop most of the scene. Only the draws that pass it, at the LOD they picked, are split into meshlets:</p>
+
+<ol class="flow">
+  <li class="gpu"><b>Per draw</b> frustum and Hi-Z test of the whole mesh's sphere.</li>
+  <li class="gpu"><b>Pick the LOD</b> a coarser LOD has fewer meshlets.</li>
+  <li class="shader"><b>Per meshlet</b> frustum, cone and Hi-Z test of each meshlet of that LOD.</li>
+  <li class="mem"><b>Pack</b> the visible meshlets into a list the draw reads.</li>
+</ol>
+
+<p>Occlusion culling with a Hi-Z works in two passes: draw what was visible last frame, build the Hi-Z from that depth, then test everything else (<a href="occlusion-culling.html">Occlusion culling</a>). With meshlets, "visible last frame" must be stored per meshlet too, or a big mesh that is always partly visible would never lose its hidden meshlets. So each view keeps one bit per meshlet:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 196" role="img" aria-label="Two rows of meshlet bits for one mesh, last frame's and this frame's. The early pass draws the meshlets whose bit is 1 and that pass the frustum and cone tests. The late pass tests every meshlet against the Hi-Z, writes the bits, and draws the visible ones the early pass did not draw.">
+    <text x="20" y="34" class="small">bits from last frame</text>
+    <g>
+      <rect x="160" y="18" width="30" height="26" class="ok o-50"/><rect x="190" y="18" width="30" height="26" class="ok o-50"/><rect x="220" y="18" width="30" height="26" class="ghost"/><rect x="250" y="18" width="30" height="26" class="ghost"/><rect x="280" y="18" width="30" height="26" class="ok o-50"/><rect x="310" y="18" width="30" height="26" class="ghost"/>
+      <text x="175" y="36" class="mid small">1</text><text x="205" y="36" class="mid small">1</text><text x="235" y="36" class="mid small">0</text><text x="265" y="36" class="mid small">0</text><text x="295" y="36" class="mid small">1</text><text x="325" y="36" class="mid small">0</text>
+    </g>
+    <rect x="390" y="16" width="160" height="30" rx="6" class="gpu"/>
+    <text x="470" y="36" class="mid">early pass</text>
+    <text x="570" y="28" class="small">draws bit 1 and in view:</text>
+    <text x="570" y="44" class="small t-ok">meshlets 0, 1, 4</text>
+
+    <line x1="470" y1="46" x2="470" y2="74" class="arrow" marker-end="url(#ah)"/>
+    <rect x="390" y="76" width="160" height="30" rx="6" class="mem"/>
+    <text x="470" y="96" class="mid">build the Hi-Z</text>
+    <line x1="470" y1="106" x2="470" y2="134" class="arrow" marker-end="url(#ah)"/>
+    <rect x="390" y="136" width="160" height="30" rx="6" class="gpu"/>
+    <text x="470" y="156" class="mid">late pass</text>
+    <text x="570" y="148" class="small">tests all against the Hi-Z,</text>
+    <text x="570" y="164" class="small t-ok">draws 2 (newly seen)</text>
+
+    <text x="20" y="156" class="small">bits for next frame</text>
+    <rect x="160" y="140" width="30" height="26" class="ok o-50"/><rect x="190" y="140" width="30" height="26" class="ghost"/><rect x="220" y="140" width="30" height="26" class="ok o-50"/><rect x="250" y="140" width="30" height="26" class="ghost"/><rect x="280" y="140" width="30" height="26" class="ok o-50"/><rect x="310" y="140" width="30" height="26" class="ghost"/>
+    <text x="175" y="158" class="mid small">1</text><text x="205" y="158" class="mid small">0</text><text x="235" y="158" class="mid small">1</text><text x="265" y="158" class="mid small">0</text><text x="295" y="158" class="mid small">1</text><text x="325" y="158" class="mid small">0</text>
+    <text x="20" y="190" class="small t-faint">meshlet 1 is now hidden: drawn once more this frame, skipped next frame</text>
+  </svg>
+  <figcaption>The bits are only a hint. If they are wrong (the mesh changed LOD, or the bits were cleared), the early pass draws a different set, and the late pass still draws every seen meshlet the early pass left out. The image stays right.</figcaption>
+</figure>
+
+<h2 id="order"><span class="n">6</span>Packing the survivors in order</h2>
+
+<p>Thousands of threads test meshlets at the same time, and each visible one needs a slot in the output list. The quick way is an atomic counter: each thread adds 1 and takes the old value. Then the order changes from frame to frame, and so do the pixels where two surfaces have the same depth. A stable order needs <a href="stream-compaction.html">stream compaction</a> with prefix sums:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="Meshlets in chunks of 4 for the picture (64 in practice). Each chunk writes a mask of its visible meshlets. Groups of chunks add their counts into one sum each. A chunk's first slot is the sum of the earlier groups' sums plus the counts of the earlier chunks in its own group; each visible meshlet adds the number of visible meshlets below it in its mask.">
+    <text x="20" y="30" class="small">chunk masks</text>
+    <g>
+      <rect x="120" y="14" width="96" height="26" rx="3" class="box"/><rect x="230" y="14" width="96" height="26" rx="3" class="box"/><rect x="350" y="14" width="96" height="26" rx="3" class="box"/><rect x="460" y="14" width="96" height="26" rx="3" class="box"/>
+      <rect x="122" y="16" width="22" height="22" class="ok o-50"/><rect x="146" y="16" width="22" height="22" class="ghost"/><rect x="170" y="16" width="22" height="22" class="ok o-50"/><rect x="194" y="16" width="20" height="22" class="ok o-50"/>
+      <rect x="232" y="16" width="22" height="22" class="ghost"/><rect x="256" y="16" width="22" height="22" class="ok o-50"/><rect x="280" y="16" width="22" height="22" class="ghost"/><rect x="304" y="16" width="20" height="22" class="ghost"/>
+      <rect x="352" y="16" width="22" height="22" class="ok o-50"/><rect x="376" y="16" width="22" height="22" class="ok o-50"/><rect x="400" y="16" width="22" height="22" class="ghost"/><rect x="424" y="16" width="20" height="22" class="ok o-50"/>
+      <rect x="462" y="16" width="22" height="22" class="ghost"/><rect x="486" y="16" width="22" height="22" class="ghost"/><rect x="510" y="16" width="22" height="22" class="ok o-50"/><rect x="534" y="16" width="20" height="22" class="ghost"/>
+    </g>
+    <text x="168" y="58" class="mid small">3</text><text x="278" y="58" class="mid small">1</text><text x="398" y="58" class="mid small">3</text><text x="508" y="58" class="mid small">1</text>
+    <text x="20" y="96" class="small">group sums</text>
+    <rect x="120" y="80" width="206" height="26" rx="4" class="mem"/>
+    <text x="223" y="98" class="mid small">4 (atomic adds: any order, same sum)</text>
+    <rect x="350" y="80" width="206" height="26" rx="4" class="mem"/>
+    <text x="453" y="98" class="mid small">4</text>
+    <text x="20" y="146" class="small">first slots</text>
+    <text x="168" y="146" class="mid mono">0</text><text x="278" y="146" class="mid mono">3</text><text x="398" y="146" class="mid mono">4</text><text x="508" y="146" class="mid mono">7</text>
+    <line x1="508" y1="114" x2="508" y2="132" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="570" y="128" class="small t-hot">4 (earlier group)</text>
+    <text x="570" y="144" class="small t-hot">+ 3 (earlier chunk)</text>
+    <text x="20" y="186" class="small t-faint">a meshlet's slot = its chunk's first slot + the visible meshlets below it in the mask</text>
+  </svg>
+  <figcaption>The sums do not depend on the order of the atomic adds, so the slots are the same every frame: the visible meshlets keep the meshes' order and the order inside each mesh.</figcaption>
+</figure>
+
+<h2 id="draw"><span class="n">7</span>Drawing the visible meshlets</h2>
+
+<p>Two ways, with the same culling in front of them:</p>
+
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Compute culls meshlets into a list of draw commands; one multi-draw-indirect call draws them, each as a small indexed draw.">
+      <rect x="10" y="20" width="70" height="40" rx="6" class="shader"/>
+      <text x="45" y="45" class="mid small">compute</text>
+      <line x1="80" y1="40" x2="100" y2="40" class="arrow mem" marker-end="url(#ah-mem)"/>
+      <rect x="102" y="24" width="20" height="32" class="mem"/><rect x="124" y="24" width="20" height="32" class="mem"/><rect x="146" y="24" width="20" height="32" class="mem"/>
+      <line x1="170" y1="40" x2="186" y2="40" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <rect x="188" y="20" width="44" height="40" rx="6" class="gpu"/>
+      <text x="210" y="45" class="mid small">draw</text>
+      <text x="120" y="88" class="mid small">one draw command per meshlet</text>
+      <text x="120" y="104" class="mid small">works on every GPU</text>
+    </svg>
+    <h4>Indirect draws (vertex pulling)</h4>
+    <p>Compute writes a draw command per visible meshlet; the usual vertex shader draws them. Runs everywhere.</p>
+    <p class="cost">Costs extra dispatches and barriers, and one command per meshlet.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A task shader culls a group of meshlets and launches one mesh shader workgroup per visible meshlet, which writes its vertices and triangles straight to the rasterizer.">
+      <rect x="10" y="20" width="70" height="40" rx="6" class="shader"/>
+      <text x="45" y="45" class="mid small">task</text>
+      <line x1="80" y1="32" x2="120" y2="22" class="arrow shader" marker-end="url(#ah-shader)"/>
+      <line x1="80" y1="48" x2="120" y2="58" class="arrow shader" marker-end="url(#ah-shader)"/>
+      <rect x="122" y="10" width="56" height="24" rx="5" class="shader"/>
+      <text x="150" y="27" class="mid small">mesh</text>
+      <rect x="122" y="46" width="56" height="24" rx="5" class="shader"/>
+      <text x="150" y="63" class="mid small">mesh</text>
+      <line x1="178" y1="40" x2="196" y2="40" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <rect x="198" y="20" width="34" height="40" rx="6" class="gpu"/>
+      <text x="215" y="45" class="mid small">ras</text>
+      <text x="120" y="96" class="mid small">culling inside the draw</text>
+      <text x="120" y="112" class="mid small">no list in memory</text>
+    </svg>
+    <h4>Task and mesh shaders</h4>
+    <p>A task shader culls a chunk of meshlets and launches a mesh shader workgroup per survivor. No list, no extra pass.</p>
+    <p class="cost">Needs mesh shader support (Vulkan VK_EXT_mesh_shader, D3D12, Metal 3).</p>
+  </div>
+</div>
+
+<h2 id="pays"><span class="n">8</span>When it pays, and the pitfalls</h2>
+
+<p>Meshlet culling trades culling work for vertex and triangle work. It wins when there are many triangles to drop: dense meshes near the camera, terrain, scanned objects, scenes without LODs. With good LODs, far meshes are already cheap, and the extra culling passes can cost more than they save.</p>
+
+<dl class="pitfalls">
+  <div><dt>Culling costs more than it saves</dt><dd>Every view gets more dispatches and barriers, a fixed cost even when little is culled. Split only meshes with many meshlets, and measure.</dd></div>
+  <div><dt>A skinned or morphed mesh loses pieces</dt><dd>Its vertices move every frame, so bounds made at load do not hold. Draw it whole, or rebuild the bounds each frame from the posed vertices.</dd></div>
+  <div><dt>Holes on a stretched object</dt><dd>A non-uniform scale changes the normals' angles. Do the cone test in the object's own space (move the camera there), not on a cone moved into the world.</dd></div>
+  <div><dt>Back faces of a leaf are missing</dt><dd>The cone test ran on a double-sided material. Only test surfaces whose back faces are culled anyway.</dd></div>
+  <div><dt>Flicker where two surfaces touch</dt><dd>The visible meshlets come out in a different order each frame (an atomic counter). Pack them with prefix sums.</dd></div>
+  <div><dt>Memory for the list explodes</dt><dd>One draw command per meshlet per view: a list sized for every meshlet of every instance is huge. Give it a budget and draw what does not fit whole.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
+
+<p>Every sub-mesh of at least 512 triangles that is not skinned or morphed gets meshlets of 64 vertices and 124 triangles per LOD when it loads (<code>buildMeshlets</code>, after the LODs, on the same worker job). Each LOD's indices are rewritten in meshlet order, so a meshlet is a range of them, and a whole draw of the LOD draws the same triangles. Drawing by meshlets is <code>EngineConfig::meshletPath</code> (<code>Engine::setMeshletPath</code> at run time): <code>MeshletPath::OFF</code> by default, <code>MeshletPath::VERTEX_PULLING</code> for the indirect draws of section 7.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="The culling pass of one view and phase. countMain tests each draw and picks its LOD; writeMain writes small draws to the visible draws as before, and draws whose LOD has 8 or more meshlets as chunks of 64 meshlets. meshletCountMain, one group per chunk, tests the meshlets and writes a mask and a group sum. meshletWriteMain writes a DrawInfo per visible meshlet after the draws. The draw pass draws both lists per run.">
+    <text x="20" y="22" class="title t-gpu">Cull pass, per view and phase (compute)</text>
+    <rect x="20" y="36" width="150" height="48" rx="24" class="shader"/>
+    <text x="95" y="57" class="mid mono">countMain</text>
+    <text x="95" y="73" class="mid small">a thread per draw</text>
+    <line x1="170" y1="60" x2="196" y2="60" class="arrow" marker-end="url(#ah)"/>
+    <rect x="198" y="36" width="150" height="48" rx="24" class="shader"/>
+    <text x="273" y="57" class="mid mono">writeMain</text>
+    <text x="273" y="73" class="mid small">draws or chunks</text>
+    <line x1="348" y1="60" x2="374" y2="60" class="arrow" marker-end="url(#ah)"/>
+    <rect x="376" y="36" width="170" height="48" rx="24" class="shader"/>
+    <text x="461" y="57" class="mid mono">meshletCountMain</text>
+    <text x="461" y="73" class="mid small">a group per chunk</text>
+    <line x1="546" y1="60" x2="572" y2="60" class="arrow" marker-end="url(#ah)"/>
+    <rect x="574" y="36" width="170" height="48" rx="24" class="shader"/>
+    <text x="659" y="57" class="mid mono">meshletWriteMain</text>
+    <text x="659" y="73" class="mid small">a draw per meshlet</text>
+
+    <text x="20" y="192" class="title t-mem">The view's visible draw buffer</text>
+    <rect x="20" y="134" width="230" height="40" rx="4" class="mem"/>
+    <text x="135" y="159" class="mid">draws, per run</text>
+    <rect x="250" y="134" width="230" height="40" rx="4" class="mem o-75"/>
+    <text x="365" y="159" class="mid">meshlet draws, per run</text>
+    <rect x="480" y="134" width="260" height="40" rx="4" class="mem o-50"/>
+    <text x="610" y="159" class="mid small">slots · chunks · masks · sums · counts</text>
+    <line x1="273" y1="84" x2="135" y2="132" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="273" y1="84" x2="560" y2="132" class="arrow mem dashed" marker-end="url(#ah-mem)"/>
+    <line x1="659" y1="84" x2="365" y2="132" class="arrow mem" marker-end="url(#ah-mem)"/>
+
+    <text x="20" y="220" class="title t-gpu">Scene pass, per run</text>
+    <text x="20" y="240" class="mono small">drawIndexedIndirectCount(draws) + drawIndexedIndirectCount(meshlet draws)</text>
+  </svg>
+  <figcaption>Two indirect dispatches per run (the chunk count is the GPU's), behind the two of before. Both lists are DrawInfos in one buffer, so the vertex shader is the same and only <code>PushConstants::firstDraw</code> differs.</figcaption>
+</figure>
+
+<h3>Where RASM follows the page, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Building</td><td>64 / 124, cone weight</td><td><code>meshopt_buildMeshlets</code> with 64 / 124 and cone weight 0.25, then <code>meshopt_optimizeMeshlet</code> and <code>meshopt_computeMeshletBounds</code> per meshlet; <code>MIN_MESHLET_TRIANGLES</code> (512) per sub-mesh.</td></tr>
+  <tr><td>Storage</td><td>index range or local lists</td><td>An index range (<code>GeometryMeshlet</code>: sphere, cone, <code>firstIndex</code>, <code>indexCount</code>, 40 B) in the geometry pool's meshlet stream (<code>EngineConfig::geometryPoolMeshlets</code>); each <code>GeometryLod</code> names its <code>firstMeshlet</code> and <code>meshletCount</code>.</td></tr>
+  <tr><td>Which draws</td><td>big meshes</td><td>A visible draw whose LOD has at least <code>MESHLET_MIN_DRAW</code> (8) meshlets, in a run that is not the blend run (it is sorted per object). Skinned and morphed sub-meshes have none (<code>D37</code>).</td></tr>
+  <tr><td>Cone test</td><td>camera in object space</td><td><code>isMeshletBackFacing</code>: the camera (or an orthographic view's direction, <code>SceneData::cullViewPoint</code>) moved by the inverse world matrix, only in runs culled by face (<code>SceneData::coneRuns</code>).</td></tr>
+  <tr><td>Occlusion</td><td>a bit per meshlet</td><td>Per view, in <code>SceneView::meshletVisibility</code>; each instance row of a mesh with meshlets owns words at <code>InstanceData::meshletVisibility</code>, one word per row on average (<code>EngineConfig::maxInstances</code> words per view). A row that finds none is still culled, only without its bits.</td></tr>
+  <tr><td>Order</td><td>prefix sums</td><td>Chunks of 64 meshlets in list order; a sum per 64 chunks added with atomics; <code>meshletWriteMain</code> adds the earlier sums and chunks.</td></tr>
+  <tr><td>Memory</td><td>a budget</td><td><code>EngineConfig::maxViewMeshlets</code> (2¹⁶, 1.3 MiB) meshlet draws per view and frame slot, made only for views that draw meshlets; a draw past it is drawn whole.</td></tr>
+  <tr><td>Mesh shaders</td><td>task + mesh</td><td>Not yet: the chunks are what a task shader would take.</td></tr>
+</table>
+</div>
+
+<h3>Numbers</h3>
+
+<p><code>examples/18_meshlets --bench</code> (Release, headless, 1920 × 1080, RTX 3060): a terrain of 256 tiles and 2500 rocks of 20480 triangles, with four sun cascades. GPU frame time, meshlets off → on:</p>
+
+<div class="stats">
+  <div><b>1.69 → 1.19 ms</b><span>every mesh at LOD 0, no shadows: 4.72 → 1.80 M triangles</span><small><samp>--lod-error 0 --no-shadows</samp></small></div>
+  <div><b>5.79 → 5.59 ms</b><span>LOD 0 with the 4 cascades: 21.4 → 15.9 M triangles</span><small><samp>--lod-error 0</samp></small></div>
+  <div><b>1.96 → 2.22 ms</b><span>with LODs (the default): 3.32 → 2.33 M triangles, but 0.24 ms more culling</span><small>default flags</small></div>
+</div>
+
+<p>With LODs, the meshlet passes cost more than the triangles they drop, and <code>05_city</code> is the same with them on and off (2.22 and 2.25 ms). So the default is <code>MeshletPath::OFF</code>; turn it on for dense meshes seen up close (<code>P28</code>).</p>
+
+<h3>Code map</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Building</td><td><code>buildMeshlets</code> in <code>src/assets/meshlets.cpp</code>, called by the load jobs in <code>src/assets/mesh.cpp</code></td></tr>
+  <tr><td>Storage</td><td><code>GeometryPool::allocate</code>, <code>GeometryPool::write</code> in <code>src/renderer/geometryPool.cpp</code></td></tr>
+  <tr><td>Draw level</td><td><code>countMain</code>, <code>writeMain</code> in <code>shaders/passes/cull.slang</code></td></tr>
+  <tr><td>Meshlet level</td><td><code>meshletCountMain</code>, <code>meshletWriteMain</code> in <code>shaders/passes/cull.slang</code>; <code>isMeshletBackFacing</code> in <code>shaders/lib/meshletCulling.slang</code></td></tr>
+  <tr><td>Buffers and dispatches</td><td><code>Engine::prepareSceneView</code>, <code>Engine::recordMeshletCulling</code>, <code>Engine::drawSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Seeing it</td><td><code>DebugView::MESHLETS</code> (a color per meshlet), <code>FrameStats::meshletsVisible</code>, <code>FrameStats::meshletsCulled</code>, the Meshlets combo in the RASM window</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Rules</strong>
+  <p>A meshlet's indices are a range of its LOD's, so the LOD draws the same triangles whole or by meshlets: the image must not change when the path changes (the <code>meshlets</code> image tests check it). Keep the meshlet draws in chunk order. A new kind of draw that moves its vertices on the GPU must not get meshlets until its bounds move too.</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Arseny Kapoulkine, meshoptimizer: "Mesh shading" and cluster culling in its README; the niagara renderer's task-shader culling.</li>
+  <li>Christoph Kubisch, "Introduction to Turing Mesh Shaders", NVIDIA, 2018.</li>
+  <li>Graham Wihlidal, "Optimizing the Graphics Pipeline with Compute", GDC 2016: cluster and triangle culling in compute.</li>
+  <li>Ulrich Haar and Sebastian Aaltonen, "GPU-Driven Rendering Pipelines", SIGGRAPH 2015.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

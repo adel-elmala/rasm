@@ -803,7 +803,7 @@
 <table>
   <tr><th>Limit</th><th>Why</th><th>Usual answer</th></tr>
   <tr><td>Materials must be data</td><td>One call has one pipeline, so per-material shaders split the runs.</td><td><a href="uber-shaders.html">Uber shaders</a>, <a href="bindless.html">bindless</a> textures.</td></tr>
-  <tr><td>Per-draw GPU cost stays</td><td>The command processor still starts every draw. Thousands of tiny draws keep the GPU front end busy.</td><td>Merge small objects, use instancing (<var>instanceCount</var> &gt; 1), or split meshes into small clusters drawn with mesh shaders.</td></tr>
+  <tr><td>Per-draw GPU cost stays</td><td>The command processor still starts every draw. Thousands of tiny draws keep the GPU front end busy.</td><td>Merge small objects, use instancing (<var>instanceCount</var> &gt; 1), or split meshes into small clusters drawn with mesh shaders (<a href="meshlets.html">meshlets</a>).</td></tr>
   <tr><td>Harder to debug</td><td>The draw arguments are made on the GPU. A wrong record is only visible in a frame capture.</td><td>Capture tools, a CPU fallback path that draws everything, readback of the counts.</td></tr>
   <tr><td>The CPU does not know what is visible</td><td>The result is in GPU memory.</td><td>Read back statistics a frame or two later.</td></tr>
   <tr><td>Memory sized for the worst case</td><td>A count call needs room for <var>maxDrawCount</var> records, even if few survive.</td><td>Size buffers to the draw list, grow them when it grows.</td></tr>
@@ -915,6 +915,7 @@
     <li><code>P3</code>: no real instancing. Each entity's sub-mesh is its own draw, even when the mesh is shared.</li>
     <li>A destroyed or removed entity leaves the draw lists at their next rebuild, and its instance rows are reused (<a href="resource-lifetime.html">deferred destruction</a>).</li>
     <li><code>D12</code>: <code>getDrawIndex</code> uses <code>spirv_asm</code>, so this path is Vulkan-only today.</li>
+    <li>No mesh shaders yet. Big meshes can be culled per <a href="meshlets.html">meshlet</a> with <code>MeshletPath::VERTEX_PULLING</code>, which draws each visible meshlet as one more indirect draw (off by default, <code>P28</code>).</li>
   </ul>
 </div>
 

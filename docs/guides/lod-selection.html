@@ -707,7 +707,7 @@ pixels = e × s × P11 × H / 2 = e × s × H / (top − bottom)</code></pre>
 
 <h2 id="in-rasm"><span class="n">11</span>In RASM</h2>
 
-<p>RASM picks a level on the GPU, inside the culling pass, for every draw that passed the frustum and occlusion tests. It uses the screen-space error rule of this page, with <var>τ</var> = <code>EngineConfig::lodErrorPixels</code> (1 pixel by default). The levels and their errors come from <a href="mesh-simplification.html#in-rasm">Mesh simplification</a>.</p>
+<p>RASM picks a level on the GPU, inside the culling pass, for every draw that passed the frustum and occlusion tests. It uses the screen-space error rule of this page, with <var>τ</var> = <code>EngineConfig::lodErrorPixels</code> (1 pixel by default). The levels and their errors come from <a href="mesh-simplification.html#in-rasm">Mesh simplification</a>. With <code>MeshletPath::VERTEX_PULLING</code>, a level with 8 meshlets or more is then culled again per meshlet (<a href="meshlets.html#in-rasm">Meshlets and cluster culling</a>).</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 290" role="img" aria-label="In countMain, one thread per draw: getWorldSphere gives the world-space sphere and its scale, and after the culling tests selectLod picks a level from the geometry row's errors, lodErrorPixels and forcedLod in SceneData. The level is packed above the draw's slot in cullSlotsPtr. In writeMain, getLodDraw copies that level's firstIndex and indexCount into the visible draw.">

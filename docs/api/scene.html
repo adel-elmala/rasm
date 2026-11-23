@@ -574,6 +574,7 @@ constexpr uint32_t MAX_MORPH_TARGETS = 256;</pre>
       <dt>firstColor, colorCount</dt><dd>The sub-mesh's vertex colors in the color pool; <code>colorCount</code> is 0 without colors.</dd>
       <dt>firstSkin, skinCount</dt><dd>The sub-mesh's <a href="#SkinVertex"><code>SkinVertex</code></a>es in the skin stream; <code>skinCount</code> is 0 when it is not skinned.</dd>
       <dt>firstMorph, morphCount, morphTargetCount</dt><dd>The sub-mesh's <a href="#MorphDelta"><code>MorphDelta</code></a>s in the morph stream: <code>morphCount</code> = <code>vertexCount</code> · <code>morphTargetCount</code>, target by target. Both are 0 without morph targets.</dd>
+      <dt>firstMeshlet, meshletCount, maxLodMeshlets</dt><dd>The sub-mesh's <a href="#Meshlet">meshlets</a> in the meshlet stream, of every LOD, and the most of one LOD (each instance keeps a visibility bit per meshlet of that LOD). 0 for a sub-mesh without meshlets.</dd>
     </dl>
   </div>
 </div>
@@ -584,6 +585,8 @@ constexpr uint32_t MAX_MORPH_TARGETS = 256;</pre>
     std::vector&lt;Vertex&gt;   vertices;
     std::vector&lt;uint32_t&gt; indices;
     std::vector&lt;MeshLod&gt;  lods;
+    std::vector&lt;Meshlet&gt;  meshlets;
+    std::vector&lt;uint32_t&gt; lodMeshletCounts;
     std::vector&lt;uint32_t&gt; colors;
     std::vector&lt;SkinVertex&gt; skin;
     std::vector&lt;MorphDelta&gt; morphs;
@@ -594,6 +597,7 @@ constexpr uint32_t MAX_MORPH_TARGETS = 256;</pre>
     <dl>
       <dt>indices</dt><dd>LOD 0, the full detail.</dd>
       <dt>lods</dt><dd>LOD 1 and coarser, from fine to coarse; at most <code>MAX_MESH_LODS</code> − 1. Empty until the engine builds them, and for a sub-mesh under 1024 triangles.</dd>
+      <dt>meshlets, lodMeshletCounts</dt><dd>The <a href="#Meshlet"><code>Meshlet</code></a>s of LOD 0, then of each coarser LOD, and how many each LOD has. Built after the LODs, for a sub-mesh of 512 triangles or more that is not skinned or morphed; building them writes each LOD's indices again in meshlet order (the same triangles). Empty otherwise.</dd>
       <dt>colors</dt><dd>One packed vertex color per vertex (glTF <code>COLOR_0</code>), or empty.</dd>
       <dt>skin</dt><dd>One <a href="#SkinVertex"><code>SkinVertex</code></a> per vertex (glTF <code>JOINTS_0</code> / <code>WEIGHTS_0</code>) for a skinned primitive, or empty.</dd>
       <dt>morphs, morphTargetCount</dt><dd>The deltas of each morph target, target-major: target <var>t</var>'s delta of vertex <var>v</var> is at <code class="lang-text">t · vertices.size() + v</code>. Empty, and a count of 0, for a primitive without targets, or whose targets move nothing.</dd>
@@ -612,6 +616,26 @@ constexpr uint32_t MAX_MORPH_TARGETS = 256;</pre>
     <dl>
       <dt>indices</dt><dd>A triangle list into the same vertices as LOD 0. So a LOD costs only indices.</dd>
       <dt>error</dt><dd>How far this LOD's surface may be from LOD 0, in the mesh's own units. It never gets smaller from one LOD to the next.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="Meshlet">
+  <pre class="sig">struct Meshlet
+{
+    glm::vec3               center;
+    float                   radius;
+    glm::vec3               coneAxis;
+    float                   coneCutoff;
+    uint32_t                firstIndex;
+    uint32_t                indexCount;
+};</pre>
+  <div class="body">
+    <p>A piece of one LOD of a sub-mesh: at most 64 vertices and 124 triangles that lie close together, with its own bounds in object space. The engine builds them as a mesh loads; with <a href="engine.html#setMeshletPath"><code>MeshletPath::VERTEX_PULLING</code></a> the scene passes cull and draw each one (<a href="../guides/meshlets.html">Meshlets and cluster culling</a>).</p>
+    <dl>
+      <dt>center, radius</dt><dd>A sphere around its triangles, for the frustum and Hi-Z tests.</dd>
+      <dt>coneAxis, coneCutoff</dt><dd>Its normal cone: every triangle's normal is within the cone around <code>coneAxis</code>. <code>coneCutoff</code> is the sine of the cone's half angle; 1 for a cone that cannot be culled.</dd>
+      <dt>firstIndex, indexCount</dt><dd>Its triangles: a range of its LOD's indices.</dd>
     </dl>
   </div>
 </div>
@@ -1098,6 +1122,7 @@ engine.setSceneEnvironment(scene, {});</code></pre>
   <tr><td><code>EngineConfig::maxInstances</code></td><td>65,536</td><td>all</td><td>sub-meshes of all entities together</td></tr>
   <tr><td><code>EngineConfig::geometryPoolVertices</code>, <code>geometryPoolIndices</code>, <code>geometryPoolSubMeshes</code></td><td>2<sup>21</sup> / 2<sup>24</sup> / 2<sup>14</sup></td><td>all</td><td>geometry of all meshes together: vertices, indices, and one row per sub-mesh. The number of meshes has no limit of its own.</td></tr>
   <tr><td><code>EngineConfig::geometryPoolColors</code>, <code>geometryPoolSkins</code>, <code>geometryPoolMorphs</code></td><td>2<sup>20</sup> / 2<sup>20</sup> / 2<sup>20</sup></td><td>all</td><td>vertex colors, skinned vertices' joints and weights, and morph target deltas (one per vertex and target), of all meshes together</td></tr>
+  <tr><td><code>EngineConfig::geometryPoolMeshlets</code></td><td>2<sup>17</sup></td><td>all</td><td>meshlets of all meshes together, every LOD included</td></tr>
   <tr><td><code>EngineConfig::maxAnimatedEntities</code></td><td>16,384</td><td>all</td><td>entities that have played a clip, or of a skinned or morphed mesh (each keeps its row)</td></tr>
   <tr><td><code>EngineConfig::maxMorphWeights</code></td><td>65,536</td><td>all</td><td>morph weights of all posed entities together (each keeps its range)</td></tr>
   <tr><td><code>EngineConfig::animationPoolBytes</code></td><td>16 MiB</td><td>all</td><td>the kept nodes, samplers and keys of all loaded meshes; a mesh that does not fit fails to load</td></tr>

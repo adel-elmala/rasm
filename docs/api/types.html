@@ -177,6 +177,7 @@ public:
     uint64_t     vertices                = 0;        // of EngineConfig::geometryPoolVertices
     uint64_t     indices                 = 0;        // of geometryPoolIndices
     uint64_t     subMeshes               = 0;        // of geometryPoolSubMeshes
+    uint64_t     meshlets                = 0;        // of geometryPoolMeshlets
     uint64_t     instances               = 0;        // instance rows, of maxInstances
     uint64_t     animationPoolBytes      = 0;        // of animationPoolBytes
     uint32_t     releasesWaiting         = 0;        // destroyed objects the GPU may still use
@@ -329,6 +330,7 @@ public:
     uint32_t     geometryPoolMorphs    = 1u &lt;&lt; 20;
     uint32_t     geometryPoolIndices   = 1u &lt;&lt; 24;
     uint32_t     geometryPoolSubMeshes = 1u &lt;&lt; 14;
+    uint32_t     geometryPoolMeshlets  = 1u &lt;&lt; 17;
     uint32_t     maxInstances          = 1u &lt;&lt; 16;
     uint32_t     maxLights             = 1u &lt;&lt; 14;
     uint32_t     maxAnimatedEntities   = 1u &lt;&lt; 14;
@@ -342,6 +344,8 @@ public:
     bool         meshLods              = true;
     float        lodErrorPixels        = 1.0f;
     int32_t      forcedLod             = -1;
+    MeshletPath  meshletPath           = MeshletPath::OFF;
+    uint32_t     maxViewMeshlets       = 1u &lt;&lt; 16;
     bool         asyncCompute          = false;
     bool         clusteredLighting     = true;
     bool         hostImageCopy         = true;
@@ -389,9 +393,21 @@ public:
     LODS,
     CULLING,
     LIGHT_COUNT,
+    MESHLETS,
 };</pre>
   <div class="body">
-    <p>What the scene's views show instead of their shading (<a href="engine.html#setDebugView"><code>Engine::setDebugView</code></a>). <code>OVERDRAW</code> and <code>LIGHT_COUNT</code> are counts, shown as a heat color. See <a href="engine.html#debug-views">Debug views</a> for what each one shows and <a href="../guides/debug-views.html">the guide</a> for how to read it.</p>
+    <p>What the scene's views show instead of their shading (<a href="engine.html#setDebugView"><code>Engine::setDebugView</code></a>). <code>OVERDRAW</code> and <code>LIGHT_COUNT</code> are counts, shown as a heat color. <code>MESHLETS</code> gives each meshlet of a draw drawn by meshlets its own color. See <a href="engine.html#debug-views">Debug views</a> for what each one shows and <a href="../guides/debug-views.html">the guide</a> for how to read it.</p>
+  </div>
+</div>
+
+<div class="api" id="MeshletPath">
+  <pre class="sig">enum class MeshletPath
+{
+    OFF,
+    VERTEX_PULLING,
+};</pre>
+  <div class="body">
+    <p>How the scene passes draw a visible mesh whose LOD has 8 meshlets or more (<code>EngineConfig::meshletPath</code>, <a href="engine.html#setMeshletPath"><code>Engine::setMeshletPath</code></a>). <code>OFF</code>: the whole draw. <code>VERTEX_PULLING</code>: compute culls each meshlet and writes the visible ones as indirect draws, which the usual vertex shader draws. Both draw the same triangles. See <a href="../guides/meshlets.html">Meshlets and cluster culling</a>.</p>
   </div>
 </div>
 

@@ -51,8 +51,9 @@
   <tr><td><a href="#addUiPass"><code>addUiPass</code></a></td><td>draw the ImGui windows over the image</td><td>this page</td></tr>
   <tr><td><a href="#setUiCallback"><code>setUiCallback</code></a></td><td>your own ImGui windows, every frame</td><td>this page</td></tr>
   <tr><td><a href="#getUiTexture"><code>getUiTexture</code></a></td><td>a texture as an <code>ImTextureID</code> for <code>ImGui::Image</code></td><td>this page</td></tr>
-  <tr><td><a href="#setDebugView"><code>setDebugView</code></a></td><td>show normals, UVs, overdraw, LODs, culling or light counts</td><td>this page</td></tr>
+  <tr><td><a href="#setDebugView"><code>setDebugView</code></a></td><td>show normals, UVs, overdraw, LODs, culling, light counts or meshlets</td><td>this page</td></tr>
   <tr><td><a href="#setCullingFrozen"><code>setCullingFrozen</code></a></td><td>keep the culling of one frame while the camera moves</td><td>this page</td></tr>
+  <tr><td><a href="#setMeshletPath"><code>setMeshletPath</code></a>, <a href="#setMeshletPath"><code>getMeshletPath</code></a></td><td>cull and draw big meshes by meshlets, or whole</td><td>this page</td></tr>
   <tr><td><a href="#setInspection"><code>setInspection</code></a>, <a href="#getInspection"><code>getInspection</code></a></td><td>show a render target, depth, Hi-Z level, light clusters or an entity's GPU table rows in the RASM window</td><td>this page</td></tr>
   <tr><td><a href="#getCurrentFrameResources"><code>getCurrentFrameResources</code></a></td><td>this frame's command buffer and depth</td><td>this page</td></tr>
   <tr><td><a href="#recreateSwapchain"><code>recreateSwapchain</code></a></td><td>rebuild after a resize</td><td>this page</td></tr>
@@ -206,8 +207,9 @@ if (!engine.running())
   <tr><td><code>geometryPoolSkins</code></td><td>2<sup>20</sup> = 1,048,576</td><td>Joints and weights of the skinned vertices (glTF <code>JOINTS_0</code> / <code>WEIGHTS_0</code>, a <a href="scene.html#SkinVertex"><code>SkinVertex</code></a> each), 16 bytes each (16 MiB). A mesh that is not skinned uses none. Fixed for the engine's life. The posed vertices go to buffers that grow by themselves (64 bytes per vertex per frame slot, per playing entity).</td></tr>
   <tr><td><code>geometryPoolMorphs</code></td><td>2<sup>20</sup> = 1,048,576</td><td>Morph target deltas (a <a href="scene.html#MorphDelta"><code>MorphDelta</code></a> per vertex and target), 24 bytes each (24 MiB). A mesh without morph targets uses none. Fixed for the engine's life. A mesh that does not fit fails to load with an error that names this setting.</td></tr>
   <tr><td><code>geometryPoolIndices</code></td><td>2<sup>24</sup> = 16,777,216</td><td>Indices of all meshes together, LODs included, 4 bytes each (64 MiB). The LODs take up to as many again as LOD 0.</td></tr>
-  <tr><td><code>geometryPoolSubMeshes</code></td><td>2<sup>14</sup> = 16,384</td><td>Sub-meshes of all meshes together (136 bytes each: about 2.1 MiB).</td></tr>
-  <tr><td><code>maxInstances</code></td><td>2<sup>16</sup> = 65,536</td><td>Instance rows: one per sub-mesh of every entity. 160 bytes each, two copies (one per frame slot).</td></tr>
+  <tr><td><code>geometryPoolSubMeshes</code></td><td>2<sup>14</sup> = 16,384</td><td>Sub-meshes of all meshes together (200 bytes each: about 3.1 MiB).</td></tr>
+  <tr><td><code>geometryPoolMeshlets</code></td><td>2<sup>17</sup> = 131,072</td><td>Meshlets of all meshes together, every LOD included, 40 bytes each (5 MiB). Every sub-mesh of 512 triangles or more that is not skinned or morphed gets about one per 124 triangles of each LOD as it loads. A mesh that does not fit fails to load with an error that names this setting. See <a href="../guides/meshlets.html">meshlets</a>.</td></tr>
+  <tr><td><code>maxInstances</code></td><td>2<sup>16</sup> = 65,536</td><td>Instance rows: one per sub-mesh of every entity. 164 bytes each, two copies (one per frame slot). Each scene view with occlusion culling also keeps this many words of meshlet visibility bits (4 bytes each).</td></tr>
   <tr><td><code>maxLights</code></td><td>2<sup>14</sup> = 16,384</td><td>Lights in total (<a href="scene.html#createLight"><code>createLight</code></a>). 56 bytes each, two copies (about 1.8 MiB). 0, or a table larger than the GPU allows, logs an error and the engine does not start.</td></tr>
   <tr><td><code>maxAnimatedEntities</code></td><td>2<sup>14</sup> = 16,384</td><td>Entities that have played a clip (<a href="scene.html#playAnimation"><code>playAnimation</code></a>), and entities of a skinned or morphed mesh, which are posed at rest; each keeps its row. 120 bytes each, two copies. A play past it is refused with an error. 0, or more than 65,535 (one Animate group per row), logs an error and the engine does not start.</td></tr>
   <tr><td><code>animationPoolBytes</code></td><td>16 MiB</td><td>The kept nodes, samplers, channel tables and keys of every loaded mesh with clips, uploaded once per mesh. A mesh that does not fit fails to load with an error that names this setting.</td></tr>
@@ -220,6 +222,8 @@ if (!engine.running())
   <tr><td><code>meshLods</code></td><td><code>true</code></td><td>Builds coarser levels of detail (<a href="scene.html#MeshLod">LODs</a>) of every sub-mesh with 1024 triangles or more as meshes load, on the worker thread for <code>loadMesh</code>. <code>false</code>: meshes have LOD 0 only.</td></tr>
   <tr><td><code>lodErrorPixels</code></td><td><code>1.0f</code></td><td>Culling draws the coarsest LOD whose error stays under this many pixels on screen. Larger is faster and coarser; 0 always draws LOD 0. See <a href="../guides/lod-selection.html">level of detail</a>.</td></tr>
   <tr><td><code>forcedLod</code></td><td><code>-1</code></td><td>For debugging. From 0 up, every draw uses this LOD (or its mesh's coarsest one), whatever the distance. -1 picks by distance. <kbd>F2</kbd> cycles it at runtime.</td></tr>
+  <tr><td><code>meshletPath</code></td><td><code>MeshletPath::OFF</code></td><td>How the <a href="#addScenePasses">scene passes</a> draw a visible mesh whose LOD has 8 meshlets or more (<a href="types.html#MeshletPath"><code>MeshletPath</code></a>). <code>OFF</code>: whole. <code>VERTEX_PULLING</code>: compute culls each meshlet (frustum, back faces, Hi-Z) and draws the visible ones by indirect draws. The image is the same either way. Off by default: on the RTX 3060 it pays only for dense meshes near the camera, and costs more than it saves when LODs already cut the triangles (<code>P28</code>). <a href="#setMeshletPath"><code>setMeshletPath</code></a> changes it at run time. See <a href="../guides/meshlets.html">meshlets</a>.</td></tr>
+  <tr><td><code>maxViewMeshlets</code></td><td>2<sup>16</sup> = 65,536</td><td>With <code>VERTEX_PULLING</code>: meshlet draws per scene view and frame slot, 20 bytes each (1.3 MiB), made only for views that draw meshlets and only as large as their meshes can need. A draw past it is drawn whole, and <code>FrameStats::meshletDrawsWhole</code> counts it.</td></tr>
   <tr><td><code>asyncCompute</code></td><td><code>false</code></td><td>Runs the scene's culling and Hi-Z passes, and every pass added with <a href="render-graph.html#addAsyncComputePass"><code>addAsyncComputePass</code></a>, on a second GPU queue next to the graphics work. Needs a GPU with a compute queue family without graphics; without one, everything stays on the graphics queue, as with <code>false</code>. Off by default: today it does not make the scene passes faster (<code>P11</code>). <code>examples/03_instances</code> turns it on. See <a href="../guides/async-compute.html">async compute</a>.</td></tr>
   <tr><td><code>transferQueue</code></td><td><code>true</code></td><td>Loads copy their textures and geometry on the GPU's copy engine, a queue family that only copies, next to the graphics work; a load counts as loaded once its copies are done, so the frames never wait for them. Without such a family (lavapipe, MoltenVK, most Intel GPUs), and with <code>false</code>, the copies run on the graphics queue, by the same code. On by default: with a busy GPU loads end sooner, with an idle one nothing changes (<code>D13</code>). The examples' <code>--transfer-queue on|off</code> sets it. See <a href="../guides/transfer-queue.html">transfer queues and ownership transfers</a>.</td></tr>
   <tr><td><code>clusteredLighting</code></td><td><code>true</code></td><td>Each shaded view sorts its lights with a <code>range</code> into clusters, and each pixel shades only its cluster's lights (about 6.8 MiB per view and frame slot). <code>false</code>: every pixel shades every light of the scene, with the same image and a much higher cost; for comparison and debugging. See <a href="../guides/clustered-lighting.html">clustered lighting</a>.</td></tr>
@@ -722,6 +726,9 @@ for (uint32_t i = 0; i &lt; stats.gpuTimerCount; ++i)
       <dt>trianglesVisible</dt><dd>Triangles of the visible draws, at the LOD culling picked for each.</dd>
       <dt>trianglesVisibleLod0</dt><dd>Triangles of the same visible draws at LOD 0. <code>trianglesVisibleLod0 - trianglesVisible</code> is what LODs saved this frame.</dd>
       <dt>drawsPerLod</dt><dd>Visible draws at each LOD, from LOD 0 to <code>MAX_MESH_LODS - 1</code>. They add up to <code>drawsVisible</code>.</dd>
+      <dt>meshletsVisible</dt><dd>Meshlets drawn in all views, with <code>MeshletPath::VERTEX_PULLING</code>. For a draw drawn by meshlets, <code>trianglesVisible</code> counts their triangles only.</dd>
+      <dt>meshletsCulled</dt><dd>Meshlets of visible draws that the frustum, their normal cone or the Hi-Z culled.</dd>
+      <dt>meshletDrawsWhole</dt><dd>Draws past a view's <code>EngineConfig::maxViewMeshlets</code>, drawn whole instead of by meshlets.</dd>
       <dt>lightsGlobal</dt><dd>Global lights (directional, or <code>range</code> 0) of the frame's shaded views: each one is shaded at every pixel.</dd>
       <dt>lightsVisible</dt><dd>Lights with a range in the shaded views' frustums. A view without clusters counts all of them.</dd>
       <dt>lightsDropped</dt><dd>Lights left out of a cluster that already held <a href="scene.html#MAX_CLUSTER_LIGHTS"><code>MAX_CLUSTER_LIGHTS</code></a> (counted once per cluster), or of a screen tile that already held 24 × 256: their pixels miss them. Above 0, the log also warns (once, then at most every 10 s).</dd>
@@ -869,6 +876,7 @@ engine.addUiPass(graph);</code></pre>
   <tr><td><code>LODS</code></td><td>the LOD the draw uses, 0 to 7</td><td>a color per LOD</td></tr>
   <tr><td><code>CULLING</code></td><td>drawn in the early or the late pass; culled draws as see-through ghosts</td><td>green, yellow; red ghost: occluded, blue ghost: outside the frustum</td></tr>
   <tr><td><code>LIGHT_COUNT</code></td><td>the lights the shading loops over there</td><td>heat color</td></tr>
+  <tr><td><code>MESHLETS</code></td><td>which meshlet of a draw drawn by meshlets, or which draw</td><td>a color per meshlet (per draw for a mesh drawn whole)</td></tr>
 </table>
 </div>
 
@@ -883,6 +891,16 @@ for (int i = 1; i + 1 &lt; argc; ++i)
     if (std::strcmp(argv[i], "--debug-view") == 0)
         engine.setDebugView(parseDebugView(argv[i + 1]));
 }</code></pre>
+  </div>
+</div>
+
+<div class="api" id="setMeshletPath">
+  <pre class="sig">void setMeshletPath(MeshletPath path);
+MeshletPath getMeshletPath() const;</pre>
+  <div class="body">
+    <p>How the scene passes draw big meshes from the next frame on: <code>MeshletPath::OFF</code> draws each visible draw whole, <code>MeshletPath::VERTEX_PULLING</code> splits a visible draw whose LOD has 8 meshlets or more and draws only its visible meshlets (<a href="../guides/meshlets.html">meshlets</a>). It starts as <code>EngineConfig::meshletPath</code>. Every mesh has its meshlets either way, and both paths draw the same triangles, so the image does not change; only the cost does. The RASM window has it under "Culling and LODs". A value outside the enum logs an error and changes nothing.</p>
+    <pre><code>// Dense meshes near the camera: cull them by meshlets.
+engine.setMeshletPath(rasm::MeshletPath::VERTEX_PULLING);</code></pre>
   </div>
 </div>
 

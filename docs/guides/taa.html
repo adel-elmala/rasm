@@ -291,7 +291,7 @@
 
 <h3>Last frame's transforms</h3>
 
-<p>Each instance row of the GPU scene keeps <code>previousWorld</code>, the rows of the affine world matrix the frame before drew (48 of the row's 160 bytes). It is written only through <code>GpuTable::setRow</code> in the frame's sync, like every row. A sub-mesh that a clip moves (<a href="keyframe-animation.html#in-rasm">keyframe animation</a>) gets its matrices, <code>previousWorld</code> included, from the <code>Animate</code> pass instead, which reads last frame's matrix from the other frame slot; the shaders read both kinds through <code>getPreviousWorldPosition</code>:</p>
+<p>Each instance row of the GPU scene keeps <code>previousWorld</code>, the rows of the affine world matrix the frame before drew (48 of the row's 164 bytes). It is written only through <code>GpuTable::setRow</code> in the frame's sync, like every row. A sub-mesh that a clip moves (<a href="keyframe-animation.html#in-rasm">keyframe animation</a>) gets its matrices, <code>previousWorld</code> included, from the <code>Animate</code> pass instead, which reads last frame's matrix from the other frame slot; the shaders read both kinds through <code>getPreviousWorldPosition</code>:</p>
 
 <ol class="flow">
   <li class="cpu"><b>updateTransform</b><span>rows: new world, previousWorld = the last synced matrix</span></li>
@@ -344,7 +344,7 @@
   <div><b>+0.13 ms</b><span>the draw passes with the motion output</span><small>Scene 1, Scene 2, Transparent: 0.88 → 1.02 ms</small></div>
   <div><b>7.9 MiB</b><span>the motion target at 1080p</span><small>R16G16_SFLOAT, transient</small></div>
   <div><b>31.6 MiB</b><span>the history at 1080p</span><small>two RGBA16F copies, for the graph's life</small></div>
-  <div><b>+6 MiB</b><span>the instance table</span><small>48 B of the 160 B row × 65536 rows × 2 frame slots</small></div>
+  <div><b>+6 MiB</b><span>the instance table</span><small>48 B of the 164 B row × 65536 rows × 2 frame slots</small></div>
 </div>
 
 <h3>Where it lives in code</h3>

@@ -128,11 +128,12 @@
   <tr><td>play a glTF model's animations</td><td><a href="guides/keyframe-animation.html">Keyframe animation</a>, <a href="api/scene.html#animation">playAnimation and setAnimationTime</a></td></tr>
   <tr><td>play a skinned glTF character (joints and weights)</td><td><a href="guides/skinning.html">Skinning</a>, <a href="api/scene.html#animation">playAnimation and setAnimationTime</a></td></tr>
   <tr><td>blend a glTF mesh between shapes (morph targets), from a clip or from the application</td><td><a href="guides/morph-targets.html">Morph targets</a>, <a href="api/scene.html#morph-targets">setMorphWeights</a></td></tr>
-  <tr><td>see normals, UVs, overdraw, LODs, culling or light counts on screen</td><td><a href="guides/debug-views.html">Debug views</a>, <a href="api/engine.html#setDebugView">setDebugView</a>, <a href="api/engine.html#setCullingFrozen">setCullingFrozen</a></td></tr>
+  <tr><td>see normals, UVs, overdraw, LODs, culling, light counts or meshlets on screen</td><td><a href="guides/debug-views.html">Debug views</a>, <a href="api/engine.html#setDebugView">setDebugView</a>, <a href="api/engine.html#setCullingFrozen">setCullingFrozen</a></td></tr>
   <tr><td>look at a render target, a depth, a Hi-Z level, the light clusters or an entity's GPU table rows while it runs</td><td><a href="guides/inspecting-gpu-resources.html">Inspecting GPU resources</a>, <a href="api/engine.html#setInspection">setInspection</a></td></tr>
   <tr><td>add debug windows, sliders or tool panels to an app</td><td><a href="guides/immediate-mode-ui.html">Immediate-mode UI</a>, <a href="api/engine.html#ui">UI with Dear ImGui</a>, <a href="api/engine.html#setUiCallback">setUiCallback</a></td></tr>
   <tr><td>change a GPU struct or a shader</td><td><a href="guides/struct-layout.html">Struct layout rules</a></td></tr>
   <tr><td>find why something is slow</td><td><a href="guides/gpu-timing.html">GPU timing and frame statistics</a></td></tr>
+  <tr><td>draw only the visible parts of big, dense meshes</td><td><a href="guides/meshlets.html">Meshlets and cluster culling</a>, <a href="api/engine.html#setMeshletPath">setMeshletPath</a></td></tr>
   <tr><td>keep a frame free of heap allocations, or find the ones it makes</td><td><a href="guides/frame-allocations.html">Heap memory in the frame</a></td></tr>
   <tr><td>load without slowing the frames: copies on the GPU's copy engine</td><td><a href="guides/transfer-queue.html">Transfer queues and ownership transfers</a>, <a href="api/engine.html#EngineConfig">EngineConfig::transferQueue</a></td></tr>
   <tr><td>run compute work next to graphics work</td><td><a href="guides/async-compute.html">Async compute and multiple queues</a></td></tr>
