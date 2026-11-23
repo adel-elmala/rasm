@@ -87,7 +87,7 @@ namespace rasm
 
         // The path a view draws its meshlets by. AUTO takes the mesh shaders where the device has them and leaves meshlets off
         // elsewhere: measured on an RTX 3060, the mesh shaders cost about 1% where LODs already cut the triangles and save up
-        // to 30% on dense meshes, while vertex pulling costs about 12% in the first case (P28). MESH_SHADERS asked for
+        // to 30% on dense meshes, while vertex pulling costs about 11% in the first case (P28). MESH_SHADERS asked for
         // explicitly falls back to vertex pulling.
         MeshletPath resolveMeshletPath(MeshletPath path, bool meshShaders)
         {
@@ -1088,13 +1088,16 @@ namespace rasm
         // The sky goes behind what the view's last draw pass of the frame drew: the late pass, unless this frame has
         // none (no Hi-Z, or frozen culling).
         // With mesh shaders the draw passes cull the meshlets themselves (lib/meshletTask.slang): the early one reads the
-        // meshlet bits, the late one reads the Hi-Z and writes the bits, as the culling passes do on the other path.
+        // meshlet bits, the late one reads the Hi-Z and writes the bits, as the culling passes do on the other path. The
+        // graph is fixed and the path is not, so this holds wherever the device has them: with async compute, Cull 1 then
+        // also waits for the frame before's Scene 2.
+        const bool meshletBitsInDraws = ctx.hasMeshShaders() && sceneView.meshletVisibility.isValid();
         graph.addPass(
             occlusion ? drawName + " 1" : drawName,
             [&](PassBuilder &builder)
             {
                 drawScenePass(builder);
-                if (sceneView.meshletVisibility.isValid())
+                if (meshletBitsInDraws)
                     builder.readPrevious(sceneView.meshletVisibility);
             },
             [this, view](RenderContext &)
@@ -1159,8 +1162,9 @@ namespace rasm
             [&](PassBuilder &builder)
             {
                 drawScenePass(builder);
-                builder.read(sceneView.hiz);
-                if (sceneView.meshletVisibility.isValid())
+                if (ctx.hasMeshShaders())
+                    builder.read(sceneView.hiz);
+                if (meshletBitsInDraws)
                     builder.write(sceneView.meshletVisibility);
             },
             [this, view](RenderContext &)

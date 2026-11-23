@@ -251,9 +251,9 @@ public:
 </div>
 
 <div class="api" id="ShaderType">
-  <pre class="sig">enum class ShaderType { VERTEX, FRAGMENT, VERTEX_FRAGMENT, COMPUTE, ALL };</pre>
+  <pre class="sig">enum class ShaderType { VERTEX, FRAGMENT, VERTEX_FRAGMENT, COMPUTE, ALL, TASK, MESH };</pre>
   <div class="body">
-    <p>A shader stage. <code>ShaderDesc::type</code> is <code>VERTEX</code>, <code>FRAGMENT</code> or <code>COMPUTE</code>. <code>ALL</code> is every stage, for descriptor set layouts: the engine's bindless layout uses it, so compute shaders can sample textures too.</p>
+    <p>A shader stage. <code>ShaderDesc::type</code> is <code>VERTEX</code>, <code>FRAGMENT</code>, <code>COMPUTE</code>, <code>TASK</code> or <code>MESH</code> (the last two only where <a href="low-level.html#hasMeshShaders"><code>RenderContext::hasMeshShaders</code></a> is true). <code>ALL</code> is every stage, for descriptor set layouts: the engine's bindless layout uses it, so compute shaders can sample textures too.</p>
   </div>
 </div>
 
@@ -405,9 +405,11 @@ public:
 {
     OFF,
     VERTEX_PULLING,
+    MESH_SHADERS,
+    AUTO,
 };</pre>
   <div class="body">
-    <p>How the scene passes draw a visible mesh whose LOD has 8 meshlets or more (<code>EngineConfig::meshletPath</code>, <a href="engine.html#setMeshletPath"><code>Engine::setMeshletPath</code></a>). <code>OFF</code>: the whole draw. <code>VERTEX_PULLING</code>: compute culls each meshlet and writes the visible ones as indirect draws, which the usual vertex shader draws. Both draw the same triangles. See <a href="../guides/meshlets.html">Meshlets and cluster culling</a>.</p>
+    <p>How the scene passes draw a visible mesh whose LOD has 8 meshlets or more (<code>EngineConfig::meshletPath</code>, <a href="engine.html#setMeshletPath"><code>Engine::setMeshletPath</code></a>). <code>OFF</code>: the whole draw. <code>VERTEX_PULLING</code>: compute culls each meshlet and writes the visible ones as indirect draws, which the usual vertex shader draws. <code>MESH_SHADERS</code>: a task shader culls them inside the draw and mesh shaders draw the visible ones; where the GPU has no mesh shaders (<a href="low-level.html#hasMeshShaders"><code>RenderContext::hasMeshShaders</code></a>, e.g. MoltenVK) it draws by vertex pulling. <code>AUTO</code>, the default: <code>MESH_SHADERS</code> where the GPU has them, else <code>OFF</code>. All draw the same triangles. See <a href="../guides/meshlets.html">Meshlets and cluster culling</a>.</p>
   </div>
 </div>
 

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Meshlets and Cluster Culling · RASM</title>
 <meta name="description" content="How meshlets work: cutting a mesh into small clusters with their own bounds and normal cones, culling each cluster against the frustum, its back faces and the Hi-Z, keeping the draw order, drawing the survivors by indirect draws or mesh shaders, and how RASM does it.">
-<meta name="rasm-sources" content="src/assets/meshlets.cpp src/assets/meshlets.h src/assets/mesh.cpp src/renderer/geometryPool.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/uberMaterialTypes.h shaders/passes/cull.slang shaders/lib/meshletCulling.slang shaders/lib/geometryTypes.slang shaders/lib/debugViews.slang include/rasm/types.h include/rasm/mesh.h examples/18_meshlets/main.cpp examples/exampleBench.h">
+<meta name="rasm-sources" content="src/assets/meshlets.cpp src/assets/meshlets.h src/assets/mesh.cpp src/renderer/geometryPool.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/uberMaterialTypes.h shaders/passes/cull.slang shaders/lib/meshletCulling.slang shaders/lib/meshletTask.slang shaders/passes/rasm.slang shaders/passes/shadow.slang src/rhi/vulkan/vulkanDevice.cpp shaders/lib/geometryTypes.slang shaders/lib/debugViews.slang include/rasm/types.h include/rasm/mesh.h examples/18_meshlets/main.cpp examples/exampleBench.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -313,7 +313,9 @@
 
 <h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
 
-<p>Every sub-mesh of at least 1024 triangles that is not skinned or morphed gets meshlets of 64 vertices and 124 triangles per LOD when it loads (<code>buildMeshlets</code>, after the LODs, on the same worker job). Each LOD's indices are rewritten in meshlet order, so a meshlet is a range of them, and a whole draw of the LOD draws the same triangles. Drawing by meshlets is <code>EngineConfig::meshletPath</code> (<code>Engine::setMeshletPath</code> at run time): <code>MeshletPath::OFF</code> by default, <code>MeshletPath::VERTEX_PULLING</code> for the indirect draws of section 7.</p>
+<p>Every sub-mesh of at least 1024 triangles that is not skinned or morphed gets meshlets of 64 vertices and 124 triangles per LOD when it loads (<code>buildMeshlets</code>, after the LODs, on the same worker job). Each LOD's indices are rewritten in meshlet order, so a meshlet is a range of them, and a whole draw of the LOD draws the same triangles. Drawing by meshlets is <code>EngineConfig::meshletPath</code> (<code>Engine::setMeshletPath</code> at run time), with both ways of section 7: <code>MeshletPath::VERTEX_PULLING</code> for the indirect draws, <code>MeshletPath::MESH_SHADERS</code> for task and mesh shaders (vertex pulling where the GPU has none), <code>MeshletPath::OFF</code> for whole draws. The default, <code>MeshletPath::AUTO</code>, takes the mesh shaders where the GPU has them and is off elsewhere.</p>
+
+<p><b>Vertex pulling.</b> Two more compute passes per culling phase turn the chunks into one indirect draw per visible meshlet:</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 250" role="img" aria-label="The culling pass of one view and phase. countMain tests each draw and picks its LOD; writeMain writes small draws to the visible draws as before, and draws whose LOD has 8 or more meshlets as chunks of 64 meshlets. meshletCountMain, one group per chunk, tests the meshlets and writes a mask and a group sum. meshletWriteMain writes a DrawInfo per visible meshlet after the draws. The draw pass draws both lists per run.">
@@ -351,33 +353,89 @@
   <figcaption>Two indirect dispatches per run (the chunk count is the GPU's), behind the two of before. Both lists are DrawInfos in one buffer, so the vertex shader is the same and only <code>PushConstants::firstDraw</code> differs.</figcaption>
 </figure>
 
+<p><b>Mesh shaders.</b> The culling pass stops after <code>writeMain</code>. The draw pass culls the meshlets itself: one task workgroup per chunk runs the same test (<code>cullMeshletChunk</code>, shared with <code>meshletCountMain</code>, so both paths keep the same meshlets), and launches one mesh workgroup per survivor. No meshlet draw list, so no budget, and no extra dispatch or barrier.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 335" role="img" aria-label="The mesh-shader path. The cull pass runs countMain and writeMain, which write chunks of 64 meshlets and the run's group counts. The draw pass calls drawMeshTasksIndirect on those counts: each taskMain workgroup tests the 64 meshlets of one chunk, writes the visible lanes in order into its payload and launches that many meshMain workgroups. Each meshMain workgroup reads its meshlet's vertex list and packed triangles from the meshlet data stream and writes up to 64 vertices and 124 triangles to the rasterizer.">
+    <text x="20" y="22" class="title t-gpu">Cull pass (compute)</text>
+    <rect x="20" y="36" width="150" height="44" rx="22" class="shader"/>
+    <text x="95" y="63" class="mid mono">countMain</text>
+    <line x1="170" y1="58" x2="196" y2="58" class="arrow" marker-end="url(#ah)"/>
+    <rect x="198" y="36" width="150" height="44" rx="22" class="shader"/>
+    <text x="273" y="63" class="mid mono">writeMain</text>
+    <line x1="348" y1="58" x2="388" y2="58" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="390" y="38" width="170" height="40" rx="4" class="mem"/>
+    <text x="475" y="63" class="mid small">chunks of 64 meshlets</text>
+    <rect x="570" y="38" width="170" height="40" rx="4" class="mem o-75"/>
+    <text x="655" y="63" class="mid small">group counts per run</text>
+
+    <text x="20" y="116" class="title t-gpu">Draw pass (graphics), per run</text>
+    <line x1="655" y1="78" x2="655" y2="118" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="740" y="136" class="end mono small">drawMeshTasksIndirect(group counts)</text>
+    <rect x="20" y="150" width="190" height="66" rx="8" class="shader"/>
+    <text x="115" y="172" class="mid mono">taskMain</text>
+    <text x="115" y="190" class="mid small">a workgroup per chunk:</text>
+    <text x="115" y="206" class="mid small">64 threads, 64 meshlets</text>
+    <line x1="430" y1="78" x2="170" y2="148" class="arrow mem dashed" marker-end="url(#ah-mem)"/>
+    <line x1="210" y1="183" x2="248" y2="183" class="arrow shader" marker-end="url(#ah-shader)"/>
+    <rect x="250" y="156" width="170" height="54" rx="4" class="mem o-75"/>
+    <text x="335" y="178" class="mid small">payload: the chunk,</text>
+    <text x="335" y="196" class="mid small">visible lanes in order</text>
+    <line x1="420" y1="170" x2="470" y2="154" class="arrow shader" marker-end="url(#ah-shader)"/>
+    <line x1="420" y1="183" x2="470" y2="183" class="arrow shader" marker-end="url(#ah-shader)"/>
+    <line x1="420" y1="196" x2="470" y2="212" class="arrow shader" marker-end="url(#ah-shader)"/>
+    <rect x="472" y="140" width="130" height="26" rx="5" class="shader"/>
+    <text x="537" y="158" class="mid mono small">meshMain</text>
+    <rect x="472" y="170" width="130" height="26" rx="5" class="shader"/>
+    <text x="537" y="188" class="mid mono small">meshMain</text>
+    <rect x="472" y="200" width="130" height="26" rx="5" class="shader"/>
+    <text x="537" y="218" class="mid mono small">meshMain</text>
+    <line x1="602" y1="183" x2="640" y2="183" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="642" y="160" width="98" height="46" rx="6" class="gpu"/>
+    <text x="691" y="188" class="mid small">rasterizer</text>
+    <text x="537" y="244" class="mid small">one per visible meshlet</text>
+
+    <text x="20" y="282" class="title t-mem">One meshlet in the meshlet data stream (32-bit words)</text>
+    <rect x="20" y="294" width="34" height="28" class="mem"/><text x="37" y="313" class="mid small">v0</text>
+    <rect x="54" y="294" width="34" height="28" class="mem"/><text x="71" y="313" class="mid small">v1</text>
+    <rect x="88" y="294" width="34" height="28" class="mem"/><text x="105" y="313" class="mid small">…</text>
+    <rect x="122" y="294" width="58" height="28" class="mem"/><text x="151" y="313" class="mid small">v(n−1)</text>
+    <rect x="190" y="294" width="130" height="28" class="mem o-75"/><text x="255" y="313" class="mid small">t0: a | b | c | 0</text>
+    <rect x="320" y="294" width="130" height="28" class="mem o-75"/><text x="385" y="313" class="mid small">t1: a | b | c | 0</text>
+    <rect x="450" y="294" width="60" height="28" class="mem o-75"/><text x="480" y="313" class="mid small">…</text>
+    <text x="520" y="306" class="small">n ≤ 64 sub-mesh vertex numbers,</text>
+    <text x="520" y="322" class="small">then a word per triangle (bytes)</text>
+  </svg>
+  <figcaption>The task shader reads the chunks <code>writeMain</code> wrote, with the group counts it wrote for the vertex-pulling dispatches. Each thread of a mesh workgroup runs one vertex through <code>getVertexOutput</code>, the function <code>vertMain</code> uses, so both paths compute the same vertices.</figcaption>
+</figure>
+
 <h3>Where RASM follows the page, and where it differs</h3>
 
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Building</td><td>64 / 124, cone weight</td><td><code>meshopt_buildMeshlets</code> with 64 / 124 and cone weight 0.25, then <code>meshopt_optimizeMeshlet</code> and <code>meshopt_computeMeshletBounds</code> per meshlet; <code>MIN_MESHLET_TRIANGLES</code> (1024) per sub-mesh.</td></tr>
-  <tr><td>Storage</td><td>index range or local lists</td><td>An index range (<code>GeometryMeshlet</code>: sphere, cone, <code>firstIndex</code>, <code>indexCount</code>, 40 B) in the geometry pool's meshlet stream (<code>EngineConfig::geometryPoolMeshlets</code>); each <code>GeometryLod</code> names its <code>firstMeshlet</code> and <code>meshletCount</code>.</td></tr>
+  <tr><td>Storage</td><td>index range or local lists</td><td>Both. An index range (<code>GeometryMeshlet</code>: sphere, cone, <code>firstIndex</code>, <code>indexCount</code>, <code>firstData</code>, <code>vertexCount</code>, 48 B) in the geometry pool's meshlet stream (<code>EngineConfig::geometryPoolMeshlets</code>); each <code>GeometryLod</code> names its <code>firstMeshlet</code> and <code>meshletCount</code>. Where the GPU has mesh shaders, also its local lists in the meshlet data stream (<code>EngineConfig::geometryPoolMeshletData</code>).</td></tr>
   <tr><td>Which draws</td><td>big meshes</td><td>A visible draw whose LOD has at least <code>MESHLET_MIN_DRAW</code> (8) meshlets, in a run that is not the blend run (it is sorted per object). Skinned and morphed sub-meshes have none (<code>D37</code>).</td></tr>
   <tr><td>Cone test</td><td>camera in object space</td><td><code>isMeshletBackFacing</code>: the camera (or an orthographic view's direction, <code>SceneData::cullViewPoint</code>) moved by the inverse world matrix, only in runs culled by face (<code>SceneData::coneRuns</code>).</td></tr>
   <tr><td>Occlusion</td><td>a bit per meshlet</td><td>Per view, in <code>SceneView::meshletVisibility</code>; each instance row of a mesh with meshlets owns words at <code>InstanceData::meshletVisibility</code>, one word per row on average (<code>EngineConfig::maxInstances</code> words per view). A row that finds none is still culled, only without its bits.</td></tr>
   <tr><td>Order</td><td>prefix sums</td><td>Chunks of 64 meshlets in list order; a sum per 64 chunks added with atomics; <code>meshletWriteMain</code> adds the earlier sums and chunks.</td></tr>
-  <tr><td>Memory</td><td>a budget</td><td><code>EngineConfig::maxViewMeshlets</code> (2¹⁶, 1.3 MiB) meshlet draws per view and frame slot, made only for views that draw meshlets; a draw past it is drawn whole.</td></tr>
-  <tr><td>Mesh shaders</td><td>task + mesh</td><td>Not yet: the chunks are what a task shader would take.</td></tr>
+  <tr><td>Memory</td><td>a budget</td><td>Vertex pulling: <code>EngineConfig::maxViewMeshlets</code> (2¹⁶, 1.3 MiB) meshlet draws per view and frame slot, made only for views that draw meshlets; a draw past it is drawn whole. Mesh shaders: no list, no budget.</td></tr>
+  <tr><td>Mesh shaders</td><td>task + mesh</td><td><code>VK_EXT_mesh_shader</code>, turned on where the GPU has it (<code>RenderContext::hasMeshShaders</code>; not on MoltenVK). A task workgroup of 64 threads per chunk, a mesh workgroup of 64 threads per visible meshlet. The draw passes then read (<code>Scene 1</code>) and write (<code>Scene 2</code>) the meshlet bits.</td></tr>
 </table>
 </div>
 
 <h3>Numbers</h3>
 
-<p><code>examples/18_meshlets --bench</code> (Release, headless, 1920 × 1080, RTX 3060): a terrain of 256 tiles and 2500 rocks of 20480 triangles, with four sun cascades. GPU frame time, meshlets off → on:</p>
+<p><code>examples/18_meshlets --bench</code> (Release, headless, 1920 × 1080, RTX 3060, 600 frames after 120): a terrain of 256 tiles and 2500 rocks of 20480 triangles, with four sun cascades. GPU frame time, off / vertex pulling / mesh shaders:</p>
 
 <div class="stats">
-  <div><b>1.69 → 1.19 ms</b><span>every mesh at LOD 0, no shadows: 4.72 → 1.80 M triangles</span><small><samp>--lod-error 0 --no-shadows</samp></small></div>
-  <div><b>5.79 → 5.59 ms</b><span>LOD 0 with the 4 cascades: 21.4 → 15.9 M triangles</span><small><samp>--lod-error 0</samp></small></div>
-  <div><b>1.96 → 2.22 ms</b><span>with LODs (the default): 3.32 → 2.33 M triangles, but 0.24 ms more culling</span><small>default flags</small></div>
+  <div><b>1.71 / 1.17 / 1.19 ms</b><span>every mesh at LOD 0, no shadows: 4.72 → 1.80 M triangles</span><small><samp>--lod-error 0 --no-shadows</samp></small></div>
+  <div><b>5.81 / 5.59 / 5.15 ms</b><span>LOD 0 with the 4 cascades: 21.4 → 15.9 M triangles by vertex pulling (over its budget), 13.1 M by mesh shaders</span><small><samp>--lod-error 0</samp></small></div>
+  <div><b>1.97 / 2.18 / 1.99 ms</b><span>with LODs (the default): 3.32 → 2.33 M triangles; vertex pulling adds 0.2 ms of culling passes</span><small>default flags</small></div>
 </div>
 
-<p>With LODs, the meshlet passes cost more than the triangles they drop, and <code>05_city</code> is the same with them on and off (2.22 and 2.25 ms). So the default is <code>MeshletPath::OFF</code>; turn it on for dense meshes seen up close (<code>P28</code>).</p>
+<p>With LODs, the vertex-pulling passes cost more than the triangles they drop; the mesh shaders, with no passes of their own, cost about 1%. <code>05_city</code>, with few big meshes, is the same on all three (1.91, 1.92, 1.93 ms). So <code>MeshletPath::AUTO</code> takes the mesh shaders where the GPU has them and leaves meshlets off elsewhere; vertex pulling is there to choose for dense meshes seen up close (<code>P28</code>).</p>
 
 <h3>Code map</h3>
 
@@ -387,15 +445,16 @@
   <tr><td>Building</td><td><code>buildMeshlets</code> in <code>src/assets/meshlets.cpp</code>, called by the load jobs in <code>src/assets/mesh.cpp</code></td></tr>
   <tr><td>Storage</td><td><code>GeometryPool::allocate</code>, <code>GeometryPool::write</code> in <code>src/renderer/geometryPool.cpp</code></td></tr>
   <tr><td>Draw level</td><td><code>countMain</code>, <code>writeMain</code> in <code>shaders/passes/cull.slang</code></td></tr>
-  <tr><td>Meshlet level</td><td><code>meshletCountMain</code>, <code>meshletWriteMain</code> in <code>shaders/passes/cull.slang</code>; <code>isMeshletBackFacing</code> in <code>shaders/lib/meshletCulling.slang</code></td></tr>
-  <tr><td>Buffers and dispatches</td><td><code>Engine::prepareSceneView</code>, <code>Engine::recordMeshletCulling</code>, <code>Engine::drawSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>Seeing it</td><td><code>DebugView::MESHLETS</code> (a color per meshlet), <code>FrameStats::meshletsVisible</code>, <code>FrameStats::meshletsCulled</code>, the Meshlets combo in the RASM window</td></tr>
+  <tr><td>Meshlet level</td><td><code>cullMeshletChunk</code>, <code>isMeshletBackFacing</code> in <code>shaders/lib/meshletCulling.slang</code>; vertex pulling: <code>meshletCountMain</code>, <code>meshletWriteMain</code> in <code>shaders/passes/cull.slang</code></td></tr>
+  <tr><td>Mesh shaders</td><td><code>taskMain</code> in <code>shaders/lib/meshletTask.slang</code>; <code>meshMain</code> in <code>shaders/passes/rasm.slang</code> and <code>shaders/passes/shadow.slang</code> (and <code>meshMask</code>); <code>Engine::createMeshletPipelines</code>; <code>VulkanDevice::enableMeshShaders</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
+  <tr><td>Buffers, dispatches, draws</td><td><code>Engine::prepareSceneView</code>, <code>Engine::recordMeshletCulling</code>, <code>Engine::drawSceneView</code> (<code>RenderContext::drawMeshTasksIndirect</code>) in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Seeing it</td><td><code>DebugView::MESHLETS</code> (a color per meshlet), <code>FrameStats::meshletsVisible</code>, <code>FrameStats::meshletsCulled</code>, "Meshlets saved" (<code>FrameStats::trianglesVisibleLod</code> minus <code>FrameStats::trianglesVisible</code>), the Meshlets combo in the RASM window</td></tr>
 </table>
 </div>
 
 <div class="callout rule">
   <strong>Rules</strong>
-  <p>A meshlet's indices are a range of its LOD's, so the LOD draws the same triangles whole or by meshlets: the image must not change when the path changes (the <code>meshlets</code> image tests check it). Keep the meshlet draws in chunk order. A new kind of draw that moves its vertices on the GPU must not get meshlets until its bounds move too.</p>
+  <p>A meshlet's indices are a range of its LOD's, so the LOD draws the same triangles whole or by meshlets: the image must not change when the path changes (the <code>meshlets</code> and <code>mesh_*</code> image tests check it). Both paths cull with <code>cullMeshletChunk</code> and compute vertices with the vertex shader's functions: change them there, not in one path. Keep the meshlet draws, and the task shader's lanes, in chunk order. A new kind of draw that moves its vertices on the GPU must not get meshlets until its bounds move too.</p>
 </div>
 
 <h3>Further reading</h3>

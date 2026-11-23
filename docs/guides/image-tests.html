@@ -308,7 +308,7 @@
     <text x="423" y="96" class="mid small">helmet, sponza, alpha modes, msaa4, taa,</text>
     <text x="423" y="114" class="mid small">bloom, many lights, local shadows, ktx2,</text>
     <text x="423" y="132" class="mid small">debug normals, determinism, skinning,</text>
-    <text x="423" y="150" class="mid small">morph, node animation, materials</text>
+    <text x="423" y="150" class="mid small">morph, node animation, materials, meshlets</text>
     <text x="423" y="180" class="mid small t-faint">tests with the same build share its scene</text>
     <rect x="586" y="54" width="140" height="150" rx="6" class="paper"/>
     <text x="656" y="74" class="mid small title">each test</text>
@@ -329,7 +329,7 @@
   <tr><th>Test</th><th>What it guards</th></tr>
   <tr><td><samp>helmet_ibl</samp></td><td>DamagedHelmet: image-based lighting (venice sunset), four shadow cascades, emissive</td></tr>
   <tr><td><samp>sponza</samp></td><td>Sponza (fetched): many materials, MASK foliage, cascades in a large scene. The sky's light is not shadowed (<code>D23</code>), so the atrium is lit everywhere.</td></tr>
-  <tr><td><samp>alpha_modes</samp>, <samp>msaa4</samp></td><td>AlphaBlendModeTest: opaque, MASK with <code class="lang-text">discard</code>, BLEND sorted; the same at 4 samples with alpha-to-coverage</td></tr>
+  <tr><td><samp>alpha_modes</samp>, <samp>msaa4</samp>, <samp>sponza_msaa4</samp></td><td>AlphaBlendModeTest: opaque, MASK with <code class="lang-text">discard</code>, BLEND sorted; the same at 4 samples with alpha-to-coverage; Sponza at 4 samples</td></tr>
   <tr><td><samp>taa</samp></td><td>the helmet after 16 jittered frames</td></tr>
   <tr><td><samp>bloom</samp></td><td>EmissiveStrengthTest with the bloom passes</td></tr>
   <tr><td><samp>skinning</samp>, <samp>morph</samp>, <samp>node_anim</samp></td><td>CesiumMan and two foxes at 1.25 s; MorphStressTest at fixed weights; AnimatedCube at 0.3 s</td></tr>
@@ -337,12 +337,14 @@
   <tr><td><samp>ktx2</samp>, <samp>materials</samp></td><td>FlightHelmet's Basis textures; texture transforms, vertex colors, a quantized mesh</td></tr>
   <tr><td><samp>debug_normals</samp></td><td>the normals debug view</td></tr>
   <tr><td><samp>determinism</samp></td><td>the helmet again in the same process: it must equal <samp>helmet_ibl</samp> exactly (T = 0, F = 0)</td></tr>
+  <tr><td><samp>meshlets</samp>, <samp>meshlet_sponza</samp></td><td>the helmet and Sponza drawn by <a href="meshlets.html">meshlets</a> on the vertex-pulling path: they must equal <samp>helmet_ibl</samp> and <samp>sponza</samp> exactly (T = 0, F = 0)</td></tr>
+  <tr><td><samp>mesh_helmet</samp>, <samp>mesh_sponza</samp>, <samp>mesh_msaa4</samp>, <samp>mesh_taa</samp>, <samp>mesh_normals</samp></td><td>the same scenes on the mesh-shader path, against <samp>helmet_ibl</samp>, <samp>sponza</samp>, <samp>sponza_msaa4</samp>, <samp>taa</samp> and <samp>debug_normals</samp> of the same run (T = 3/255, F = 0.01%): lavapipe's mesh shaders rasterize a few edge pixels differently (3 of Sponza's). On an RTX 3060 they are equal.</td></tr>
 </table>
 </div>
 
 <h3>The numbers</h3>
 
-<p>Every test uses T = 3/255 and F = 0.1% (147 of the 147,456 pixels), except <samp>determinism</samp>. They come from the noise measured on lavapipe, which was none: all runs were on one CPU model (AMD EPYC 7763), so T and F are a margin for a runner with another CPU, not for noise seen so far.</p>
+<p>Every test uses T = 3/255 and F = 0.1% (147 of the 147,456 pixels), except the tests that compare with another test of the same run (<samp>determinism</samp>, <samp>meshlets</samp>, <samp>mesh_helmet</samp>, ...). They come from the noise measured on lavapipe, which was none: all runs were on one CPU model (AMD EPYC 7763), so T and F are a margin for a runner with another CPU, not for noise seen so far.</p>
 
 <div class="stats">
   <div><b>0</b><span>largest difference, the same job twice</span><small>15 tests, every pixel equal</small></div>

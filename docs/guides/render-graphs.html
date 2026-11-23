@@ -1196,7 +1196,7 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
     <text x="15" y="182" class="small">Time goes right. A box is a batch: one command buffer, one submit. Hot arrows are the waits the graph adds;</text>
     <text x="15" y="198" class="small">inside a batch, Hi-Z and Cull 2 get a plain barrier. The next frame's Cull 1 needs nothing Scene 2 uses.</text>
   </svg>
-  <figcaption>The scene passes with async compute: four batches, submitted in this order at the end of the frame (<a href="frame-loop.html">the frame loop</a>). <code>Cull 1</code> of the next frame can run next to <code>Scene 2</code>; that is the only overlap today, so async compute costs a little more than it saves on the scene passes (<code>P11</code>) and is off by default. The idea in general: <a href="async-compute.html">Async compute and multiple queues</a>.</figcaption>
+  <figcaption>The scene passes with async compute: four batches, submitted in this order at the end of the frame (<a href="frame-loop.html">the frame loop</a>). <code>Cull 1</code> of the next frame can run next to <code>Scene 2</code>, except where the GPU has mesh shaders: then <code>Scene 2</code> writes the <a href="meshlets.html">meshlet</a> bits that <code>Cull 1</code> reads. That is the only overlap today, so async compute costs a little more than it saves on the scene passes (<code>P11</code>) and is off by default. The idea in general: <a href="async-compute.html">Async compute and multiple queues</a>.</figcaption>
 </figure>
 
 <h3>Render targets: transient, history, and the rest</h3>
