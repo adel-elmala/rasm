@@ -24,7 +24,10 @@ namespace rasm
     constexpr uint32_t                  CULL_STATS_LOD_DRAWS                                                = 5;    // one per LOD
     constexpr uint32_t                  CULL_STATS_LIGHTS_VISIBLE                                           = CULL_STATS_LOD_DRAWS + MAX_MESH_LODS; // lightClusters.slang
     constexpr uint32_t                  CULL_STATS_LIGHTS_DROPPED                                           = CULL_STATS_LIGHTS_VISIBLE + 1;
-    constexpr uint32_t                  CULL_STATS_WORDS                                                    = CULL_STATS_LIGHTS_DROPPED + 1;
+    constexpr uint32_t                  CULL_STATS_MESHLETS                                                 = CULL_STATS_LIGHTS_DROPPED + 1;
+    constexpr uint32_t                  CULL_STATS_MESHLETS_CULLED                                          = CULL_STATS_MESHLETS + 1;
+    constexpr uint32_t                  CULL_STATS_MESHLETS_WHOLE                                           = CULL_STATS_MESHLETS + 2;  // draws past a run's budget, drawn whole
+    constexpr uint32_t                  CULL_STATS_WORDS                                                    = CULL_STATS_MESHLETS_WHOLE + 1;
 
     struct EntityDrawState
     {
@@ -43,6 +46,9 @@ namespace rasm
         CullMode                        cullMode                                                            = CullMode::NONE;
         uint32_t                        first                                                               = 0;
         uint32_t                        count                                                               = 0;
+        uint32_t                        meshletDraws                                                        = 0;    // draws whose geometry has meshlets
+        uint32_t                        meshlets                                                            = 0;    // their meshlets at the LOD with the most
+        uint32_t                        chunks                                                              = 0;    // their chunks of 64 at that LOD
     };
 
     struct DrawTotals
@@ -74,8 +80,14 @@ namespace rasm
         uint32_t                        shadowCount                                                         = 0;
         bool                            depthOnly                                                           = false;
         bool                            mirrored                                                            = false;    // its view matrix mirrors the world (a cube face), so front faces turn clockwise
-        BufferHandle                    visibleDraws[MAX_FRAMES_IN_FLIGHT]                                  = {};
+        BufferHandle                    visibleDraws[MAX_FRAMES_IN_FLIGHT]                                  = {};   // the draws, the meshlet draws, then culling's scratch (VisibleDrawLayout)
         uint32_t                        visibleCapacity[MAX_FRAMES_IN_FLIGHT]                               = {};
+        uint32_t                        meshletCapacity[MAX_FRAMES_IN_FLIGHT]                               = {};   // meshlet draws
+        uint32_t                        chunkCapacity[MAX_FRAMES_IN_FLIGHT]                                 = {};
+        BufferHandle                    meshletVisibility                                                   = {};   // a bit per meshlet of an instance, kept across frames like visibility
+        uint32_t                        meshletRuns                                                         = 0;    // this frame's runs drawn by meshlets
+        uint32_t                        runMeshletFirst[gfx::MAX_DRAW_RUNS]                                 = {};
+        uint32_t                        runMeshletSize[gfx::MAX_DRAW_RUNS]                                  = {};
         BufferHandle                    hiz[MAX_FRAMES_IN_FLIGHT]                                           = {};
         uint32_t                        hizCapacity[MAX_FRAMES_IN_FLIGHT]                                   = {};
         BufferHandle                    visibility                                                          = {};
@@ -98,6 +110,7 @@ namespace rasm
         float                           frozenLodPixelsPerUnit                                              = 0.0f;
         glm::vec4                       frozenLodDepthPlane                                                 = glm::vec4(0.0f);
         glm::mat4                       frozenViewProjection                                                = glm::mat4(1.0f);
+        glm::vec4                       frozenViewPoint                                                     = glm::vec4(0.0f);
         uint32_t                        width                                                               = 0;
         uint32_t                        height                                                              = 0;
         bool                            jitter                                                              = false;    // addTaaPass: the projection takes a sub-pixel offset per frame
@@ -140,6 +153,8 @@ namespace rasm
         PipelineHandle                  cullCountPipeline                                                   = {};
         PipelineHandle                  cullWritePipeline                                                   = {};
         PipelineHandle                  hizPipeline                                                         = {};
+        PipelineHandle                  meshletCountPipeline                                                = {};
+        PipelineHandle                  meshletWritePipeline                                                = {};
         BufferHandle                    cullStats[MAX_FRAMES_IN_FLIGHT]                                     = {};
         SceneView                       views[MAX_SCENE_VIEWS];
         DrawTotals                      drawTotals[MAX_FRAMES_IN_FLIGHT]                                    = {};
@@ -147,6 +162,11 @@ namespace rasm
         std::vector<CullMode>           instanceCullModes;
         std::vector<AlphaMode>          instanceAlphaModes;
         RangeAllocator                  instanceRows;                                                               // a range per entity, reused at once: each slot has its own copy
+        RangeAllocator                  meshletWords;                                                               // each view's meshlet visibility words, a range per instance row of a mesh with meshlets
+        std::vector<uint32_t>           instanceMeshlets;                                                           // per instance row: the meshlets of its LOD with the most
+        std::vector<int32_t>            instanceMeshletWords;                                                       // per instance row: its first word, -1 for none
+        std::vector<uint32_t>           instanceMeshletWordCounts;
+        bool                            meshletWordsFullLogged                                              = false;
         std::vector<EntityHandle>       entitiesWaitingForMesh;
         std::vector<EntityHandle>       entitiesWaitingForTextures;
         std::vector<EntityHandle>       movedEntities;          // rows written since the last sync: their previousWorld is the last synced matrix

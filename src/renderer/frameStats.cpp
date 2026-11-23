@@ -122,6 +122,9 @@ namespace rasm
             for (uint32_t i = 0; i < MAX_MESH_LODS; ++i)
                 stats.drawsPerLod[i] = culled[CULL_STATS_LOD_DRAWS + i];
             stats.drawsPerLod[0] += totals.unculledDraws;
+            stats.meshletsVisible = culled[CULL_STATS_MESHLETS];
+            stats.meshletsCulled = culled[CULL_STATS_MESHLETS_CULLED];
+            stats.meshletDrawsWhole = culled[CULL_STATS_MESHLETS_WHOLE];
         }
         // Full clusters are reported in every frame, measured or not, since they drop light from the image. The
         // warning comes once, and again only while it goes on, every LIGHTS_DROPPED_WARNING.

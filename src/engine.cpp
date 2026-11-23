@@ -1103,6 +1103,7 @@ namespace rasm
                 .vertices = geometry.vertices,
                 .indices = geometry.indices,
                 .subMeshes = geometry.subMeshes,
+                .meshlets = geometry.meshlets,
                 .instances = gpuScene->instanceRows.used(),
                 .animationPoolBytes = gpuAnimation->poolRanges.used(),
                 .releasesWaiting = ctx.getReleasesWaiting()};

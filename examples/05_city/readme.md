@@ -11,4 +11,6 @@ The camera flies a two-minute tour. Drag the mouse or press WASD to take over.
 
 Animation follows the wall clock. Run with `--fixed-step` to advance 1/60 s per frame instead, so a given frame looks the same on every run (verify-change does this).
 
-`--debug-view <none|normals|uvs|overdraw|lods|culling|light-count>` starts in a debug view (`Engine::setDebugView`), and `--freeze-culling` freezes culling at frame 30 (`Engine::setCullingFrozen`): the tour flies on, and the culling view shows what the frozen frustum kept and left out. The RASM window (F1) has both under Debug views.
+`--debug-view <none|normals|uvs|overdraw|lods|culling|light-count|meshlets>` starts in a debug view (`Engine::setDebugView`), and `--freeze-culling` freezes culling at frame 30 (`Engine::setCullingFrozen`): the tour flies on, and the culling view shows what the frozen frustum kept and left out. The RASM window (F1) has both under Debug views.
+
+`--meshlets off|vp` draws the big meshes (the canopies near the camera, the monument) whole or by meshlets (`EngineConfig::meshletPath`), and `--bench` runs at 1920x1080 without validation and the UI and prints the GPU time of each pass and what culling kept (run it headless in Release: `--headless --frames 900 --fixed-step --bench`). The city has few meshes with meshlets, so both paths cost the same here; `18_meshlets` is the dense case.

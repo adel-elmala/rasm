@@ -81,8 +81,9 @@ namespace
         bool taa = false;
         bool bloom = false;
         rasm::DebugView view = rasm::DebugView::NONE;
-        uint32_t frames = 4;          // rendered before the frame that is read
-        double time = 0.0;            // the animation clock of every frame, in seconds
+        uint32_t frames = 4; // rendered before the frame that is read
+        double time = 0.0;   // the animation clock of every frame, in seconds
+        rasm::MeshletPath meshlets = rasm::MeshletPath::OFF;
         uint32_t threshold = 3;       // a channel differs when it is off by more than this (0-255)
         double fraction = 0.001;      // the test fails when more of the pixels than this differ
         const char *sameAs = nullptr; // compare with this test's image of the same run instead of a golden
@@ -362,6 +363,9 @@ namespace
         {.name = "morph",         .build = buildMorph},
         {.name = "node_anim",     .build = buildNodeAnimation, .time = 0.3},
         {.name = "materials",     .build = buildMaterials},
+        // The same images drawn by meshlets: the same triangles, so the same pixels.
+        {.name = "meshlets",      .build = buildHelmet,        .meshlets = rasm::MeshletPath::VERTEX_PULLING, .threshold = 0, .fraction = 0.0, .sameAs = "helmet_ibl"},
+        {.name = "meshlet_sponza", .build = buildSponza,       .meshlets = rasm::MeshletPath::VERTEX_PULLING, .threshold = 0, .fraction = 0.0, .sameAs = "sponza"},
     };
     // clang-format on
 
@@ -516,11 +520,13 @@ namespace
         engine.setCameraBloomStrength(camera, test.bloom ? 0.15f : 0.0f);
         engine.resetCameraHistory(camera);
         engine.setDebugView(test.view);
+        engine.setMeshletPath(test.meshlets);
 
         rasm::RenderGraph graph = engine.createRenderGraph();
         if (!buildGraph(engine, test, *content, camera, graph))
         {
             engine.setDebugView(rasm::DebugView::NONE);
+            engine.setMeshletPath(rasm::MeshletPath::OFF);
             return false;
         }
         // Every load is in place before the first frame, so frame N looks the same on every run.
@@ -548,6 +554,7 @@ namespace
         }
         steady = taken ? stopCountingAllocations() : AllocationCount{};
         engine.setDebugView(rasm::DebugView::NONE);
+        engine.setMeshletPath(rasm::MeshletPath::OFF);
         return taken;
     }
 

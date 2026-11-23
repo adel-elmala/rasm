@@ -653,7 +653,7 @@ float4 vertexMain(uint vertexIndex : SV_VertexID) : SV_Position
 <p>RASM uses vertex pulling for every graphics pipeline: no pipeline has a vertex input layout. All meshes live in one <b>geometry pool</b>: one vertex buffer, one index buffer, one color buffer for the meshes with vertex colors, one skin buffer for the skinned meshes' joints and weights, one morph buffer for the morph targets' deltas, and one table of sub-mesh rows, created at startup and sized by <code>EngineConfig</code>.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 604" role="img" aria-label="GeometryPool holds five buffers and a table. The vertex pool holds Vertex records of 64 bytes, read by vertMain through SceneData's vertsPtr. The index pool holds 32-bit indices: each sub-mesh's LOD 0 indices, then its coarser LODs. It is bound once with bindIndexBuffer. The color pool holds packed vertex colors of the sub-meshes that have them. The skin pool holds a skinned vertex's 4 joints and 4 weights, 16 bytes, which the Skin pass reads. The morph pool holds a 24-byte MorphDelta per vertex and morph target, target by target, which the Skin pass reads too. The geometry table holds one GeometryData row of 136 bytes per sub-mesh: vertexOffset, bounding sphere, lodCount, 8 LOD ranges, colorOffset, skinOffset, morphOffset and morphTargetCount. vertMain reads vertsPtr at SV_VertexID plus the draw's vertexOffset, or a skinned or morphed sub-mesh's posed vertex.">
+  <svg viewBox="0 0 760 604" role="img" aria-label="GeometryPool holds five buffers and a table. The vertex pool holds Vertex records of 64 bytes, read by vertMain through SceneData's vertsPtr. The index pool holds 32-bit indices: each sub-mesh's LOD 0 indices, then its coarser LODs. It is bound once with bindIndexBuffer. The color pool holds packed vertex colors of the sub-meshes that have them. The skin pool holds a skinned vertex's 4 joints and 4 weights, 16 bytes, which the Skin pass reads. The morph pool holds a 24-byte MorphDelta per vertex and morph target, target by target, which the Skin pass reads too. The geometry table holds one GeometryData row of 200 bytes per sub-mesh: vertexOffset, bounding sphere, lodCount, 8 LOD ranges with their meshlet ranges, colorOffset, skinOffset, morphOffset and morphTargetCount. vertMain reads vertsPtr at SV_VertexID plus the draw's vertexOffset, or a skinned or morphed sub-mesh's posed vertex.">
     <text x="20" y="22" class="title">GeometryPool, created once</text>
 
     <rect x="20" y="34" width="360" height="64" rx="6" class="mem"/>
@@ -683,8 +683,8 @@ float4 vertexMain(uint vertexIndex : SV_VertexID) : SV_Position
 
     <rect x="20" y="414" width="360" height="64" rx="6" class="mem"/>
     <text x="34" y="434" class="title">Geometry Table</text>
-    <text x="34" y="452" class="small">GeometryData, 136 B per sub-mesh · read by pointer</text>
-    <text x="34" y="468" class="small">geometryPoolSubMeshes = 2¹⁴ rows</text>
+    <text x="34" y="452" class="small">GeometryData, 200 B per sub-mesh · read by pointer</text>
+    <text x="34" y="468" class="small">geometryPoolSubMeshes = 2¹⁴ rows · meshlets: a pool of their own</text>
 
     <text x="420" y="22" class="title">One sub-mesh in the pool</text>
     <rect x="420" y="34"  width="320" height="30" rx="3" class="mem"/>

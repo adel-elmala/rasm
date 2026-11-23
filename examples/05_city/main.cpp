@@ -5,6 +5,7 @@
 #include "rasm/rasm.h"
 
 #include "exampleArgs.h"
+#include "exampleBench.h"
 
 #include <algorithm>
 #include <chrono>
@@ -825,7 +826,7 @@ namespace
     // --debug-view's names, in the order of rasm::DebugView.
     rasm::DebugView parseDebugView(const char *name)
     {
-        const char *names[] = {"none", "normals", "uvs", "overdraw", "lods", "culling", "light-count"};
+        const char *names[] = {"none", "normals", "uvs", "overdraw", "lods", "culling", "light-count", "meshlets"};
         for (uint32_t i = 0; i < std::size(names); ++i)
         {
             if (std::strcmp(name, names[i]) == 0)
@@ -852,6 +853,17 @@ int main(int argc, char **argv)
         .ui = true};
 
     applyExampleArgs(args, config);
+    // --meshlets off|vp picks how the trees and the monument are culled; --bench measures it (exampleBench.h).
+    applyMeshletFlag(argc, argv, config);
+    ExampleBench bench{.on = hasBenchFlag(argc, argv)};
+    if (bench.on)
+    {
+        config.enableValidation = false;
+        config.ui = false;
+        config.showStats = false;
+        config.windowWidth = 1920;
+        config.windowHeight = 1080;
+    }
     rasm::Engine engine(config);
     if (!engine.running())
         return 1;
@@ -951,6 +963,8 @@ int main(int argc, char **argv)
         }
 
         engine.render(city.scene, camera);
+        if (bench.on)
+            addBenchFrame(bench, engine.getFrameStats());
 
         if (touring && cameraMovedByUser(engine.getCameraTransform(camera), tour))
             touring = false;
@@ -960,5 +974,6 @@ int main(int argc, char **argv)
         lastTime = now;
     }
 
+    printBench(bench, config);
     return exampleExit(args);
 }

@@ -243,6 +243,14 @@
   </div>
 </div>
 
+<div class="api" id="dispatchIndirect">
+  <pre class="sig">void dispatchIndirect(const CommandBufferHandle&amp; commandBuffer, const BufferHandle&amp; buffer, uint64_t offset);</pre>
+  <div class="body">
+    <p>Like <code>dispatch</code>, but the GPU reads the three group counts, <code>uint32_t</code>s at <code>offset</code> in <code>buffer</code>, when the dispatch runs: for work whose size only an earlier pass knows. The scene's meshlet culling dispatches one group per chunk of meshlets this way. Each count must stay within the device's limit (65,535 in x is always allowed). A <code>memoryBarrier</code> from <code>PipelineStage::COMPUTE</code> to <code>PipelineStage::COMPUTE</code> covers a compute shader that wrote the counts.</p>
+    <p><span class="tag">errors</span> Refused inside a render pass, when no compute pipeline is bound, for an offset that is not a multiple of 4, and for a buffer that is not <code>BufferUsage::INDIRECT</code>.</p>
+  </div>
+</div>
+
 <div class="api" id="memoryBarrier">
   <pre class="sig">void memoryBarrier(const CommandBufferHandle&amp; commandBuffer,
                    PipelineStage before, PipelineStage after);</pre>

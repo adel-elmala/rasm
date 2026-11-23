@@ -143,6 +143,7 @@ struct InstanceData
     uint32_t        materialIndex;
     float4          previousWorld[3];   // the rows of the affine world matrix the frame before drew, for motion
     int32_t         animationRow;       // its InstanceTransform in SceneData::animatedTransformsPtr, -1: the matrices above
+    int32_t         meshletVisibility;  // its first word in each view's meshlet visibility bits, -1: none
 };
 
 struct SceneData
@@ -203,6 +204,22 @@ struct SceneData
     InstanceTransform*  animatedTransformsPtr;  // this slot's rows, written by the Animate pass
     VertexFull*         skinnedVertsPtr;        // this slot's skinned vertices, written by the Skin pass
     VertexFull*         previousSkinnedVertsPtr;    // the other slot's: the frame before's
+    GeometryMeshlet*    meshletsPtr;            // the geometry pool's meshlet stream
+    DrawInfo*           meshletDrawsPtr;        // the view's visible meshlet draws, each run's at runMeshletFirst; null: no meshlets
+    uint4*              meshletChunksPtr;       // per chunk of up to 64 meshlets of a draw: draw, lod and flags, first meshlet, count
+    uint2*              chunkMasksPtr;          // per chunk: its visible meshlets
+    uint32_t*           chunkSumsPtr;           // per 64 chunks: their visible meshlets
+    uint4*              meshletArgsPtr;         // per run: the meshlet dispatches' group counts, then the run's chunk count
+    uint32_t*           meshletDrawCountsPtr;   // per run: its visible meshlet draws
+    uint2*              groupMeshletsPtr;       // per cull group: its chunks and its meshlets
+    uint32_t*           meshletVisibilityPtr;   // the view's bits: 1 where a meshlet passed its last occlusion test
+    float4              cullViewPoint;          // the camera's position (w = 1), or an orthographic view's direction (w = 0)
+    uint32_t            runChunkFirst[MAX_DRAW_RUNS];
+    uint32_t            runMeshletFirst[MAX_DRAW_RUNS];
+    uint32_t            runMeshletBudget[MAX_DRAW_RUNS];   // a run's meshlet draws past this are drawn whole
+    uint32_t            meshletRuns;            // a bit per run whose big draws are drawn by meshlets
+    uint32_t            coneRuns;               // a bit per run culled by face, where the cone test holds
+    uint32_t            padding;
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.

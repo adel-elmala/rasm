@@ -57,6 +57,11 @@ namespace rasm
             text += line;
             std::snprintf(line, sizeof(line), "Triangles %s / %s\n", formatCount(stats.trianglesVisible).c_str(), formatCount(stats.triangles).c_str());
             text += line;
+            if (stats.meshletsVisible + stats.meshletsCulled > 0)
+            {
+                std::snprintf(line, sizeof(line), "Meshlets  %s, %s culled\n", formatCount(stats.meshletsVisible).c_str(), formatCount(stats.meshletsCulled).c_str());
+                text += line;
+            }
 
             if (forcedLod >= 0)
                 std::snprintf(line, sizeof(line), "LOD       forced %d (F2)\n", forcedLod);

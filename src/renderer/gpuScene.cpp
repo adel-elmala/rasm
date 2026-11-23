@@ -29,23 +29,69 @@ namespace rasm
 {
     namespace
     {
+        // Byte offsets in a view's visible draw buffer (getVisibleDrawLayout).
+        struct VisibleDrawLayout
+        {
+            uint64_t meshletDraws = 0;
+            uint64_t cullSlots = 0;
+            uint64_t groupCounts = 0;
+            uint64_t drawCounts = 0;
+            uint64_t meshletDrawCounts = 0;
+            uint64_t meshletArgs = 0;
+            uint64_t groupMeshlets = 0;
+            uint64_t chunks = 0;
+            uint64_t chunkMasks = 0;
+            uint64_t chunkSums = 0;
+            uint64_t size = 0;
+        };
+    }
+
+    namespace
+    {
         constexpr uint32_t CULL_GROUP_SIZE = 64; // numthreads of cull.slang
         constexpr uint32_t HIZ_GROUP_SIZE = 8;   // numthreads of hiz.slang, in x and y
         constexpr uint32_t CULL_EARLY = 0;       // the cull phases of cull.slang
         constexpr uint32_t CULL_LATE = 1;
-        constexpr uint32_t GHOST_BOX_VERTICES = 36; // a box's 12 triangles, debugGhosts.slang
+        constexpr uint32_t GHOST_BOX_VERTICES = 36;                  // a box's 12 triangles, debugGhosts.slang
+        constexpr uint32_t MESHLET_RUN_SHIFT = 4;                    // the meshlet dispatches' argument: the phase, and the run above it (cull.slang)
+        constexpr uint32_t MESHLET_ARGS_SIZE = 4 * sizeof(uint32_t); // a run's dispatch group counts and its chunk count
+        constexpr uint32_t MESHLET_CHUNK_GROUP = 64;                 // chunks per sum of cull.slang's chunkSumsPtr; each run's chunks start at a multiple
 
-        // A view's visible draw buffer holds the packed draws, then culling's scratch (a slot per draw and a count per
-        // group, at most one group per CULL_GROUP_SIZE draws plus one per run), then the visible draws per run, which
-        // the draws read as indirect counts.
-        uint64_t getDrawCountsOffset(uint32_t capacity)
+        // A view's visible draw buffer holds the packed draws, then the meshlet draws, so that both are DrawInfos at
+        // drawInfoPtr, then culling's scratch: a slot per draw and a count per group (at most one group per
+        // CULL_GROUP_SIZE draws plus one per run), the visible draws per run, which the draws read as indirect counts,
+        // the visible meshlet draws per run, the meshlet dispatches' group counts per run, a chunk and meshlet count per
+        // group, per chunk its entry and its visible meshlets, and the visible meshlets of each 64 chunks (cull.slang).
+        VisibleDrawLayout getVisibleDrawLayout(uint32_t capacity, uint32_t meshletCapacity, uint32_t chunkCapacity)
         {
-            return static_cast<uint64_t>(capacity) * (sizeof(gfx::DrawInfo) + sizeof(uint32_t)) + (capacity / CULL_GROUP_SIZE + gfx::MAX_DRAW_RUNS) * sizeof(uint32_t);
+            const uint64_t groups = capacity / CULL_GROUP_SIZE + gfx::MAX_DRAW_RUNS;
+            VisibleDrawLayout layout;
+            layout.meshletDraws = static_cast<uint64_t>(capacity) * sizeof(gfx::DrawInfo);
+            layout.cullSlots = layout.meshletDraws + static_cast<uint64_t>(meshletCapacity) * sizeof(gfx::DrawInfo);
+            layout.groupCounts = layout.cullSlots + static_cast<uint64_t>(capacity) * sizeof(uint32_t);
+            layout.drawCounts = layout.groupCounts + groups * sizeof(uint32_t);
+            layout.meshletDrawCounts = layout.drawCounts + gfx::MAX_DRAW_RUNS * sizeof(uint32_t);
+            layout.meshletArgs = layout.meshletDrawCounts + gfx::MAX_DRAW_RUNS * sizeof(uint32_t);
+            layout.groupMeshlets = layout.meshletArgs + static_cast<uint64_t>(gfx::MAX_DRAW_RUNS) * MESHLET_ARGS_SIZE;
+            layout.chunks = layout.groupMeshlets + groups * 2 * sizeof(uint32_t);
+            layout.chunkMasks = layout.chunks + static_cast<uint64_t>(chunkCapacity) * 4 * sizeof(uint32_t);
+            layout.chunkSums = layout.chunkMasks + static_cast<uint64_t>(chunkCapacity) * 2 * sizeof(uint32_t);
+            layout.size = layout.chunkSums + static_cast<uint64_t>(chunkCapacity / MESHLET_CHUNK_GROUP) * sizeof(uint32_t);
+            return layout;
         }
 
-        uint64_t getVisibleDrawBufferSize(uint32_t capacity)
+        VisibleDrawLayout getVisibleDrawLayout(const SceneView &view, uint32_t frame)
         {
-            return getDrawCountsOffset(capacity) + gfx::MAX_DRAW_RUNS * sizeof(uint32_t);
+            return getVisibleDrawLayout(view.visibleCapacity[frame], view.meshletCapacity[frame], view.chunkCapacity[frame]);
+        }
+
+        // An orthographic view's direction, or a perspective one's position: what the meshlet cone test looks from.
+        glm::vec4 getCullViewPoint(const glm::mat4 &projection, const glm::mat4 &view)
+        {
+            const glm::mat4 world = glm::inverse(view);
+            if (projection[3][3] == 1.0f)
+                return glm::vec4(-glm::normalize(glm::vec3(world[2])), 0.0f);
+            return glm::vec4(glm::vec3(world[3]), 1.0f);
         }
 
         // The blend sort's keys (a uint2 each), then the draws it copies aside (shaders/passes/sort.slang).
@@ -336,6 +382,12 @@ namespace rasm
         gpuScene->instanceRows.reset(config.maxInstances);
         gpuScene->instanceCullModes.assign(config.maxInstances, CullMode::NONE);
         gpuScene->instanceAlphaModes.assign(config.maxInstances, AlphaMode::NONE);
+        // A word of meshlet visibility bits per instance row on average: 32 meshlets. Each view with occlusion culling
+        // has this many words (createSceneView); a row that finds none left has no bits, and is only culled less.
+        gpuScene->meshletWords.reset(config.maxInstances);
+        gpuScene->instanceMeshlets.assign(config.maxInstances, 0);
+        gpuScene->instanceMeshletWords.assign(config.maxInstances, -1);
+        gpuScene->instanceMeshletWordCounts.assign(config.maxInstances, 0);
 
         // The CPU rewrites each view's SceneData every frame, so it stays host-visible.
         for (auto &buffer : gpuScene->sceneData)
@@ -432,6 +484,19 @@ namespace rasm
                     {
                         gpuScene->instanceCullModes[firstRow + r] = CullMode::NONE;
                         gpuScene->instanceAlphaModes[firstRow + r] = AlphaMode::NONE;
+                        // The bits of the LOD with the most meshlets, so every LOD's fit.
+                        gpuScene->instanceMeshlets[firstRow + r] = mesh.subMeshes[r].geometry.maxLodMeshlets;
+                        const auto words = (mesh.subMeshes[r].geometry.maxLodMeshlets + 31) / 32;
+                        uint64_t firstWord = 0;
+                        const bool bits = words > 0 && gpuScene->meshletWords.allocate(words, firstWord);
+                        if (words > 0 && !bits && !gpuScene->meshletWordsFullLogged)
+                        {
+                            spdlog::warn("The meshlet visibility bits are full ({} words, EngineConfig::maxInstances): entity {}'s meshlets are not occlusion culled.",
+                                         gpuScene->meshletWords.capacity(), entity.index);
+                            gpuScene->meshletWordsFullLogged = true;
+                        }
+                        gpuScene->instanceMeshletWords[firstRow + r] = bits ? static_cast<int32_t>(firstWord) : -1;
+                        gpuScene->instanceMeshletWordCounts[firstRow + r] = bits ? words : 0;
                     }
                     state.syncedMatrix = entityRef.transform.toMatrix();
                     writeInstanceRows(entity, false);
@@ -528,7 +593,8 @@ namespace rasm
                                         .geometryIndex = subMesh.geometry.geometryIndex,
                                         .materialIndex = static_cast<uint32_t>(getSubMeshMaterial(*this, entityRef, subMesh).handle.index),
                                         .previousWorld = {previous[0], previous[1], previous[2]},
-                                        .animationRow = getAnimationRow(entity, i)};
+                                        .animationRow = getAnimationRow(entity, i),
+                                        .meshletVisibility = gpuScene->instanceMeshletWords[state.firstInstance + i]};
             gpuScene->instances.setRow(state.firstInstance + i, &row);
         }
 
@@ -604,6 +670,14 @@ namespace rasm
         {
             markDrawListsDirty(entity);
             gpuScene->instanceRows.free(state.firstInstance, state.instanceCount);
+            // The next row to take these words finds this one's bits: a hint the late pass corrects.
+            for (uint32_t row = state.firstInstance; row < state.firstInstance + state.instanceCount; ++row)
+            {
+                if (gpuScene->instanceMeshletWords[row] >= 0)
+                    gpuScene->meshletWords.free(static_cast<uint64_t>(gpuScene->instanceMeshletWords[row]), gpuScene->instanceMeshletWordCounts[row]);
+                gpuScene->instanceMeshletWords[row] = -1;
+                gpuScene->instanceMeshletWordCounts[row] = 0;
+            }
         }
         state.firstInstance = 0;
         state.instanceCount = 0;
@@ -699,7 +773,16 @@ namespace rasm
             const CullMode cullMode = cullModes[drawList.draws[i].firstInstance];
             if (drawList.runs.empty() || drawList.runs.back().alphaMode != alphaMode || drawList.runs.back().cullMode != cullMode)
                 drawList.runs.push_back({alphaMode, cullMode, i, 0});
-            ++drawList.runs.back().count;
+            DrawRun &run = drawList.runs.back();
+            ++run.count;
+            // What the run's draws could take as meshlets, at most: prepareSceneView sizes the meshlet draws by it.
+            const uint32_t meshlets = gpuScene->instanceMeshlets[drawList.draws[i].firstInstance];
+            if (meshlets > 0)
+            {
+                ++run.meshletDraws;
+                run.meshlets += meshlets;
+                run.chunks += (meshlets + CULL_GROUP_SIZE - 1) / CULL_GROUP_SIZE;
+            }
         }
 
         drawList.staleSlots = static_cast<uint8_t>((1u << MAX_FRAMES_IN_FLIGHT) - 1);
@@ -977,6 +1060,8 @@ namespace rasm
                     builder.write(clusters.buffers);
                 if (occlusion)
                     builder.readPrevious(sceneView.visibility);
+                if (sceneView.meshletVisibility.isValid())
+                    builder.readPrevious(sceneView.meshletVisibility);
             },
             [this, view](RenderContext &)
             {
@@ -1039,6 +1124,8 @@ namespace rasm
                 builder.read(sceneView.hiz);
                 writeCulling(builder);
                 builder.write(sceneView.visibility);
+                if (sceneView.meshletVisibility.isValid())
+                    builder.write(sceneView.meshletVisibility);
             },
             [this, view](RenderContext &)
             {
@@ -1092,7 +1179,7 @@ namespace rasm
         for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
             view.visibleCapacity[i] = CULL_GROUP_SIZE;
-            view.visibleDraws[i] = ctx.createBuffer({.name = "Visible Draw Buffer", .usage = BufferUsage::INDIRECT, .size = getVisibleDrawBufferSize(CULL_GROUP_SIZE)});
+            view.visibleDraws[i] = ctx.createBuffer({.name = "Visible Draw Buffer", .usage = BufferUsage::INDIRECT, .size = getVisibleDrawLayout(CULL_GROUP_SIZE, 0, 0).size});
             if (!view.visibleDraws[i].isValid())
             {
                 spdlog::error("Failed to create the culling buffers of a scene view.");
@@ -1134,6 +1221,12 @@ namespace rasm
             const std::vector<uint32_t> unseen(config.maxInstances, 0);
             view.visibility = ctx.createBuffer({.name = "Visibility Buffer", .usage = BufferUsage::STORAGE, .size = unseen.size() * sizeof(uint32_t)});
             created = created && view.visibility.isValid() && ctx.fillBuffer(view.visibility, unseen.data(), unseen.size() * sizeof(uint32_t));
+            // The meshlets' own bits, one word per instance row on average (GpuScene::meshletWords).
+            if (created)
+            {
+                view.meshletVisibility = ctx.createBuffer({.name = "Meshlet Visibility Buffer", .usage = BufferUsage::STORAGE, .size = gpuScene->meshletWords.capacity() * sizeof(uint32_t)});
+                created = view.meshletVisibility.isValid() && ctx.fillBuffer(view.meshletVisibility, unseen.data(), unseen.size() * sizeof(uint32_t));
+            }
             if (!created)
             {
                 spdlog::error("Failed to create the occlusion culling buffers of a scene view; it is drawn with frustum culling only.");
@@ -1143,6 +1236,7 @@ namespace rasm
                     view.hizCapacity[i] = 0;
                 }
                 destroyViewBuffer(ctx, view.visibility);
+                destroyViewBuffer(ctx, view.meshletVisibility);
             }
         }
         gpuScene->views[freeSlot] = view;
@@ -1171,6 +1265,7 @@ namespace rasm
             destroyViewBuffer(ctx, view.sortBuffers[i]);
         }
         destroyViewBuffer(ctx, view.visibility);
+        destroyViewBuffer(ctx, view.meshletVisibility);
         releaseViewClusters(viewIndex);
         view = {};
     }
@@ -1194,6 +1289,7 @@ namespace rasm
         view.hizLevelCount = 0;
         view.late = false;
         view.debugView = DebugView::NONE;
+        view.meshletRuns = 0;
 
         const auto &drawList = gpuScene->drawLists[view.scene.index];
         const auto frame = static_cast<uint32_t>(frameCount);
@@ -1313,6 +1409,23 @@ namespace rasm
         }
         const bool culled = gpuScene->cullCountPipeline.isValid() && gpuScene->cullWritePipeline.isValid();
 
+        // The meshlet passes, made once a scene has meshlets to draw. Without them its big draws are drawn whole.
+        bool meshletDraws = false;
+        for (const DrawRun &run : drawList.runs)
+            meshletDraws = meshletDraws || (run.alphaMode != AlphaMode::BLEND && run.meshletDraws > 0);
+        meshletDraws = meshletDraws && culled && config.meshletPath == MeshletPath::VERTEX_PULLING;
+        if (meshletDraws && (!gpuScene->meshletCountPipeline.isValid() || !gpuScene->meshletWritePipeline.isValid()))
+        {
+            const std::string cullSource = readFile(pathFromUtf8(config.shaderDir) / "passes/cull.slang");
+            if (!gpuScene->meshletCountPipeline.isValid())
+                gpuScene->meshletCountPipeline = createComputePipeline("meshletCount", cullSource, "meshletCountMain");
+            if (!gpuScene->meshletWritePipeline.isValid())
+                gpuScene->meshletWritePipeline = createComputePipeline("meshletWrite", cullSource, "meshletWriteMain");
+            if (!gpuScene->meshletCountPipeline.isValid() || !gpuScene->meshletWritePipeline.isValid())
+                spdlog::error("Failed to create the meshlet culling pipelines; big meshes are drawn whole.");
+        }
+        meshletDraws = meshletDraws && gpuScene->meshletCountPipeline.isValid() && gpuScene->meshletWritePipeline.isValid();
+
         // A shaded view draws its blend run last, back to front: the run is sorted on the GPU once culling has packed it.
         for (uint32_t i = 0; !view.depthOnly && i < drawList.runs.size(); ++i)
         {
@@ -1365,20 +1478,62 @@ namespace rasm
         const uint32_t height = renderTargetData.height;
         const TextureHandle depthTexture = renderTargetData.attachments[frame].depth;
 
-        // The buffer holds the packed draws, then culling's scratch. Only this slot's last frame used the old
-        // buffer, and the fence wait covered it.
+        // Each run drawn by meshlets has a range of meshlet draws: room for its meshlets, up to what is left of the
+        // view's budget (EngineConfig::maxViewMeshlets), and one draw per draw of the run, for those past the budget,
+        // which are drawn whole. Its chunks have room for every draw at its LOD with the most meshlets.
+        uint32_t meshletNeed = 0;
+        uint32_t chunkNeed = 0;
+        uint32_t runChunkFirst[gfx::MAX_DRAW_RUNS] = {};
+        uint32_t runMeshletBudget[gfx::MAX_DRAW_RUNS] = {};
+        uint32_t meshletRuns = 0;
+        uint32_t budgetLeft = config.maxViewMeshlets;
+        for (uint32_t i = 0; meshletDraws && i < drawList.runs.size(); ++i)
+        {
+            const DrawRun &run = drawList.runs[i];
+            if (run.alphaMode == AlphaMode::BLEND || run.meshletDraws == 0)
+                continue;
+            runMeshletBudget[i] = std::min(run.meshlets, budgetLeft);
+            budgetLeft -= runMeshletBudget[i];
+            view.runMeshletFirst[i] = meshletNeed;
+            view.runMeshletSize[i] = runMeshletBudget[i] + run.meshletDraws;
+            meshletNeed += view.runMeshletSize[i];
+            // A run's chunks start at a multiple of MESHLET_CHUNK_GROUP, so each sum of chunkSumsPtr holds one run's.
+            runChunkFirst[i] = chunkNeed;
+            chunkNeed += (run.chunks + MESHLET_CHUNK_GROUP - 1) / MESHLET_CHUNK_GROUP * MESHLET_CHUNK_GROUP;
+            meshletRuns |= 1u << i;
+        }
+
+        // The buffer holds the packed draws and meshlet draws, then culling's scratch. Only this slot's last frame used
+        // the old buffer, and the fence wait covered it.
         const auto drawCount = static_cast<uint32_t>(drawList.draws.size());
         uint32_t &visibleCapacity = view.visibleCapacity[frame];
-        if (culled && visibleCapacity < drawCount)
+        uint32_t &meshletCapacity = view.meshletCapacity[frame];
+        uint32_t &chunkCapacity = view.chunkCapacity[frame];
+        if (culled && (visibleCapacity < drawCount || meshletCapacity < meshletNeed || chunkCapacity < chunkNeed))
         {
-            const uint32_t capacity = std::max(drawCount, visibleCapacity * 2);
-            if (!ctx.resizeBuffer(view.visibleDraws[frame], getVisibleDrawBufferSize(capacity)))
+            const uint32_t capacity = visibleCapacity < drawCount ? std::max(drawCount, visibleCapacity * 2) : visibleCapacity;
+            const uint32_t meshlets = meshletCapacity < meshletNeed ? std::max(meshletNeed, meshletCapacity * 2) : meshletCapacity;
+            const uint32_t chunks = chunkCapacity < chunkNeed ? std::max(chunkNeed, chunkCapacity * 2) : chunkCapacity;
+            if (ctx.resizeBuffer(view.visibleDraws[frame], getVisibleDrawLayout(capacity, meshlets, chunks).size))
+            {
+                visibleCapacity = capacity;
+                meshletCapacity = meshlets;
+                chunkCapacity = chunks;
+            }
+            else if (visibleCapacity < drawCount)
             {
                 spdlog::error("Failed to grow a visible draw buffer to {} draws.", capacity);
                 return;
             }
-            visibleCapacity = capacity;
+            else
+            {
+                // A failed resize keeps the old buffer, which holds the draws but not the meshlet draws.
+                spdlog::error("Failed to grow a visible draw buffer to {} meshlet draws; big meshes are drawn whole.", meshlets);
+                meshletRuns = 0;
+            }
         }
+        view.meshletRuns = culled ? meshletRuns : 0;
+        const VisibleDrawLayout layout = getVisibleDrawLayout(view, frame);
 
         // Occlusion culling samples the pass's depth, which is in the bindless set from its creation
         // (RenderContext::createAttachments). Its Hi-Z covers the whole attachment.
@@ -1459,6 +1614,7 @@ namespace rasm
         if (!view.depthOnly)
             writeViewMotion(view, sceneData, width, height);
         getFrustumPlanes(sceneData.projection * sceneData.view, sceneData.frustumPlanes);
+        sceneData.cullViewPoint = getCullViewPoint(sceneData.projection, sceneData.view);
         sceneData.cameraWorldPosition = cameraRef.transform.position;
         sceneData.nearZ = getNearZ(cameraRef);
         sceneData.vertsPtr = ctx.getBufferDeviceAddress(geometryPool->vertexBuffer());
@@ -1469,9 +1625,30 @@ namespace rasm
         sceneData.allDrawsPtr = ctx.getBufferDeviceAddress(drawList.buffers[frame]);
         if (culled)
         {
-            sceneData.cullSlotsPtr = sceneData.drawInfoPtr + static_cast<uint64_t>(visibleCapacity) * sizeof(gfx::DrawInfo);
-            sceneData.groupCountsPtr = sceneData.cullSlotsPtr + static_cast<uint64_t>(visibleCapacity) * sizeof(uint32_t);
-            sceneData.drawCountsPtr = sceneData.drawInfoPtr + getDrawCountsOffset(visibleCapacity);
+            sceneData.cullSlotsPtr = sceneData.drawInfoPtr + layout.cullSlots;
+            sceneData.groupCountsPtr = sceneData.drawInfoPtr + layout.groupCounts;
+            sceneData.drawCountsPtr = sceneData.drawInfoPtr + layout.drawCounts;
+        }
+        sceneData.meshletsPtr = ctx.getBufferDeviceAddress(geometryPool->meshletBuffer());
+        if (view.meshletRuns != 0)
+        {
+            sceneData.meshletDrawsPtr = sceneData.drawInfoPtr + layout.meshletDraws;
+            sceneData.meshletChunksPtr = sceneData.drawInfoPtr + layout.chunks;
+            sceneData.chunkMasksPtr = sceneData.drawInfoPtr + layout.chunkMasks;
+            sceneData.chunkSumsPtr = sceneData.drawInfoPtr + layout.chunkSums;
+            sceneData.meshletArgsPtr = sceneData.drawInfoPtr + layout.meshletArgs;
+            sceneData.meshletDrawCountsPtr = sceneData.drawInfoPtr + layout.meshletDrawCounts;
+            sceneData.groupMeshletsPtr = sceneData.drawInfoPtr + layout.groupMeshlets;
+            sceneData.meshletRuns = view.meshletRuns;
+            for (uint32_t i = 0; i < gfx::MAX_DRAW_RUNS; ++i)
+            {
+                sceneData.runChunkFirst[i] = runChunkFirst[i];
+                sceneData.runMeshletFirst[i] = view.runMeshletFirst[i];
+                sceneData.runMeshletBudget[i] = runMeshletBudget[i];
+            }
+            // The cone test holds where the run culls back faces (or front faces, for a mirroring instance).
+            for (uint32_t i = 0; i < drawList.runs.size(); ++i)
+                sceneData.coneRuns |= drawList.runs[i].cullMode != CullMode::NONE ? 1u << i : 0u;
         }
         // Culling and the light clusters count into it.
         sceneData.cullStatsPtr = ctx.getBufferDeviceAddress(gpuScene->cullStats[frame]);
@@ -1479,6 +1656,8 @@ namespace rasm
         {
             sceneData.visibilityPtr = ctx.getBufferDeviceAddress(view.visibility);
             sceneData.hizPtr = ctx.getBufferDeviceAddress(view.hiz[frame]);
+            if (view.meshletVisibility.isValid())
+                sceneData.meshletVisibilityPtr = ctx.getBufferDeviceAddress(view.meshletVisibility);
         }
         sceneData.colorsPtr = ctx.getBufferDeviceAddress(geometryPool->colorBuffer());
         sceneData.animatedTransformsPtr = ctx.getBufferDeviceAddress(gpuAnimation->transforms[frame]);
@@ -1541,11 +1720,13 @@ namespace rasm
             view.frozenLodPixelsPerUnit = sceneData.lodPixelsPerUnit;
             view.frozenLodDepthPlane = sceneData.lodDepthPlane;
             view.frozenViewProjection = cameraProjection * cameraView;
+            view.frozenViewPoint = sceneData.cullViewPoint;
         }
         view.frozen = frozen;
         if (frozen)
         {
             std::copy(view.frozenPlanes, view.frozenPlanes + 6, sceneData.frustumPlanes);
+            sceneData.cullViewPoint = view.frozenViewPoint;
             sceneData.lodPixelsPerUnit = view.frozenLodPixelsPerUnit;
             sceneData.lodDepthPlane = view.frozenLodDepthPlane;
         }
@@ -1598,6 +1779,8 @@ namespace rasm
         ctx.bindPipeline(commandBuffer, gpuScene->cullWritePipeline);
         ctx.pushConstants(commandBuffer, gpuScene->cullWritePipeline, &pushConstants, sizeof(pushConstants), 0);
         ctx.dispatch(commandBuffer, view.groupCount);
+        if (view.meshletRuns != 0)
+            recordMeshletCulling(viewIndex, phase);
 
         // The phase that keeps the blend run's draws: the late one, or the only one in a frame without a Hi-Z.
         if (view.sortBlend && (phase == CULL_LATE || view.hizLevelCount == 0))
@@ -1605,6 +1788,37 @@ namespace rasm
             ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::COMPUTE);
             recordBlendSort(viewIndex);
         }
+    }
+
+    // The meshlets of the chunks writeMain wrote: tested and masked per chunk, a run at a time (the chunk count is the
+    // GPU's, so the dispatches are indirect), then written as draws. Each step reads what the one before wrote.
+    void Engine::recordMeshletCulling(uint32_t viewIndex, uint32_t phase)
+    {
+        const SceneView &view = gpuScene->views[viewIndex];
+        const auto frame = static_cast<uint32_t>(frameCount);
+        const auto commandBuffer = frameResources[frame].commandBuffer;
+        const VisibleDrawLayout layout = getVisibleDrawLayout(view, frame);
+        const auto runCount = static_cast<uint32_t>(gpuScene->drawLists[view.scene.index].runs.size());
+        gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, frame, viewIndex), .argument = phase};
+        auto dispatchRuns = [&](PipelineHandle pipeline)
+        {
+            ctx.bindPipeline(commandBuffer, pipeline);
+            for (uint32_t run = 0; run < runCount; ++run)
+            {
+                if ((view.meshletRuns & (1u << run)) == 0)
+                    continue;
+                pushConstants.argument = phase | run << MESHLET_RUN_SHIFT;
+                ctx.pushConstants(commandBuffer, pipeline, &pushConstants, sizeof(pushConstants), 0);
+                ctx.dispatchIndirect(commandBuffer, view.visibleDraws[frame], layout.meshletArgs + static_cast<uint64_t>(run) * MESHLET_ARGS_SIZE);
+            }
+        };
+
+        const uint32_t timer = beginGpuTimer(commandBuffer, "Meshlet Cull");
+        ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::COMPUTE);
+        dispatchRuns(gpuScene->meshletCountPipeline);
+        ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::COMPUTE);
+        dispatchRuns(gpuScene->meshletWritePipeline);
+        endGpuTimer(commandBuffer, timer);
     }
 
     // A bitonic sort of the blend run's visible draws, back to front, in place (shaders/passes/sort.slang). Its size
@@ -1676,7 +1890,7 @@ namespace rasm
         const auto frame = static_cast<uint32_t>(frameCount);
         const auto &drawList = gpuScene->drawLists[view.scene.index];
         const auto commandBuffer = frameResources[frame].commandBuffer;
-        const uint64_t drawCountsOffset = getDrawCountsOffset(view.visibleCapacity[frame]);
+        const VisibleDrawLayout layout = getVisibleDrawLayout(view, frame);
         ctx.bindIndexBuffer(commandBuffer, geometryPool->indexBuffer(), 0, Format::U32_UINT);
 
         // Opaque draws use the pipeline that never discards; a depth-only view draws MASK and BLEND with its cut-out one,
@@ -1710,9 +1924,18 @@ namespace rasm
             ctx.pushConstants(commandBuffer, pipeline, &pushConstants, sizeof(pushConstants), 0);
             if (view.culled)
                 ctx.drawIndexedIndirectCount(commandBuffer, view.visibleDraws[frame], run.first * sizeof(gfx::DrawInfo), view.visibleDraws[frame],
-                                             drawCountsOffset + i * sizeof(uint32_t), run.count, sizeof(gfx::DrawInfo));
+                                             layout.drawCounts + i * sizeof(uint32_t), run.count, sizeof(gfx::DrawInfo));
             else
                 ctx.drawIndexedIndirect(commandBuffer, drawList.buffers[frame], run.first * sizeof(gfx::DrawInfo), run.count, sizeof(gfx::DrawInfo));
+            // The run's visible meshlets, after the draws in the same buffer: the vertex shader reads either one as a
+            // DrawInfo at drawInfoPtr.
+            if ((view.meshletRuns & (1u << i)) != 0)
+            {
+                pushConstants.firstDraw = view.visibleCapacity[frame] + view.runMeshletFirst[i];
+                ctx.pushConstants(commandBuffer, pipeline, &pushConstants, sizeof(pushConstants), 0);
+                ctx.drawIndexedIndirectCount(commandBuffer, view.visibleDraws[frame], static_cast<uint64_t>(pushConstants.firstDraw) * sizeof(gfx::DrawInfo), view.visibleDraws[frame],
+                                             layout.meshletDrawCounts + i * sizeof(uint32_t), view.runMeshletSize[i], sizeof(gfx::DrawInfo));
+            }
         }
         // beginPass sets NONE for every other pipeline.
         ctx.setCullMode(commandBuffer, CullMode::NONE);
@@ -1740,7 +1963,7 @@ namespace rasm
         ctx.pushConstants(commandBuffer, blendPipeline, &pushConstants, sizeof(pushConstants), 0);
         if (view.culled)
             ctx.drawIndexedIndirectCount(commandBuffer, view.visibleDraws[frame], run.first * sizeof(gfx::DrawInfo), view.visibleDraws[frame],
-                                         getDrawCountsOffset(view.visibleCapacity[frame]) + view.blendRun * sizeof(uint32_t), run.count, sizeof(gfx::DrawInfo));
+                                         getVisibleDrawLayout(view, frame).drawCounts + view.blendRun * sizeof(uint32_t), run.count, sizeof(gfx::DrawInfo));
         else
             ctx.drawIndexedIndirect(commandBuffer, gpuScene->drawLists[view.scene.index].buffers[frame], run.first * sizeof(gfx::DrawInfo), run.count, sizeof(gfx::DrawInfo));
     }
@@ -1790,5 +2013,20 @@ namespace rasm
         ctx.pushConstants(commandBuffer, ghostPipeline, &pushConstants, sizeof(pushConstants), 0);
         ctx.draw(commandBuffer, GHOST_BOX_VERTICES, static_cast<uint32_t>(gpuScene->drawLists[view.scene.index].draws.size()));
         ctx.setCullMode(commandBuffer, CullMode::NONE);
+    }
+
+    void Engine::setMeshletPath(MeshletPath path)
+    {
+        if (path != MeshletPath::OFF && path != MeshletPath::VERTEX_PULLING)
+        {
+            spdlog::error("setMeshletPath: {} is not a MeshletPath.", static_cast<uint32_t>(path));
+            return;
+        }
+        config.meshletPath = path;
+    }
+
+    MeshletPath Engine::getMeshletPath() const
+    {
+        return config.meshletPath;
     }
 }

@@ -15,6 +15,7 @@ static const uint   DEBUG_VIEW_OVERDRAW     = 3;
 static const uint   DEBUG_VIEW_LODS         = 4;
 static const uint   DEBUG_VIEW_CULLING      = 5;
 static const uint   DEBUG_VIEW_LIGHT_COUNT  = 6;
+static const uint   DEBUG_VIEW_MESHLETS     = 7;
 // The draw passes' PushConstants::argument: the late pass (CULL_LATE in cull.slang) draws what the Hi-Z found.
 static const uint   DEBUG_LATE_PASS         = 1;
 
@@ -25,16 +26,39 @@ static const float3 DEBUG_LOD_COLORS[MAX_MESH_LODS] = {
 static const float3 DEBUG_EARLY_COLOR       = float3(0.20, 0.80, 0.25);
 static const float3 DEBUG_LATE_COLOR        = float3(0.95, 0.85, 0.15);
 
-// The LOD a draw draws: the one whose index range culling gave it (getLodDraw).
+// The LOD a draw draws: the one whose index range holds the range culling gave it, a whole LOD's (getLodDraw) or one
+// meshlet's.
 uint getDrawLod(SceneData *scene, InstanceData *instance, DrawInfo *draw)
 {
     GeometryData *geometry = scene->geometryPtr + instance->geometryIndex;
+    uint first = draw->firstIndex;
     for (uint i = 1; i < min(geometry->lodCount, MAX_MESH_LODS); ++i)
     {
-        if (geometry->lods[i].firstIndex == draw->firstIndex)
+        uint lodFirst = geometry->lods[i].firstIndex;
+        uint lodEnd = lodFirst + geometry->lods[i].indexCount;
+        if (first >= lodFirst && first < lodEnd)
             return i;
     }
     return 0;
+}
+
+// A key per draw of an instance: a meshlet's own index range, or a whole draw's. MESHLETS colors each key alike.
+uint getDrawMeshletKey(DrawInfo *draw)
+{
+    uint first = draw->firstIndex;
+    uint instance = draw->firstInstance;
+    return first * 2654435761u ^ instance * 40503u;
+}
+
+float3 getMeshletColor(uint key)
+{
+    uint hash = key;
+    hash ^= hash >> 16;
+    hash *= 0x7feb352du;
+    hash ^= hash >> 15;
+    hash *= 0x846ca68bu;
+    hash ^= hash >> 16;
+    return float3(float(hash & 0xFF), float((hash >> 8) & 0xFF), float((hash >> 16) & 0xFF)) / 255.0 * 0.8 + 0.2;
 }
 
 // The lights pbr.slang's shading loops over at this pixel: the shadowed ones, the other global ones, and the local
@@ -73,7 +97,7 @@ float3 getDebugNormal(Sampler2D gTextures[], MaterialData *model, float3 positio
 // The view's value for one fragment. OVERDRAW's pipelines add it up, so each fragment counts 1. A color is lit from
 // the camera, so the shapes stay readable.
 float4 getDebugColor(Sampler2D gTextures[], SceneData *scene, MaterialData *model, float3 position, float3 normal, float4 tangent, float2 uv0, float2 uv1, float2 uv2,
-                     float2 pixel, bool backFace, uint lod)
+                     float2 pixel, bool backFace, uint lod, uint meshlet)
 {
     uint view = scene->debugView;
     if (view == DEBUG_VIEW_OVERDRAW)
@@ -92,6 +116,8 @@ float4 getDebugColor(Sampler2D gTextures[], SceneData *scene, MaterialData *mode
         return float4(n * 0.5 + 0.5, 1.0);
     float shade = 0.35 + 0.65 * saturate(dot(n, normalize(scene->cameraWorldPosition - position)));
     float3 color = view == DEBUG_VIEW_LODS ? DEBUG_LOD_COLORS[min(lod, MAX_MESH_LODS - 1)] : (pc.argument == DEBUG_LATE_PASS ? DEBUG_LATE_COLOR : DEBUG_EARLY_COLOR);
+    if (view == DEBUG_VIEW_MESHLETS)
+        color = getMeshletColor(meshlet);
     return float4(color * shade, 1.0);
 }
 // clang-format on

@@ -17,6 +17,7 @@ rasm_add_example(13_skinning)
 rasm_add_example(14_morph_targets)
 rasm_add_example(16_headless)
 rasm_add_example(17_streaming)
+rasm_add_example(18_meshlets)
 # Calls ImGui itself, so it needs a rasm with Dear ImGui.
 if (RASM_IMGUI)
     rasm_add_example(15_debug_ui)

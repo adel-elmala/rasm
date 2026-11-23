@@ -5,12 +5,12 @@
 
 namespace rasm
 {
-    static_assert(static_cast<uint32_t>(DebugView::LIGHT_COUNT) == 6, "shaders/lib/debugViews.slang numbers the debug views the same");
+    static_assert(static_cast<uint32_t>(DebugView::MESHLETS) == 7, "shaders/lib/debugViews.slang numbers the debug views the same");
 
     // A new view starts TAA over, so its first frame does not blend with the frames of the view before.
     void Engine::setDebugView(DebugView view)
     {
-        if (static_cast<uint32_t>(view) > static_cast<uint32_t>(DebugView::LIGHT_COUNT))
+        if (static_cast<uint32_t>(view) > static_cast<uint32_t>(DebugView::MESHLETS))
         {
             spdlog::error("setDebugView: {} is not a DebugView.", static_cast<uint32_t>(view));
             return;

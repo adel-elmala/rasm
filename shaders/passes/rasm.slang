@@ -34,6 +34,7 @@ struct VSOutput
 #endif
 #if defined(RASM_DEBUG_VIEW)
     nointerpolation uint lod;           // the LOD the draw draws, for DEBUG_VIEW_LODS
+    nointerpolation uint meshlet;       // the draw's key, for DEBUG_VIEW_MESHLETS
 #endif
 };
 
@@ -80,6 +81,7 @@ VSOutput vertMain(VSInput input)
 #endif
 #if defined(RASM_DEBUG_VIEW)
     output.lod                  = getDrawLod(pc.scene, instance, draw);
+    output.meshlet              = getDrawMeshletKey(draw);
 #endif
 
     return output;
@@ -195,7 +197,7 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
 #if defined(RASM_DEBUG_VIEW)
     // A debug view (Engine::setDebugView) shows a value of the fragment instead of its shading; cut-outs still cut.
     return TO_OUTPUT(getDebugColor(gTextures, pc.scene, model, input.worldPosition, input.worldNormal, input.worldTangent, input.uv0, input.uv1, input.uv2,
-                                   input.clipPosition.xy, isBackFace(input.handedness, isFrontFace), input.lod));
+                                   input.clipPosition.xy, isBackFace(input.handedness, isFrontFace), input.lod, input.meshlet));
 #else
     if (model->materialId == MaterialId.UNLIT)
     {

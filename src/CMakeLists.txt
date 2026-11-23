@@ -46,6 +46,7 @@ target_sources(rasm PRIVATE
     "assets/morphImport.cpp"
     "assets/skinImport.cpp"
     "assets/meshLod.cpp"
+    "assets/meshlets.cpp"
     "assets/ktxImage.cpp"
     "assets/texture.cpp"
     "assets/environment.cpp"

@@ -4,6 +4,7 @@
 #include "assets/loadJobs.h"
 #include "assets/meshImport.h"
 #include "assets/meshLod.h"
+#include "assets/meshlets.h"
 #include "core/workerPool.h"
 #include "platform/paths.h"
 #include "renderer/animation.h"
@@ -47,7 +48,7 @@ namespace rasm
             {
                 const ObjRaw &obj = sub.objRaw;
                 bytes += obj.vertices.size() * sizeof(Vertex) + obj.indices.size() * sizeof(uint32_t) + obj.colors.size() * sizeof(uint32_t) +
-                         obj.skin.size() * sizeof(SkinVertex) + obj.morphs.size() * sizeof(MorphDelta);
+                         obj.skin.size() * sizeof(SkinVertex) + obj.morphs.size() * sizeof(MorphDelta) + obj.meshlets.size() * sizeof(Meshlet);
                 for (const MeshLod &lod : obj.lods)
                     bytes += lod.indices.size() * sizeof(uint32_t);
             }
@@ -74,28 +75,30 @@ namespace rasm
                 completeMeshLoad(*job, pool);
         }
 
-        // Each image and each sub-mesh's LODs become a child job. None is waited for: the last one to end finishes the
-        // load, so no worker is ever held.
-        void spawnMeshChildJobs(const std::shared_ptr<MeshLoadJob> &job, WorkerPool *pool, uint32_t lodCount)
+        // Each image and each sub-mesh's LODs and meshlets become a child job. None is waited for: the last one to end
+        // finishes the load, so no worker is ever held.
+        void spawnMeshChildJobs(const std::shared_ptr<MeshLoadJob> &job, WorkerPool *pool, uint32_t subMeshJobs, bool lods)
         {
             const auto imageCount = static_cast<uint32_t>(job->images.size());
-            if (imageCount + lodCount == 0 || job->ticket.cancelled)
+            if (imageCount + subMeshJobs == 0 || job->ticket.cancelled)
             {
                 completeMeshLoad(*job, pool);
                 return;
             }
-            job->remaining = imageCount + lodCount;
+            job->remaining = imageCount + subMeshJobs;
             for (uint32_t i = 0; i < imageCount; ++i)
                 pool->pushChild([job, pool, i]()
                                 {
                                     if (!job->ticket.cancelled)
                                         runImageWork(*job->raw.model, job->images[i]);
                                     endMeshChildJob(job, pool); });
-            for (uint32_t i = 0; i < lodCount; ++i)
-                pool->pushChild([job, pool, i]()
+            for (uint32_t i = 0; i < subMeshJobs; ++i)
+                pool->pushChild([job, pool, i, lods]()
                                 {
-                                    if (!job->ticket.cancelled)
+                                    if (!job->ticket.cancelled && lods)
                                         buildMeshLods(job->raw.subGltfRaws[i].objRaw);
+                                    if (!job->ticket.cancelled)
+                                        buildMeshlets(job->raw.subGltfRaws[i].objRaw);
                                     endMeshChildJob(job, pool); });
         }
 
@@ -121,14 +124,14 @@ namespace rasm
             }
             pool->setLoadBytes(job->ticket, getRawBytes(job->raw) + fileBytes);
 
-            const auto lodCount = lods ? static_cast<uint32_t>(job->raw.subGltfRaws.size()) : 0u;
+            const auto subMeshJobs = static_cast<uint32_t>(job->raw.subGltfRaws.size());
             if (imageBytes == 0 || job->ticket.cancelled)
             {
-                spawnMeshChildJobs(job, pool, lodCount);
+                spawnMeshChildJobs(job, pool, subMeshJobs, lods);
                 return;
             }
-            pool->pushNext({.run = [job, pool, lodCount]()
-                            { spawnMeshChildJobs(job, pool, lodCount); },
+            pool->pushNext({.run = [job, pool, subMeshJobs, lods]()
+                            { spawnMeshChildJobs(job, pool, subMeshJobs, lods); },
                             .bytes = imageBytes,
                             .ticket = std::shared_ptr<LoadTicket>(job, &job->ticket)});
         }
@@ -166,6 +169,7 @@ namespace rasm
         ObjRaw raw{.vertices = std::move(vertices), .indices = std::move(indices), .colors = std::move(colors)};
         if (config.meshLods)
             buildMeshLods(raw);
+        buildMeshlets(raw);
 
         // The handle is taken once the geometry is in the pool, so a mesh that does not fit uses no index.
         Mesh mesh{.state = MeshState::READY, .subMeshes = {SubMesh{.transform = glm::mat4(1.0f)}}};
@@ -235,8 +239,8 @@ namespace rasm
         const uint32_t users = registry.meshes[handle.index].users;
         registry.meshes[handle.index] = Mesh{.users = users};
 
-        // The workers read and decode the file and build the LODs; beginFrame uploads the result (finishLoads). Until the
-        // file is parsed, its size stands for what it will hold.
+        // The workers read and decode the file and build the LODs and meshlets; beginFrame uploads the result
+        // (finishLoads). Until the file is parsed, its size stands for what it will hold.
         const bool lods = config.meshLods;
         const uint64_t textureFormats = getSupportedTextureFormats(ctx);
         auto job = std::make_shared<MeshLoadJob>();

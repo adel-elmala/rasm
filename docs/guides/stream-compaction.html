@@ -1319,7 +1319,7 @@ void compactMain(uint3 id : SV_DispatchThreadID)
   <tr><td>Count</td><td>written by the last group, or an atomic counter</td><td>Written by thread 0 of the run's last group, every frame. Nothing is cleared.</td></tr>
   <tr><td>Atomics</td><td>for positions, in the unordered methods</td><td>Only for the frame statistics (<code>cullStatsPtr</code>, with <code>InterlockedAdd</code>), never for positions.</td></tr>
   <tr><td>Capacity</td><td>the worst case</td><td>The visible draw buffer holds at least as many draws as the draw list, then the scratch. It grows in <code>Engine::prepareSceneView</code> (<code>SceneView::visibleCapacity</code>).</td></tr>
-  <tr><td>What is copied</td><td>the item</td><td>The <code>DrawInfo</code>, with the index range of the LOD that <code>countMain</code> chose (<a href="lod-selection.html">LOD selection</a>). The LOD rides in the high bits of the slot.</td></tr>
+  <tr><td>What is copied</td><td>the item</td><td>The <code>DrawInfo</code>, with the index range of the LOD that <code>countMain</code> chose (<a href="lod-selection.html">LOD selection</a>). The LOD rides in the high bits of the slot. With <code>EngineConfig::meshletPath</code>, a big draw is written as chunks of meshlets instead, which a second compaction packs in the same order (<a href="meshlets.html#order">meshlets</a>).</td></tr>
 </table>
 </div>
 
@@ -1332,7 +1332,7 @@ void compactMain(uint3 id : SV_DispatchThreadID)
   <tr><td>Base from earlier groups, scatter, run count</td><td><code>writeMain</code> in <code>shaders/passes/cull.slang</code></td></tr>
   <tr><td>Which run and range a group covers</td><td><code>getCullGroup</code> in <code>shaders/passes/cull.slang</code></td></tr>
   <tr><td>Group size</td><td><code>CULL_GROUP_SIZE</code> in <code>shaders/passes/cull.slang</code> and <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>Scratch pointers, buffer size, group count per view</td><td><code>Engine::prepareSceneView</code>, <code>getVisibleDrawBufferSize</code> in <code>src/renderer/gpuScene.cpp</code> (<code>SceneView::groupCount</code>)</td></tr>
+  <tr><td>Scratch pointers, buffer layout, group count per view</td><td><code>Engine::prepareSceneView</code>, <code>getVisibleDrawLayout</code> in <code>src/renderer/gpuScene.cpp</code> (<code>SceneView::groupCount</code>)</td></tr>
   <tr><td>Recording the dispatches and the barrier between them</td><td><code>Engine::recordSceneCulling</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>The <code>Cull</code> and <code>Scene</code> passes</td><td><code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Runs of one alpha mode and cull mode</td><td><code>Engine::rebuildDrawList</code> in <code>src/renderer/gpuScene.cpp</code>, <code>DrawRun</code> in <code>src/renderer/gpuScene.h</code></td></tr>
@@ -1343,7 +1343,7 @@ void compactMain(uint3 id : SV_DispatchThreadID)
 <div class="callout rule">
   <strong>Keep these true</strong>
   <ul>
-    <li><code>CULL_GROUP_SIZE</code> is defined in <code>cull.slang</code> and in <code>gpuScene.cpp</code>. Change both, and the scratch size in <code>getVisibleDrawBufferSize</code> (one count per group, at most one group per 64 draws plus one per run).</li>
+    <li><code>CULL_GROUP_SIZE</code> is defined in <code>cull.slang</code> and in <code>gpuScene.cpp</code>. Change both, and the scratch size in <code>getVisibleDrawLayout</code> (one count per group, at most one group per 64 draws plus one per run).</li>
     <li>A group must never cross a run. <code>getCullGroup</code> and the CPU's group count in <code>Engine::prepareSceneView</code> must agree.</li>
     <li>Threads past the end of a run still reach every barrier, with <code>visible</code> = false. Do not return early in <code>countMain</code> or <code>writeMain</code>.</li>
     <li>The count must be written every time the culling runs, by the run's last group. Nothing clears it.</li>

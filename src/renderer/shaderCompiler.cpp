@@ -581,7 +581,30 @@ namespace rasm
                                      {"debugView", offsetof(gfx::SceneData, debugView)},
                                      {"animatedTransformsPtr", offsetof(gfx::SceneData, animatedTransformsPtr)},
                                      {"skinnedVertsPtr", offsetof(gfx::SceneData, skinnedVertsPtr)},
-                                     {"previousSkinnedVertsPtr", offsetof(gfx::SceneData, previousSkinnedVertsPtr)}});
+                                     {"previousSkinnedVertsPtr", offsetof(gfx::SceneData, previousSkinnedVertsPtr)},
+                                     {"meshletsPtr", offsetof(gfx::SceneData, meshletsPtr)},
+                                     {"meshletDrawsPtr", offsetof(gfx::SceneData, meshletDrawsPtr)},
+                                     {"meshletChunksPtr", offsetof(gfx::SceneData, meshletChunksPtr)},
+                                     {"chunkMasksPtr", offsetof(gfx::SceneData, chunkMasksPtr)},
+                                     {"chunkSumsPtr", offsetof(gfx::SceneData, chunkSumsPtr)},
+                                     {"meshletArgsPtr", offsetof(gfx::SceneData, meshletArgsPtr)},
+                                     {"meshletDrawCountsPtr", offsetof(gfx::SceneData, meshletDrawCountsPtr)},
+                                     {"groupMeshletsPtr", offsetof(gfx::SceneData, groupMeshletsPtr)},
+                                     {"meshletVisibilityPtr", offsetof(gfx::SceneData, meshletVisibilityPtr)},
+                                     {"cullViewPoint", offsetof(gfx::SceneData, cullViewPoint)},
+                                     {"runChunkFirst", offsetof(gfx::SceneData, runChunkFirst)},
+                                     {"runMeshletFirst", offsetof(gfx::SceneData, runMeshletFirst)},
+                                     {"runMeshletBudget", offsetof(gfx::SceneData, runMeshletBudget)},
+                                     {"meshletRuns", offsetof(gfx::SceneData, meshletRuns)},
+                                     {"coneRuns", offsetof(gfx::SceneData, coneRuns)}});
+
+            valid &= validateStruct(fieldStruct(layouts, scene, "meshletsPtr"), "GeometryMeshlet", sizeof(gfx::GeometryMeshlet),
+                                    {{"center", offsetof(gfx::GeometryMeshlet, center)},
+                                     {"radius", offsetof(gfx::GeometryMeshlet, radius)},
+                                     {"coneAxis", offsetof(gfx::GeometryMeshlet, coneAxis)},
+                                     {"coneCutoff", offsetof(gfx::GeometryMeshlet, coneCutoff)},
+                                     {"firstIndex", offsetof(gfx::GeometryMeshlet, firstIndex)},
+                                     {"indexCount", offsetof(gfx::GeometryMeshlet, indexCount)}});
 
             valid &= validateInstanceTransform(fieldStruct(layouts, scene, "animatedTransformsPtr"));
 
@@ -624,14 +647,17 @@ namespace rasm
                                      {"geometryIndex", offsetof(gfx::InstanceData, geometryIndex)},
                                      {"materialIndex", offsetof(gfx::InstanceData, materialIndex)},
                                      {"previousWorld", offsetof(gfx::InstanceData, previousWorld)},
-                                     {"animationRow", offsetof(gfx::InstanceData, animationRow)}});
+                                     {"animationRow", offsetof(gfx::InstanceData, animationRow)},
+                                     {"meshletVisibility", offsetof(gfx::InstanceData, meshletVisibility)}});
 
             valid &= validateGeometryData(fieldStruct(layouts, scene, "geometryPtr"));
 
             valid &= validateStruct(fieldStruct(layouts, fieldStruct(layouts, scene, "geometryPtr"), "lods"), "GeometryLod", sizeof(gfx::GeometryLod),
                                     {{"firstIndex", offsetof(gfx::GeometryLod, firstIndex)},
                                      {"indexCount", offsetof(gfx::GeometryLod, indexCount)},
-                                     {"error", offsetof(gfx::GeometryLod, error)}});
+                                     {"error", offsetof(gfx::GeometryLod, error)},
+                                     {"firstMeshlet", offsetof(gfx::GeometryLod, firstMeshlet)},
+                                     {"meshletCount", offsetof(gfx::GeometryLod, meshletCount)}});
 
             valid &= validateStruct(materialData, "MaterialData", sizeof(gfx::MaterialData),
                                     {{"material", offsetof(gfx::MaterialData, material)},

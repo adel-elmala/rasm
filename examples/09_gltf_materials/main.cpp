@@ -120,7 +120,7 @@ namespace
     // --debug-view's names, in the order of rasm::DebugView.
     rasm::DebugView parseDebugView(const char *name)
     {
-        const char *names[] = {"none", "normals", "uvs", "overdraw", "lods", "culling", "light-count"};
+        const char *names[] = {"none", "normals", "uvs", "overdraw", "lods", "culling", "light-count", "meshlets"};
         for (uint32_t i = 0; i < std::size(names); ++i)
         {
             if (std::strcmp(name, names[i]) == 0)

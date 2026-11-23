@@ -94,6 +94,7 @@ const SECTIONS = [
             { path: "guides/gpu-sorting.html",           title: "Sorting on the GPU",                  blurb: "A bitonic network: thousands of threads, one compare each, in steps." },
             { path: "guides/occlusion-culling.html",     title: "Occlusion culling with Hi-Z",         blurb: "Skip what is hidden behind other things." },
             { path: "guides/lod-selection.html",         title: "LOD selection",                       blurb: "Pick the cheapest mesh nobody can tell apart." },
+            { path: "guides/meshlets.html",              title: "Meshlets and cluster culling",        blurb: "Cut a big mesh into small pieces, and cull each piece." },
             { path: "guides/render-graphs.html",         title: "Render graphs",                       blurb: "Passes declare what they read and write; the graph does the rest." },
             { path: "guides/async-compute.html",         title: "Async compute and multiple queues",   blurb: "Compute work next to graphics work." },
             { path: "guides/memory-aliasing.html",       title: "Transient memory and aliasing",       blurb: "Render targets that share memory." },

@@ -35,6 +35,21 @@ struct GeometryLod
     uint32_t        firstIndex;
     uint32_t        indexCount;
     float           error;              // object space; 0 for LOD 0
+    uint32_t        firstMeshlet;       // in SceneData::meshletsPtr
+    uint32_t        meshletCount;       // 0: the LOD is culled and drawn whole
+};
+
+// Must match rasm::gfx::GeometryMeshlet: a range of a LOD's indices and its bounds, in object space. Every triangle's
+// normal lies in the cone around coneAxis (meshopt_computeMeshletBounds), so a camera far enough behind it sees only
+// back faces.
+struct GeometryMeshlet
+{
+    float3          center;
+    float           radius;
+    float3          coneAxis;
+    float           coneCutoff;
+    uint32_t        firstIndex;         // in the index pool
+    uint32_t        indexCount;
 };
 
 // The LODs share the sub-mesh's vertices, so vertexOffset is the same for all of them.
