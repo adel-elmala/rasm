@@ -72,7 +72,7 @@ namespace rasm
             layout.drawCounts = layout.groupCounts + groups * sizeof(uint32_t);
             layout.meshletDrawCounts = layout.drawCounts + gfx::MAX_DRAW_RUNS * sizeof(uint32_t);
             layout.meshletArgs = layout.meshletDrawCounts + gfx::MAX_DRAW_RUNS * sizeof(uint32_t);
-            layout.groupMeshlets = layout.meshletArgs + gfx::MAX_DRAW_RUNS * MESHLET_ARGS_SIZE;
+            layout.groupMeshlets = layout.meshletArgs + static_cast<uint64_t>(gfx::MAX_DRAW_RUNS) * MESHLET_ARGS_SIZE;
             layout.chunks = layout.groupMeshlets + groups * 2 * sizeof(uint32_t);
             layout.chunkMasks = layout.chunks + static_cast<uint64_t>(chunkCapacity) * 4 * sizeof(uint32_t);
             layout.chunkSums = layout.chunkMasks + static_cast<uint64_t>(chunkCapacity) * 2 * sizeof(uint32_t);
@@ -1809,7 +1809,7 @@ namespace rasm
                     continue;
                 pushConstants.argument = phase | run << MESHLET_RUN_SHIFT;
                 ctx.pushConstants(commandBuffer, pipeline, &pushConstants, sizeof(pushConstants), 0);
-                ctx.dispatchIndirect(commandBuffer, view.visibleDraws[frame], layout.meshletArgs + run * MESHLET_ARGS_SIZE);
+                ctx.dispatchIndirect(commandBuffer, view.visibleDraws[frame], layout.meshletArgs + static_cast<uint64_t>(run) * MESHLET_ARGS_SIZE);
             }
         };
 

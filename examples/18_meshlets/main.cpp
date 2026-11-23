@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iterator>
 #include <unordered_map>
@@ -255,7 +256,7 @@ int main(int argc, char **argv)
     for (int i = 1; i + 1 < argc; ++i)
     {
         if (std::strcmp(argv[i], "--lod-error") == 0)
-            config.lodErrorPixels = static_cast<float>(std::atof(argv[i + 1]));
+            config.lodErrorPixels = std::strtof(argv[i + 1], nullptr);
         if (std::strcmp(argv[i], "--async-compute") == 0)
             config.asyncCompute = true;
     }
