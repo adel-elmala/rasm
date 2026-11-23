@@ -360,6 +360,7 @@ namespace rasm
         // Recording state of the command buffer being recorded. beginCommandBuffer resets it.
         bool                                                                                                                    skipDraws       = false; // a mismatched or missing pipeline was rejected
         bool                                                                                                                    computeBound    = false; // a compute pipeline is bound, so dispatches are defined
+        bool                                                                                                                    meshBound       = false; // the pass's pipeline is a mesh pipeline, for drawMeshTasksIndirect
         bool                                                                                                                    insidePass      = false; // between beginRendering and endRendering, where draws are allowed and dispatches and barriers are not
         Viewport                                                                                                                viewport;                // the last setViewport
 
@@ -733,7 +734,9 @@ namespace rasm
     PipelineHandle RenderContext::createPipeline(const PipelineDesc &desc)
     {
         const bool compute = desc.computeShader.isValid();
-        if (!checkArgument(!compute || (!desc.vertexShader.isValid() && !desc.fragmentShader.isValid()), __func__, "a pipeline has either a compute shader or vertex and fragment shaders.") ||
+        if (!checkArgument(!compute || (!desc.vertexShader.isValid() && !desc.fragmentShader.isValid() && !desc.taskShader.isValid() && !desc.meshShader.isValid()), __func__,
+                           "a pipeline has either a compute shader, vertex and fragment shaders, or task, mesh and fragment shaders.") ||
+            !checkArgument(desc.taskShader.isValid() == desc.meshShader.isValid(), __func__, "a mesh pipeline has both a task and a mesh shader.") ||
             !checkArgument(compute || isSampleCount(desc.samples, impl->device->supportedSampleCounts()), __func__,
                            "a graphics pipeline has 1, 2, 4 or 8 samples per pixel, of those the device has (supportsSampleCount)."))
             return {};
@@ -1765,6 +1768,7 @@ namespace rasm
     {
         impl->skipDraws = false;
         impl->computeBound = false;
+        impl->meshBound = false;
         impl->insidePass = false;
 
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
@@ -2065,6 +2069,7 @@ namespace rasm
             // Whatever was bound before is not the pipeline the caller wants to draw or dispatch with.
             impl->skipDraws = true;
             impl->computeBound = false;
+            impl->meshBound = false;
             return;
         }
 
@@ -2087,6 +2092,7 @@ namespace rasm
 
         rhiCommandBuffer->bindPipeline(rhiPipeline);
         impl->skipDraws = false;
+        impl->meshBound = desc.meshShader.isValid();
     }
 
     void RenderContext::bindIndexBuffer(const CommandBufferHandle &commandBuffer, const BufferHandle &buffer, uint64_t offset, Format indexType)
@@ -2172,6 +2178,7 @@ namespace rasm
     {
         if (!checkArgument(impl->insidePass, __func__, "draws must be recorded inside a render pass.") ||
             !checkArgument(impl->device->hasMeshShaders(), __func__, "the device has no mesh shaders (hasMeshShaders).") ||
+            !checkArgument(impl->meshBound || impl->skipDraws, __func__, "no mesh pipeline is bound.") ||
             !checkArgument(offset % sizeof(uint32_t) == 0 && stride >= 3 * sizeof(uint32_t) && stride % sizeof(uint32_t) == 0, __func__,
                            "the offset and the stride must be multiples of 4, and the stride at least 12."))
             return;

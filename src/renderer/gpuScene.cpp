@@ -1455,9 +1455,12 @@ namespace rasm
             opaqueMeshlets = opaqueMeshlets || (hasMeshlets && run.alphaMode == AlphaMode::NONE);
             maskMeshlets = maskMeshlets || (hasMeshlets && run.alphaMode == AlphaMode::MASK && view.drawMask);
         }
-        const MeshletPath meshletPath = resolveMeshletPath(config.meshletPath, ctx.hasMeshShaders());
+        // The mesh shaders read the meshlet data stream, which EngineConfig::geometryPoolMeshletData = 0 leaves out.
+        const MeshletPath meshletPath = resolveMeshletPath(config.meshletPath, ctx.hasMeshShaders() && geometryPool->meshletDataBuffer().isValid());
         meshletDraws = meshletDraws && culled && meshletPath != MeshletPath::OFF;
         view.meshShaders = meshletDraws && meshletPath == MeshletPath::MESH_SHADERS && createMeshletPipelines(viewIndex, opaqueMeshlets, maskMeshlets);
+        // AUTO picked the mesh shaders for their cost; without their pipelines it draws whole, as where the GPU has none.
+        meshletDraws = meshletDraws && (view.meshShaders || config.meshletPath != MeshletPath::AUTO);
         if (meshletDraws && !view.meshShaders && (!gpuScene->meshletCountPipeline.isValid() || !gpuScene->meshletWritePipeline.isValid()))
         {
             const std::string cullSource = readFile(pathFromUtf8(config.shaderDir) / "passes/cull.slang");
@@ -2015,7 +2018,7 @@ namespace rasm
 
     // The task and mesh pipelines a view's meshlet runs need, made the first time like the MASK ones: the opaque runs'
     // and the MASK runs', shaded, in the view's debug view, or depth-only. False while one is missing (a shader error
-    // retries next frame), and the view then draws its meshlets by vertex pulling.
+    // retries next frame), and the view then draws its meshlets by vertex pulling (whole with AUTO).
     bool Engine::createMeshletPipelines(uint32_t viewIndex, bool opaque, bool mask)
     {
         SceneView &view = gpuScene->views[viewIndex];
@@ -2046,7 +2049,7 @@ namespace rasm
             if (mask && !maskPipeline.isValid())
                 maskPipeline = createMeshScenePipeline(debugVariant ? "rasmDebugMeshMask" : "rasmMeshMask", "passes/rasm.slang", maskDefines, view.renderTarget, "meshMain", "fragMain", blendMode, true, coverage);
             if ((opaque && !opaquePipeline.isValid()) || (mask && !maskPipeline.isValid()))
-                spdlog::error("Failed to create the mesh shader pipelines; meshlets are drawn by vertex pulling.");
+                spdlog::error("Failed to create the mesh shader pipelines; meshlets are drawn by vertex pulling, or whole with MeshletPath::AUTO.");
         }
         return (!opaque || opaquePipeline.isValid()) && (!mask || maskPipeline.isValid());
     }

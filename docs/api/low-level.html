@@ -239,7 +239,7 @@
                            uint32_t drawCount, uint32_t stride);</pre>
   <div class="body">
     <p>Runs the bound mesh pipeline (<a href="#PipelineDesc"><code>PipelineDesc::meshShader</code></a>) <code>drawCount</code> times. Each command is three <code>uint32_t</code> task workgroup counts at <code>offset</code>, then every <code>stride</code> bytes, read by the GPU when it draws. Each task workgroup launches its own mesh workgroups. The scene's draw passes draw a run's visible meshlets this way, with the group counts culling wrote for its chunks.</p>
-    <p><span class="tag">errors</span> Refused outside a render pass, where the device has no mesh shaders (<a href="#hasMeshShaders"><code>hasMeshShaders</code></a>), for an offset or a stride that is not a multiple of 4 or a stride under 12, for a buffer that is not <code>BufferUsage::INDIRECT</code>, and for commands that reach past the buffer.</p>
+    <p><span class="tag">errors</span> Refused outside a render pass, when no mesh pipeline is bound, where the device has no mesh shaders (<a href="#hasMeshShaders"><code>hasMeshShaders</code></a>), for an offset or a stride that is not a multiple of 4 or a stride under 12, for a buffer that is not <code>BufferUsage::INDIRECT</code>, and for commands that reach past the buffer.</p>
   </div>
 </div>
 

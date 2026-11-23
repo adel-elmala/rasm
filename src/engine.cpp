@@ -592,6 +592,11 @@ namespace rasm
         ZoneScoped;
 
         const auto &rt = ctx.getRenderTarget(renderTarget);
+        if (rt.depthFormat == Format::UNKNOWN)
+        {
+            spdlog::error("Pipeline '{}' needs a valid render target.", name);
+            return {};
+        }
         const std::string file = readFile(pathFromUtf8(config.shaderDir) / shaderFile);
         const std::string source = defines.empty() ? file : defines + "#line 1\n" + file;
         auto taskShader = shaderCompiler->compileFromString(source, name + ".task.slang", "taskMain");

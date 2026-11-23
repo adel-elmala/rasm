@@ -13,7 +13,6 @@
 // BENCH_WARMUP_FRAMES, printed when the run ends. Run it headless in Release (--headless --frames 600 --bench): the
 // engine then runs without validation and without the UI, whose passes would change the timings.
 constexpr uint32_t BENCH_WARMUP_FRAMES = 120;
-constexpr const char* MESHLET_PATH_NAMES[] = {"off", "vertex pulling", "mesh shaders", "auto"};
 
 struct ExampleBench
 {
@@ -48,13 +47,16 @@ inline void applyMeshletFlag(int argc, char** argv, rasm::EngineConfig& config)
         if (std::strcmp(argv[i], "--meshlets") == 0)
         {
             const char* path = argv[i + 1];
-            config.meshletPath = rasm::MeshletPath::VERTEX_PULLING;
             if (std::strcmp(path, "off") == 0)
                 config.meshletPath = rasm::MeshletPath::OFF;
-            if (std::strcmp(path, "mesh") == 0)
+            else if (std::strcmp(path, "vp") == 0)
+                config.meshletPath = rasm::MeshletPath::VERTEX_PULLING;
+            else if (std::strcmp(path, "mesh") == 0)
                 config.meshletPath = rasm::MeshletPath::MESH_SHADERS;
-            if (std::strcmp(path, "auto") == 0)
+            else if (std::strcmp(path, "auto") == 0)
                 config.meshletPath = rasm::MeshletPath::AUTO;
+            else
+                std::printf("--meshlets takes off, vp, mesh or auto, not '%s'; the path stays as it was.\n", path);
         }
     }
 }
@@ -83,7 +85,17 @@ inline void addBenchFrame(ExampleBench& bench, const rasm::FrameStats& stats)
     bench.meshletDrawsWhole += stats.meshletDrawsWhole;
 }
 
-inline void printBench(const ExampleBench& bench, const rasm::EngineConfig& config)
+// The path that ran: MESH_SHADERS draws by vertex pulling where the GPU has no mesh shaders, AUTO by them or not at all.
+inline const char* getMeshletPathName(rasm::MeshletPath path, bool meshShaders)
+{
+    if (path == rasm::MeshletPath::OFF)
+        return "off";
+    if (path == rasm::MeshletPath::AUTO)
+        return meshShaders ? "auto (mesh shaders)" : "auto (off)";
+    return path == rasm::MeshletPath::MESH_SHADERS && meshShaders ? "mesh shaders" : "vertex pulling";
+}
+
+inline void printBench(const ExampleBench& bench, const rasm::EngineConfig& config, bool meshShaders)
 {
     if (!bench.on || bench.measured == 0)
         return;
@@ -98,7 +110,7 @@ inline void printBench(const ExampleBench& bench, const rasm::EngineConfig& conf
             culling += bench.sums.at(name);
     }
     std::printf("bench, %u frames at %dx%d, meshlets %s:\n", bench.measured, config.windowWidth, config.windowHeight,
-                MESHLET_PATH_NAMES[static_cast<uint32_t>(config.meshletPath)]);
+                getMeshletPathName(config.meshletPath, meshShaders));
     for (const std::string& name : bench.names)
         std::printf("  %-22s %8.3f ms\n", name.c_str(), bench.sums.at(name) / n);
     std::printf("  %-22s %8.3f ms\n", "GPU frame", bench.gpuMs / n);

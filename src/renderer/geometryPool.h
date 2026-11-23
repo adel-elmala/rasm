@@ -63,6 +63,7 @@ namespace rasm
         RangeAllocator          meshletDataRanges;
         RangeAllocator          subMeshRows;
         bool                    meshletsFullLogged      = false;
+        bool                    meshletDataFullLogged   = false;
     };
 
 }

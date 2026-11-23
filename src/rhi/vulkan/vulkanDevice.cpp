@@ -972,11 +972,16 @@ namespace rasm::rhi
         const bool fits = properties.maxTaskWorkGroupInvocations >= 64 && properties.maxMeshWorkGroupInvocations >= 64 && properties.maxMeshOutputVertices >= 64 &&
                           properties.maxMeshOutputPrimitives >= 124 && properties.maxTaskPayloadSize >= 512 && properties.maxTaskWorkGroupCount[0] >= 65535 &&
                           properties.maxTaskWorkGroupCount[1] >= 65535;
-        if (!fits || !physicalDevice.enable_extension_features_if_present(VkPhysicalDeviceMeshShaderFeaturesEXT{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT,
-                                                                                                                .taskShader = VK_TRUE,
-                                                                                                                .meshShader = VK_TRUE}))
+        if (!fits)
         {
             spdlog::info("Mesh shaders: no (the GPU's limits are too small for the meshlet passes).");
+            return false;
+        }
+        if (!physicalDevice.enable_extension_features_if_present(VkPhysicalDeviceMeshShaderFeaturesEXT{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT,
+                                                                                                       .taskShader = VK_TRUE,
+                                                                                                       .meshShader = VK_TRUE}))
+        {
+            spdlog::info("Mesh shaders: no (the GPU lacks the taskShader or meshShader feature).");
             return false;
         }
         physicalDevice.enable_extension_if_present(VK_EXT_MESH_SHADER_EXTENSION_NAME);

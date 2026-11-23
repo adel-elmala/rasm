@@ -184,10 +184,10 @@ namespace rasm
         const auto meshletDataCount = static_cast<uint32_t>(meshletDataRanges.capacity() > 0 && geometry.meshletCount > 0 ? raw.meshletData.size() : 0);
         if (morph && meshletDataCount > 0 && !meshletDataRanges.allocate(meshletDataCount, firstMeshletData))
         {
-            if (!meshletsFullLogged)
+            if (!meshletDataFullLogged)
                 spdlog::warn("The meshlet data pool is full ({}/{} words, EngineConfig::geometryPoolMeshletData): a sub-mesh of {} meshlets is drawn whole.", meshletDataRanges.used(),
                              meshletDataRanges.capacity(), geometry.meshletCount);
-            meshletsFullLogged = true;
+            meshletDataFullLogged = true;
             meshletRanges.free(firstMeshlet, geometry.meshletCount);
             geometry.meshletCount = 0;
             geometry.maxLodMeshlets = 0;

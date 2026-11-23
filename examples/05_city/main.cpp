@@ -974,6 +974,6 @@ int main(int argc, char **argv)
         lastTime = now;
     }
 
-    printBench(bench, config);
+    printBench(bench, config, engine.getRenderContext().hasMeshShaders());
     return exampleExit(args);
 }
