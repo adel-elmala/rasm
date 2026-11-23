@@ -15,7 +15,7 @@ namespace rasm
 
         // Splits one LOD's triangles into meshlets and writes the LOD's indices again in meshlet order, so each meshlet is
         // one range of them: the same triangles, which a whole draw of the LOD still draws. Returns the meshlet count.
-        uint32_t buildLodMeshlets(std::vector<uint32_t> &indices, const std::vector<Vertex> &vertices, std::vector<Meshlet> &out)
+        uint32_t buildLodMeshlets(std::vector<uint32_t> &indices, const std::vector<Vertex> &vertices, std::vector<Meshlet> &out, std::vector<uint32_t> &data)
         {
             const size_t maxMeshlets = meshopt_buildMeshletsBound(indices.size(), MESHLET_MAX_VERTICES, MESHLET_MAX_TRIANGLES);
             std::vector<meshopt_Meshlet> meshlets(maxMeshlets);
@@ -37,12 +37,19 @@ namespace rasm
                 const auto first = static_cast<uint32_t>(ordered.size());
                 for (size_t k = 0; k < static_cast<size_t>(meshlet.triangle_count) * 3; ++k)
                     ordered.push_back(localVertices[localTriangles[k]]);
+                // What a mesh shader reads: the vertices once, then each triangle as three local indices in one word.
+                const auto firstData = static_cast<uint32_t>(data.size());
+                data.insert(data.end(), localVertices, localVertices + meshlet.vertex_count);
+                for (size_t t = 0; t < meshlet.triangle_count; ++t)
+                    data.push_back(static_cast<uint32_t>(localTriangles[t * 3]) | static_cast<uint32_t>(localTriangles[t * 3 + 1]) << 8 | static_cast<uint32_t>(localTriangles[t * 3 + 2]) << 16);
                 out.push_back({.center = glm::vec3(bounds.center[0], bounds.center[1], bounds.center[2]),
                                .radius = bounds.radius,
                                .coneAxis = glm::vec3(bounds.cone_axis[0], bounds.cone_axis[1], bounds.cone_axis[2]),
                                .coneCutoff = bounds.cone_cutoff,
                                .firstIndex = first,
-                               .indexCount = meshlet.triangle_count * 3});
+                               .indexCount = meshlet.triangle_count * 3,
+                               .firstData = firstData,
+                               .vertexCount = meshlet.vertex_count});
             }
             indices = std::move(ordered);
             return static_cast<uint32_t>(count);
@@ -57,11 +64,12 @@ namespace rasm
 
         raw.meshlets.clear();
         raw.lodMeshletCounts.clear();
+        raw.meshletData.clear();
         if (!raw.skin.empty() || !raw.morphs.empty() || raw.vertices.empty() || raw.indices.size() < static_cast<size_t>(MIN_MESHLET_TRIANGLES) * 3)
             return;
 
-        raw.lodMeshletCounts.push_back(buildLodMeshlets(raw.indices, raw.vertices, raw.meshlets));
+        raw.lodMeshletCounts.push_back(buildLodMeshlets(raw.indices, raw.vertices, raw.meshlets, raw.meshletData));
         for (MeshLod &lod : raw.lods)
-            raw.lodMeshletCounts.push_back(lod.indices.empty() ? 0u : buildLodMeshlets(lod.indices, raw.vertices, raw.meshlets));
+            raw.lodMeshletCounts.push_back(lod.indices.empty() ? 0u : buildLodMeshlets(lod.indices, raw.vertices, raw.meshlets, raw.meshletData));
     }
 }

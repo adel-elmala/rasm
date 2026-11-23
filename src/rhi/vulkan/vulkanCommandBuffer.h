@@ -33,6 +33,7 @@ namespace rasm::rhi
         void                        drawIndexed(uint32_t indexCount, uint32_t instanceCount, uint32_t vertexOffset, uint32_t firstIndex, uint32_t firstInstance) override;
         void                        drawIndexedIndirect(Buffer* buffer, uint64_t offset, uint32_t drawCount, uint32_t stride) override;
         void                        drawIndexedIndirectCount(Buffer* buffer, uint64_t offset, Buffer* countBuffer, uint64_t countOffset, uint32_t maxDrawCount, uint32_t stride) override;
+        void                        drawMeshTasksIndirect(Buffer* buffer, uint64_t offset, uint32_t drawCount, uint32_t stride) override;
         void                        dispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) override;
         void                        dispatchIndirect(Buffer* buffer, uint64_t offset) override;
         void                        memoryBarrier(PipelineStage before, PipelineStage after) override;

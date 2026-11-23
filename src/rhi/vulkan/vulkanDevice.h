@@ -28,6 +28,7 @@ namespace rasm::rhi
         Shader*                     createShader(const ShaderDesc& desc) override;
         Pipeline*                   createGraphicsPipeline(const PipelineDesc& desc, Shader* vertexShader, Shader* fragmentShader, DescriptorSetLayout* layout) override;
         Pipeline*                   createComputePipeline(const PipelineDesc& desc, Shader* computeShader, DescriptorSetLayout* layout) override;
+        Pipeline*                   createMeshPipeline(const PipelineDesc& desc, Shader* taskShader, Shader* meshShader, Shader* fragmentShader, DescriptorSetLayout* layout) override;
         DescriptorSetLayout*        createBindlessDescriptorSetLayout(const BindlessDescriptorSetLayoutDesc& desc) override;
         DescriptorPool*             createDescriptorPool(const DescriptorPoolDesc& desc) override;
         DescriptorSet*              allocateDescriptorSet(const std::string& name, DescriptorPool* pool, DescriptorSetLayout* layout) override;
@@ -51,6 +52,8 @@ namespace rasm::rhi
         Queue*                      getQueue(QueueType queueType) override;
         bool                        hasAsyncCompute() const override;
         bool                        hasTransferQueue() const override;
+        bool                        hasMeshShaders() const override;
+        VkShaderStageFlags          getPushConstantStages() const;
         bool                        hasTimestamps(QueueType queueType) const override;
         bool                        fillBuffer(Buffer* buffer, const void* data, size_t size, size_t offset) override;
         bool                        readBuffer(Buffer* buffer, void* data, size_t size, size_t offset) override;
@@ -87,6 +90,8 @@ namespace rasm::rhi
         void                            queryFormatSupport(bool hostImageCopy);
         bool                            usesHostCopy(const TextureDesc& desc) const;
         uint32_t                        getImageMemoryTypes(const TextureDesc& desc, bool hostCopy);
+        bool                            enableMeshShaders();
+        Pipeline*                       createRasterPipeline(const PipelineDesc& desc, const VkPipelineShaderStageCreateInfo* stages, uint32_t stageCount, DescriptorSetLayout* layout);
         const uint32_t*                 getImageFamilies(const TextureDesc& desc, bool hostCopy, uint32_t& count) const;
 
         static constexpr uint32_t       FORMAT_COUNT        = static_cast<uint32_t>(Format::R16G16_SFLOAT) + 1;
@@ -119,6 +124,8 @@ namespace rasm::rhi
         VkDeviceSize                    maxBufferSize       = 0;
         uint32_t                        maxStorageImages    = 0;    // update-after-bind storage images in a set and in a stage
         uint32_t                        sampleCounts        = VK_SAMPLE_COUNT_1_BIT;
+        bool                            meshShaders         = false;    // VK_EXT_mesh_shader, with limits that hold the meshlet passes' workgroups
+        VkShaderStageFlags              pushConstantStages  = PUSH_CONSTANT_STAGES;
     };
 
     std::unique_ptr<Device>         createVulkanDevice(const DeviceDesc& desc);

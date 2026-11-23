@@ -120,9 +120,12 @@ namespace rasm::rhi
             }
         }
 
-        VkPipelineStageFlags2 toVkStageMask(PipelineStage stages)
+        // With mesh shaders, graphics reads and writes storage in the task and mesh stages too.
+        VkPipelineStageFlags2 toVkStageMask(PipelineStage stages, bool meshShaders)
         {
             VkPipelineStageFlags2 mask = VK_PIPELINE_STAGE_2_NONE;
+            if (meshShaders && hasStage(stages, PipelineStage::GRAPHICS))
+                mask |= VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT | VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT;
             // An indirect dispatch reads its group counts in the draw-indirect stage.
             if (hasStage(stages, PipelineStage::COMPUTE))
                 mask |= VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
@@ -412,7 +415,7 @@ namespace rasm::rhi
 
     void VulkanCommandBuffer::pushConstants(Pipeline *pipeline, const void *data, uint32_t size, uint32_t offset)
     {
-        vk.vkCmdPushConstants(commandBuffer, static_cast<VulkanPipeline *>(pipeline)->layout, PUSH_CONSTANT_STAGES, offset, size, data);
+        vk.vkCmdPushConstants(commandBuffer, static_cast<VulkanPipeline *>(pipeline)->layout, device.getPushConstantStages(), offset, size, data);
     }
 
     void VulkanCommandBuffer::draw(uint32_t vertexCount, uint32_t instanceCount)
@@ -435,6 +438,11 @@ namespace rasm::rhi
         vk.vkCmdDrawIndexedIndirectCount(commandBuffer, static_cast<VulkanBuffer *>(buffer)->buffer, offset, static_cast<VulkanBuffer *>(countBuffer)->buffer, countOffset, maxDrawCount, stride);
     }
 
+    void VulkanCommandBuffer::drawMeshTasksIndirect(Buffer *buffer, uint64_t offset, uint32_t drawCount, uint32_t stride)
+    {
+        vk.vkCmdDrawMeshTasksIndirectEXT(commandBuffer, static_cast<VulkanBuffer *>(buffer)->buffer, offset, drawCount, stride);
+    }
+
     void VulkanCommandBuffer::dispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ)
     {
         vk.vkCmdDispatch(commandBuffer, groupCountX, groupCountY, groupCountZ);
@@ -450,9 +458,9 @@ namespace rasm::rhi
         // Only writes need to be made available: reads before the barrier just have to finish, which the stage
         // mask covers. Writes after it must wait for the writes before it.
         VkMemoryBarrier2 barrier = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
-                                    .srcStageMask = toVkStageMask(before),
+                                    .srcStageMask = toVkStageMask(before, device.hasMeshShaders()),
                                     .srcAccessMask = toVkWriteMask(before),
-                                    .dstStageMask = toVkStageMask(after),
+                                    .dstStageMask = toVkStageMask(after, device.hasMeshShaders()),
                                     .dstAccessMask = toVkReadMask(after) | toVkWriteMask(after)};
         if (computeQueue)
             fitToComputeQueue(barrier.srcStageMask, barrier.srcAccessMask, barrier.dstStageMask, barrier.dstAccessMask);

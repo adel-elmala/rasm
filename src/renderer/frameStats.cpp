@@ -119,6 +119,7 @@ namespace rasm
             stats.triangles = totals.triangles;
             stats.trianglesVisible = readCount64(culled + CULL_STATS_TRIANGLES) + totals.unculledTriangles;
             stats.trianglesVisibleLod0 = readCount64(culled + CULL_STATS_LOD0_TRIANGLES) + totals.unculledTriangles;
+            stats.trianglesVisibleLod = readCount64(culled + CULL_STATS_LOD_TRIANGLES) + totals.unculledTriangles;
             for (uint32_t i = 0; i < MAX_MESH_LODS; ++i)
                 stats.drawsPerLod[i] = culled[CULL_STATS_LOD_DRAWS + i];
             stats.drawsPerLod[0] += totals.unculledDraws;

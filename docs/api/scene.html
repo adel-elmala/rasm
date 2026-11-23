@@ -561,6 +561,11 @@ constexpr uint32_t MAX_MORPH_TARGETS = 256;</pre>
     uint32_t  firstMorph       = 0;
     uint32_t  morphCount       = 0;
     uint32_t  morphTargetCount = 0;
+    uint32_t  firstMeshlet     = 0;
+    uint32_t  meshletCount     = 0;
+    uint32_t  maxLodMeshlets   = 0;
+    uint32_t  firstMeshletData = 0;
+    uint32_t  meshletDataCount = 0;
     uint32_t  geometryIndex    = 0;
     glm::vec3 boundsCenter     = glm::vec3(0.0f);
     float     boundsRadius     = 0.0f;
@@ -575,6 +580,7 @@ constexpr uint32_t MAX_MORPH_TARGETS = 256;</pre>
       <dt>firstSkin, skinCount</dt><dd>The sub-mesh's <a href="#SkinVertex"><code>SkinVertex</code></a>es in the skin stream; <code>skinCount</code> is 0 when it is not skinned.</dd>
       <dt>firstMorph, morphCount, morphTargetCount</dt><dd>The sub-mesh's <a href="#MorphDelta"><code>MorphDelta</code></a>s in the morph stream: <code>morphCount</code> = <code>vertexCount</code> · <code>morphTargetCount</code>, target by target. Both are 0 without morph targets.</dd>
       <dt>firstMeshlet, meshletCount, maxLodMeshlets</dt><dd>The sub-mesh's <a href="#Meshlet">meshlets</a> in the meshlet stream, of every LOD, and the most of one LOD (each instance keeps a visibility bit per meshlet of that LOD). 0 for a sub-mesh without meshlets.</dd>
+      <dt>firstMeshletData, meshletDataCount</dt><dd>Its <code>ObjRaw::meshletData</code> words in the meshlet data stream, which the mesh shaders read. Taken only where the device has mesh shaders (<a href="low-level.html#hasMeshShaders"><code>RenderContext::hasMeshShaders</code></a>), else 0; a sub-mesh whose data does not fit (<code>EngineConfig::geometryPoolMeshletData</code>) has no meshlets.</dd>
     </dl>
   </div>
 </div>
@@ -587,6 +593,7 @@ constexpr uint32_t MAX_MORPH_TARGETS = 256;</pre>
     std::vector&lt;MeshLod&gt;  lods;
     std::vector&lt;Meshlet&gt;  meshlets;
     std::vector&lt;uint32_t&gt; lodMeshletCounts;
+    std::vector&lt;uint32_t&gt; meshletData;
     std::vector&lt;uint32_t&gt; colors;
     std::vector&lt;SkinVertex&gt; skin;
     std::vector&lt;MorphDelta&gt; morphs;
@@ -598,6 +605,7 @@ constexpr uint32_t MAX_MORPH_TARGETS = 256;</pre>
       <dt>indices</dt><dd>LOD 0, the full detail.</dd>
       <dt>lods</dt><dd>LOD 1 and coarser, from fine to coarse; at most <code>MAX_MESH_LODS</code> − 1. Empty until the engine builds them, and for a sub-mesh under 1024 triangles.</dd>
       <dt>meshlets, lodMeshletCounts</dt><dd>The <a href="#Meshlet"><code>Meshlet</code></a>s of LOD 0, then of each coarser LOD, and how many each LOD has. Built after the LODs, for a sub-mesh of 1024 triangles or more that is not skinned or morphed; building them writes each LOD's indices again in meshlet order (the same triangles). Empty otherwise.</dd>
+      <dt>meshletData</dt><dd>What a mesh shader reads, per meshlet: its vertices (the sub-mesh's, as its indices name them), then one word per triangle with three local vertex numbers, a byte each. Built with the meshlets.</dd>
       <dt>colors</dt><dd>One packed vertex color per vertex (glTF <code>COLOR_0</code>), or empty.</dd>
       <dt>skin</dt><dd>One <a href="#SkinVertex"><code>SkinVertex</code></a> per vertex (glTF <code>JOINTS_0</code> / <code>WEIGHTS_0</code>) for a skinned primitive, or empty.</dd>
       <dt>morphs, morphTargetCount</dt><dd>The deltas of each morph target, target-major: target <var>t</var>'s delta of vertex <var>v</var> is at <code class="lang-text">t · vertices.size() + v</code>. Empty, and a count of 0, for a primitive without targets, or whose targets move nothing.</dd>
@@ -629,13 +637,16 @@ constexpr uint32_t MAX_MORPH_TARGETS = 256;</pre>
     float                   coneCutoff;
     uint32_t                firstIndex;
     uint32_t                indexCount;
+    uint32_t                firstData;
+    uint32_t                vertexCount;
 };</pre>
   <div class="body">
-    <p>A piece of one LOD of a sub-mesh: at most 64 vertices and 124 triangles that lie close together, with its own bounds in object space. The engine builds them as a mesh loads; with <a href="engine.html#setMeshletPath"><code>MeshletPath::VERTEX_PULLING</code></a> the scene passes cull and draw each one (<a href="../guides/meshlets.html">Meshlets and cluster culling</a>).</p>
+    <p>A piece of one LOD of a sub-mesh: at most 64 vertices and 124 triangles that lie close together, with its own bounds in object space. The engine builds them as a mesh loads; with a <a href="engine.html#setMeshletPath"><code>MeshletPath</code></a> other than <code>OFF</code> the scene passes cull and draw each one (<a href="../guides/meshlets.html">Meshlets and cluster culling</a>).</p>
     <dl>
       <dt>center, radius</dt><dd>A sphere around its triangles, for the frustum and Hi-Z tests.</dd>
       <dt>coneAxis, coneCutoff</dt><dd>Its normal cone: every triangle's normal is within the cone around <code>coneAxis</code>. <code>coneCutoff</code> is the sine of the cone's half angle; 1 for a cone that cannot be culled.</dd>
       <dt>firstIndex, indexCount</dt><dd>Its triangles: a range of its LOD's indices.</dd>
+      <dt>firstData, vertexCount</dt><dd>Where its vertices start in <code>ObjRaw::meshletData</code>, and how many (at most 64); its <code>indexCount</code> / 3 packed triangles follow them.</dd>
     </dl>
   </div>
 </div>

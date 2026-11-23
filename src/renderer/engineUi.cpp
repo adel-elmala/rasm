@@ -67,9 +67,13 @@ namespace rasm
             ImGui::Text("Meshlets   %s drawn, %s culled", formatCount(stats.meshletsVisible).c_str(), formatCount(stats.meshletsCulled).c_str());
             if (stats.meshletDrawsWhole > 0)
                 ImGui::Text("Whole      %s draws (maxViewMeshlets)", formatCount(stats.meshletDrawsWhole).c_str());
-            const uint64_t saved = stats.trianglesVisibleLod0 > stats.trianglesVisible ? stats.trianglesVisibleLod0 - stats.trianglesVisible : 0;
+            // What LODs saved, and then what meshlet culling saved of the rest: two numbers, so neither hides the other.
+            const uint64_t saved = stats.trianglesVisibleLod0 > stats.trianglesVisibleLod ? stats.trianglesVisibleLod0 - stats.trianglesVisibleLod : 0;
             const double savedPercent = stats.trianglesVisibleLod0 > 0 ? 100.0 * static_cast<double>(saved) / static_cast<double>(stats.trianglesVisibleLod0) : 0.0;
             ImGui::Text("LOD saved  %s (%.0f%%)", formatCount(saved).c_str(), savedPercent);
+            const uint64_t meshletSaved = stats.trianglesVisibleLod > stats.trianglesVisible ? stats.trianglesVisibleLod - stats.trianglesVisible : 0;
+            const double meshletPercent = stats.trianglesVisibleLod > 0 ? 100.0 * static_cast<double>(meshletSaved) / static_cast<double>(stats.trianglesVisibleLod) : 0.0;
+            ImGui::Text("Meshlets saved %s (%.0f%%)", formatCount(meshletSaved).c_str(), meshletPercent);
             // In a buffer on the stack: a std::string this long would allocate in every frame the window is open.
             char lodDraws[160] = "LOD draws ";
             size_t used = std::strlen(lodDraws);
@@ -186,7 +190,7 @@ namespace rasm
                 }
                 ImGui::EndCombo();
             }
-            const char *meshletPaths[] = {"off", "vertex pulling"};
+            const char *meshletPaths[] = {"off", "vertex pulling", ctx.hasMeshShaders() ? "mesh shaders" : "mesh shaders (vertex pulling here)", ctx.hasMeshShaders() ? "auto (mesh shaders)" : "auto (off here)"};
             const uint32_t meshletPath = std::min(static_cast<uint32_t>(config.meshletPath), static_cast<uint32_t>(std::size(meshletPaths) - 1));
             if (ImGui::BeginCombo("Meshlets", meshletPaths[meshletPath]))
             {

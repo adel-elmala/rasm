@@ -77,6 +77,8 @@ namespace rasm
         skinRanges.reset(config.geometryPoolSkins);
         morphRanges.reset(config.geometryPoolMorphs);
         meshletRanges.reset(config.geometryPoolMeshlets);
+        // The mesh shaders read each meshlet's own vertices and triangles; without them only the index ranges are needed.
+        meshletDataRanges.reset(ctx.hasMeshShaders() ? config.geometryPoolMeshletData : 0);
         subMeshRows.reset(config.geometryPoolSubMeshes);
         vertices = ctx.createBuffer({.name = "Geometry Vertex Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(config.geometryPoolVertices) * sizeof(Vertex)});
         indices = ctx.createBuffer({.name = "Geometry Index Pool", .usage = BufferUsage::INDEX, .size = static_cast<uint64_t>(config.geometryPoolIndices) * sizeof(uint32_t)});
@@ -84,6 +86,15 @@ namespace rasm
         skins = ctx.createBuffer({.name = "Geometry Skin Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(config.geometryPoolSkins) * sizeof(SkinVertex)});
         morphs = ctx.createBuffer({.name = "Geometry Morph Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(config.geometryPoolMorphs) * sizeof(MorphDelta)});
         meshlets = ctx.createBuffer({.name = "Geometry Meshlet Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(config.geometryPoolMeshlets) * sizeof(gfx::GeometryMeshlet)});
+        if (meshletDataRanges.capacity() > 0)
+        {
+            meshletData = ctx.createBuffer({.name = "Geometry Meshlet Data Pool", .usage = BufferUsage::STORAGE, .size = meshletDataRanges.capacity() * sizeof(uint32_t)});
+            if (!meshletData.isValid())
+            {
+                spdlog::error("Failed to create the meshlet data pool.");
+                return false;
+            }
+        }
         table = ctx.createBuffer({.name = "Geometry Table", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(config.geometryPoolSubMeshes) * sizeof(gfx::GeometryData)});
         if (!vertices.isValid() || !indices.isValid() || !colors.isValid() || !skins.isValid() || !morphs.isValid() || !meshlets.isValid() || !table.isValid())
         {
@@ -169,11 +180,28 @@ namespace rasm
             geometry.meshletCount = 0;
             geometry.maxLodMeshlets = 0;
         }
+        uint64_t firstMeshletData = 0;
+        const auto meshletDataCount = static_cast<uint32_t>(meshletDataRanges.capacity() > 0 && geometry.meshletCount > 0 ? raw.meshletData.size() : 0);
+        if (morph && meshletDataCount > 0 && !meshletDataRanges.allocate(meshletDataCount, firstMeshletData))
+        {
+            if (!meshletDataFullLogged)
+                spdlog::warn("The meshlet data pool is full ({}/{} words, EngineConfig::geometryPoolMeshletData): a sub-mesh of {} meshlets is drawn whole.", meshletDataRanges.used(),
+                             meshletDataRanges.capacity(), geometry.meshletCount);
+            meshletDataFullLogged = true;
+            meshletRanges.free(firstMeshlet, geometry.meshletCount);
+            geometry.meshletCount = 0;
+            geometry.maxLodMeshlets = 0;
+        }
+        else
+            geometry.meshletDataCount = meshletDataCount;
         const bool tableRow = morph && subMeshRows.allocate(1, row);
         if (!tableRow)
         {
             if (morph)
+            {
                 meshletRanges.free(firstMeshlet, geometry.meshletCount);
+                meshletDataRanges.free(firstMeshletData, geometry.meshletDataCount);
+            }
             if (vertex)
                 vertexRanges.free(firstVertex, geometry.vertexCount);
             if (index)
@@ -192,6 +220,7 @@ namespace rasm
         geometry.firstSkin = static_cast<uint32_t>(firstSkin);
         geometry.firstMorph = static_cast<uint32_t>(firstMorph);
         geometry.firstMeshlet = static_cast<uint32_t>(firstMeshlet);
+        geometry.firstMeshletData = static_cast<uint32_t>(firstMeshletData);
         geometry.geometryIndex = static_cast<uint32_t>(row);
         geometry.allocated = true;
         computeBounds(raw.vertices, geometry);
@@ -208,6 +237,7 @@ namespace rasm
         skinRanges.free(geometry.firstSkin, geometry.skinCount);
         morphRanges.free(geometry.firstMorph, geometry.morphCount);
         meshletRanges.free(geometry.firstMeshlet, geometry.meshletCount);
+        meshletDataRanges.free(geometry.firstMeshletData, geometry.meshletDataCount);
         subMeshRows.free(geometry.geometryIndex, 1);
     }
 
@@ -264,10 +294,15 @@ namespace rasm
                                            .coneAxis = meshlet.coneAxis,
                                            .coneCutoff = meshlet.coneCutoff,
                                            .firstIndex = row.lods[i].firstIndex + meshlet.firstIndex,
-                                           .indexCount = meshlet.indexCount});
+                                           .indexCount = meshlet.indexCount,
+                                           .firstData = geometry.firstMeshletData + meshlet.firstData,
+                                           .vertexCount = meshlet.vertexCount});
                 }
             }
             if (!ctx.fillBuffer(meshlets, meshletRows.data(), meshletRows.size() * sizeof(gfx::GeometryMeshlet), static_cast<size_t>(geometry.firstMeshlet) * sizeof(gfx::GeometryMeshlet)))
+                return false;
+            if (geometry.meshletDataCount > 0 &&
+                !ctx.fillBuffer(meshletData, raw.meshletData.data(), static_cast<size_t>(geometry.meshletDataCount) * sizeof(uint32_t), static_cast<size_t>(geometry.firstMeshletData) * sizeof(uint32_t)))
                 return false;
         }
 
@@ -319,6 +354,11 @@ namespace rasm
     BufferHandle GeometryPool::meshletBuffer() const
     {
         return meshlets;
+    }
+
+    BufferHandle GeometryPool::meshletDataBuffer() const
+    {
+        return meshletData;
     }
 
     BufferHandle GeometryPool::tableBuffer() const

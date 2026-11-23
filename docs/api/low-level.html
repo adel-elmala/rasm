@@ -234,6 +234,15 @@
   </div>
 </div>
 
+<div class="api" id="drawMeshTasksIndirect">
+  <pre class="sig">void drawMeshTasksIndirect(const CommandBufferHandle&amp; commandBuffer, const BufferHandle&amp; buffer, uint64_t offset,
+                           uint32_t drawCount, uint32_t stride);</pre>
+  <div class="body">
+    <p>Runs the bound mesh pipeline (<a href="#PipelineDesc"><code>PipelineDesc::meshShader</code></a>) <code>drawCount</code> times. Each command is three <code>uint32_t</code> task workgroup counts at <code>offset</code>, then every <code>stride</code> bytes, read by the GPU when it draws. Each task workgroup launches its own mesh workgroups. The scene's draw passes draw a run's visible meshlets this way, with the group counts culling wrote for its chunks.</p>
+    <p><span class="tag">errors</span> Refused outside a render pass, when no mesh pipeline is bound, where the device has no mesh shaders (<a href="#hasMeshShaders"><code>hasMeshShaders</code></a>), for an offset or a stride that is not a multiple of 4 or a stride under 12, for a buffer that is not <code>BufferUsage::INDIRECT</code>, and for commands that reach past the buffer.</p>
+  </div>
+</div>
+
 <div class="api" id="dispatch">
   <pre class="sig">void dispatch(const CommandBufferHandle&amp; commandBuffer, uint32_t groupCountX,
               uint32_t groupCountY = 1, uint32_t groupCountZ = 1);</pre>
@@ -837,6 +846,8 @@ float takeUploadGpuMs();</pre>
     ShaderHandle              vertexShader;
     ShaderHandle              fragmentShader;
     ShaderHandle              computeShader;
+    ShaderHandle              taskShader;
+    ShaderHandle              meshShader;
     DescriptorSetLayoutHandle descriptorSetLayout;
     PrimitiveTopology         topology = PrimitiveTopology::TRIANGLE_LIST;
     Format                    colorAttachmentFormats[MAX_COLOR_ATTACHMENTS] = {};
@@ -852,6 +863,7 @@ float takeUploadGpuMs();</pre>
   <div class="body">
     <dl>
       <dt>computeShader</dt><dd>Valid for a compute pipeline; then leave the vertex and fragment shaders invalid.</dd>
+      <dt>taskShader, meshShader</dt><dd>Both valid, with <code>fragmentShader</code> and no <code>vertexShader</code>, for a mesh pipeline (<code>ShaderType::TASK</code>, <code>ShaderType::MESH</code>), drawn with <a href="#drawMeshTasksIndirect"><code>drawMeshTasksIndirect</code></a>. It has no vertex input and no topology: the mesh shader writes the triangles. Only where <a href="#hasMeshShaders"><code>hasMeshShaders</code></a> is true.</dd>
       <dt>descriptorSetLayout</dt><dd>Required. Usually the engine's bindless layout (the one <code>Engine::createPipeline</code> uses).</dd>
       <dt>topology</dt><dd>See <a href="types.html#PrimitiveTopology">PrimitiveTopology</a>.</dd>
       <dt>colorAttachmentFormats</dt><dd>One per color attachment, ending at the first <code>UNKNOWN</code> (count them with <code>colorAttachmentCount</code>). Must equal the color formats of the pass the pipeline is used in, in order, or <code>bindPipeline</code> rejects it. Every attachment gets the same blend state, from <code>blendMode</code>.</dd>
@@ -1139,6 +1151,13 @@ void destroyRenderTarget(const RenderTargetHandle&amp; renderTarget);</pre>
   <pre class="sig">bool hasAsyncCompute() const;</pre>
   <div class="body">
     <p><code>true</code> when the device has a compute queue of its own, next to the graphics queue. That needs <code>EngineConfig::asyncCompute</code> and a GPU with a compute queue family without graphics, whose timestamps have as many valid bits as the graphics queue's. Then every buffer and texture is shared by both queues, so either queue can use it with no ownership transfer.</p>
+  </div>
+</div>
+
+<div class="api" id="hasMeshShaders">
+  <pre class="sig">bool hasMeshShaders() const;</pre>
+  <div class="body">
+    <p><code>true</code> when the device has task and mesh shaders (<code>VK_EXT_mesh_shader</code>) with limits that hold the engine's meshlet passes: workgroups of 64 threads, 64 vertices and 124 triangles per mesh workgroup, 65,535 task workgroups in x and y. They are turned on whenever the GPU has them; MoltenVK has none. Then every pipeline's push constants also reach the task and mesh stages, and barriers on <code>PipelineStage::GRAPHICS</code> cover them.</p>
   </div>
 </div>
 

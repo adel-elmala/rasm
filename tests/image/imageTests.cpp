@@ -352,6 +352,7 @@ namespace
         {.name = "sponza",        .build = buildSponza},
         {.name = "alpha_modes",   .build = buildAlphaModes},
         {.name = "msaa4",         .build = buildAlphaModes,    .samples = 4},
+        {.name = "sponza_msaa4",  .build = buildSponza,        .samples = 4},
         {.name = "taa",           .build = buildHelmet,        .taa = true, .frames = 16},
         {.name = "bloom",         .build = buildEmissive,      .bloom = true},
         {.name = "many_lights",   .build = buildManyLights},
@@ -363,9 +364,17 @@ namespace
         {.name = "morph",         .build = buildMorph},
         {.name = "node_anim",     .build = buildNodeAnimation, .time = 0.3},
         {.name = "materials",     .build = buildMaterials},
-        // The same images drawn by meshlets: the same triangles, so the same pixels.
+        // The same images drawn by meshlets: the same triangles, so the same pixels. The mesh_ tests take the mesh shaders
+        // where the device has them (lavapipe and the desktop GPUs do), else vertex pulling. lavapipe's mesh shaders round a
+        // few positions differently from its vertex shaders: up to 3 levels on 0.2% of the pixels after TAA, and a few edge
+        // pixels (3 of Sponza's 147456) that a triangle's neighbour covers. So they allow 3 levels, and 0.01% beyond them.
         {.name = "meshlets",      .build = buildHelmet,        .meshlets = rasm::MeshletPath::VERTEX_PULLING, .threshold = 0, .fraction = 0.0, .sameAs = "helmet_ibl"},
         {.name = "meshlet_sponza", .build = buildSponza,       .meshlets = rasm::MeshletPath::VERTEX_PULLING, .threshold = 0, .fraction = 0.0, .sameAs = "sponza"},
+        {.name = "mesh_helmet",   .build = buildHelmet,        .meshlets = rasm::MeshletPath::MESH_SHADERS, .threshold = 3, .fraction = 0.0001, .sameAs = "helmet_ibl"},
+        {.name = "mesh_sponza",   .build = buildSponza,        .meshlets = rasm::MeshletPath::MESH_SHADERS, .threshold = 3, .fraction = 0.0001, .sameAs = "sponza"},
+        {.name = "mesh_msaa4",    .build = buildSponza,        .samples = 4, .meshlets = rasm::MeshletPath::MESH_SHADERS, .threshold = 3, .fraction = 0.0001, .sameAs = "sponza_msaa4"},
+        {.name = "mesh_taa",      .build = buildHelmet,        .taa = true, .frames = 16, .meshlets = rasm::MeshletPath::MESH_SHADERS, .threshold = 3, .fraction = 0.0001, .sameAs = "taa"},
+        {.name = "mesh_normals",  .build = buildHelmet,        .view = rasm::DebugView::NORMALS, .meshlets = rasm::MeshletPath::MESH_SHADERS, .threshold = 3, .fraction = 0.0001, .sameAs = "debug_normals"},
     };
     // clang-format on
 

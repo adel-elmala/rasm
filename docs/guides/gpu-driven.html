@@ -915,7 +915,7 @@
     <li><code>P3</code>: no real instancing. Each entity's sub-mesh is its own draw, even when the mesh is shared.</li>
     <li>A destroyed or removed entity leaves the draw lists at their next rebuild, and its instance rows are reused (<a href="resource-lifetime.html">deferred destruction</a>).</li>
     <li><code>D12</code>: <code>getDrawIndex</code> uses <code>spirv_asm</code>, so this path is Vulkan-only today.</li>
-    <li>No mesh shaders yet. Big meshes can be culled per <a href="meshlets.html">meshlet</a> with <code>MeshletPath::VERTEX_PULLING</code>, which draws each visible meshlet as one more indirect draw (off by default, <code>P28</code>).</li>
+    <li>Big meshes are culled per <a href="meshlets.html">meshlet</a> where the GPU has mesh shaders (<code>MeshletPath::AUTO</code>, the default): a task shader culls them inside the draw pass. <code>MeshletPath::VERTEX_PULLING</code> does it everywhere, with two more compute passes and one indirect draw per visible meshlet (<code>P28</code>).</li>
   </ul>
 </div>
 

@@ -16,7 +16,8 @@ static const uint   DEBUG_VIEW_LODS         = 4;
 static const uint   DEBUG_VIEW_CULLING      = 5;
 static const uint   DEBUG_VIEW_LIGHT_COUNT  = 6;
 static const uint   DEBUG_VIEW_MESHLETS     = 7;
-// The draw passes' PushConstants::argument: the late pass (CULL_LATE in cull.slang) draws what the Hi-Z found.
+// The draw passes' PushConstants::argument, its lowest bit: the late pass (CULL_LATE) draws what the Hi-Z found. A
+// task draw has its run above it.
 static const uint   DEBUG_LATE_PASS         = 1;
 
 // Display values: the Tone Map pass shows them without a curve.
@@ -28,10 +29,9 @@ static const float3 DEBUG_LATE_COLOR        = float3(0.95, 0.85, 0.15);
 
 // The LOD a draw draws: the one whose index range holds the range culling gave it, a whole LOD's (getLodDraw) or one
 // meshlet's.
-uint getDrawLod(SceneData *scene, InstanceData *instance, DrawInfo *draw)
+uint getDrawLod(SceneData *scene, InstanceData *instance, uint first)
 {
     GeometryData *geometry = scene->geometryPtr + instance->geometryIndex;
-    uint first = draw->firstIndex;
     for (uint i = 1; i < min(geometry->lodCount, MAX_MESH_LODS); ++i)
     {
         uint lodFirst = geometry->lods[i].firstIndex;
@@ -42,11 +42,10 @@ uint getDrawLod(SceneData *scene, InstanceData *instance, DrawInfo *draw)
     return 0;
 }
 
-// A key per draw of an instance: a meshlet's own index range, or a whole draw's. MESHLETS colors each key alike.
-uint getDrawMeshletKey(DrawInfo *draw)
+// A key per draw of an instance: a meshlet's own index range, or a whole draw's. MESHLETS colors each key alike, so a
+// meshlet has the same color drawn by an indirect draw or by a mesh shader.
+uint getMeshletKey(uint first, uint instance)
 {
-    uint first = draw->firstIndex;
-    uint instance = draw->firstInstance;
     return first * 2654435761u ^ instance * 40503u;
 }
 
@@ -115,7 +114,7 @@ float4 getDebugColor(Sampler2D gTextures[], SceneData *scene, MaterialData *mode
     if (view == DEBUG_VIEW_NORMALS)
         return float4(n * 0.5 + 0.5, 1.0);
     float shade = 0.35 + 0.65 * saturate(dot(n, normalize(scene->cameraWorldPosition - position)));
-    float3 color = view == DEBUG_VIEW_LODS ? DEBUG_LOD_COLORS[min(lod, MAX_MESH_LODS - 1)] : (pc.argument == DEBUG_LATE_PASS ? DEBUG_LATE_COLOR : DEBUG_EARLY_COLOR);
+    float3 color = view == DEBUG_VIEW_LODS ? DEBUG_LOD_COLORS[min(lod, MAX_MESH_LODS - 1)] : ((pc.argument & 1) == DEBUG_LATE_PASS ? DEBUG_LATE_COLOR : DEBUG_EARLY_COLOR);
     if (view == DEBUG_VIEW_MESHLETS)
         color = getMeshletColor(meshlet);
     return float4(color * shade, 1.0);

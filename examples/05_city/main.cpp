@@ -853,7 +853,7 @@ int main(int argc, char **argv)
         .ui = true};
 
     applyExampleArgs(args, config);
-    // --meshlets off|vp picks how the trees and the monument are culled; --bench measures it (exampleBench.h).
+    // --meshlets off|vp|mesh|auto picks how the trees and the monument are culled; --bench measures it (exampleBench.h).
     applyMeshletFlag(argc, argv, config);
     ExampleBench bench{.on = hasBenchFlag(argc, argv)};
     if (bench.on)
@@ -974,6 +974,6 @@ int main(int argc, char **argv)
         lastTime = now;
     }
 
-    printBench(bench, config);
+    printBench(bench, config, engine.getRenderContext().hasMeshShaders());
     return exampleExit(args);
 }

@@ -612,7 +612,7 @@ field m: base + 540 + 64     = base + 604 = 0x1_0020_025C</code></pre>
 
 <pre><code class="lang-slang">DrawInfo *draw = pc.scene-&gt;drawInfoPtr + getDrawIndex();
 InstanceData *instance = pc.scene-&gt;instancesPtr + draw-&gt;firstInstance;
-VertexFull vert = getVertex(pc.scene, instance, draw, input.vertexID);</code></pre>
+VertexFull vert = getVertex(pc.scene, instance, draw-&gt;vertexOffset, input.vertexID);</code></pre>
 
 <p><code>getVertex</code> in <code>shaders/lib/core.slang</code> takes a skinned sub-mesh's vertex from the <code>Skin</code> pass's output, and any other from the geometry pool:</p>
 

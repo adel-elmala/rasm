@@ -1,13 +1,21 @@
 // clang-format off
 #include "core.slang"
+#include "meshletTask.slang"
 
 // The depth-only scene passes of a depth-only target (a shadow map): the draws of rasm.slang without shading.
-// Opaque draws use vertMain and the empty fragMain; MASK and BLEND draws use vertMask and fragMask.
+// Opaque draws use vertMain and the empty fragMain; MASK and BLEND draws use vertMask and fragMask. With mesh shaders,
+// meshMain and meshMask draw the visible meshlets (lib/meshletTask.slang's taskMain) the same way.
 
 struct VSInput
 {
     uint vertexID : SV_VertexID;
 };
+
+float4 getDepthPosition(InstanceData *instance, int vertexOffset, uint vertexID)
+{
+    VertexFull vert         = getVertex(pc.scene, instance, vertexOffset, vertexID);
+    return mul(pc.scene->projection, mul(pc.scene->view, mul(getWorldMatrix(pc.scene, instance), float4(vert.pos, 1.0))));
+}
 
 [shader("vertex")]
 float4 vertMain(VSInput input) : SV_POSITION
@@ -15,8 +23,26 @@ float4 vertMain(VSInput input) : SV_POSITION
     DrawInfo *draw          = pc.scene->drawInfoPtr + getDrawIndex();
     InstanceData *instance  = pc.scene->instancesPtr + draw->firstInstance;
     // SV_VertexID is the raw index-buffer value, as in rasm.slang.
-    VertexFull vert         = getVertex(pc.scene, instance, draw, input.vertexID);
-    return mul(pc.scene->projection, mul(pc.scene->view, mul(getWorldMatrix(pc.scene, instance), float4(vert.pos, 1.0))));
+    return getDepthPosition(instance, draw->vertexOffset, input.vertexID);
+}
+
+struct DepthVertex
+{
+    float4 clipPosition     : SV_POSITION;
+};
+
+[shader("mesh")]
+[outputtopology("triangle")]
+[numthreads(MESHLET_CHUNK_SIZE, 1, 1)]
+void meshMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID, in payload MeshletPayload meshletPayload,
+              out indices uint3 triangles[MESHLET_MAX_TRIANGLES], out vertices DepthVertex vertices[MESHLET_MAX_VERTICES])
+{
+    MeshletDraw meshlet     = getMeshletDraw(pc.scene, meshletPayload, groupId.x);
+    SetMeshOutputCounts(meshlet.vertexCount, meshlet.triangleCount);
+    if (threadId.x < meshlet.vertexCount)
+        vertices[threadId.x].clipPosition = getDepthPosition(meshlet.instance, meshlet.draw.vertexOffset, getMeshletVertex(pc.scene, meshlet, threadId.x));
+    for (uint t = threadId.x; t < meshlet.triangleCount; t += MESHLET_CHUNK_SIZE)
+        triangles[t] = getMeshletTriangle(pc.scene, meshlet, t);
 }
 
 [shader("fragment")]
@@ -35,22 +61,41 @@ struct MaskOutput
     nointerpolation uint materialIndex;
 };
 
-[shader("vertex")]
-MaskOutput vertMask(VSInput input)
+MaskOutput getMaskOutput(InstanceData *instance, int vertexOffset, uint vertexID)
 {
-    DrawInfo *draw          = pc.scene->drawInfoPtr + getDrawIndex();
-    InstanceData *instance  = pc.scene->instancesPtr + draw->firstInstance;
-    VertexFull vert         = getVertex(pc.scene, instance, draw, input.vertexID);
+    VertexFull vert         = getVertex(pc.scene, instance, vertexOffset, vertexID);
 
     MaskOutput output       = {};
     output.clipPosition     = mul(pc.scene->projection, mul(pc.scene->view, mul(getWorldMatrix(pc.scene, instance), float4(vert.pos, 1.0))));
     output.objectPosition   = vert.pos;
-    output.vertexAlpha      = getVertexColor(pc.scene, instance->geometryIndex, input.vertexID).a;
+    output.vertexAlpha      = getVertexColor(pc.scene, instance->geometryIndex, vertexID).a;
     output.uv0              = vert.uv[0];
     output.uv1              = vert.uv[1];
     output.uv2              = vert.uv[2];
     output.materialIndex    = instance->materialIndex;
     return output;
+}
+
+[shader("vertex")]
+MaskOutput vertMask(VSInput input)
+{
+    DrawInfo *draw          = pc.scene->drawInfoPtr + getDrawIndex();
+    InstanceData *instance  = pc.scene->instancesPtr + draw->firstInstance;
+    return getMaskOutput(instance, draw->vertexOffset, input.vertexID);
+}
+
+[shader("mesh")]
+[outputtopology("triangle")]
+[numthreads(MESHLET_CHUNK_SIZE, 1, 1)]
+void meshMask(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID, in payload MeshletPayload meshletPayload,
+              out indices uint3 triangles[MESHLET_MAX_TRIANGLES], out vertices MaskOutput vertices[MESHLET_MAX_VERTICES])
+{
+    MeshletDraw meshlet     = getMeshletDraw(pc.scene, meshletPayload, groupId.x);
+    SetMeshOutputCounts(meshlet.vertexCount, meshlet.triangleCount);
+    if (threadId.x < meshlet.vertexCount)
+        vertices[threadId.x] = getMaskOutput(meshlet.instance, meshlet.draw.vertexOffset, getMeshletVertex(pc.scene, meshlet, threadId.x));
+    for (uint t = threadId.x; t < meshlet.triangleCount; t += MESHLET_CHUNK_SIZE)
+        triangles[t] = getMeshletTriangle(pc.scene, meshlet, t);
 }
 
 [[vk::binding(0, 0)]]

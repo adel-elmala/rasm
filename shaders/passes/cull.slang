@@ -43,31 +43,16 @@ static const uint   CULL_MESHLETS       = 1u << 15;     // in chunks, not as a w
 static const uint   CULL_WHOLE          = 1u << 14;     // over the run's budget: one CHUNK_WHOLE chunk (writeMain)
 static const uint   CULL_DRAWN_EARLY    = 1u << 13;     // late phase: the early one drew the whole draw
 static const uint   CULL_EARLY_MESHLETS = 1u << 12;     // late phase: the early one drew its meshlets that passed their last test
-static const uint   CULL_EARLY          = 0;            // Must match CULL_EARLY and CULL_LATE in gpuScene.cpp.
-static const uint   CULL_LATE           = 1;
-// A chunk: x = the draw in allDrawsPtr, y = lod | CHUNK_* flags, z = its first meshlet in the LOD, w = its meshlets.
-static const uint   CHUNK_LOD_MASK      = 0xFF;
-static const uint   CHUNK_WHOLE         = 1u << 8;
-static const uint   CHUNK_DRAWN_EARLY   = 1u << 9;
-static const uint   CHUNK_EARLY_MESHLETS = 1u << 10;
-// The meshlet dispatches' groups: x, then rows of x. Must match MESHLET_DISPATCH_WIDTH in gpuScene.cpp.
-static const uint   MESHLET_DISPATCH_WIDTH = 65535;
 // A LOD with fewer meshlets is drawn whole: the draw's own test already culled it, and its few meshlets would cost
 // more to test than they save (measured in 05_city and 18_meshlets, RTX 3060).
 static const uint   MESHLET_MIN_DRAW    = 8;
-static const uint   MESHLET_CHUNK_GROUP = 64;           // chunks per sum of chunkSumsPtr; each run's chunks start at a multiple. Must match gpuScene.cpp.
-// The meshlet dispatches' pc.argument: the phase, and the run above it.
-static const uint   MESHLET_RUN_SHIFT   = 4;
-// cullStatsPtr: visible draws, visible triangles (low, high), the same triangles at LOD 0 (low, high), then the
-// visible draws at each LOD, the light counts of lightClusters.slang, then the meshlets. Must match the CULL_STATS_*
-// words in gpuScene.h.
+// cullStatsPtr: visible draws, visible triangles (low, high: STATS_TRIANGLES in lib/meshletCulling.slang), the same
+// triangles at LOD 0 (low, high), then the visible draws at each LOD, the light counts of lightClusters.slang, then
+// the meshlets. Must match the CULL_STATS_* words in gpuScene.h.
 static const uint   STATS_DRAWS         = 0;
-static const uint   STATS_TRIANGLES     = 1;
 static const uint   STATS_LOD0_TRIANGLES = 3;
 static const uint   STATS_LOD_DRAWS     = 5;
-static const uint   STATS_MESHLETS      = STATS_LOD_DRAWS + MAX_MESH_LODS + 2;
-static const uint   STATS_MESHLETS_CULLED = STATS_MESHLETS + 1;
-static const uint   STATS_MESHLETS_WHOLE = STATS_MESHLETS + 2;
+static const uint   STATS_LOD_TRIANGLES = STATS_MESHLETS + 3;    // low, high: the visible draws' triangles at their LOD, before meshlet culling
 
 struct CullGroup
 {
@@ -81,6 +66,7 @@ struct CullGroup
 groupshared uint    visibleFlags[CULL_GROUP_SIZE];
 groupshared uint    visibleTriangles[CULL_GROUP_SIZE];
 groupshared uint    visibleLod0Triangles[CULL_GROUP_SIZE];
+groupshared uint    visibleLodTriangles[CULL_GROUP_SIZE];    // at the picked LOD, whole: before meshlet culling
 groupshared uint    visibleLods[CULL_GROUP_SIZE];          // MAX_MESH_LODS for a culled draw
 groupshared uint    groupChunks[CULL_GROUP_SIZE];          // a draw's chunks, 0 when it is not drawn by meshlets
 groupshared uint    groupMeshlets[CULL_GROUP_SIZE];        // a draw's meshlets, at its LOD
@@ -112,17 +98,6 @@ CullGroup getCullGroup(SceneData *scene, uint groupIndex)
     return group;
 }
 
-// Adds a 64-bit count, low word first, to counter[0] (low) and counter[1] (high). Not every backend has 64-bit
-// atomics, so a carry out of the low word goes into the high one.
-void addCount64(uint32_t *counter, uint low, uint high)
-{
-    uint previousLow;
-    InterlockedAdd(counter[0], low, previousLow);
-    high += previousLow + low < previousLow ? 1 : 0;
-    if (high > 0)
-        InterlockedAdd(counter[1], high);
-}
-
 bool isMeshletRun(SceneData *scene, uint run)
 {
     return ((scene->meshletRuns >> run) & 1) != 0;
@@ -143,6 +118,7 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
     uint packed         = CULLED;
     uint triangles      = 0;
     uint lod0Triangles  = 0;
+    uint lodTriangles   = 0;
     uint lod            = MAX_MESH_LODS;
     uint chunks         = 0;
     uint meshlets       = 0;
@@ -192,12 +168,14 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
                 triangles   = visible ? geometry->lods[lod].indexCount / 3 : 0;
             }
             lod0Triangles   = counted ? draw.indexCount / 3 : 0;
+            lodTriangles    = counted ? geometry->lods[lod].indexCount / 3 : 0;
         }
     }
 
     visibleFlags[threadId.x]            = visible ? 1 : 0;
     visibleTriangles[threadId.x]        = triangles;
     visibleLod0Triangles[threadId.x]    = lod0Triangles;
+    visibleLodTriangles[threadId.x]     = lodTriangles;
     visibleLods[threadId.x]             = counted ? lod : MAX_MESH_LODS;
     groupChunks[threadId.x]             = chunks;
     groupMeshlets[threadId.x]           = meshlets;
@@ -228,6 +206,8 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
         uint trianglesHigh      = 0;
         uint lod0Low            = 0;
         uint lod0High           = 0;
+        uint lodLow             = 0;
+        uint lodHigh            = 0;
         uint draws              = 0;
         uint groupChunkCount    = 0;
         uint groupMeshletCount  = 0;
@@ -239,6 +219,9 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
             uint lod0Sum        = lod0Low + visibleLod0Triangles[i];
             lod0High           += lod0Sum < lod0Low ? 1 : 0;
             lod0Low             = lod0Sum;
+            uint lodSum         = lodLow + visibleLodTriangles[i];
+            lodHigh            += lodSum < lodLow ? 1 : 0;
+            lodLow              = lodSum;
             draws              += visibleLods[i] < MAX_MESH_LODS ? 1 : 0;
             groupChunkCount    += groupChunks[i];
             groupMeshletCount  += groupMeshlets[i];
@@ -250,6 +233,7 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
             InterlockedAdd(scene->cullStatsPtr[STATS_DRAWS], draws);
             addCount64(scene->cullStatsPtr + STATS_TRIANGLES, trianglesLow, trianglesHigh);
             addCount64(scene->cullStatsPtr + STATS_LOD0_TRIANGLES, lod0Low, lod0High);
+            addCount64(scene->cullStatsPtr + STATS_LOD_TRIANGLES, lodLow, lodHigh);
         }
     }
 }
@@ -361,32 +345,9 @@ void writeMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
     }
 }
 
-groupshared uint    chunkMask[2];
-groupshared uint    chunkBits[2];
-groupshared uint    chunkTriangles;
-groupshared uint    chunkCulled;
-
-struct MeshletChunk
-{
-    uint            run;
-    uint            index;                              // in meshletChunksPtr
-    uint4           entry;
-    bool            valid;
-};
-
-MeshletChunk getMeshletChunk(SceneData *scene, uint3 groupId)
-{
-    MeshletChunk chunk;
-    chunk.run           = pc.argument >> MESHLET_RUN_SHIFT;
-    uint index          = groupId.y * MESHLET_DISPATCH_WIDTH + groupId.x;
-    chunk.valid         = index < scene->meshletArgsPtr[chunk.run].w;
-    chunk.index         = scene->runChunkFirst[chunk.run] + index;
-    chunk.entry         = chunk.valid ? scene->meshletChunksPtr[chunk.index] : uint4(0);
-    return chunk;
-}
-
-// Tests a chunk's meshlets, a thread each, and keeps the visible ones in the chunk's mask. The late phase also writes
-// the chunk's visibility bits: each chunk holds 64 meshlets from a multiple of 64, so its two words are its own.
+// Tests a chunk's meshlets (lib/meshletCulling.slang) and keeps the visible ones as the chunk's mask, and their count in
+// the sum of its group of 64 chunks: a sum the order of the adds does not change, so meshletWriteMain's draws stay in
+// chunk order.
 [shader("compute")]
 [numthreads(CULL_GROUP_SIZE, 1, 1)]
 void meshletCountMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
@@ -396,94 +357,13 @@ void meshletCountMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThrea
     if (!chunk.valid)
         return;
 
-    uint phase          = pc.argument & 1;
-    uint lane           = threadId.x;
-    uint4 entry         = chunk.entry;
-    DrawInfo draw       = scene->allDrawsPtr[entry.x];
-    InstanceData *instance = scene->instancesPtr + draw.firstInstance;
-    GeometryLod lod     = scene->geometryPtr[instance->geometryIndex].lods[entry.y & CHUNK_LOD_MASK];
-    bool late           = scene->hizLevelCount > 0 && phase == CULL_LATE;
-    bool hasBits        = scene->hizLevelCount > 0 && scene->meshletVisibilityPtr != nullptr && instance->meshletVisibility >= 0;
-    if (lane < 2)
+    uint2 mask          = cullMeshletChunk(scene, chunk, threadId.x);
+    if (threadId.x == 0)
     {
-        chunkMask[lane] = 0;
-        chunkBits[lane] = 0;
-    }
-    if (lane == 0)
-    {
-        chunkTriangles  = 0;
-        chunkCulled     = 0;
-    }
-    GroupMemoryBarrierWithGroupSync();
-
-    if (lane < entry.w)
-    {
-        bool visible    = false;
-        uint triangles  = 0;
-        if ((entry.y & CHUNK_WHOLE) != 0)
-        {
-            // Drawn whole by the early phase already; one it drew in part is drawn whole now.
-            visible     = (entry.y & CHUNK_DRAWN_EARLY) == 0;
-            triangles   = visible ? lod.indexCount / 3 : 0;
-        }
-        else
-        {
-            uint index      = entry.z + lane;
-            GeometryMeshlet meshlet = scene->meshletsPtr[lod.firstMeshlet + index];
-            Sphere sphere   = getInstanceSphere(scene, instance, meshlet.center, meshlet.radius);
-            bool facing     = !(((scene->coneRuns >> chunk.run) & 1) != 0 && isMeshletBackFacing(scene, instance, meshlet));
-            bool tested     = isInFrustum(scene, sphere) && facing;
-            bool lastSeen   = !hasBits || readMeshletBit(scene, instance, index);
-            // A meshlet the early phase leaves out is not culled yet: the late one decides. The last phase of the
-            // frame counts the culled ones.
-            bool culled     = false;
-            if (scene->hizLevelCount == 0)
-            {
-                visible     = tested;
-                culled      = !tested;
-            }
-            else if (!late)
-            {
-                visible     = tested && lastSeen;
-            }
-            else
-            {
-                bool seen   = tested && !isOccluded(scene, sphere);
-                if (seen)
-                    InterlockedOr(chunkBits[lane / 32], 1u << (lane % 32));
-                bool drawnEarly = (entry.y & CHUNK_DRAWN_EARLY) != 0 || ((entry.y & CHUNK_EARLY_MESHLETS) != 0 && tested && lastSeen);
-                visible     = seen && !drawnEarly;
-                // A draw the early phase drew whole has none culled.
-                culled      = !seen && (entry.y & CHUNK_DRAWN_EARLY) == 0;
-            }
-            if (culled)
-                InterlockedAdd(chunkCulled, 1);
-            triangles       = visible ? meshlet.indexCount / 3 : 0;
-        }
-        if (visible)
-        {
-            InterlockedOr(chunkMask[lane / 32], 1u << (lane % 32));
-            InterlockedAdd(chunkTriangles, triangles);
-        }
-    }
-    GroupMemoryBarrierWithGroupSync();
-
-    // The words past the LOD's meshlets belong to no meshlet: the instance's words cover only its LOD's.
-    if (late && hasBits && (entry.y & CHUNK_WHOLE) == 0 && lane < 2 && entry.z + lane * 32 < lod.meshletCount)
-        scene->meshletVisibilityPtr[uint(instance->meshletVisibility) + entry.z / 32 + lane] = chunkBits[lane];
-    if (lane == 0)
-    {
-        scene->chunkMasksPtr[chunk.index] = uint2(chunkMask[0], chunkMask[1]);
-        uint visibleCount = countbits(chunkMask[0]) + countbits(chunkMask[1]);
+        scene->chunkMasksPtr[chunk.index] = mask;
+        uint visibleCount = countbits(mask.x) + countbits(mask.y);
         if (visibleCount > 0)
-        {
-            // A sum the order of the adds does not change, so meshletWriteMain's draws stay in chunk order.
             InterlockedAdd(scene->chunkSumsPtr[chunk.index / MESHLET_CHUNK_GROUP], visibleCount);
-            InterlockedAdd(scene->cullStatsPtr[STATS_MESHLETS], visibleCount);
-            addCount64(scene->cullStatsPtr + STATS_TRIANGLES, chunkTriangles, 0);
-        }
-        if (chunkCulled > 0)
-            InterlockedAdd(scene->cullStatsPtr[STATS_MESHLETS_CULLED], chunkCulled);
     }
 }
 
@@ -523,12 +403,10 @@ void meshletWriteMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThrea
     uint2 mask          = scene->chunkMasksPtr[chunk.index];
     if (lane == 0 && chunk.index + 1 == first + scene->meshletArgsPtr[chunk.run].w)
         scene->meshletDrawCountsPtr[chunk.run] = base + countbits(mask.x) + countbits(mask.y);
-    uint word           = lane < 32 ? mask.x : mask.y;
-    if (lane >= chunk.entry.w || (word & (1u << (lane % 32))) == 0)
+    if (lane >= chunk.entry.w || !isInMask(mask, lane))
         return;
 
-    uint below          = lane < 32 ? countbits(mask.x & ((1u << lane) - 1)) : countbits(mask.x) + countbits(mask.y & ((1u << (lane - 32)) - 1));
-    uint slot           = scene->runMeshletFirst[chunk.run] + base + below;
+    uint slot           = scene->runMeshletFirst[chunk.run] + base + countMaskBelow(mask, lane);
     DrawInfo draw       = scene->allDrawsPtr[chunk.entry.x];
     GeometryData *geometry = getDrawGeometry(scene, draw);
     uint lod            = chunk.entry.y & CHUNK_LOD_MASK;

@@ -220,6 +220,7 @@ struct SceneData
     uint32_t            meshletRuns;            // a bit per run whose big draws are drawn by meshlets
     uint32_t            coneRuns;               // a bit per run culled by face, where the cone test holds
     uint32_t            padding;
+    uint32_t*           meshletDataPtr;         // the meshlets' vertices and triangles, for the mesh shaders; null without them
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.
@@ -357,12 +358,12 @@ int getSkinnedVertex(SceneData *scene, InstanceData *instance)
 
 // A vertex of the draw: a skinned sub-mesh's from this frame's Skin pass, any other from the geometry pool. vertexID
 // is the raw index-buffer value, local to the sub-mesh.
-VertexFull getVertex(SceneData *scene, InstanceData *instance, DrawInfo *draw, uint vertexID)
+VertexFull getVertex(SceneData *scene, InstanceData *instance, int vertexOffset, uint vertexID)
 {
     int skinned = getSkinnedVertex(scene, instance);
     if (skinned >= 0)
         return scene->skinnedVertsPtr[uint(skinned) + vertexID];
-    return scene->vertsPtr[vertexID + draw->vertexOffset];
+    return scene->vertsPtr[vertexID + vertexOffset];
 }
 
 // The object-space position the frame before drew for a vertex: a skinned one's from the other slot's skinned

@@ -155,6 +155,8 @@ namespace rasm
         ShaderHandle                vertexShader;
         ShaderHandle                fragmentShader;
         ShaderHandle                computeShader;
+        ShaderHandle                taskShader;
+        ShaderHandle                meshShader;                                   // with taskShader in place of vertexShader: a mesh pipeline
         DescriptorSetLayoutHandle   descriptorSetLayout;
         PrimitiveTopology           topology                                      = PrimitiveTopology::TRIANGLE_LIST;
         Format                      colorAttachmentFormats[MAX_COLOR_ATTACHMENTS] = {};

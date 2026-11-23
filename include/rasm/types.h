@@ -78,7 +78,9 @@ namespace rasm
         FRAGMENT,
         VERTEX_FRAGMENT,
         COMPUTE,
-        ALL             // every stage, for descriptor set layouts
+        ALL,            // every stage, for descriptor set layouts
+        TASK,
+        MESH,
     };
 
     enum class PrimitiveTopology
@@ -140,6 +142,8 @@ namespace rasm
     {
         OFF,
         VERTEX_PULLING,
+        MESH_SHADERS,
+        AUTO,
     };
 
     // What the RASM window's Buffers section shows of a frame resource (Engine::setInspection).
@@ -187,7 +191,8 @@ namespace rasm
         uint32_t     geometryPoolMorphs      = 1u << 20; // a morph target's change to a vertex, 24 B each: 24 MiB
         uint32_t     geometryPoolIndices     = 1u << 24; // 4 B each: 64 MiB
         uint32_t     geometryPoolSubMeshes   = 1u << 14; // 200 B each
-        uint32_t     geometryPoolMeshlets    = 1u << 17; // a meshlet's bounds and index range, 40 B each: 5 MiB
+        uint32_t     geometryPoolMeshlets    = 1u << 17; // a meshlet's bounds and index range, 48 B each: 6 MiB
+        uint32_t     geometryPoolMeshletData = 1u << 23; // with mesh shaders: meshlets' vertices and triangles, 4 B each (32 MiB, about 50k meshlets)
         uint32_t     maxInstances            = 1u << 16; // 164 B each, twice (one copy per frame slot)
         uint32_t     maxLights               = 1u << 14; // 56 B each, twice
         uint32_t     maxMaterials            = 1u << 12; // materials alive at once, 220 B each, twice
@@ -202,7 +207,7 @@ namespace rasm
         bool         meshLods                = true;
         float        lodErrorPixels          = 1.0f;
         int32_t      forcedLod               = -1;
-        MeshletPath  meshletPath             = MeshletPath::OFF; // Engine::setMeshletPath; every mesh has its meshlets either way
+        MeshletPath  meshletPath             = MeshletPath::AUTO; // Engine::setMeshletPath; AUTO: MESH_SHADERS where the GPU has them, else OFF
         uint32_t     maxViewMeshlets         = 1u << 16; // VERTEX_PULLING: meshlet draws per scene view and frame slot, 20 B each (1.3 MiB); past it a mesh is drawn whole
         bool         asyncCompute            = false;
         bool         transferQueue           = true;     // loads copy their data on a queue family that only copies (the copy engine), where the GPU has one; else on the graphics queue

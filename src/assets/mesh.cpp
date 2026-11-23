@@ -48,7 +48,7 @@ namespace rasm
             {
                 const ObjRaw &obj = sub.objRaw;
                 bytes += obj.vertices.size() * sizeof(Vertex) + obj.indices.size() * sizeof(uint32_t) + obj.colors.size() * sizeof(uint32_t) +
-                         obj.skin.size() * sizeof(SkinVertex) + obj.morphs.size() * sizeof(MorphDelta) + obj.meshlets.size() * sizeof(Meshlet);
+                         obj.skin.size() * sizeof(SkinVertex) + obj.morphs.size() * sizeof(MorphDelta) + obj.meshlets.size() * sizeof(Meshlet) + obj.meshletData.size() * sizeof(uint32_t);
                 for (const MeshLod &lod : obj.lods)
                     bytes += lod.indices.size() * sizeof(uint32_t);
             }

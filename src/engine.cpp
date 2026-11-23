@@ -584,6 +584,44 @@ namespace rasm
         return ctx.createPipeline(desc);
     }
 
+    // A mesh pipeline of the scene passes: the file's taskMain (lib/meshletTask.slang), its mesh and fragment entry points,
+    // for targets with this one's formats and sample count.
+    PipelineHandle Engine::createMeshScenePipeline(const std::string &name, const std::string &shaderFile, const std::string &defines, const RenderTargetHandle &renderTarget,
+                                                   const char *meshEntryPoint, const char *fragmentEntryPoint, BlendMode blendMode, bool depthWrite, bool alphaToCoverage)
+    {
+        ZoneScoped;
+
+        const auto &rt = ctx.getRenderTarget(renderTarget);
+        if (rt.depthFormat == Format::UNKNOWN)
+        {
+            spdlog::error("Pipeline '{}' needs a valid render target.", name);
+            return {};
+        }
+        const std::string file = readFile(pathFromUtf8(config.shaderDir) / shaderFile);
+        const std::string source = defines.empty() ? file : defines + "#line 1\n" + file;
+        auto taskShader = shaderCompiler->compileFromString(source, name + ".task.slang", "taskMain");
+        auto meshShader = shaderCompiler->compileFromString(source, name + ".mesh.slang", meshEntryPoint);
+        auto fragShader = shaderCompiler->compileFromString(source, name + ".frag.slang", fragmentEntryPoint);
+        if (taskShader.code.empty() || meshShader.code.empty() || fragShader.code.empty())
+        {
+            spdlog::error("Failed to compile the shaders of mesh pipeline '{}'.", name);
+            return {};
+        }
+
+        PipelineDesc desc = {.name = "Mesh Pipeline for " + name,
+                             .fragmentShader = ctx.createShader({.name = name + ".frag", .type = ShaderType::FRAGMENT, .entryPoint = fragmentEntryPoint, .code = std::move(fragShader.code)}),
+                             .taskShader = ctx.createShader({.name = name + ".task", .type = ShaderType::TASK, .entryPoint = "taskMain", .code = std::move(taskShader.code)}),
+                             .meshShader = ctx.createShader({.name = name + ".mesh", .type = ShaderType::MESH, .entryPoint = meshEntryPoint, .code = std::move(meshShader.code)}),
+                             .descriptorSetLayout = bindlessDescriptorSetLayout,
+                             .depthStencilAttachmentFormat = rt.depthFormat,
+                             .blendMode = blendMode,
+                             .depthWrite = depthWrite,
+                             .samples = rt.samples,
+                             .alphaToCoverage = alphaToCoverage};
+        std::copy(rt.colorFormats, rt.colorFormats + MAX_COLOR_ATTACHMENTS, std::begin(desc.colorAttachmentFormats));
+        return ctx.createPipeline(desc);
+    }
+
     PipelineHandle Engine::createComputePipeline(const std::string &name, const std::string &shaderSource, const std::string &entryPoint)
     {
         ZoneScoped;

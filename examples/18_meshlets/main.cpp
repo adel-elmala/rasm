@@ -19,12 +19,13 @@
 
 // Dense meshes, culled by meshlets. A hilly terrain in 16 x 16 tiles of 8192 triangles each and 2500 rocks of 20480
 // triangles each: about 53 million triangles at LOD 0. The camera flies low through the valleys, so most of what is
-// in front of it hides behind a hill, and every rock shows only its front half. With meshlets (EngineConfig::meshletPath,
-// which this example turns on; the engine's default is off) each visible tile and rock is culled again per meshlet: by
+// in front of it hides behind a hill, and every rock shows only its front half. With meshlets (EngineConfig::meshletPath:
+// mesh shaders here, or vertex pulling where the GPU has none) each visible tile and rock is culled again per meshlet: by
 // the frustum, by its normal cone (the back half of a rock) and by the Hi-Z. The sun casts four shadow cascades, which
 // cull their meshlets the same way. The RASM window (F1) switches the path while it runs.
 //
-//   --meshlets off|vp   draw each tile and rock whole, or by meshlets (vertex pulling, the default here)
+//   --meshlets off|vp|mesh|auto   draw each tile and rock whole, or by meshlets: vertex pulling, mesh shaders (the
+//                       default here), or the engine's default (mesh shaders where the GPU has them, else whole)
 //   --bench             at 1920x1080, without validation and without the UI: prints the GPU time of each pass and
 //                       what culling kept, averaged over the frames after the warm-up (exampleBench.h)
 //   --debug-view <none|normals|uvs|overdraw|lods|culling|light-count|meshlets>
@@ -249,7 +250,7 @@ int main(int argc, char **argv)
         .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
         .shaderDir = RASM_EXAMPLE_SHADER_DIR,
         .geometryPoolColors = 1u << 21, // the terrain's vertex colors: 1.1M
-        .meshletPath = rasm::MeshletPath::VERTEX_PULLING,
+        .meshletPath = rasm::MeshletPath::MESH_SHADERS,
         .ui = true};
     applyExampleArgs(args, config);
     applyMeshletFlag(argc, argv, config);
@@ -361,6 +362,6 @@ int main(int argc, char **argv)
             addBenchFrame(bench, engine.getFrameStats());
         seconds += FIXED_STEP_SECONDS;
     }
-    printBench(bench, config);
+    printBench(bench, config, engine.getRenderContext().hasMeshShaders());
     return exampleExit(args);
 }

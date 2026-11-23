@@ -68,10 +68,18 @@ namespace rasm
             else
                 std::snprintf(line, sizeof(line), "LOD       by distance (F2)\n");
             text += line;
-            const uint64_t saved = stats.trianglesVisibleLod0 > stats.trianglesVisible ? stats.trianglesVisibleLod0 - stats.trianglesVisible : 0;
+            // What LODs saved, and then what meshlet culling saved of the rest: two numbers, so neither hides the other.
+            const uint64_t saved = stats.trianglesVisibleLod0 > stats.trianglesVisibleLod ? stats.trianglesVisibleLod0 - stats.trianglesVisibleLod : 0;
             const double savedPercent = stats.trianglesVisibleLod0 > 0 ? 100.0 * static_cast<double>(saved) / static_cast<double>(stats.trianglesVisibleLod0) : 0.0;
             std::snprintf(line, sizeof(line), "LOD saved %s (%.0f%%)\n", formatCount(saved).c_str(), savedPercent);
             text += line;
+            if (stats.meshletsVisible + stats.meshletsCulled > 0)
+            {
+                const uint64_t meshletSaved = stats.trianglesVisibleLod > stats.trianglesVisible ? stats.trianglesVisibleLod - stats.trianglesVisible : 0;
+                const double meshletPercent = stats.trianglesVisibleLod > 0 ? 100.0 * static_cast<double>(meshletSaved) / static_cast<double>(stats.trianglesVisibleLod) : 0.0;
+                std::snprintf(line, sizeof(line), "Meshlets saved %s (%.0f%%)\n", formatCount(meshletSaved).c_str(), meshletPercent);
+                text += line;
+            }
 
             // The visible draws at LOD 0, 1, 2, ... up to the coarsest one in use, wrapped to the overlay's width.
             uint32_t lodsUsed = 1;

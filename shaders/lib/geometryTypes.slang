@@ -50,6 +50,8 @@ struct GeometryMeshlet
     float           coneCutoff;
     uint32_t        firstIndex;         // in the index pool
     uint32_t        indexCount;
+    uint32_t        firstData;          // in SceneData::meshletDataPtr: vertexCount vertices, then a word per triangle
+    uint32_t        vertexCount;
 };
 
 // The LODs share the sub-mesh's vertices, so vertexOffset is the same for all of them.

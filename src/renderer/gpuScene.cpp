@@ -85,6 +85,19 @@ namespace rasm
             return getVisibleDrawLayout(view.visibleCapacity[frame], view.meshletCapacity[frame], view.chunkCapacity[frame]);
         }
 
+        // The path a view draws its meshlets by. AUTO takes the mesh shaders where the device has them and leaves meshlets off
+        // elsewhere: measured on an RTX 3060, the mesh shaders cost about 1% where LODs already cut the triangles and save up
+        // to 30% on dense meshes, while vertex pulling costs about 11% in the first case (P28). MESH_SHADERS asked for
+        // explicitly falls back to vertex pulling.
+        MeshletPath resolveMeshletPath(MeshletPath path, bool meshShaders)
+        {
+            if (path == MeshletPath::AUTO)
+                return meshShaders ? MeshletPath::MESH_SHADERS : MeshletPath::OFF;
+            if (path == MeshletPath::MESH_SHADERS && !meshShaders)
+                return MeshletPath::VERTEX_PULLING;
+            return path;
+        }
+
         // An orthographic view's direction, or a perspective one's position: what the meshlet cone test looks from.
         glm::vec4 getCullViewPoint(const glm::mat4 &projection, const glm::mat4 &view)
         {
@@ -379,6 +392,8 @@ namespace rasm
             spdlog::error("Failed to create the GPU scene tables (EngineConfig::maxInstances = {}, maxMaterials = {}).", config.maxInstances, config.maxMaterials);
             return false;
         }
+        if (config.meshletPath == MeshletPath::MESH_SHADERS && !ctx.hasMeshShaders())
+            spdlog::warn("EngineConfig::meshletPath is MESH_SHADERS, and this GPU has no mesh shaders (VK_EXT_mesh_shader): meshlets are drawn by vertex pulling.");
         gpuScene->instanceRows.reset(config.maxInstances);
         gpuScene->instanceCullModes.assign(config.maxInstances, CullMode::NONE);
         gpuScene->instanceAlphaModes.assign(config.maxInstances, AlphaMode::NONE);
@@ -1072,9 +1087,19 @@ namespace rasm
             });
         // The sky goes behind what the view's last draw pass of the frame drew: the late pass, unless this frame has
         // none (no Hi-Z, or frozen culling).
+        // With mesh shaders the draw passes cull the meshlets themselves (lib/meshletTask.slang): the early one reads the
+        // meshlet bits, the late one reads the Hi-Z and writes the bits, as the culling passes do on the other path. The
+        // graph is fixed and the path is not, so this holds wherever the device has them: with async compute, Cull 1 then
+        // also waits for the frame before's Scene 2.
+        const bool meshletBitsInDraws = ctx.hasMeshShaders() && sceneView.meshletVisibility.isValid();
         graph.addPass(
             occlusion ? drawName + " 1" : drawName,
-            drawScenePass,
+            [&](PassBuilder &builder)
+            {
+                drawScenePass(builder);
+                if (meshletBitsInDraws)
+                    builder.readPrevious(sceneView.meshletVisibility);
+            },
             [this, view](RenderContext &)
             {
                 drawSceneView(view, CULL_EARLY);
@@ -1134,7 +1159,14 @@ namespace rasm
             });
         graph.addPass(
             drawName + " 2",
-            drawScenePass,
+            [&](PassBuilder &builder)
+            {
+                drawScenePass(builder);
+                if (ctx.hasMeshShaders())
+                    builder.read(sceneView.hiz);
+                if (meshletBitsInDraws)
+                    builder.write(sceneView.meshletVisibility);
+            },
             [this, view](RenderContext &)
             {
                 if (!gpuScene->views[view].late)
@@ -1290,6 +1322,7 @@ namespace rasm
         view.late = false;
         view.debugView = DebugView::NONE;
         view.meshletRuns = 0;
+        view.meshShaders = false;
 
         const auto &drawList = gpuScene->drawLists[view.scene.index];
         const auto frame = static_cast<uint32_t>(frameCount);
@@ -1409,12 +1442,26 @@ namespace rasm
         }
         const bool culled = gpuScene->cullCountPipeline.isValid() && gpuScene->cullWritePipeline.isValid();
 
-        // The meshlet passes, made once a scene has meshlets to draw. Without them its big draws are drawn whole.
+        // The meshlet pipelines, made once a scene has meshlets to draw. With mesh shaders: the task and mesh pipelines of
+        // the runs that have meshlets; where the device has none, or they fail, the vertex-pulling passes. Without either,
+        // big draws are drawn whole.
         bool meshletDraws = false;
+        bool opaqueMeshlets = false;
+        bool maskMeshlets = false;
         for (const DrawRun &run : drawList.runs)
-            meshletDraws = meshletDraws || (run.alphaMode != AlphaMode::BLEND && run.meshletDraws > 0);
-        meshletDraws = meshletDraws && culled && config.meshletPath == MeshletPath::VERTEX_PULLING;
-        if (meshletDraws && (!gpuScene->meshletCountPipeline.isValid() || !gpuScene->meshletWritePipeline.isValid()))
+        {
+            const bool hasMeshlets = run.alphaMode != AlphaMode::BLEND && run.meshletDraws > 0;
+            meshletDraws = meshletDraws || hasMeshlets;
+            opaqueMeshlets = opaqueMeshlets || (hasMeshlets && run.alphaMode == AlphaMode::NONE);
+            maskMeshlets = maskMeshlets || (hasMeshlets && run.alphaMode == AlphaMode::MASK && view.drawMask);
+        }
+        // The mesh shaders read the meshlet data stream, which EngineConfig::geometryPoolMeshletData = 0 leaves out.
+        const MeshletPath meshletPath = resolveMeshletPath(config.meshletPath, ctx.hasMeshShaders() && geometryPool->meshletDataBuffer().isValid());
+        meshletDraws = meshletDraws && culled && meshletPath != MeshletPath::OFF;
+        view.meshShaders = meshletDraws && meshletPath == MeshletPath::MESH_SHADERS && createMeshletPipelines(viewIndex, opaqueMeshlets, maskMeshlets);
+        // AUTO picked the mesh shaders for their cost; without their pipelines it draws whole, as where the GPU has none.
+        meshletDraws = meshletDraws && (view.meshShaders || config.meshletPath != MeshletPath::AUTO);
+        if (meshletDraws && !view.meshShaders && (!gpuScene->meshletCountPipeline.isValid() || !gpuScene->meshletWritePipeline.isValid()))
         {
             const std::string cullSource = readFile(pathFromUtf8(config.shaderDir) / "passes/cull.slang");
             if (!gpuScene->meshletCountPipeline.isValid())
@@ -1424,7 +1471,7 @@ namespace rasm
             if (!gpuScene->meshletCountPipeline.isValid() || !gpuScene->meshletWritePipeline.isValid())
                 spdlog::error("Failed to create the meshlet culling pipelines; big meshes are drawn whole.");
         }
-        meshletDraws = meshletDraws && gpuScene->meshletCountPipeline.isValid() && gpuScene->meshletWritePipeline.isValid();
+        meshletDraws = meshletDraws && (view.meshShaders || (gpuScene->meshletCountPipeline.isValid() && gpuScene->meshletWritePipeline.isValid()));
 
         // A shaded view draws its blend run last, back to front: the run is sorted on the GPU once culling has packed it.
         for (uint32_t i = 0; !view.depthOnly && i < drawList.runs.size(); ++i)
@@ -1492,15 +1539,22 @@ namespace rasm
             const DrawRun &run = drawList.runs[i];
             if (run.alphaMode == AlphaMode::BLEND || run.meshletDraws == 0)
                 continue;
+            meshletRuns |= 1u << i;
+            // A run's chunks start at a multiple of MESHLET_CHUNK_GROUP, so each sum of chunkSumsPtr holds one run's.
+            runChunkFirst[i] = chunkNeed;
+            chunkNeed += (run.chunks + MESHLET_CHUNK_GROUP - 1) / MESHLET_CHUNK_GROUP * MESHLET_CHUNK_GROUP;
+            // The task shaders draw every visible meshlet straight away: no meshlet draws, so no budget.
+            if (view.meshShaders)
+            {
+                runMeshletBudget[i] = UINT32_MAX;
+                view.runMeshletSize[i] = 0;
+                continue;
+            }
             runMeshletBudget[i] = std::min(run.meshlets, budgetLeft);
             budgetLeft -= runMeshletBudget[i];
             view.runMeshletFirst[i] = meshletNeed;
             view.runMeshletSize[i] = runMeshletBudget[i] + run.meshletDraws;
             meshletNeed += view.runMeshletSize[i];
-            // A run's chunks start at a multiple of MESHLET_CHUNK_GROUP, so each sum of chunkSumsPtr holds one run's.
-            runChunkFirst[i] = chunkNeed;
-            chunkNeed += (run.chunks + MESHLET_CHUNK_GROUP - 1) / MESHLET_CHUNK_GROUP * MESHLET_CHUNK_GROUP;
-            meshletRuns |= 1u << i;
         }
 
         // The buffer holds the packed draws and meshlet draws, then culling's scratch. Only this slot's last frame used
@@ -1630,6 +1684,8 @@ namespace rasm
             sceneData.drawCountsPtr = sceneData.drawInfoPtr + layout.drawCounts;
         }
         sceneData.meshletsPtr = ctx.getBufferDeviceAddress(geometryPool->meshletBuffer());
+        if (view.meshShaders)
+            sceneData.meshletDataPtr = ctx.getBufferDeviceAddress(geometryPool->meshletDataBuffer());
         if (view.meshletRuns != 0)
         {
             sceneData.meshletDrawsPtr = sceneData.drawInfoPtr + layout.meshletDraws;
@@ -1779,7 +1835,7 @@ namespace rasm
         ctx.bindPipeline(commandBuffer, gpuScene->cullWritePipeline);
         ctx.pushConstants(commandBuffer, gpuScene->cullWritePipeline, &pushConstants, sizeof(pushConstants), 0);
         ctx.dispatch(commandBuffer, view.groupCount);
-        if (view.meshletRuns != 0)
+        if (view.meshletRuns != 0 && !view.meshShaders)
             recordMeshletCulling(viewIndex, phase);
 
         // The phase that keeps the blend run's draws: the late one, or the only one in a frame without a Hi-Z.
@@ -1927,9 +1983,28 @@ namespace rasm
                                              layout.drawCounts + i * sizeof(uint32_t), run.count, sizeof(gfx::DrawInfo));
             else
                 ctx.drawIndexedIndirect(commandBuffer, drawList.buffers[frame], run.first * sizeof(gfx::DrawInfo), run.count, sizeof(gfx::DrawInfo));
+            // With mesh shaders, the run's task draw: a task workgroup per chunk of meshlets (lib/meshletTask.slang),
+            // with the group counts writeMain wrote for the vertex-pulling dispatches. The run is in the argument.
+            if ((view.meshletRuns & (1u << i)) != 0 && view.meshShaders)
+            {
+                const bool mask = run.alphaMode != AlphaMode::NONE;
+                PipelineHandle meshPipeline = mask ? shaded.meshMaskPipeline : shaded.meshPipeline;
+                if (view.depthOnly)
+                    meshPipeline = mask ? gpuScene->depthMeshMaskPipeline : gpuScene->depthMeshPipeline;
+                else if (view.debugView != DebugView::NONE)
+                    meshPipeline = mask ? debug.meshMaskPipeline : debug.meshPipeline;
+                ctx.bindPipeline(commandBuffer, meshPipeline);
+                ctx.bindDescriptorSet(commandBuffer, meshPipeline, bindlessDescriptorSet, 0);
+                bound = meshPipeline;
+                gfx::PushConstants taskConstants = pushConstants;
+                taskConstants.firstDraw = 0;
+                taskConstants.argument = phase | i << MESHLET_RUN_SHIFT;
+                ctx.pushConstants(commandBuffer, meshPipeline, &taskConstants, sizeof(taskConstants), 0);
+                ctx.drawMeshTasksIndirect(commandBuffer, view.visibleDraws[frame], layout.meshletArgs + static_cast<uint64_t>(i) * MESHLET_ARGS_SIZE, 1, MESHLET_ARGS_SIZE);
+            }
             // The run's visible meshlets, after the draws in the same buffer: the vertex shader reads either one as a
             // DrawInfo at drawInfoPtr.
-            if ((view.meshletRuns & (1u << i)) != 0)
+            else if ((view.meshletRuns & (1u << i)) != 0)
             {
                 pushConstants.firstDraw = view.visibleCapacity[frame] + view.runMeshletFirst[i];
                 ctx.pushConstants(commandBuffer, pipeline, &pushConstants, sizeof(pushConstants), 0);
@@ -1939,6 +2014,44 @@ namespace rasm
         }
         // beginPass sets NONE for every other pipeline.
         ctx.setCullMode(commandBuffer, CullMode::NONE);
+    }
+
+    // The task and mesh pipelines a view's meshlet runs need, made the first time like the MASK ones: the opaque runs'
+    // and the MASK runs', shaded, in the view's debug view, or depth-only. False while one is missing (a shader error
+    // retries next frame), and the view then draws its meshlets by vertex pulling (whole with AUTO).
+    bool Engine::createMeshletPipelines(uint32_t viewIndex, bool opaque, bool mask)
+    {
+        SceneView &view = gpuScene->views[viewIndex];
+        if (view.depthOnly)
+        {
+            if (opaque && !gpuScene->depthMeshPipeline.isValid())
+                gpuScene->depthMeshPipeline = createMeshScenePipeline("shadowMesh", "passes/shadow.slang", "", view.renderTarget, "meshMain", "fragMain", BlendMode::NONE, true);
+            if (mask && !gpuScene->depthMeshMaskPipeline.isValid())
+                gpuScene->depthMeshMaskPipeline = createMeshScenePipeline("shadowMeshMask", "passes/shadow.slang", "", view.renderTarget, "meshMask", "fragMask", BlendMode::NONE, true);
+            return (!opaque || gpuScene->depthMeshPipeline.isValid()) && (!mask || gpuScene->depthMeshMaskPipeline.isValid());
+        }
+
+        ShadedPipelines &shaded = getShadedPipelines(*gpuScene, ctx, view);
+        const bool debugVariant = view.debugView != DebugView::NONE;
+        PipelineHandle &opaquePipeline = debugVariant ? (view.debugView == DebugView::OVERDRAW ? shaded.overdraw : shaded.debug).meshPipeline : shaded.meshPipeline;
+        PipelineHandle &maskPipeline = debugVariant ? (view.debugView == DebugView::OVERDRAW ? shaded.overdraw : shaded.debug).meshMaskPipeline : shaded.meshMaskPipeline;
+        const bool missing = (opaque && !opaquePipeline.isValid()) || (mask && !maskPipeline.isValid());
+        if (missing)
+        {
+            // The same variants as the vertex pipelines of drawSceneView, so the image does not depend on the path.
+            const bool multisampled = ctx.getRenderTarget(view.renderTarget).samples > 1;
+            const BlendMode blendMode = view.debugView == DebugView::OVERDRAW ? BlendMode::ADDITIVE : BlendMode::NONE;
+            const std::string defines = getMotionDefine(ctx, view) + std::string(debugVariant ? "#define RASM_DEBUG_VIEW 1\n" : "");
+            const bool coverage = multisampled && !debugVariant;
+            const std::string maskDefines = defines + (coverage ? "#define RASM_ALPHA_MASK 1\n#define RASM_ALPHA_TO_COVERAGE 1\n" : "#define RASM_ALPHA_MASK 1\n");
+            if (opaque && !opaquePipeline.isValid())
+                opaquePipeline = createMeshScenePipeline(debugVariant ? "rasmDebugMesh" : "rasmMesh", "passes/rasm.slang", defines, view.renderTarget, "meshMain", "fragMain", blendMode, true);
+            if (mask && !maskPipeline.isValid())
+                maskPipeline = createMeshScenePipeline(debugVariant ? "rasmDebugMeshMask" : "rasmMeshMask", "passes/rasm.slang", maskDefines, view.renderTarget, "meshMain", "fragMain", blendMode, true, coverage);
+            if ((opaque && !opaquePipeline.isValid()) || (mask && !maskPipeline.isValid()))
+                spdlog::error("Failed to create the mesh shader pipelines; meshlets are drawn by vertex pulling, or whole with MeshletPath::AUTO.");
+        }
+        return (!opaque || opaquePipeline.isValid()) && (!mask || maskPipeline.isValid());
     }
 
     // The blend run, after the view's draws and its sky: depth tested against them, but not written, so each see-through
@@ -2017,11 +2130,14 @@ namespace rasm
 
     void Engine::setMeshletPath(MeshletPath path)
     {
-        if (path != MeshletPath::OFF && path != MeshletPath::VERTEX_PULLING)
+        if (path != MeshletPath::OFF && path != MeshletPath::VERTEX_PULLING && path != MeshletPath::MESH_SHADERS && path != MeshletPath::AUTO)
         {
             spdlog::error("setMeshletPath: {} is not a MeshletPath.", static_cast<uint32_t>(path));
             return;
         }
+        // Kept as asked: prepareSceneView draws by vertex pulling where the device has no mesh shaders.
+        if (path == MeshletPath::MESH_SHADERS && !ctx.hasMeshShaders() && config.meshletPath != MeshletPath::MESH_SHADERS)
+            spdlog::warn("setMeshletPath: this GPU has no mesh shaders (VK_EXT_mesh_shader); meshlets are drawn by vertex pulling.");
         config.meshletPath = path;
     }
 

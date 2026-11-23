@@ -72,6 +72,7 @@ namespace rasm
         uint64_t                    triangles                   = 0;
         uint64_t                    trianglesVisible            = 0;
         uint64_t                    trianglesVisibleLod0        = 0;
+        uint64_t                    trianglesVisibleLod         = 0;    // the visible draws' triangles at their LOD, before meshlet culling
         uint32_t                    drawsPerLod[MAX_MESH_LODS]  = {};
         uint32_t                    meshletsVisible             = 0;    // meshlets drawn, in every view
         uint32_t                    meshletsCulled              = 0;    // meshlets of visible draws that the frustum, the normal cone or the Hi-Z culled
@@ -371,6 +372,7 @@ namespace rasm
         };
 
         PipelineHandle              createGraphicsPipeline(const std::string& name, const std::string& shaderSource, const Format* colorFormats, Format depthFormat, const char* vertexEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite, uint32_t samples = 1, bool alphaToCoverage = false, bool depthTest = true);
+        PipelineHandle              createMeshScenePipeline(const std::string& name, const std::string& shaderFile, const std::string& defines, const RenderTargetHandle& renderTarget, const char* meshEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite, bool alphaToCoverage = false);
         PipelineHandle              createScenePipeline(const std::string& name, const std::string& shaderFile, const std::string& defines, const RenderTargetHandle& renderTarget, const char* vertexEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite, bool alphaToCoverage = false, bool depthTest = true);
         MaterialHandle              loadMaterial(const tinygltf::Model& model, int materialIndex, GltfImportCache& cache);
         void                        finishMeshLoad(PendingMeshLoad& load);
@@ -434,6 +436,7 @@ namespace rasm
         void                        prepareSceneView(uint32_t view);
         void                        recordSceneCulling(uint32_t view, uint32_t phase);
         void                        recordMeshletCulling(uint32_t view, uint32_t phase);
+        bool                        createMeshletPipelines(uint32_t view, bool opaque, bool mask);
         void                        recordHiz(uint32_t view);
         void                        recordBlendSort(uint32_t view);
         void                        drawSceneView(uint32_t view, uint32_t phase);
