@@ -16,24 +16,33 @@ install(EXPORT rasmTargets NAMESPACE rasm:: DESTINATION "${RASM_INSTALL_CONFIG_D
 # shaders, which a relative shaderDir finds next to the library under any host program (python.exe), and on Windows the
 # dependencies' DLLs. A C program needs nothing else, not even vcpkg.
 if (RASM_C_API)
-    if (WIN32)
-        # The vcpkg DLLs they load, and the ones those load (zstd for libktx), from the build's configuration. The Debug
-        # TracyClient.dll is in debug/bin/Debug (see RasmRuntimeDlls.cmake).
-        set(rasm_vcpkg_bin "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
-        if (CMAKE_BUILD_TYPE STREQUAL "Debug")
-            set(rasm_vcpkg_bin "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/debug/bin" "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/debug/bin/Debug")
-        endif()
-        install(TARGETS rasm_c_renderer rasm_c EXPORT rasmCTargets
-                RUNTIME_DEPENDENCIES
-                    PRE_EXCLUDE_REGEXES "^api-ms-" "^ext-ms-"
-                    POST_EXCLUDE_REGEXES "[Ss]ystem32"
-                    DIRECTORIES ${rasm_vcpkg_bin}
-                FILE_SET HEADERS)
-        set(rasm_c_library_dir "${CMAKE_INSTALL_BINDIR}")
-    else()
-        install(TARGETS rasm_c_renderer rasm_c EXPORT rasmCTargets FILE_SET HEADERS)
-        set(rasm_c_library_dir "${CMAKE_INSTALL_LIBDIR}")
+    # The vcpkg shared libraries they load, and the ones those load (zstd for libktx on Windows, Slang's compiler on
+    # macOS too), from the build's configuration, go beside them. The Debug TracyClient.dll is in debug/bin/Debug (see
+    # RasmRuntimeDlls.cmake). On macOS and Linux the libraries look beside themselves (@loader_path, $ORIGIN).
+    set(rasm_vcpkg_dir "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
+    if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+        set(rasm_vcpkg_dir "${rasm_vcpkg_dir}/debug")
     endif()
+    if (WIN32)
+        set(rasm_c_library_dir "${CMAKE_INSTALL_BINDIR}")
+        set(rasm_vcpkg_libraries "${rasm_vcpkg_dir}/bin" "${rasm_vcpkg_dir}/bin/Debug")
+        set(rasm_system_libraries "[Ss]ystem32")
+    else()
+        set(rasm_c_library_dir "${CMAKE_INSTALL_LIBDIR}")
+        set(rasm_vcpkg_libraries "${rasm_vcpkg_dir}/lib")
+        set(rasm_system_libraries "^/usr/lib" "^/System/" "^/lib")
+        if (APPLE)
+            set_target_properties(rasm_c_renderer rasm_c PROPERTIES INSTALL_RPATH "@loader_path")
+        else()
+            set_target_properties(rasm_c_renderer rasm_c PROPERTIES INSTALL_RPATH "$ORIGIN")
+        endif()
+    endif()
+    install(TARGETS rasm_c_renderer rasm_c EXPORT rasmCTargets
+            RUNTIME_DEPENDENCIES
+                PRE_EXCLUDE_REGEXES "^api-ms-" "^ext-ms-"
+                POST_EXCLUDE_REGEXES ${rasm_system_libraries}
+                DIRECTORIES ${rasm_vcpkg_libraries}
+            FILE_SET HEADERS)
     install(EXPORT rasmCTargets NAMESPACE rasm:: DESTINATION "${RASM_INSTALL_CONFIG_DIR}")
     # An absolute RASM_SHADER_DIR is where the libraries look, wherever they are: nothing goes beside them then.
     if (NOT IS_ABSOLUTE "${RASM_SHADER_DIR}")
