@@ -99,7 +99,8 @@
   <tr><td><a href="camera.html#getCameraController"><code>getCameraController</code></a> / <a href="camera.html#setCameraController"><code>setCameraController</code></a></td><td>trackball or free-fly</td><td>camera.html</td></tr>
   <tr><td><a href="camera.html#getProjectionMatrix"><code>getProjectionMatrix</code></a>, <a href="camera.html#getProjectionMatrix-aspect"><code>getProjectionMatrix(camera, aspect)</code></a>, <a href="camera.html#getViewMatrix"><code>getViewMatrix</code></a></td><td>camera matrices</td><td>camera.html</td></tr>
   <tr><td><a href="camera.html#updateCameraAspectRatio"><code>updateCameraAspectRatio</code></a></td><td>aspect of every camera</td><td>camera.html</td></tr>
-  <tr><td><a href="camera.html#updateCamera"><code>updateCamera</code></a> / <a href="camera.html#pollEvents"><code>pollEvents</code></a></td><td>input and camera control</td><td>camera.html</td></tr>
+  <tr><td><a href="camera.html#pollEvents"><code>pollEvents</code></a> / <a href="camera.html#updateCamera"><code>updateCamera</code></a></td><td>the frame's input, and the camera control it drives</td><td>camera.html</td></tr>
+  <tr><td><a href="camera.html#getCameraInput"><code>getCameraInput</code></a>, <a href="camera.html#getInputEvents"><code>getInputEvents</code></a>, <a href="camera.html#getUiInputCapture"><code>getUiInputCapture</code></a>, <a href="camera.html#getDeltaTime"><code>getDeltaTime</code></a></td><td>read the frame's input, to move cameras yourself</td><td>camera.html</td></tr>
   <tr><td><a href="render-graph.html#createRenderGraph"><code>createRenderGraph</code></a></td><td>new render graph</td><td>render-graph.html</td></tr>
   <tr><td><a href="render-graph.html#createPipeline"><code>createPipeline</code></a> / <a href="render-graph.html#createComputePipeline"><code>createComputePipeline</code></a></td><td>your own Slang shaders</td><td>render-graph.html</td></tr>
   <tr><td><a href="render-graph.html#createRenderTarget"><code>createRenderTarget</code></a></td><td>offscreen color + depth</td><td>render-graph.html</td></tr>
@@ -180,7 +181,7 @@ if (!engine.running())
 <div class="api" id="running">
   <pre class="sig">bool running() const;</pre>
   <div class="body">
-    <p>True while the engine works. With the SDL platform it becomes false when the window is closed or <kbd>Esc</kbd> is pressed (both handled in <code>pollEvents</code>, inside <code>beginFrame</code>); with <code>NATIVE</code> or <code>HEADLESS</code> the application decides when to stop, and it stays true. It is false from the start when the constructor failed. Use it as the main loop condition.</p>
+    <p>True while the engine works. With the SDL platform it becomes false when the window is closed or <kbd>Esc</kbd> is pressed (both handled in <code>pollEvents</code>, which <code>beginFrame</code> calls unless you did); with <code>NATIVE</code> or <code>HEADLESS</code> the application decides when to stop, and it stays true. It is false from the start when the constructor failed. Use it as the main loop condition.</p>
   </div>
 </div>
 
@@ -984,7 +985,7 @@ engine.setInspection(inspection);</code></pre>
 <div class="split">
   <div>
     <h4>Built-in keys</h4>
-    <p><kbd>Esc</kbd> or closing the window, SDL platform only: <code>running()</code> becomes false.<br><kbd>F1</kbd>: shows or hides the stats: the RASM window with <code>EngineConfig::ui</code>, else the overlay.<br><kbd>F2</kbd>: cycles <code>forcedLod</code>: by distance, LOD 0, 1, … 7, by distance.<br><kbd>F3</kbd>: logs the dump of the next render graph that runs (<a href="render-graph.html#dump"><code>RenderGraph::dump</code></a>), and shows it in the RASM window.<br>While a UI window is under the mouse or has the keyboard, the camera gets none of it, and while a text field takes typing these keys do nothing.<br>Mouse and <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> (by position, also on AZERTY): move the camera passed to <code>beginFrame</code> (see <a href="camera.html#pollEvents">camera.html</a>).<br>The keys work the same from the SDL window and from <a href="#addInputEvent"><code>addInputEvent</code></a>.</p>
+    <p><kbd>Esc</kbd> or closing the window, SDL platform only: <code>running()</code> becomes false.<br><kbd>F1</kbd>: shows or hides the stats: the RASM window with <code>EngineConfig::ui</code>, else the overlay.<br><kbd>F2</kbd>: cycles <code>forcedLod</code>: by distance, LOD 0, 1, … 7, by distance.<br><kbd>F3</kbd>: logs the dump of the next render graph that runs (<a href="render-graph.html#dump"><code>RenderGraph::dump</code></a>), and shows it in the RASM window.<br>While a UI window is under the mouse or has the keyboard, the camera gets none of it, and while a text field takes typing these keys do nothing.<br>Mouse and <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> (by position, also on AZERTY): move the camera passed to <code>beginFrame</code>, unless its controller is <code>NONE</code> (see <a href="camera.html#pollEvents">camera.html</a>; to move cameras yourself, <a href="camera.html#drive">Drive a camera yourself</a>).<br>The keys work the same from the SDL window and from <a href="#addInputEvent"><code>addInputEvent</code></a>.</p>
   </div>
   <div>
     <h4>Two sizes</h4>
@@ -992,7 +993,7 @@ engine.setInspection(inspection);</code></pre>
   </div>
 </div>
 
-<p>Three platforms (<a href="types.html#PlatformType"><code>EngineConfig::platform</code></a>): <code>SDL</code> opens a window and reads its events for you; <code>NATIVE</code> draws into your window, and your program runs the event loop and sends the input; <code>HEADLESS</code> has no window. In all three, the input goes through the same <a href="types.html#InputEvent"><code>InputEvent</code></a>s, to the camera, Dear ImGui and the keys above. How it works: <a href="../guides/platform-layer.html">The platform layer</a>.</p>
+<p>Three platforms (<a href="types.html#PlatformType"><code>EngineConfig::platform</code></a>): <code>SDL</code> opens a window and reads its events for you; <code>NATIVE</code> draws into your window, and your program runs the event loop and sends the input; <code>HEADLESS</code> has no window. In all three, the input goes through the same <a href="types.html#InputEvent"><code>InputEvent</code></a>s, to the camera, Dear ImGui and the keys above, and <a href="camera.html#getInputEvents"><code>getInputEvents</code></a> gives them back after <code>pollEvents</code>. How it works: <a href="../guides/platform-layer.html">The platform layer</a>.</p>
 
 <h3 id="native">Your own window</h3>
 
@@ -1016,7 +1017,7 @@ while (editorRunning)
 <div class="api" id="addInputEvent">
   <pre class="sig">void addInputEvent(const InputEvent&amp; event);</pre>
   <div class="body">
-    <p>Queues one input event (<a href="types.html#InputEvent"><code>InputEvent</code></a>). The next <code>beginFrame</code> applies the queue in order, after the platform's own events: to Dear ImGui while it builds frames, to the built-in keys, and to the camera passed to <code>beginFrame</code>, without what the last UI frame took. Use it with <code>NATIVE</code>, or to script the input of a headless engine. The queue keeps its capacity, so a steady frame makes no heap allocation.</p>
+    <p>Queues one input event (<a href="types.html#InputEvent"><code>InputEvent</code></a>). The next <a href="camera.html#pollEvents"><code>pollEvents</code></a> (first thing in <code>beginFrame</code>, unless you called it) applies the queue in order, before the platform's own events: to Dear ImGui while it builds frames, to the built-in keys, and to the input of the camera passed to <code>beginFrame</code>, without what the last UI frame took. An event added after this frame's poll goes into the next frame. Use it with <code>NATIVE</code>, or to script the input of a headless engine. The queue keeps its capacity, so a steady frame makes no heap allocation.</p>
     <p><span class="tag main-thread">main thread</span> Mouse positions are in window points from the top-left corner, like <code>windowWidth</code>. Escape does not stop a <code>NATIVE</code> or headless engine.</p>
   </div>
 </div>

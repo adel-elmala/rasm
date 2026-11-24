@@ -469,7 +469,7 @@ struct Access
   <div class="body">
     <p>Runs one whole frame: <code>beginFrame(camera)</code>, every pass in order, <code>endFrame</code>. Call it once per loop instead of <code>render</code>. The results show on screen when the frame is presented. With async compute, each pass records into the open batch of its queue (<a href="#queues">Across queues</a>).</p>
     <dl>
-      <dt>camera</dt><dd>Gets this frame's mouse and keyboard input (through <a href="camera.html#pollEvents">pollEvents</a>). It is not given to the passes: <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> takes its own camera.</dd>
+      <dt>camera</dt><dd>Gets this frame's mouse and keyboard input (through <a href="camera.html#pollEvents">pollEvents</a>), unless its controller is <code>NONE</code>; an invalid handle moves no camera. It is not given to the passes: <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> takes its own camera.</dd>
     </dl>
     <p>When <code>beginFrame</code> returns false (window minimized, swapchain being re-created, failed wait), no pass runs that frame. If no pass draws into the swapchain, <code>endFrame</code> clears it so it can be presented. If the transient targets cannot be placed (out of memory), no pass runs either, and the graph tries again the next frame.</p>
   </div>

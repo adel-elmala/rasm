@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Camera Controllers · RASM</title>
 <meta name="description" content="How mouse and keys become a camera pose: fly (FPS) cameras, orbit cameras (turntable and arcball), pitch clamping, frame-time scaling, and frame-rate independent exponential easing. Then how RASM does it.">
-<meta name="rasm-sources" content="include/rasm/camera.h include/rasm/window.h include/rasm/input.h src/scene/camera.cpp src/platform/input.h src/platform/input.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/engine.cpp tests/cameraTests.cpp tests/inputTests.cpp">
+<meta name="rasm-sources" content="include/rasm/camera.h include/rasm/cameraController.h include/rasm/cameraInput.h include/rasm/window.h include/rasm/input.h src/scene/camera.cpp src/scene/cameraController.cpp src/platform/cameraInput.cpp src/platform/input.h src/platform/input.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/engine.cpp tests/cameraTests.cpp tests/inputTests.cpp examples/05_city/main.cpp examples/19_embedding/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -748,7 +748,93 @@ so                         t = 1 − e^(−k · dt)</code></pre>
   </div>
 </div>
 
-<h2 id="pitfalls"><span class="n">7</span>Pitfalls</h2>
+<h2 id="who-drives"><span class="n">7</span>Who runs the controller</h2>
+
+<p>A small program is happy when the renderer reads the input and moves the camera for it. An editor, a game or a map application wants more: its own keys, two views with a camera each, a scripted camera path that the user can take over. Then the controller works better as a <b>helper</b>: a plain value the application keeps, and one function it calls each frame. The renderer only gets the pose.</p>
+
+<div class="split">
+  <div>
+    <svg viewBox="0 0 320 140" role="img" aria-label="The renderer holds the input, the controller and the pose. The application only passes a camera to it.">
+      <rect x="10" y="10" width="300" height="88" rx="6" class="zone"/>
+      <text x="20" y="28" class="small t-faint">renderer</text>
+      <rect x="24" y="40" width="70" height="40" rx="5" class="box"/>
+      <text x="59" y="64" class="mid small">input</text>
+      <line x1="94" y1="60" x2="122" y2="60" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <rect x="124" y="40" width="80" height="40" rx="5" class="cpu"/>
+      <text x="164" y="64" class="mid small">controller</text>
+      <line x1="204" y1="60" x2="232" y2="60" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <rect x="234" y="40" width="64" height="40" rx="5" class="mem"/>
+      <text x="266" y="64" class="mid small">pose</text>
+      <rect x="10" y="108" width="300" height="26" rx="6" class="box"/>
+      <text x="160" y="125" class="mid small">application: passes one camera</text>
+    </svg>
+    <h4>The renderer runs it</h4>
+    <p>No code in the application. But one controller for one camera, with the renderer's input only.</p>
+  </div>
+  <div>
+    <svg viewBox="0 0 320 140" role="img" aria-label="The application holds the input and two controllers, one per camera, and gives their poses to the renderer, which only draws them.">
+      <rect x="10" y="10" width="300" height="88" rx="6" class="zone"/>
+      <text x="20" y="28" class="small t-faint">application</text>
+      <rect x="24" y="40" width="70" height="40" rx="5" class="box"/>
+      <text x="59" y="64" class="mid small">input</text>
+      <line x1="94" y1="52" x2="122" y2="47" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <line x1="94" y1="68" x2="122" y2="73" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <rect x="124" y="34" width="80" height="24" rx="5" class="cpu"/>
+      <text x="164" y="50" class="mid small">controller A</text>
+      <rect x="124" y="62" width="80" height="24" rx="5" class="cpu"/>
+      <text x="164" y="78" class="mid small">controller B</text>
+      <line x1="204" y1="60" x2="232" y2="60" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <rect x="234" y="40" width="64" height="40" rx="5" class="mem"/>
+      <text x="266" y="64" class="mid small">poses</text>
+      <line x1="266" y1="80" x2="266" y2="106" class="arrow mem" marker-end="url(#ah-mem)"/>
+      <rect x="10" y="108" width="300" height="26" rx="6" class="box"/>
+      <text x="140" y="125" class="mid small">renderer: draws the poses</text>
+    </svg>
+    <h4>The application runs it</h4>
+    <p>A few lines per frame. Any number of cameras, any input, and the application can change the input or the pose in between.</p>
+  </div>
+</div>
+
+<p>The helper is one value with everything a controller keeps: its state (angles, center, distance) and the two poses of <a href="#two-poses">section 1</a>. Its function takes one frame's input and moves both poses. With no controller it still eases, so a pose the application sets as the target is smoothed too. To switch controllers, make the new one from the current pose: a fly camera takes its yaw and pitch from the rotation, so the view does not jump.</p>
+
+<h3>One input per view</h3>
+
+<p>With two views in one window, each camera needs its own input. Each view's input reads the same events, but only inside its own rectangle, and its mouse units are taken from that rectangle:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 240" role="img" aria-label="A window split into view A on the left and view B on the right. Each view has its own center at 0, 0. A press in view A starts a drag for A, and the drag goes on over view B until the release. The wheel over view B zooms B.">
+    <rect x="30" y="20" width="700" height="180" class="paper"/>
+    <line x1="380" y1="20" x2="380" y2="200" class="dashed"/>
+    <text x="42" y="40" class="small title">view A</text>
+    <text x="392" y="40" class="small title">view B</text>
+    <circle cx="205" cy="110" r="3" class="accent"/>
+    <text x="205" y="128" class="mid small t-faint">0, 0</text>
+    <circle cx="555" cy="110" r="3" class="accent"/>
+    <text x="555" y="128" class="mid small t-faint">0, 0</text>
+    <path d="M140,140 Q300,40 466,80" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="310" y="122" class="mid small t-hot">A's drag goes on over B</text>
+    <circle cx="140" cy="140" r="10" class="badge"/><text x="140" y="144" class="badge-n">1</text>
+    <text x="140" y="168" class="mid small">press in A</text>
+    <circle cx="478" cy="84" r="10" class="badge"/><text x="478" y="88" class="badge-n">2</text>
+    <text x="478" y="66" class="mid small">release: the drag ends</text>
+    <circle cx="620" cy="150" r="10" class="badge"/><text x="620" y="154" class="badge-n">3</text>
+    <text x="620" y="176" class="mid small">wheel over B: B zooms</text>
+    <text x="380" y="226" class="mid small">mouse units per view: its center is 0, 0, and its smaller side is 2 units long</text>
+  </svg>
+  <figcaption>The same rules as one window, applied to each view's rectangle. A drag belongs to the view where the button went down.</figcaption>
+</figure>
+
+<div class="callout rule">
+  <strong>Which view gets the input</strong>
+  <ul>
+    <li>A press starts a drag only in its own view, and not on a UI window.</li>
+    <li>The drag stays with that view until the button goes up, even over another view.</li>
+    <li>The wheel goes to the view under the pointer.</li>
+    <li>Held keys go to the view the application picks: the one under the pointer, or the last one clicked.</li>
+  </ul>
+</div>
+
+<h2 id="pitfalls"><span class="n">8</span>Pitfalls</h2>
 
 <dl class="pitfalls">
   <div><dt>Looking around is slower at a high frame rate</dt><dd>Mouse moves multiplied by <var>dt</var>.</dd></div>
@@ -759,66 +845,91 @@ so                         t = 1 − e^(−k · dt)</code></pre>
   <div><dt>The horizon slowly tilts in a fly camera</dt><dd>Small turns added to the last rotation instead of rebuilding it from yaw and pitch.</dd></div>
   <div><dt>The camera keeps moving after alt-tab</dt><dd>The key-up event was lost; the key state was not reset on focus loss.</dd></div>
   <div><dt>The orbit zooms in and out while turning</dt><dd>The position eased in a straight line instead of along the sphere.</dd></div>
+  <div><dt>A drag in one view also turns the other camera</dt><dd>Both cameras read the whole window's input. Give each view its own input, limited to its rectangle.</dd></div>
+  <div><dt>The view jumps when the controller changes</dt><dd>The new controller kept its old angles. Make it from the current pose.</dd></div>
 </dl>
 
-<h2 id="in-rasm"><span class="n">8</span>In RASM</h2>
+<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
 
-<p>RASM has both kinds of controller: <code>FREE_FLY</code> (a fly camera, turned while a mouse button is held) and <code>TRACK_BALL</code> (an arcball-style orbit camera). The engine reads the input itself, once per frame, inside <code>beginFrame</code>. Easing is the exponential kind of <a href="#easing">section 5</a>.</p>
+<p>RASM has both kinds of controller: <code>FREE_FLY</code> (a fly camera, turned while a mouse button is held) and <code>TRACK_BALL</code> (an arcball-style orbit camera). Easing is the exponential kind of <a href="#easing">section 5</a>. The controllers are helpers, as in <a href="#who-drives">section 7</a>: a <code>CameraRig</code> holds the <code>controller</code>, the rendered <code>transform</code> and the <code>targetTransform</code>, and <code>updateCameraRig</code> moves it by one <code>CameraInput</code>. They need no <code>Engine</code>. The engine runs the same function for the camera given to <code>beginFrame</code>, unless that camera's controller is <code>CameraController::Type::NONE</code>.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 200" role="img" aria-label="SDL events go to pollEvents, which fills a CameraInput: mouseStart and mouseEnd in NDC divided by the smaller side, the summed wheel delta, W A S D, and deltaTime capped at 0.1 seconds. updateCamera runs updateFreeFlyCamera or updateTrackballCamera, which write targetTransform. easeCamera moves transform toward it. getViewMatrix reads transform.">
+  <svg viewBox="0 0 760 290" role="img" aria-label="Input events from the SDL platform or addInputEvent go to pollEvents, once per frame, which feeds the engine's CameraInputState for the whole window and gives this frame's CameraInput. beginFrame runs updateCameraRig on the camera's own rig unless its controller is NONE. The application can instead read getInputEvents into its own CameraInputState per view, or read getCameraInput, run updateCameraRig on its own CameraRig, and set the pose with setCameraTransform. Both paths end in the pose that getViewMatrix reads.">
     <rect x="15"  y="20" width="160" height="58" rx="6" class="box"/>
-    <text x="95"  y="44" class="mid title">SDL events</text>
-    <text x="95"  y="62" class="mid small">mouse, wheel, keys</text>
+    <text x="95"  y="44" class="mid mono">InputEvent</text>
+    <text x="95"  y="62" class="mid small">SDL or addInputEvent</text>
     <line x1="175" y1="49" x2="206" y2="49" class="arrow" marker-end="url(#ah)"/>
 
     <rect x="208" y="20" width="160" height="58" rx="6" class="cpu"/>
     <text x="288" y="44" class="mid mono">pollEvents</text>
-    <text x="288" y="62" class="mid small">in beginFrame</text>
+    <text x="288" y="62" class="mid small">once per frame</text>
     <line x1="368" y1="49" x2="399" y2="49" class="arrow cpu" marker-end="url(#ah-cpu)"/>
 
     <rect x="401" y="20" width="160" height="58" rx="6" class="box"/>
-    <text x="481" y="44" class="mid mono">CameraInput</text>
-    <text x="481" y="62" class="mid small">one frame's input</text>
+    <text x="481" y="44" class="mid mono">CameraInputState</text>
+    <text x="481" y="62" class="mid small">the engine's, whole window</text>
     <line x1="561" y1="49" x2="592" y2="49" class="arrow cpu" marker-end="url(#ah-cpu)"/>
 
-    <rect x="594" y="20" width="160" height="58" rx="6" class="cpu"/>
-    <text x="674" y="44" class="mid mono">updateCamera</text>
-    <text x="674" y="62" class="mid small">controller, then easing</text>
+    <rect x="594" y="20" width="160" height="58" rx="6" class="box"/>
+    <text x="674" y="44" class="mid mono">CameraInput</text>
+    <text x="674" y="62" class="mid small">this frame's input</text>
 
-    <path d="M674,78 V100 H95 V118" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <text x="384" y="94" class="mid small">updateFreeFlyCamera or updateTrackballCamera writes</text>
+    <line x1="288" y1="78" x2="288" y2="128" class="arrow cpu dashed" marker-end="url(#ah-cpu)"/>
+    <text x="296" y="108" class="small mono t-cpu">getInputEvents</text>
+    <path d="M630,78 V100 H481 V128" class="arrow cpu dashed" marker-end="url(#ah-cpu)"/>
+    <text x="560" y="116" class="mid small mono t-cpu">getCameraInput</text>
+    <line x1="700" y1="78" x2="700" y2="128" class="arrow cpu" marker-end="url(#ah-cpu)"/>
 
-    <rect x="15"  y="120" width="160" height="58" rx="6" class="box"/>
-    <text x="95"  y="144" class="mid mono">targetTransform</text>
-    <text x="95"  y="162" class="mid small">the target pose</text>
-    <line x1="175" y1="149" x2="206" y2="149" class="arrow" marker-end="url(#ah)"/>
+    <rect x="208" y="130" width="160" height="58" rx="6" class="box"/>
+    <text x="288" y="154" class="mid mono">CameraInputState</text>
+    <text x="288" y="172" class="mid small">yours, one per view</text>
+    <line x1="368" y1="159" x2="399" y2="159" class="arrow cpu dashed" marker-end="url(#ah-cpu)"/>
 
-    <rect x="208" y="120" width="160" height="58" rx="6" class="cpu"/>
-    <text x="288" y="144" class="mid mono">easeCamera</text>
-    <text x="288" y="162" class="mid small">t = 1 − exp(−speed · dt)</text>
-    <line x1="368" y1="149" x2="399" y2="149" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="401" y="130" width="160" height="58" rx="6" class="cpu"/>
+    <text x="481" y="154" class="mid mono">updateCameraRig</text>
+    <text x="481" y="172" class="mid small">on your CameraRig</text>
 
-    <rect x="401" y="120" width="160" height="58" rx="6" class="box"/>
-    <text x="481" y="144" class="mid mono">transform</text>
-    <text x="481" y="162" class="mid small">the rendered pose</text>
-    <line x1="561" y1="149" x2="592" y2="149" class="arrow" marker-end="url(#ah)"/>
+    <rect x="594" y="130" width="160" height="58" rx="6" class="cpu"/>
+    <text x="674" y="154" class="mid mono">beginFrame</text>
+    <text x="674" y="172" class="mid small">camera's rig, unless NONE</text>
 
-    <rect x="594" y="120" width="160" height="58" rx="6" class="cpu"/>
-    <text x="674" y="144" class="mid mono">getViewMatrix</text>
-    <text x="674" y="162" class="mid small">read by drawScene</text>
+    <line x1="481" y1="188" x2="481" y2="218" class="arrow cpu dashed" marker-end="url(#ah-cpu)"/>
+    <rect x="401" y="220" width="160" height="58" rx="6" class="box"/>
+    <text x="481" y="244" class="mid mono">setCameraTransform</text>
+    <text x="481" y="262" class="mid small">sets both poses</text>
+    <line x1="561" y1="249" x2="592" y2="249" class="arrow" marker-end="url(#ah)"/>
 
+    <line x1="674" y1="188" x2="674" y2="218" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="594" y="220" width="160" height="58" rx="6" class="mem"/>
+    <text x="674" y="244" class="mid mono">rig.transform</text>
+    <text x="674" y="262" class="mid small">read by getViewMatrix</text>
+
+    <text x="15" y="214" class="small t-faint">dashed: the application's path</text>
   </svg>
-  <figcaption>The two-pose split of <a href="#two-poses">section 1</a>: controllers write <code>targetTransform</code>, rendering reads <code>transform</code>. <code>setCameraTransform</code> sets both, so the camera jumps there.</figcaption>
+  <figcaption>Solid: the engine's built-in path. Dashed: an application that drives its cameras itself. Both call <code>updateCameraRig</code>, so a camera moves the same either way. Controllers write <code>targetTransform</code>; easing moves <code>transform</code>; <code>setCameraTransform</code> sets both, so the camera jumps there.</figcaption>
 </figure>
 
-<p>How the input reaches <code>CameraInput</code>. Every event, from the SDL platform or from the application's <code>Engine::addInputEvent</code>, goes through one <code>InputState</code> (<a href="platform-layer.html">The platform layer</a>):</p>
+<p>An application that drives a camera itself turns the engine's controller off and keeps its own rig. <code>pollEvents</code> before the frame makes this frame's input readable at once; <code>beginFrame</code> then polls no more. <code>examples/05_city</code> does this with the input the engine read, and <code>examples/19_embedding</code> with its own <code>CameraInputState</code>:</p>
+
+<pre><code>engine.setCameraController(camera, rasm::CameraController{.type = rasm::CameraController::Type::NONE});
+rasm::CameraRig rig = rasm::createCameraRig(freeFly, start);
+
+while (engine.running())
+{
+    engine.pollEvents();
+    rasm::updateCameraRig(rig, engine.getCameraInput());
+    engine.setCameraTransform(camera, rig.transform);
+    engine.render(scene, camera);
+}</code></pre>
+
+<p>How events become a <code>CameraInput</code>: a <code>CameraInputState</code> takes them one by one (<code>addCameraInputEvent</code>), then gives the frame's input (<code>takeCameraInput</code>). The engine keeps one for the main window, and applies to it every event, from the SDL platform or from <code>Engine::addInputEvent</code> (<a href="platform-layer.html">The platform layer</a>). An application can keep one per view:</p>
 <ul>
-  <li><code>mouseStart</code> is last frame's drag position, <code>mouseEnd</code> the newest one, both from <code>toInputNdc</code>.</li>
-  <li><code>wheelDelta</code> is summed over the frame.</li>
+  <li><code>mouseStart</code> is last frame's drag position, <code>mouseEnd</code> the newest one, both from <code>toInputNdc</code> in the <code>InputArea</code>: a rectangle in window points, the units of <code>InputEvent</code> mouse positions.</li>
+  <li>A press starts a drag only inside the area and not on the UI (<code>UiInputCapture</code>, from <code>Engine::getUiInputCapture</code>). The drag goes on outside the area until the release.</li>
+  <li><code>wheelDelta</code> is summed over the frame, only while the pointer is in the area.</li>
   <li>W, A, S, D are held keys by position (<code>InputEvent::physicalKey</code>), so they stay in the same place on an AZERTY keyboard.</li>
-  <li><code>deltaTime</code> comes from <code>steady_clock</code>: 0 on the first frame, at most 0.1 s. With <code>EngineConfig::fixedDeltaTime</code> it is that step instead, so the easing is the same in every run.</li>
-  <li>A <code>FOCUS</code> event that loses the focus lets go of every key, so no key stays held.</li>
+  <li><code>deltaTime</code> comes from <code>steady_clock</code>: 0 on the first frame, at most 0.1 s. With <code>EngineConfig::fixedDeltaTime</code> it is that step instead, so the easing is the same in every run. <code>Engine::getDeltaTime</code> returns it.</li>
+  <li>A <code>FOCUS</code> event that loses the focus lets go of every key and ends the drag, so no key stays held.</li>
 </ul>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
@@ -826,35 +937,36 @@ so                         t = 1 − e^(−k · dt)</code></pre>
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>Mouse units</td><td>divide by the smaller side, flip <var>y</var></td><td>The same, in <code>toInputNdc</code>, with the logical window size (<code>Window</code>'s <code>width</code>, <code>height</code>), the units of <code>InputEvent</code> mouse positions.</td></tr>
+  <tr><td>Mouse units</td><td>divide by the smaller side, flip <var>y</var></td><td>The same, in <code>toInputNdc</code>, by the smaller side of the <code>InputArea</code>, around its center. The engine's area is the main window in points (<code>Window</code>'s <code>width</code>, <code>height</code>).</td></tr>
   <tr><td>Fly: angles</td><td>yaw around world up, pitch around right, clamp</td><td><code class="lang-text">yaw -= dx * lookSensitivity</code>, <code class="lang-text">pitch += dy * lookSensitivity</code>, pitch clamped to ±89°, rotation <code class="lang-text">angleAxis(yaw, +Y) * angleAxis(pitch, +X)</code>. <code>lookSensitivity</code> is radians per NDC unit.</td></tr>
   <tr><td>Fly: moving</td><td>normalized sum × speed × <var>dt</var></td><td>The same. It flies along the full view direction, and has no keys for up, down or a faster speed.</td></tr>
   <tr><td>Fly: mouse</td><td>drag or capture</td><td>Drag: the view turns only while a mouse button (any) is held.</td></tr>
   <tr><td>Orbit kind</td><td>turntable or arcball</td><td>An arcball-style trackball only (<code>projectOnSphere</code>: Shoemake's lift, rim outside). It can roll. There is no turntable mode.</td></tr>
   <tr><td>Orbit angle</td><td>2 × or 1 × the angle between the points</td><td>1 × the angle, times <code>orbitSensitivity</code>, applied as <code class="lang-text">rotation * angleAxis(-angle, axis)</code>: in the camera's frame, grab style.</td></tr>
   <tr><td>Zoom</td><td>additive or multiplicative</td><td>Additive: <code class="lang-text">radius -= wheelDelta</code>, one unit per wheel notch, clamped at 0. At 0 the camera sits on the center.</td></tr>
-  <tr><td>Easing</td><td><var>t</var> = 1 − e<sup>−<var>k</var>·<var>dt</var></sup>, slerp, orbit on the sphere</td><td>All three, in <code>easeCamera</code>. <var>k</var> is <code>easingSpeed</code>: 12 by default, 6 in the examples, ≤ 0 turns easing off. A trackball eases its radius and keeps the camera on the sphere; free-fly mixes the position.</td></tr>
+  <tr><td>Easing</td><td><var>t</var> = 1 − e<sup>−<var>k</var>·<var>dt</var></sup>, slerp, orbit on the sphere</td><td>All three, in <code>updateCameraRig</code>. <var>k</var> is <code>easingSpeed</code>: 12 by default, 6 in the examples, ≤ 0 turns easing off. A trackball eases its radius and keeps the camera on the sphere; free-fly mixes the position.</td></tr>
   <tr><td>Stop when close</td><td>snap below a threshold</td><td>Snaps once position, rotation and scale are within 1e-6 (relative for the position), so a camera at rest does not move (<code>B24</code>).</td></tr>
   <tr><td>Long frames</td><td>cap <var>dt</var></td><td>Capped at 0.1 s in <code>pollEvents</code>.</td></tr>
-  <tr><td>Switching controllers</td><td>—</td><td><code>setCameraController</code> starts from the rendered pose. For free-fly it computes <code class="lang-text">pitch = asin(forward.y)</code> and <code class="lang-text">yaw = atan2(-forward.x, -forward.z)</code>, so the view does not jump; a roll is dropped.</td></tr>
-  <tr><td>Who owns input</td><td>the application, usually</td><td>Either. The SDL platform reads its window's events, or the application sends its own with <code>addInputEvent</code>. Both are applied in <code>pollEvents</code>, inside <code>beginFrame</code>, to the camera passed to it; controllers the application drives itself are still open (<code>D7</code>).</td></tr>
+  <tr><td>Switching controllers</td><td>make the new one from the pose</td><td><code>createCameraRig</code> starts at the given pose; <code>setCameraController</code> passes the rendered one. For free-fly it computes <code class="lang-text">pitch = asin(forward.y)</code> and <code class="lang-text">yaw = atan2(-forward.x, -forward.z)</code>, so the view does not jump; a roll is dropped.</td></tr>
+  <tr><td>Who runs the controller</td><td>the renderer or the application</td><td>Either, per camera. <code>beginFrame</code> runs the rig of the camera passed to it; a camera whose controller is <code>NONE</code> keeps the pose the application sets. The SDL platform reads its window's events, or the application sends its own with <code>addInputEvent</code>; <code>getInputEvents</code> gives them back after <code>pollEvents</code>.</td></tr>
+  <tr><td>Views</td><td>one input per view</td><td>One <code>CameraInputState</code> and one <code>InputArea</code> per view, kept by the application. The engine has one, for the whole main window.</td></tr>
 </table>
 </div>
 
-<p>A new camera from <code>createCamera</code> is a trackball whose center is one unit in front of it, with radius 1, so the first update keeps the given pose. The fields are described in the API reference: <a href="../api/camera.html#CameraController">CameraController</a> and <a href="../api/camera.html#CameraInput">CameraInput</a>.</p>
+<p>A new camera from <code>createCamera</code> is a trackball whose center is one unit in front of it, with radius 1, so the first update keeps the given pose. The fields are described in the API reference: <a href="../api/camera.html#CameraController">CameraController</a>, <a href="../api/camera.html#CameraRig">CameraRig</a>, <a href="../api/camera.html#CameraInput">CameraInput</a> and <a href="../api/camera.html#CameraInputState">CameraInputState</a>.</p>
 
 <h3>Where it lives in code</h3>
 
 <div class="table-wrap">
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
-  <tr><td>Types</td><td><code>CameraInput</code>, <code>CameraController</code>, <code>Camera</code> in <code>include/rasm/camera.h</code></td></tr>
-  <tr><td>Input to <code>CameraInput</code></td><td><code>Engine::pollEvents</code> in <code>src/engine.cpp</code>, <code>toInputNdc</code> and <code>endInputFrame</code> in <code>src/platform/input.cpp</code></td></tr>
-  <tr><td>Called each frame</td><td><code>Engine::beginFrame</code> in <code>src/engine.cpp</code></td></tr>
-  <tr><td>Controllers</td><td><code>updateFreeFlyCamera</code>, <code>updateTrackballCamera</code>, <code>projectOnSphere</code> in <code>src/scene/camera.cpp</code></td></tr>
-  <tr><td>Easing</td><td><code>easeCamera</code>, <code>Engine::updateCamera</code> in <code>src/scene/camera.cpp</code></td></tr>
-  <tr><td>Setup and switching</td><td><code>Engine::createCamera</code>, <code>Engine::setCameraController</code>, <code>Engine::setCameraTransform</code> in <code>src/scene/camera.cpp</code></td></tr>
-  <tr><td>Tests</td><td><code>tests/cameraTests.cpp</code>: frame-time movement, diagonal speed, the pitch clamp, orbit sphere, easing</td></tr>
+  <tr><td>Types</td><td><code>CameraInput</code>, <code>CameraController</code>, <code>CameraRig</code> in <code>include/rasm/cameraController.h</code>; <code>CameraInputState</code>, <code>InputArea</code> in <code>include/rasm/cameraInput.h</code>; <code>Camera</code> in <code>include/rasm/camera.h</code></td></tr>
+  <tr><td>Controllers and easing</td><td><code>createCameraRig</code>, <code>updateCameraRig</code>, <code>projectOnSphere</code> in <code>src/scene/cameraController.cpp</code></td></tr>
+  <tr><td>Events to <code>CameraInput</code></td><td><code>addCameraInputEvent</code>, <code>takeCameraInput</code>, <code>toInputNdc</code> in <code>src/platform/cameraInput.cpp</code></td></tr>
+  <tr><td>The engine's path</td><td><code>Engine::pollEvents</code> and <code>Engine::beginFrame</code> in <code>src/engine.cpp</code>; <code>Engine::updateCamera</code>, <code>Engine::setCameraController</code> in <code>src/scene/camera.cpp</code></td></tr>
+  <tr><td>Setup</td><td><code>Engine::createCamera</code>, <code>Engine::setCameraTransform</code> in <code>src/scene/camera.cpp</code></td></tr>
+  <tr><td>Examples</td><td><code>examples/05_city</code>: a free-fly rig on the engine's input, a tour the user takes over; <code>examples/19_embedding</code>: its own <code>CameraInputState</code>, F switches orbit and fly</td></tr>
+  <tr><td>Tests</td><td><code>tests/cameraTests.cpp</code>: frame-time movement, diagonal speed, the pitch clamp, orbit sphere, easing, rigs and <code>NONE</code>; <code>tests/inputTests.cpp</code>: areas, drags, the wheel, <code>pollEvents</code></td></tr>
 </table>
 </div>
 
@@ -862,16 +974,17 @@ so                         t = 1 − e^(−k · dt)</code></pre>
   <strong>Keep these true</strong>
   <ul>
     <li>Controllers write <code>targetTransform</code> only. <code>transform</code> is written by easing and by <code>setCameraTransform</code>.</li>
+    <li>The engine's path and an application's call the same <code>updateCameraRig</code>: no controller math in <code>Engine</code>.</li>
     <li>Mouse deltas are never multiplied by <code>deltaTime</code>; key movement always is.</li>
     <li>The easing factor comes from <code class="lang-text">1 - exp(-easingSpeed * deltaTime)</code>, never a fixed number per frame.</li>
-    <li>A camera at rest must stay bit-for-bit still: keep the snap in <code>easeCamera</code> (<code>B24</code>).</li>
+    <li>A camera at rest must stay bit-for-bit still: keep the snap in the easing of <code>updateCameraRig</code> (<code>B24</code>).</li>
     <li>Run <code>ctest --preset x64-debug</code> after a change; <code>tests/cameraTests.cpp</code> covers the controllers.</li>
   </ul>
 </div>
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>The application cannot see input events or drive the controllers with its own input: the engine owns the event loop (<code>D7</code>). The development plan (phase 5) lists a replaceable platform layer and optional controller helpers that the application drives.</p>
+  <p>Views are not first-class yet: the engine draws one window, and its own input covers all of it. An application with several views keeps one <code>CameraInputState</code> per view (development plan, phase 5: multiple views and windows). There is no turntable or walk mode, and a fly camera has no keys for up, down or a faster speed.</p>
 </div>
 
 <h3>Further reading</h3>
