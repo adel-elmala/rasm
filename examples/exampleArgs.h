@@ -11,9 +11,10 @@
 // The flags that control a run of any example, which verify-change passes to all of them. An example's own feature
 // flags (--aa, --bench, ...) stay in its main.cpp.
 //   --fixed-step       an example that animates by the clock advances a fixed 1/60 s per frame instead, and so does the
-//                      engine's step for the cameras, the UI and the stats (EngineConfig::fixedDeltaTime)
-//   --wait-for-loads   Engine::waitForLoads before the first frame, so frame N shows the same scene on every run (C16)
-//   --headless         no window and no input (PlatformType::HEADLESS): render --frames frames, write the last to --out, exit
+//                      renderer's step for the cameras, the UI and the stats (RendererConfig::fixedDeltaTime)
+//   --wait-for-loads   Renderer::waitForLoads before the first frame, so frame N shows the same scene on every run (C16)
+//   --headless         no window and no input (PlatformType::HEADLESS, or a Renderer without a nativeWindow): render
+//                      --frames frames, write the last to --out, exit
 //   --frames N         frames a headless run renders (60)
 //   --out <file.png>   where a headless run writes its last frame (frame.png in the working directory)
 //   --no-cache         no disk caches (EngineConfig::cacheDir = ""): every shader is compiled and every pipeline built
@@ -52,6 +53,7 @@ inline ExampleArgs parseExampleArgs(int argc, char** argv)
     return args;
 }
 
+// An Engine's config. A Renderer is headless when its config names no window, which the example decides.
 inline void applyExampleArgs(const ExampleArgs& args, rasm::EngineConfig& config)
 {
     if (args.headless)
@@ -64,9 +66,20 @@ inline void applyExampleArgs(const ExampleArgs& args, rasm::EngineConfig& config
         config.transferQueue    = args.transferQueue == 1;
 }
 
-// The frame loop's condition, in place of Engine::running. Headless, it asks for a copy of the last frame before that
-// frame starts (readFrame copies the next frame), and once it is rendered writes it to --out and ends the loop.
-inline bool exampleRunning(rasm::Engine& engine, ExampleArgs& args)
+inline void applyExampleArgs(const ExampleArgs& args, rasm::RendererConfig& config)
+{
+    if (args.fixedStep)
+        config.fixedDeltaTime   = 1.0f / 60.0f;
+    if (args.noCache)
+        config.cacheDir         = "";
+    if (args.transferQueue >= 0)
+        config.transferQueue    = args.transferQueue == 1;
+}
+
+// The frame loop's condition, in place of Renderer::running, for an Engine or a Renderer. Headless, it asks for a copy
+// of the last frame before that frame starts (readFrame copies the next frame), and once it is rendered writes it to
+// --out and ends the loop.
+inline bool exampleRunning(rasm::Renderer& engine, ExampleArgs& args)
 {
     if (!engine.running())
         return false;

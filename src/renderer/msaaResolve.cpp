@@ -1,4 +1,4 @@
-#include "rasm/engine.h"
+#include "rasm/renderer.h"
 #include "core/utils.h"
 #include "platform/paths.h"
 #include "renderer/uberMaterialTypes.h"
@@ -17,7 +17,7 @@ namespace rasm
     // the same size, weighting each sample by 1 / (1 + its exposed luminance): a plain average lets one bright sample
     // outweigh the rest, and a pixel half sky and half roof tone-maps almost as bright as the sky. The pass reads the
     // camera's exposure when it runs. Its pipeline is made when it first runs; a shader error retries every frame.
-    RenderTargetHandle Engine::addMsaaResolvePass(RenderGraph &graph, const RenderTargetHandle &source, CameraHandle camera)
+    RenderTargetHandle Renderer::addMsaaResolvePass(RenderGraph &graph, const RenderTargetHandle &source, CameraHandle camera)
     {
         if (!isLive(camera))
         {

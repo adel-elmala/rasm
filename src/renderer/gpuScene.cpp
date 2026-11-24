@@ -2,7 +2,7 @@
 #include "renderer/taa.h"
 #include "rasm/scene.h"
 #include "rasm/camera.h"
-#include "rasm/engine.h"
+#include "rasm/renderer.h"
 #include "core/utils.h"
 #include "platform/paths.h"
 #include "renderer/blendSort.h"
@@ -255,12 +255,12 @@ namespace rasm
         }
 
         // Primitives without a material use the entity's; getMaterial resolves an invalid one to the default material.
-        const Material &getSubMeshMaterial(Engine &engine, const Entity &entity, const SubMesh &subMesh)
+        const Material &getSubMeshMaterial(Renderer &engine, const Entity &entity, const SubMesh &subMesh)
         {
             return engine.getMaterial(subMesh.material.isValid() ? subMesh.material : entity.material);
         }
 
-        bool texturesLoaded(Engine &engine, const Entity &entity, const Mesh &mesh)
+        bool texturesLoaded(Renderer &engine, const Entity &entity, const Mesh &mesh)
         {
             for (const auto &subMesh : mesh.subMeshes)
             {
@@ -303,7 +303,7 @@ namespace rasm
             return static_cast<uint32_t>(alphaMode) * gfx::MAX_DRAW_RUNS + static_cast<uint32_t>(cullMode);
         }
 
-        gfx::Material convertToGfxMaterial(Engine &engine, const Material &mat)
+        gfx::Material convertToGfxMaterial(Renderer &engine, const Material &mat)
         {
             gfx::Material gmat{};
 
@@ -345,7 +345,7 @@ namespace rasm
         }
 
         // Most materials have no texture transform, so their shading skips the transforms and does not load them.
-        gfx::MaterialData toMaterialData(Engine &engine, const Material &mat, Format normalMapFormat)
+        gfx::MaterialData toMaterialData(Renderer &engine, const Material &mat, Format normalMapFormat)
         {
             gfx::MaterialData row{.material = convertToGfxMaterial(engine, mat),
                                   .materialId = getGfxMaterialId(mat.type),
@@ -378,22 +378,22 @@ namespace rasm
         return ctx.getBufferDeviceAddress(gpuScene.sceneData[frame]) + view * sizeof(gfx::SceneData);
     }
 
-    bool Engine::createGpuScene()
+    bool Renderer::createGpuScene()
     {
         // Material rows are indexed by handle, from 1, so the table has a row for each of maxMaterials materials and row 0.
         if (config.maxMaterials == 0 || config.maxMaterials == UINT32_MAX)
         {
-            spdlog::error("EngineConfig::maxMaterials is {}; it must be 1 to {}.", config.maxMaterials, UINT32_MAX - 1);
+            spdlog::error("RendererConfig::maxMaterials is {}; it must be 1 to {}.", config.maxMaterials, UINT32_MAX - 1);
             return false;
         }
         if (!gpuScene->instances.create(ctx, "Instance Table", sizeof(gfx::InstanceData), config.maxInstances) ||
             !gpuScene->materials.create(ctx, "Material Table", sizeof(gfx::MaterialData), config.maxMaterials + 1))
         {
-            spdlog::error("Failed to create the GPU scene tables (EngineConfig::maxInstances = {}, maxMaterials = {}).", config.maxInstances, config.maxMaterials);
+            spdlog::error("Failed to create the GPU scene tables (RendererConfig::maxInstances = {}, maxMaterials = {}).", config.maxInstances, config.maxMaterials);
             return false;
         }
         if (config.meshletPath == MeshletPath::MESH_SHADERS && !ctx.hasMeshShaders())
-            spdlog::warn("EngineConfig::meshletPath is MESH_SHADERS, and this GPU has no mesh shaders (VK_EXT_mesh_shader): meshlets are drawn by vertex pulling.");
+            spdlog::warn("RendererConfig::meshletPath is MESH_SHADERS, and this GPU has no mesh shaders (VK_EXT_mesh_shader): meshlets are drawn by vertex pulling.");
         gpuScene->instanceRows.reset(config.maxInstances);
         gpuScene->instanceCullModes.assign(config.maxInstances, CullMode::NONE);
         gpuScene->instanceAlphaModes.assign(config.maxInstances, AlphaMode::NONE);
@@ -430,7 +430,7 @@ namespace rasm
 
     // Runs once per frame, after the fence wait for this frame's slot, so the slot's buffers are free to rewrite.
     // Its cost follows what changed: only the scenes that hold a changed entity rebuild their draw lists (P7).
-    void Engine::syncGpuScene()
+    void Renderer::syncGpuScene()
     {
         ZoneScoped;
 
@@ -476,7 +476,7 @@ namespace rasm
                 uint64_t firstRow = 0;
                 if (!gpuScene->instanceRows.allocate(rowCount, firstRow))
                 {
-                    spdlog::error("The instance table is full: entity {} needs {} rows ({}/{} in use, the largest free range {}). EngineConfig::maxInstances sets its size.",
+                    spdlog::error("The instance table is full: entity {} needs {} rows ({}/{} in use, the largest free range {}). RendererConfig::maxInstances sets its size.",
                                   entity.index, rowCount, gpuScene->instanceRows.used(), gpuScene->instances.capacity(), gpuScene->instanceRows.largestFree());
                 }
                 else
@@ -506,7 +506,7 @@ namespace rasm
                         const bool bits = words > 0 && gpuScene->meshletWords.allocate(words, firstWord);
                         if (words > 0 && !bits && !gpuScene->meshletWordsFullLogged)
                         {
-                            spdlog::warn("The meshlet visibility bits are full ({} words, EngineConfig::maxInstances): entity {}'s meshlets are not occlusion culled.",
+                            spdlog::warn("The meshlet visibility bits are full ({} words, RendererConfig::maxInstances): entity {}'s meshlets are not occlusion culled.",
                                          gpuScene->meshletWords.capacity(), entity.index);
                             gpuScene->meshletWordsFullLogged = true;
                         }
@@ -573,7 +573,7 @@ namespace rasm
     }
 
     // Its rows are allocated once the mesh is ready (syncGpuScene).
-    void Engine::queueInstanceRows(EntityHandle entity)
+    void Renderer::queueInstanceRows(EntityHandle entity)
     {
         gpuScene->entitiesWaitingForMesh.push_back(entity);
     }
@@ -581,7 +581,7 @@ namespace rasm
     // A row's previousWorld is the matrix the frame before drew: the entity's matrix at the last sync (syncedMatrix).
     // A write that moves the entity (moved) puts it on movedEntities, so the next sync makes the new matrix the synced
     // one, and the sync after writes the rows again with previousWorld = world, so a stopped entity has no motion.
-    void Engine::writeInstanceRows(EntityHandle entity, bool moved)
+    void Renderer::writeInstanceRows(EntityHandle entity, bool moved)
     {
         if (entity.index >= gpuScene->entities.size())
             return;
@@ -620,7 +620,7 @@ namespace rasm
     }
 
     // A changed cull mode or alpha mode moves the entity's draws to another run, so its scenes rebuild their draw lists.
-    void Engine::updateDrawModes(EntityHandle entity)
+    void Renderer::updateDrawModes(EntityHandle entity)
     {
         const EntityDrawState &state = gpuScene->entities[entity.index];
         const Entity &entityRef = registry.entities[entity.index];
@@ -646,7 +646,7 @@ namespace rasm
 
     // updateMaterial keeps the material's row index, so no instance row changes. Its instances may change cull mode,
     // and an entity that got a texture that still loads leaves the draw lists until the texture finishes.
-    void Engine::refreshEntitiesAfterMaterialChange()
+    void Renderer::refreshEntitiesAfterMaterialChange()
     {
         for (size_t i = 0; i < gpuScene->entities.size(); ++i)
         {
@@ -665,7 +665,7 @@ namespace rasm
         }
     }
 
-    void Engine::writeMaterialRow(MaterialHandle material)
+    void Renderer::writeMaterialRow(MaterialHandle material)
     {
         const Material &materialRef = registry.materials[material.index];
         const TextureHandle normalMap = materialRef.textures[static_cast<uint32_t>(PbrSlot::NORMAL)];
@@ -676,7 +676,7 @@ namespace rasm
 
     // The rows are free for another entity at once: each frame slot has its own copy of the table, written only after its
     // fence, and the draw lists that name them are rebuilt first.
-    void Engine::releaseEntityRows(EntityHandle entity)
+    void Renderer::releaseEntityRows(EntityHandle entity)
     {
         if (entity.index >= gpuScene->entities.size())
             return;
@@ -700,7 +700,7 @@ namespace rasm
         releaseEntityAnimation(entity);
     }
 
-    bool Engine::addEntityToDrawList(SceneHandle scene, EntityHandle entity)
+    bool Renderer::addEntityToDrawList(SceneHandle scene, EntityHandle entity)
     {
         if (gpuScene->entities.size() <= entity.index)
             gpuScene->entities.resize(entity.index + 1);
@@ -716,7 +716,7 @@ namespace rasm
         return true;
     }
 
-    void Engine::markDrawListsDirty(EntityHandle entity)
+    void Renderer::markDrawListsDirty(EntityHandle entity)
     {
         const uint16_t scenes = gpuScene->entities[entity.index].scenes;
         for (uint32_t i = 0; i < MAX_SCENES; ++i)
@@ -728,7 +728,7 @@ namespace rasm
 
     // Removing an entity only clears its scene bit, so the list is compacted where it is walked anyway: an entry stays
     // while its entity lives and is in the scene, once (removed and added again, it may be there twice).
-    void Engine::compactSceneEntities(SceneHandle scene)
+    void Renderer::compactSceneEntities(SceneHandle scene)
     {
         const auto bit = static_cast<uint16_t>(1u << scene.index);
         const uint32_t stamp = ++gpuScene->rebuildStamp;
@@ -743,7 +743,7 @@ namespace rasm
                           return false; });
     }
 
-    void Engine::rebuildDrawList(SceneHandle scene)
+    void Renderer::rebuildDrawList(SceneHandle scene)
     {
         ZoneScoped;
 
@@ -803,7 +803,7 @@ namespace rasm
         drawList.staleSlots = static_cast<uint8_t>((1u << MAX_FRAMES_IN_FLIGHT) - 1);
     }
 
-    void Engine::uploadDrawList(SceneDrawList &drawList)
+    void Renderer::uploadDrawList(SceneDrawList &drawList)
     {
         const auto frame = static_cast<uint32_t>(frameCount);
         const auto bit = static_cast<uint8_t>(1u << frame);
@@ -840,8 +840,8 @@ namespace rasm
     // hold for every frame. The cull stats are not declared: the views only add to them atomically, and only the CPU
     // reads them, after the slot's fence, so views need no order between them. The draws read the shadows' maps, so
     // they run after the passes that drew them.
-    bool Engine::addScenePasses(RenderGraph &graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget, const SceneShadow *shadows, uint32_t shadowCount,
-                                const RenderTargetHandle *sampled, uint32_t sampledCount)
+    bool Renderer::addScenePasses(RenderGraph &graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget, const SceneShadow *shadows, uint32_t shadowCount,
+                                  const RenderTargetHandle *sampled, uint32_t sampledCount)
     {
         if (!isLive(camera))
         {
@@ -947,7 +947,7 @@ namespace rasm
     // A light's shadow: depth-only maps, each drawn by its own scene view, with LODs from the camera. A directional
     // light's cascades cover slices of the camera's view; a spot light's map looks along its cone; a point light's
     // cube is drawn by a view per face. The view that reads the shadow gets it from addScenePasses.
-    SceneShadow Engine::addShadowPasses(RenderGraph &graph, SceneHandle scene, CameraHandle camera, const ShadowDesc &desc)
+    SceneShadow Renderer::addShadowPasses(RenderGraph &graph, SceneHandle scene, CameraHandle camera, const ShadowDesc &desc)
     {
         if (!isLive(camera))
         {
@@ -1013,8 +1013,8 @@ namespace rasm
         return shadow;
     }
 
-    bool Engine::addSceneViewPasses(RenderGraph &graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget, uint32_t face, const SceneShadow *shadows, uint32_t shadowCount, bool depthOnly,
-                                    const RenderTargetHandle *sampled, uint32_t sampledCount)
+    bool Renderer::addSceneViewPasses(RenderGraph &graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget, uint32_t face, const SceneShadow *shadows, uint32_t shadowCount, bool depthOnly,
+                                      const RenderTargetHandle *sampled, uint32_t sampledCount)
     {
         // A view's passes run once per frame: a second set would read its own visibility as last frame's.
         for (uint32_t heldView : graph.sceneViews)
@@ -1200,7 +1200,7 @@ namespace rasm
 
     // A view lives while a graph holds it, so graphs built for the same scene, camera, target, face and shadows share
     // it. Its buffers start small and grow in prepareSceneView under the same handles.
-    uint32_t Engine::createSceneView(SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget, uint32_t face, const SceneShadow *shadows, uint32_t shadowCount, bool depthOnly)
+    uint32_t Renderer::createSceneView(SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget, uint32_t face, const SceneShadow *shadows, uint32_t shadowCount, bool depthOnly)
     {
         SceneShadow viewShadows[MAX_VIEW_SHADOWS] = {};
         std::copy(shadows, shadows + shadowCount, viewShadows);
@@ -1299,7 +1299,7 @@ namespace rasm
 
     // A graph lets go of a view when it is destroyed or replaced. The last one frees the view's buffers once the
     // frames that used them are done.
-    void Engine::releaseSceneView(uint32_t viewIndex)
+    void Renderer::releaseSceneView(uint32_t viewIndex)
     {
         SceneView &view = gpuScene->views[viewIndex];
         if (view.graphs == 0)
@@ -1325,7 +1325,7 @@ namespace rasm
     // The view's first pass runs it, before anything of the view is recorded. It decides what the view's passes do
     // this frame: nothing for an empty scene or one whose entities still load (the passes keep their cleared
     // attachments), the draws without culling when the culling pipelines fail, and no late half without a Hi-Z.
-    void Engine::prepareSceneView(uint32_t viewIndex)
+    void Renderer::prepareSceneView(uint32_t viewIndex)
     {
         ZoneScoped;
 
@@ -1475,7 +1475,7 @@ namespace rasm
             opaqueMeshlets = opaqueMeshlets || (hasMeshlets && run.alphaMode == AlphaMode::NONE);
             maskMeshlets = maskMeshlets || (hasMeshlets && run.alphaMode == AlphaMode::MASK && view.drawMask);
         }
-        // The mesh shaders read the meshlet data stream, which EngineConfig::geometryPoolMeshletData = 0 leaves out.
+        // The mesh shaders read the meshlet data stream, which RendererConfig::geometryPoolMeshletData = 0 leaves out.
         const MeshletPath meshletPath = resolveMeshletPath(config.meshletPath, ctx.hasMeshShaders() && geometryPool->meshletDataBuffer().isValid());
         meshletDraws = meshletDraws && culled && meshletPath != MeshletPath::OFF;
         view.meshShaders = meshletDraws && meshletPath == MeshletPath::MESH_SHADERS && createMeshletPipelines(viewIndex, opaqueMeshlets, maskMeshlets);
@@ -1546,7 +1546,7 @@ namespace rasm
         const TextureHandle depthTexture = renderTargetData.attachments[frame].depth;
 
         // Each run drawn by meshlets has a range of meshlet draws: room for its meshlets, up to what is left of the
-        // view's budget (EngineConfig::maxViewMeshlets), and one draw per draw of the run, for those past the budget,
+        // view's budget (RendererConfig::maxViewMeshlets), and one draw per draw of the run, for those past the budget,
         // which are drawn whole. Its chunks have room for every draw at its LOD with the most meshlets.
         uint32_t meshletNeed = 0;
         uint32_t chunkNeed = 0;
@@ -1840,7 +1840,7 @@ namespace rasm
 
     // countMain, then writeMain, which reads the counts and slots countMain wrote. The early phase draws what was
     // visible last frame; the late one, after the Hi-Z, what the early one left out.
-    void Engine::recordSceneCulling(uint32_t viewIndex, uint32_t phase)
+    void Renderer::recordSceneCulling(uint32_t viewIndex, uint32_t phase)
     {
         const SceneView &view = gpuScene->views[viewIndex];
         if (!view.ready || !view.culled)
@@ -1868,7 +1868,7 @@ namespace rasm
 
     // The meshlets of the chunks writeMain wrote: tested and masked per chunk, a run at a time (the chunk count is the
     // GPU's, so the dispatches are indirect), then written as draws. Each step reads what the one before wrote.
-    void Engine::recordMeshletCulling(uint32_t viewIndex, uint32_t phase)
+    void Renderer::recordMeshletCulling(uint32_t viewIndex, uint32_t phase)
     {
         const SceneView &view = gpuScene->views[viewIndex];
         const auto frame = static_cast<uint32_t>(frameCount);
@@ -1899,7 +1899,7 @@ namespace rasm
 
     // A bitonic sort of the blend run's visible draws, back to front, in place (shaders/passes/sort.slang). Its size
     // is the run's, not its visible count, which only the GPU knows: the draws past the count sort to the end.
-    void Engine::recordBlendSort(uint32_t viewIndex)
+    void Renderer::recordBlendSort(uint32_t viewIndex)
     {
         const SceneView &view = gpuScene->views[viewIndex];
         const auto frame = static_cast<uint32_t>(frameCount);
@@ -1931,7 +1931,7 @@ namespace rasm
     }
 
     // Each level reads the one before, level 0 the depth the early draws left.
-    void Engine::recordHiz(uint32_t viewIndex)
+    void Renderer::recordHiz(uint32_t viewIndex)
     {
         const SceneView &view = gpuScene->views[viewIndex];
         if (!view.late)
@@ -1957,7 +1957,7 @@ namespace rasm
 
     // Culling packs a run's visible draws at the start of its range and counts them, so each run is one indirect
     // draw with a count; an unculled view draws its whole list. The phase is the culling view's early or late color.
-    void Engine::drawSceneView(uint32_t viewIndex, uint32_t phase)
+    void Renderer::drawSceneView(uint32_t viewIndex, uint32_t phase)
     {
         const SceneView &view = gpuScene->views[viewIndex];
         if (!view.ready)
@@ -2039,7 +2039,7 @@ namespace rasm
     // The task and mesh pipelines a view's meshlet runs need, made the first time like the MASK ones: the opaque runs'
     // and the MASK runs', shaded, in the view's debug view, or depth-only. False while one is missing (a shader error
     // retries next frame), and the view then draws its meshlets by vertex pulling (whole with AUTO).
-    bool Engine::createMeshletPipelines(uint32_t viewIndex, bool opaque, bool mask)
+    bool Renderer::createMeshletPipelines(uint32_t viewIndex, bool opaque, bool mask)
     {
         SceneView &view = gpuScene->views[viewIndex];
         if (view.depthOnly)
@@ -2076,7 +2076,7 @@ namespace rasm
 
     // The blend run, after the view's draws and its sky: depth tested against them, but not written, so each see-through
     // surface blends over what is behind it, in the order the sort left (back to front; unsorted without culling).
-    void Engine::drawTransparent(uint32_t viewIndex)
+    void Renderer::drawTransparent(uint32_t viewIndex)
     {
         const SceneView &view = gpuScene->views[viewIndex];
         if (!view.ready || !view.drawBlend)
@@ -2103,7 +2103,7 @@ namespace rasm
 
     // One triangle at the far plane, after the view's draws: the depth test passes only where they left the clear
     // depth (0, reversed-Z), so the sky costs only the pixels it shows.
-    void Engine::drawSky(uint32_t viewIndex)
+    void Renderer::drawSky(uint32_t viewIndex)
     {
         // A debug view shows the target's clear color behind the scene, so a count starts at 0.
         const SceneView &view = gpuScene->views[viewIndex];
@@ -2130,7 +2130,7 @@ namespace rasm
 
     // The culling view's ghosts (debugGhosts.slang): a box around every draw's bounding sphere, one instance per draw of
     // the scene's list, added over what the view drew. Its vertex shader drops the draws that culling kept.
-    void Engine::drawCullingGhosts(uint32_t viewIndex)
+    void Renderer::drawCullingGhosts(uint32_t viewIndex)
     {
         const SceneView &view = gpuScene->views[viewIndex];
         const PipelineHandle ghostPipeline = getShadedPipelines(*gpuScene, ctx, view).ghostPipeline;
@@ -2148,7 +2148,7 @@ namespace rasm
         ctx.setCullMode(commandBuffer, CullMode::NONE);
     }
 
-    void Engine::setMeshletPath(MeshletPath path)
+    void Renderer::setMeshletPath(MeshletPath path)
     {
         if (path != MeshletPath::OFF && path != MeshletPath::VERTEX_PULLING && path != MeshletPath::MESH_SHADERS && path != MeshletPath::AUTO)
         {
@@ -2161,7 +2161,7 @@ namespace rasm
         config.meshletPath = path;
     }
 
-    MeshletPath Engine::getMeshletPath() const
+    MeshletPath Renderer::getMeshletPath() const
     {
         return config.meshletPath;
     }

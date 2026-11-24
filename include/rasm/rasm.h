@@ -4,6 +4,7 @@
 #include "rasm/types.h"
 #include "rasm/entity.h"
 #include "rasm/scene.h"
+#include "rasm/renderer.h"
 #include "rasm/engine.h"
 #include "rasm/window.h"
 #include "rasm/transform.h"

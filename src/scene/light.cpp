@@ -1,5 +1,5 @@
 #include "rasm/light.h"
-#include "rasm/engine.h"
+#include "rasm/renderer.h"
 #include "renderer/lightClusters.h"
 
 #include "spdlog/spdlog.h"
@@ -18,7 +18,7 @@ namespace rasm
         }
     }
 
-    LightHandle Engine::createLight(LightType type, glm::vec3 color, glm::vec3 position, glm::vec3 direction, float intensity, float range, float innerConeAngle, float outerConeAngle)
+    LightHandle Renderer::createLight(LightType type, glm::vec3 color, glm::vec3 position, glm::vec3 direction, float intensity, float range, float innerConeAngle, float outerConeAngle)
     {
         if (!isValidSpotCone(type, innerConeAngle, outerConeAngle))
             return {};
@@ -26,7 +26,7 @@ namespace rasm
         const HandleSlot slot = registry.lightHandles.allocate();
         if (slot.index == 0)
         {
-            spdlog::warn("Exceeded maximum number of lights ({}, EngineConfig::maxLights).", config.maxLights);
+            spdlog::warn("Exceeded maximum number of lights ({}, RendererConfig::maxLights).", config.maxLights);
             return {};
         }
         const LightHandle handle{slot.index, slot.generation};
@@ -51,7 +51,7 @@ namespace rasm
 
     // Its scenes rebuild their light lists without it, and its row goes to the next light at once: each frame slot has
     // its own copy of the light table. A shadow made for it casts nothing from now on.
-    void Engine::destroyLight(LightHandle light)
+    void Renderer::destroyLight(LightHandle light)
     {
         if (!isLive(light))
         {
@@ -65,7 +65,7 @@ namespace rasm
         registry.lightHandles.release(light.index, light.generation);
     }
 
-    Light Engine::getLight(LightHandle light) const
+    Light Renderer::getLight(LightHandle light) const
     {
         if (!isLive(light))
         {
@@ -77,7 +77,7 @@ namespace rasm
 
     // A light that gains or loses its range moves between the global and the local part of its scenes' lists. Its type
     // stays: a shadow's maps (addShadowPasses) are made for it, cascades, one map or a cube.
-    void Engine::updateLight(LightHandle light, const Light &values)
+    void Renderer::updateLight(LightHandle light, const Light &values)
     {
         if (!isLive(light))
         {

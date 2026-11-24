@@ -1,5 +1,5 @@
 #include "renderer/bloom.h"
-#include "rasm/engine.h"
+#include "rasm/renderer.h"
 #include "core/utils.h"
 #include "platform/paths.h"
 #include "renderer/uberMaterialTypes.h"
@@ -51,20 +51,20 @@ namespace rasm
         return std::max(levels, std::min(count, 1u));
     }
 
-    bool Engine::bloomPipelinesReady() const
+    bool Renderer::bloomPipelinesReady() const
     {
         return bloomFirstDownPipeline.isValid() && bloomDownPipeline.isValid() && bloomUpPipeline.isValid();
     }
 
     // The bloom passes dispatch, and the tone map samples their result, only when this holds. The first bloom pass
     // makes the pipelines before it asks, and the strength does not change within a frame.
-    bool Engine::bloomRuns(CameraHandle camera) const
+    bool Renderer::bloomRuns(CameraHandle camera) const
     {
         return registry.cameras[camera.index].bloomStrength > 0.0f && getDrawnDebugView(camera) == DebugView::NONE && bloomPipelinesReady();
     }
 
     // A shader error logs and retries the next frame, like the tone map, so a fix on disk is picked up.
-    bool Engine::createBloomPipelines()
+    bool Renderer::createBloomPipelines()
     {
         if (bloomPipelinesReady())
             return true;
@@ -88,7 +88,7 @@ namespace rasm
     // others. Every target is transient storage, sized from the source, so the graph lays their memory out together.
     // The passes share the GPU timer "Bloom", and dispatch nothing while the camera's bloom strength is 0 (the graph
     // still records their barriers).
-    RenderTargetHandle Engine::addBloomPasses(RenderGraph &graph, const RenderTargetHandle &source, CameraHandle camera)
+    RenderTargetHandle Renderer::addBloomPasses(RenderGraph &graph, const RenderTargetHandle &source, CameraHandle camera)
     {
         if (!isLive(camera))
         {

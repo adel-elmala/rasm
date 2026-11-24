@@ -34,6 +34,8 @@ namespace rasm
     {
     public:
         virtual                     ~Platform() = default;
+        // SDL opens windows and reads events; NATIVE wraps the application's windows; HEADLESS has none.
+        virtual PlatformType        type() const = 0;
         // The window without its handle, which the engine gives. A headless window has no native handle, and its pixel
         // size is the size asked for. A window without a native handle failed (except headless).
         virtual Window              createWindow(const WindowDesc& desc) = 0;

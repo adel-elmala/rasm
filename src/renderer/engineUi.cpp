@@ -1,4 +1,4 @@
-#include "rasm/engine.h"
+#include "rasm/renderer.h"
 #include "renderer/frameStats.h"
 #include "renderer/gpuScene.h"
 #include "renderer/inspector.h"
@@ -145,9 +145,9 @@ namespace rasm
 
     // The RASM window, F1: the frame stats, the forced LOD (F2), the debug views, the frame's resources and GPU tables,
     // and the render graph's dump (F3).
-    void Engine::drawEngineWindow()
+    void Renderer::drawEngineWindow()
     {
-        // Counted in frame time (buildUi adds it), so with EngineConfig::fixedDeltaTime the same frames renew the numbers
+        // Counted in frame time (buildUi adds it), so with RendererConfig::fixedDeltaTime the same frames renew the numbers
         // in every run (C15).
         if (ui->statsAge >= STATS_REFRESH)
         {
@@ -248,7 +248,7 @@ namespace rasm
 
     // A frozen view's frustum as lines on the UI's background, seen from the frame's camera: the near rectangle, the
     // side edges and a far rectangle at FROZEN_FAR_DEPTH. Views of other cameras draw elsewhere, so they are left out.
-    void Engine::drawFrozenFrustums(CameraHandle camera)
+    void Renderer::drawFrozenFrustums(CameraHandle camera)
     {
         if (!cullingFrozen)
             return;

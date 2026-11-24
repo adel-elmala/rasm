@@ -56,7 +56,7 @@ namespace rasm
     }
 
     // Without timestamps the stats only lack GPU times.
-    void Engine::createFrameStats()
+    void Renderer::createFrameStats()
     {
         for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
             frameStats->slots[i].timestamps = ctx.createTimestampQueryPool("GPU Timers " + std::to_string(i), 2 * MAX_GPU_TIMERS);
@@ -65,7 +65,7 @@ namespace rasm
     // Runs right after the fence wait for the frame's slot: it reads what the slot's last frame measured, then
     // resets the slot's timers and counts for this frame. Frames are measured only while the overlay is shown
     // or once getFrameStats was called.
-    void Engine::updateFrameStats()
+    void Renderer::updateFrameStats()
     {
         ZoneScoped;
 
@@ -163,19 +163,19 @@ namespace rasm
             ctx.resetQueries(slot.timestamps);
     }
 
-    uint32_t Engine::beginGpuTimer(const CommandBufferHandle &commandBuffer, const std::string &name)
+    uint32_t Renderer::beginGpuTimer(const CommandBufferHandle &commandBuffer, const std::string &name)
     {
         const bool onCompute = asyncCompute && commandBuffer == frameResources[frameCount].commandBuffer && recordingQueue == QueueType::COMPUTE;
         return beginTimer(ctx, *frameStats, static_cast<uint32_t>(frameCount), commandBuffer, name, onCompute, MAX_GPU_TIMERS);
     }
 
-    void Engine::endGpuTimer(const CommandBufferHandle &commandBuffer, uint32_t timer)
+    void Renderer::endGpuTimer(const CommandBufferHandle &commandBuffer, uint32_t timer)
     {
         if (timer != UINT32_MAX)
             ctx.writeTimestamp(commandBuffer, frameStats->slots[frameCount].timestamps, 2 * timer + 1);
     }
 
-    const FrameStats &Engine::getFrameStats() const
+    const FrameStats &Renderer::getFrameStats() const
     {
         frameStats->requested = true;
         return frameStats->stats;

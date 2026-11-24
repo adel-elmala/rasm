@@ -137,7 +137,7 @@ namespace rasm
     }
 
     // A shader that fails to compile only leaves the overlay off.
-    bool Engine::createStatsOverlay()
+    bool Renderer::createStatsOverlay()
     {
         for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
@@ -159,7 +159,7 @@ namespace rasm
     }
 
     // Runs after updateFrameStats. Each slot draws from its own buffer, so both get the current text every frame.
-    void Engine::updateStatsOverlay()
+    void Renderer::updateStatsOverlay()
     {
         StatsOverlaySlot &slot = statsOverlay->slots[frameCount];
         slot.rows = 0;
@@ -168,7 +168,7 @@ namespace rasm
         if (!config.showStats || !statsOverlay->pipeline.isValid())
             return;
 
-        // Counted in frame time, so with EngineConfig::fixedDeltaTime the same frames renew the text in every run (C15).
+        // Counted in frame time, so with RendererConfig::fixedDeltaTime the same frames renew the text in every run (C15).
         if (statsOverlay->grid.empty() || statsOverlay->gridAge >= TEXT_REFRESH)
         {
             statsOverlay->gridAge = 0.0f;
@@ -183,7 +183,7 @@ namespace rasm
 
     // Records a pass of its own after every other, so the panel covers whatever the frame drew. It keeps the color and
     // has no depth. The shader places the panel in window pixels and its triangles wind clockwise on screen.
-    void Engine::drawStatsOverlay()
+    void Renderer::drawStatsOverlay()
     {
         const StatsOverlaySlot &slot = statsOverlay->slots[frameCount];
         if (!config.showStats || slot.rows == 0)

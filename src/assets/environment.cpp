@@ -1,4 +1,4 @@
-#include "rasm/engine.h"
+#include "rasm/renderer.h"
 #include "assets/loadJobs.h"
 #include "core/workerPool.h"
 #include "renderer/environmentBake.h"
@@ -42,7 +42,7 @@ namespace rasm
         }
     }
 
-    EnvironmentHandle Engine::loadEnvironment(const std::string &assetPath)
+    EnvironmentHandle Renderer::loadEnvironment(const std::string &assetPath)
     {
         const std::string path = resolveAssetPath(assetPath);
         const auto extension = path.substr(path.find_last_of('.') + 1);
@@ -78,7 +78,7 @@ namespace rasm
         return handle;
     }
 
-    bool Engine::isLoaded(EnvironmentHandle environment) const
+    bool Renderer::isLoaded(EnvironmentHandle environment) const
     {
         if (!isLive(environment))
             return false;
@@ -87,7 +87,7 @@ namespace rasm
 
     // Scenes that use it have no environment from the next frame on. Its textures and their bindless slots are freed once
     // the frames in flight, which may still light with them or bake them, are done.
-    void Engine::destroyEnvironment(EnvironmentHandle environment)
+    void Renderer::destroyEnvironment(EnvironmentHandle environment)
     {
         if (!isLive(environment))
         {
@@ -129,7 +129,7 @@ namespace rasm
 
     // Makes the image and the three cubes, so the next frame can bake them. A failure leaves the environment without
     // light, as if the scene had none.
-    void Engine::finishEnvironmentLoad(PendingEnvironmentLoad &load)
+    void Renderer::finishEnvironmentLoad(PendingEnvironmentLoad &load)
     {
         ZoneScoped;
 

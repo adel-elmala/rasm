@@ -1,4 +1,4 @@
-#include "rasm/engine.h"
+#include "rasm/renderer.h"
 
 #include "assets/ktxImage.h"
 #include "assets/loadJobs.h"
@@ -67,7 +67,7 @@ namespace rasm
         }
     }
 
-    TextureHandle Engine::loadTexture(const std::string &assetPath, Format format)
+    TextureHandle Renderer::loadTexture(const std::string &assetPath, Format format)
     {
         if (format != Format::R8G8B8A8_SRGB && format != Format::R8G8B8A8_UNORM)
         {
@@ -158,13 +158,13 @@ namespace rasm
         return textureHandle;
     }
 
-    bool Engine::isLoaded(TextureHandle texture) const
+    bool Renderer::isLoaded(TextureHandle texture) const
     {
         return ctx.isAlive(texture) && !pendingTextures.contains(texture);
     }
 
     // Each material that uses the texture loses it, and its row is written again.
-    void Engine::detachTexture(const TextureHandle &texture)
+    void Renderer::detachTexture(const TextureHandle &texture)
     {
         if (!texture.isValid())
             return;
@@ -196,7 +196,7 @@ namespace rasm
 
     // Materials sample by slot number, so each one that uses the texture loses it before the slot can take another
     // texture. A load still in the pool is dropped: a queued job never runs, a running one gives its result up.
-    void Engine::destroyTexture(const TextureHandle &texture)
+    void Renderer::destroyTexture(const TextureHandle &texture)
     {
         if (!ctx.isAlive(texture))
         {
@@ -216,7 +216,7 @@ namespace rasm
     }
 
     // The load's bytes go back to the budget once a worker freed its data, from here or once it is filled (finishLoads).
-    void Engine::dropTextureLoad(TextureHandle texture)
+    void Renderer::dropTextureLoad(TextureHandle texture)
     {
         auto it = pendingTextures.find(texture);
         if (it == pendingTextures.end())
@@ -231,13 +231,13 @@ namespace rasm
         pendingTextures.erase(it);
     }
 
-    bool Engine::fillTextureLevels(TextureHandle texture, const TextureRaw &raw)
+    bool Renderer::fillTextureLevels(TextureHandle texture, const TextureRaw &raw)
     {
         TextureFillProgress progress;
         return fillTextureLevels(texture, raw, progress, UINT64_MAX);
     }
 
-    bool Engine::fillTextureLevels(TextureHandle texture, const TextureRaw &raw, TextureFillProgress &progress, uint64_t maxBytes)
+    bool Renderer::fillTextureLevels(TextureHandle texture, const TextureRaw &raw, TextureFillProgress &progress, uint64_t maxBytes)
     {
         std::vector<TextureLevel> levels(raw.levelSizes.size());
         uint64_t offset = 0;
@@ -252,7 +252,7 @@ namespace rasm
     // The levels arrive whole, mips included, so this only copies them: on the host, or into the staging ring, about
     // maxBytes per call, so a big texture's copies spread over frames (P24). They are freed when the load is erased (P6).
     // Returns whether the fill is over: its last part queued, failed, or its texture gone.
-    bool Engine::finishTextureLoad(PendingTextureLoad &load, uint64_t maxBytes)
+    bool Renderer::finishTextureLoad(PendingTextureLoad &load, uint64_t maxBytes)
     {
         ZoneScoped;
 

@@ -11,7 +11,7 @@
 namespace rasm
 {
 
-    // A copy asked for by Engine::readFrame or readTexture. endFrame records it into the frame's last graphics batch,
+    // A copy asked for by Renderer::readFrame or readTexture. endFrame records it into the frame's last graphics batch,
     // and it is done once the frame fence reaches fenceValue.
     struct PendingReadback
     {

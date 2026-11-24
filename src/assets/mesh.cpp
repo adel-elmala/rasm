@@ -1,5 +1,5 @@
 #include "rasm/mesh.h"
-#include "rasm/engine.h"
+#include "rasm/renderer.h"
 #include "assets/ktxImage.h"
 #include "assets/loadJobs.h"
 #include "assets/meshImport.h"
@@ -144,7 +144,7 @@ namespace rasm
         return toUnorm8(encodeSrgb(linearColor.r)) | toUnorm8(encodeSrgb(linearColor.g)) << 8 | toUnorm8(encodeSrgb(linearColor.b)) << 16 | toUnorm8(linearColor.a) << 24;
     }
 
-    MeshHandle Engine::createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices, std::vector<uint32_t> colors)
+    MeshHandle Renderer::createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices, std::vector<uint32_t> colors)
     {
         if (!colors.empty() && colors.size() != vertices.size())
         {
@@ -194,7 +194,7 @@ namespace rasm
         return handle;
     }
 
-    MeshHandle Engine::loadMesh(const std::string &assetPath)
+    MeshHandle Renderer::loadMesh(const std::string &assetPath)
     {
         const std::string path = resolveAssetPath(assetPath);
 
@@ -255,13 +255,13 @@ namespace rasm
         return handle;
     }
 
-    MeshHandle Engine::loadGLTF(const std::string &path)
+    MeshHandle Renderer::loadGLTF(const std::string &path)
     {
         return loadMesh(path);
     }
 
     // A glTF's textures are filled after its mesh is ready, a few per frame (P2), so it counts as loaded once they are.
-    bool Engine::isLoaded(MeshHandle mesh) const
+    bool Renderer::isLoaded(MeshHandle mesh) const
     {
         if (!isLive(mesh) || registry.meshes[mesh.index].state != MeshState::READY)
             return false;
@@ -273,7 +273,7 @@ namespace rasm
         return true;
     }
 
-    void Engine::finishMeshLoad(PendingMeshLoad &load)
+    void Renderer::finishMeshLoad(PendingMeshLoad &load)
     {
         ZoneScoped;
 
@@ -314,7 +314,7 @@ namespace rasm
         {
             for (const MeshGeometry &geometry : geometries)
                 geometryPool->free(geometry);
-            spdlog::error("The animation pool is full: mesh {} needs {} B ({}/{} B in use, the largest free range {} B). EngineConfig::animationPoolBytes sets its size.",
+            spdlog::error("The animation pool is full: mesh {} needs {} B ({}/{} B in use, the largest free range {} B). RendererConfig::animationPoolBytes sets its size.",
                           load.path, animationBytes, getAnimationPoolUsed(), config.animationPoolBytes, gpuAnimation->poolRanges.largestFree());
             return;
         }
@@ -388,7 +388,7 @@ namespace rasm
 
     // Entities that use the mesh keep living and draw nothing. Its geometry ranges, table rows and animation pool range
     // wait for the frames in flight, which may still draw it; its materials and textures go with it.
-    void Engine::destroyMesh(MeshHandle mesh)
+    void Renderer::destroyMesh(MeshHandle mesh)
     {
         if (!isLive(mesh))
         {
@@ -455,7 +455,7 @@ namespace rasm
         }
     }
 
-    MeshSize Engine::getMeshByteSize(const MeshHandle &handle) const
+    MeshSize Renderer::getMeshByteSize(const MeshHandle &handle) const
     {
         if (!isLive(handle))
         {

@@ -29,6 +29,7 @@ add_executable(rasm_tests
             "rangeAllocatorTests.cpp"
             "readbackTests.cpp"
             "releaseQueueTests.cpp"
+            "rendererConfigTests.cpp"
             "renderGraphTests.cpp"
             "resourceDescTests.cpp"
             "shaderCacheTests.cpp"

@@ -25,11 +25,11 @@ namespace rasm
     };
 
     // Every mesh's geometry in a few engine-wide buffers. Each stream hands out ranges with a RangeAllocator, so a destroyed
-    // mesh's ranges and table rows are reused (Engine::destroyMesh frees them once the GPU is done with them).
+    // mesh's ranges and table rows are reused (Renderer::destroyMesh frees them once the GPU is done with them).
     class GeometryPool
     {
     public:
-        bool                    create(RenderContext& ctx, const EngineConfig& config);
+        bool                    create(RenderContext& ctx, const RendererConfig& config);
         bool                    check(const ObjRaw& raw) const;
         bool                    allocate(const ObjRaw& raw, MeshGeometry& geometry);
         bool                    write(RenderContext& ctx, const ObjRaw& raw, const MeshGeometry& geometry);

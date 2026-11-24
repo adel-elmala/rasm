@@ -7,11 +7,16 @@ namespace rasm
     namespace
     {
         // The application's window: RASM makes a surface on it and reads nothing from it. The application runs the
-        // event loop and passes on the input, the size and the scale (Engine::addInputEvent, setWindowSize,
+        // event loop and passes on the input, the size and the scale (Renderer::addInputEvent, setWindowSize,
         // setWindowContentScale).
         class NativePlatform final : public Platform
         {
         public:
+            PlatformType type() const override
+            {
+                return PlatformType::NATIVE;
+            }
+
             Window createWindow(const WindowDesc &desc) override
             {
                 const NativeWindow &native = desc.native;
@@ -19,7 +24,7 @@ namespace rasm
                 const uint32_t height = desc.height;
                 if (native.type == NativeWindowType::NONE || native.window == nullptr)
                 {
-                    spdlog::error("PlatformType::NATIVE needs a window with a type and a handle (EngineConfig::nativeWindow, WindowDesc::native).");
+                    spdlog::error("PlatformType::NATIVE needs a window with a type and a handle (RendererConfig::nativeWindow, WindowDesc::native).");
                     return Window{};
                 }
                 Window window{};

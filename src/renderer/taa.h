@@ -19,7 +19,7 @@ namespace rasm
     // A perspective camera that moves more than this many times its near plane in one frame has jumped.
     constexpr float             TAA_JUMP_NEAR_PLANES    = 100.0f;
 
-    // What one TAA pass remembers between frames, to know when its history no longer fits this frame. Engine::render
+    // What one TAA pass remembers between frames, to know when its history no longer fits this frame. Renderer::render
     // keeps it with the view's history target, so a new graph goes on with the history.
     struct TaaState
     {

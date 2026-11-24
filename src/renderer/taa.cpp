@@ -1,5 +1,5 @@
 #include "renderer/taa.h"
-#include "rasm/engine.h"
+#include "rasm/renderer.h"
 #include "core/utils.h"
 #include "platform/paths.h"
 #include "renderer/gpuScene.h"
@@ -84,14 +84,14 @@ namespace rasm
     // now on. The pass drops its history when it was just made, when its textures were made again (a resize, a new
     // swapchain), after resetCameraHistory, and when the camera jumps (isCameraJump); it reads the camera when it
     // runs, so the result depends only on the frames.
-    RenderTargetHandle Engine::addTaaPass(RenderGraph &graph, const RenderTargetHandle &source, CameraHandle camera)
+    RenderTargetHandle Renderer::addTaaPass(RenderGraph &graph, const RenderTargetHandle &source, CameraHandle camera)
     {
         return addTaaPass(graph, source, camera, {}, std::make_shared<TaaState>());
     }
 
-    // history and state from a caller that keeps them across graphs, as Engine::render does for each view; an invalid
+    // history and state from a caller that keeps them across graphs, as Renderer::render does for each view; an invalid
     // history is made in the graph and lives with it.
-    RenderTargetHandle Engine::addTaaPass(RenderGraph &graph, const RenderTargetHandle &source, CameraHandle camera, RenderTargetHandle history, std::shared_ptr<TaaState> state)
+    RenderTargetHandle Renderer::addTaaPass(RenderGraph &graph, const RenderTargetHandle &source, CameraHandle camera, RenderTargetHandle history, std::shared_ptr<TaaState> state)
     {
         if (!isLive(camera))
         {

@@ -1,4 +1,4 @@
-#include "rasm/engine.h"
+#include "rasm/renderer.h"
 #include "core/utils.h"
 #include "platform/paths.h"
 #include "renderer/uberMaterialTypes.h"
@@ -11,7 +11,7 @@ namespace rasm
     // pipeline is made when the pass first runs, and a shader error retries every frame, so a shader fixed on disk is
     // picked up while the application runs. Until then the pass draws nothing and the frame shows the clear color.
     // The output's rect is fitted to the swapchain or the target when the pass runs, so it follows their size.
-    bool Engine::addToneMapPass(RenderGraph &graph, const RenderTargetHandle &source, CameraHandle camera, const RenderTargetHandle &bloom, const ViewOutput &output)
+    bool Renderer::addToneMapPass(RenderGraph &graph, const RenderTargetHandle &source, CameraHandle camera, const RenderTargetHandle &bloom, const ViewOutput &output)
     {
         if (!isLive(camera))
         {
@@ -93,7 +93,7 @@ namespace rasm
 
     // The tone map's pipeline for an output format, or a debug view's, each made the first time it is needed. A debug
     // pipeline that fails leaves the view tone mapped.
-    PipelineHandle Engine::getToneMapPipeline(Format format, DebugView shown)
+    PipelineHandle Renderer::getToneMapPipeline(Format format, DebugView shown)
     {
         ToneMapPipelines *entry = nullptr;
         for (ToneMapPipelines &pipelines : toneMapPipelines)
