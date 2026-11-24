@@ -161,7 +161,7 @@ namespace rasm
         io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasTextures;
 
         ui->scale = mainWindow.contentScale;
-        setUiScale(ui->scale);
+        setUiScale(1.0f, ui->scale);
         initUiPlatform(*platform);
         // Dear ImGui's colors and its blending are meant for sRGB numbers. Through the swapchain's UNORM view the blend
         // works on them, as ImGui's own backends do; without one the shader decodes the colors and the blend is in
@@ -229,8 +229,8 @@ namespace rasm
         // The window moved to a display of another scale, or its scale setting changed.
         if (mainWindow.contentScale != ui->scale)
         {
+            setUiScale(ui->scale, mainWindow.contentScale);
             ui->scale = mainWindow.contentScale;
-            setUiScale(ui->scale);
         }
         newUiPlatformFrame(mainWindow, deltaTime);
         ImGui::NewFrame();

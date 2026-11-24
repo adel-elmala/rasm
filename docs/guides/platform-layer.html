@@ -245,7 +245,7 @@
   <tr><td>A press outside every UI window</td><td>The camera starts a drag and keeps it until the release, even over a UI window.</td></tr>
   <tr><td>The wheel over a UI window</td><td>The UI scrolls; the camera does not zoom.</td></tr>
   <tr><td>A text field has the focus</td><td>Keys type into it. Shortcuts like F1 or Escape wait until it lets go.</td></tr>
-  <tr><td>The window loses the focus</td><td>Nobody: the window will never see the release of a held key, so every key counts as up.</td></tr>
+  <tr><td>The window loses the focus</td><td>Nobody: the window will never see the release of a held key or button, so every key counts as up and a drag ends.</td></tr>
 </table>
 </div>
 
@@ -310,9 +310,9 @@
   <tr><td>Events applied at the start of a frame</td><td><code>Engine::inputEvents</code>, a vector that keeps its capacity (no allocation in a steady frame, <code>P27</code>). <code>pollEvents</code> appends the platform's events after the application's and applies them in order.</td></tr>
   <tr><td>Meaning and position</td><td><code>InputEvent::key</code> and <code>physicalKey</code>, one <code>Key</code> enum for both. ImGui and F1–F3 read <code>key</code>; W/A/S/D read <code>physicalKey</code>, which <code>Key::NONE</code> makes the same as <code>key</code>.</td></tr>
   <tr><td>The UI's capture</td><td><code>getUiInputCapture</code> after the last UI frame: <code>WantCaptureMouse</code> keeps presses and the wheel from the camera, <code>WantCaptureKeyboard</code> W/A/S/D, <code>WantTextInput</code> Escape and F1–F3.</td></tr>
-  <tr><td>Focus lost: every key up</td><td><code>applyInputEvent</code> clears <code>InputState::keysDown</code> on a lost <code>FOCUS</code>; ImGui gets <code>AddFocusEvent</code>.</td></tr>
+  <tr><td>Focus lost: every key up</td><td><code>applyInputEvent</code> clears <code>InputState::keysDown</code> and ends the drag on a lost <code>FOCUS</code>; ImGui gets <code>AddFocusEvent</code>.</td></tr>
   <tr><td>Ask for text input</td><td><code>updateUiPlatform</code> calls <code>Platform::setTextInput</code> when <code>WantTextInput</code> changes; SDL starts and stops its text events. Cursor shapes and the clipboard go the same way. The SDL platform also captures the mouse while a button is held.</td></tr>
-  <tr><td>Scale the UI</td><td><code>setUiScale</code> rebuilds the style from ImGui's default when <code>Window::contentScale</code> changes; ImGui's framebuffer scale is pixels per point.</td></tr>
+  <tr><td>Scale the UI</td><td><code>setUiScale</code> scales the current style by the ratio of the new <code>Window::contentScale</code> to the old, so the application's colors and sizes stay; ImGui's framebuffer scale is pixels per point.</td></tr>
   <tr><td>A hidden window as a test</td><td><code>19_embedding --headless</code> opens a hidden SDL window, makes a <code>NATIVE</code> engine on it, plays a scripted drag, click and typing, and writes frame N. <code>verify-change</code> runs it like every example.</td></tr>
 </table>
 </div>

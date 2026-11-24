@@ -731,13 +731,13 @@ if (rasm::readPng("golden.png", golden) &amp;&amp; golden.width == image.width)
     <div class="table-wrap">
     <table>
       <tr><th><code>type</code></th><th>Fields</th><th>Goes to</th></tr>
-      <tr><td><code>KEY</code></td><td><code>key</code>, <code>physicalKey</code>, <code>down</code>, <code>repeat</code>, <code>modifiers</code></td><td>ImGui and F1–F3 by <code>key</code>; the camera's W/A/S/D by <code>physicalKey</code></td></tr>
+      <tr><td><code>KEY</code></td><td><code>key</code>, <code>physicalKey</code>, <code>down</code>, <code>repeat</code>, <code>modifiers</code></td><td>ImGui and F1–F3 by <code>key</code> (ImGui by <code>physicalKey</code> when <code>key</code> is <code>NONE</code>); the camera's W/A/S/D by <code>physicalKey</code></td></tr>
       <tr><td><code>MOUSE_BUTTON</code></td><td><code>button</code>, <code>down</code>, <code>x</code>, <code>y</code></td><td>ImGui; any button starts the camera's drag</td></tr>
       <tr><td><code>MOUSE_MOVE</code></td><td><code>x</code>, <code>y</code></td><td>ImGui; the camera while a drag runs</td></tr>
       <tr><td><code>MOUSE_WHEEL</code></td><td><code>x</code>, <code>y</code>: steps, <code>y</code> &gt; 0 away from the user, <code>x</code> &gt; 0 to the right</td><td>ImGui; the camera's zoom</td></tr>
       <tr><td><code>MOUSE_LEAVE</code></td><td>none</td><td>ImGui: no window is hovered</td></tr>
       <tr><td><code>TEXT</code></td><td><code>codepoint</code>: one Unicode character</td><td>ImGui's text fields</td></tr>
-      <tr><td><code>FOCUS</code></td><td><code>down</code>: gained, else lost</td><td>ImGui; losing it lets go of every held key</td></tr>
+      <tr><td><code>FOCUS</code></td><td><code>down</code>: gained, else lost</td><td>ImGui; losing it lets go of every held key and ends the camera's drag</td></tr>
     </table>
     </div>
     <dl>

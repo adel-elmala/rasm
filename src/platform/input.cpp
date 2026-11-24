@@ -91,9 +91,12 @@ namespace rasm
             state.mouseInside = false;
             break;
         case InputEventType::FOCUS:
-            // Keys released while another window has the focus never send their release here.
+            // Keys and buttons released while another window has the focus never send their release here.
             if (!event.down)
+            {
                 std::fill(std::begin(state.keysDown), std::end(state.keysDown), false);
+                state.dragActive = false;
+            }
             break;
         case InputEventType::TEXT:
         case InputEventType::NONE:

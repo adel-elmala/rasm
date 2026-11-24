@@ -97,7 +97,8 @@ namespace rasm
             io.AddKeyEvent(ImGuiMod_Shift, (event.modifiers & KEY_MOD_SHIFT) != 0);
             io.AddKeyEvent(ImGuiMod_Alt, (event.modifiers & KEY_MOD_ALT) != 0);
             io.AddKeyEvent(ImGuiMod_Super, (event.modifiers & KEY_MOD_SUPER) != 0);
-            if (const ImGuiKey key = toImGuiKey(event.key); key != ImGuiKey_None)
+            // A key whose meaning has no name (a 'ü' on a German keyboard) goes by its position, as ImGui's own backends do.
+            if (const ImGuiKey key = toImGuiKey(event.key != Key::NONE ? event.key : event.physicalKey); key != ImGuiKey_None)
                 io.AddKeyEvent(key, event.down);
             break;
         case InputEventType::MOUSE_BUTTON:
@@ -185,14 +186,13 @@ namespace rasm
     }
 
     // The style and the fonts follow the display's scale, so the UI keeps its size on a 150 % or 4K display. A new
-    // scale starts again from ImGui's default style, since ScaleAllSizes rounds and can't be undone.
-    void setUiScale(float scale)
+    // scale scales the current style by the ratio, so the application's colors and sizes stay; ScaleAllSizes rounds
+    // each size down, so a size may lose a pixel over moves between displays.
+    void setUiScale(float from, float to)
     {
-        ImGuiStyle style;
-        ImGui::StyleColorsDark(&style);
-        style.ScaleAllSizes(scale);
-        style.FontScaleDpi = scale;
-        ImGui::GetStyle() = style;
+        ImGuiStyle &style = ImGui::GetStyle();
+        style.ScaleAllSizes(to / from);
+        style.FontScaleDpi = to;
     }
 
     UiInputCapture getUiInputCapture()

@@ -21,7 +21,7 @@ namespace rasm
     void            resumeUiInput(const InputState& input);
     void            updateUiPlatform(Platform& platform, const Window& window, UiPlatformState& state);
     void            suspendUiPlatform(Platform& platform, const Window& window, UiPlatformState& state);
-    void            setUiScale(float scale);
+    void            setUiScale(float from, float to);
     UiInputCapture  getUiInputCapture();
 
 }

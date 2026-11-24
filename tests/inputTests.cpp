@@ -132,11 +132,15 @@ TEST_CASE("the camera moves by key position, and a key without one counts as its
     CHECK_FALSE(input.forward);
     CHECK(input.left);
 
-    // A key released in another window never sends its release: losing the focus lets go of it.
+    // A key or button released in another window never sends its release: losing the focus lets go of it.
     rasm::beginInputFrame(state);
+    rasm::applyInputEvent(state, button(400.0f, 300.0f, true), window, {});
     rasm::applyInputEvent(state, {.type = InputEventType::FOCUS, .down = false}, window, {});
+    rasm::applyInputEvent(state, move(500.0f, 300.0f), window, {});
     input = rasm::endInputFrame(state, {}, 0.016f);
     CHECK_FALSE(input.left);
+    CHECK_FALSE(state.dragActive);
+    CHECK(isNear(input.mouseStart, input.mouseEnd));
 }
 
 TEST_CASE("the engine's keys follow the layout, count once per press, and wait while a text field types")

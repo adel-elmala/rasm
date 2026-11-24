@@ -1,5 +1,6 @@
 #include "platform/platform.h"
 
+#include <cstddef>
 #include <cstring>
 
 #include "SDL3/SDL.h"
@@ -208,16 +209,6 @@ namespace rasm
         class SdlPlatform final : public Platform
         {
         public:
-            ~SdlPlatform() override
-            {
-                for (SDL_Cursor *cursor : cursors)
-                {
-                    if (cursor != nullptr)
-                        SDL_DestroyCursor(cursor);
-                }
-                SDL_free(clipboard);
-            }
-
             Window createWindow(uint32_t width, uint32_t height) override
             {
                 if (!SDL_Init(SDL_INIT_VIDEO))
@@ -240,7 +231,11 @@ namespace rasm
                 }
 
                 Window window{};
-                if (!getNativeWindow(sdlWindow, window.native, metalView))
+                SDL_MetalView metalView = nullptr;
+                const bool native = getNativeWindow(sdlWindow, window.native, metalView);
+                if (metalView != nullptr)
+                    metalViews.push_back({sdlWindow, metalView});
+                if (!native)
                 {
                     destroySdlWindow(sdlWindow);
                     return Window{};
@@ -411,18 +406,38 @@ namespace rasm
                 return reinterpret_cast<SDL_Window *>(window.handle.index);
             }
 
+            // SDL_Quit frees what SDL made, so the cursors and the clipboard copy go first.
             void destroySdlWindow(SDL_Window *window)
             {
+                for (size_t i = 0; i < metalViews.size(); ++i)
+                {
+                    if (metalViews[i].window != window)
+                        continue;
 #if defined(__APPLE__)
-                if (metalView != nullptr)
-                    SDL_Metal_DestroyView(metalView);
+                    SDL_Metal_DestroyView(metalViews[i].view);
 #endif
-                metalView = nullptr;
+                    metalViews.erase(metalViews.begin() + static_cast<std::ptrdiff_t>(i));
+                    break;
+                }
+                for (SDL_Cursor *&cursor : cursors)
+                {
+                    if (cursor != nullptr)
+                        SDL_DestroyCursor(cursor);
+                    cursor = nullptr;
+                }
+                SDL_free(clipboard);
+                clipboard = nullptr;
                 SDL_DestroyWindow(window);
                 SDL_Quit();
             }
 
-            SDL_MetalView metalView = nullptr;
+            struct MetalView
+            {
+                SDL_Window *window;
+                SDL_MetalView view;
+            };
+
+            std::vector<MetalView> metalViews;
             SDL_Cursor *cursors[SDL_CURSOR_COUNT] = {};
             char *clipboard = nullptr;
         };
