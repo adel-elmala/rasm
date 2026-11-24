@@ -44,7 +44,7 @@ namespace rasm::rhi
 
         // With mutable formats the images can also be viewed as UNORM, which the UI draws through. The format list must
         // hold the swapchain's format, so only a surface that has B8G8R8A8_SRGB gets them; mutableFormat says whether it did.
-        // The images are copy sources for Engine::readFrame when the surface allows it.
+        // The images are copy sources for Renderer::readFrame when the surface allows it.
         bool surfaceAllowsCopies(const vkb::Device &device)
         {
             VkSurfaceCapabilitiesKHR capabilities = {};

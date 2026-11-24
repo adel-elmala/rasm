@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Engine · RASM</title>
-<meta name="description" content="The Engine class: EngineConfig, construction and shutdown, the frame functions, loading, frame stats, paths and the window, plus an index of every Engine method.">
-<meta name="rasm-sources" content="include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h src/engine.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/platform/headlessPlatform.cpp src/platform/nativePlatform.cpp include/rasm/input.h examples/19_embedding/main.cpp src/renderer/readback.cpp include/rasm/readback.h src/platform/paths.cpp src/renderer/frameStats.cpp src/renderer/gpuScene.cpp src/renderer/renderGraph.cpp src/renderer/renderer.cpp src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/msaaResolve.cpp src/renderer/taa.cpp src/renderer/engineUi.cpp src/renderer/debugViews.cpp src/renderer/inspector.cpp src/rhi/renderContext.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.cpp src/assets/mesh.cpp src/assets/texture.cpp src/renderer/geometryPool.cpp src/renderer/gpuTable.cpp CMakeLists.txt shaders/lib/shadow.slang shaders/passes/shadow.slang examples/06_shadows/main.cpp">
+<title>Engine and Renderer · RASM</title>
+<meta name="description" content="Renderer, the renderer alone, and Engine, a Renderer that opens its own window: construction and shutdown, the frame functions, loading, frame stats, paths and the window, plus an index of every method.">
+<meta name="rasm-sources" content="include/rasm/renderer.h include/rasm/engine.h src/engine.cpp include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h src/renderer/renderer.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/platform/headlessPlatform.cpp src/platform/nativePlatform.cpp include/rasm/input.h examples/19_embedding/main.cpp src/renderer/readback.cpp include/rasm/readback.h src/platform/paths.cpp src/renderer/frameStats.cpp src/renderer/gpuScene.cpp src/renderer/renderGraph.cpp src/renderer/viewGraph.cpp src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/msaaResolve.cpp src/renderer/taa.cpp src/renderer/engineUi.cpp src/renderer/debugViews.cpp src/renderer/inspector.cpp src/rhi/renderContext.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.cpp src/assets/mesh.cpp src/assets/texture.cpp src/renderer/geometryPool.cpp src/renderer/gpuTable.cpp CMakeLists.txt shaders/lib/shadow.slang shaders/passes/shadow.slang examples/06_shadows/main.cpp examples/21_renderer/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -27,15 +27,15 @@
 <main>
 
 <p class="eyebrow">API reference</p>
-<h1>Engine</h1>
-<p class="lead"><code>rasm::Engine</code> is the one object your program creates. It opens the window, owns every scene object and GPU resource, and runs the frame. This page covers how to create it, the frame functions, loading, frame stats, paths and the window. The table below lists every method and the page that documents it.</p>
+<h1>Engine and Renderer</h1>
+<p class="lead">Your program creates one of two objects. <code>rasm::Renderer</code> is the renderer alone: it owns every scene object and GPU resource and runs the frame, in your window or into images, and opens no window itself. <code>rasm::Engine</code> is a <code>Renderer</code> that also opens its window with SDL and reads its events. Every method on this page is a <code>Renderer</code> method, and an <code>Engine</code> has them all. This page covers how to create them, the frame functions, loading, frame stats, paths and the window. The table below lists every method and the page that documents it.</p>
 
-<h2 id="index"><span class="n">1</span>Every Engine method</h2>
+<h2 id="index"><span class="n">1</span>Every method</h2>
 
 <div class="table-wrap">
 <table>
   <tr><th>Method</th><th>Task</th><th>Page</th></tr>
-  <tr><td><a href="#Engine"><code>Engine</code></a> / <a href="#Engine-destructor"><code>~Engine</code></a></td><td>create and shut down</td><td>this page</td></tr>
+  <tr><td><a href="#Renderer"><code>Renderer</code></a> / <a href="#Engine"><code>Engine</code></a> / <a href="#Renderer-destructor"><code>~Renderer</code></a></td><td>create and shut down</td><td>this page</td></tr>
   <tr><td><a href="#running"><code>running</code></a></td><td>false after quit or a failed start</td><td>this page</td></tr>
   <tr><td><a href="#getConfig"><code>getConfig</code></a></td><td>the config, with resolved paths</td><td>this page</td></tr>
   <tr><td><a href="#resolveAssetPath"><code>resolveAssetPath</code></a></td><td>where an asset path points</td><td>this page</td></tr>
@@ -123,6 +123,64 @@
 
 <h2 id="create"><span class="n">2</span>Create and shut down</h2>
 
+<p>Pick the object by who owns the window and the files:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Two ways to start. Left: an Engine, which is a Renderer plus a platform that opens an SDL window and reads its events. Right: a Renderer alone, which draws into the application's window or into offscreen images, and gets its input from the application. Both sit on the same RenderContext and GPU.">
+    <text x="190" y="20" class="title mid">Engine: the all-in-one</text>
+    <text x="570" y="20" class="title mid">Renderer: you own the window</text>
+
+    <rect x="20" y="34" width="340" height="48" rx="6" class="cpu"/>
+    <text x="190" y="54" class="mid">your program</text>
+    <text x="190" y="72" class="mid small">rasm::Engine engine(EngineConfig)</text>
+    <rect x="400" y="34" width="340" height="48" rx="6" class="cpu"/>
+    <text x="570" y="54" class="mid">your program: its window, its loop, its data</text>
+    <text x="570" y="72" class="mid small">rasm::Renderer renderer(RendererConfig)</text>
+
+    <rect x="20" y="100" width="150" height="56" rx="6" class="ghost"/>
+    <text x="95" y="122" class="mid">SDL platform</text>
+    <text x="95" y="140" class="mid small">window + events</text>
+    <rect x="186" y="100" width="174" height="56" rx="6" class="cpu"/>
+    <text x="273" y="122" class="mid">Renderer</text>
+    <text x="273" y="140" class="mid small">scene, frame, UI</text>
+    <line x1="170" y1="128" x2="184" y2="128" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="400" y="100" width="150" height="56" rx="6" class="ghost"/>
+    <text x="475" y="122" class="mid">nativeWindow</text>
+    <text x="475" y="140" class="mid small">or none: offscreen</text>
+    <rect x="566" y="100" width="174" height="56" rx="6" class="cpu"/>
+    <text x="653" y="122" class="mid">Renderer</text>
+    <text x="653" y="140" class="mid small">scene, frame, UI</text>
+    <line x1="550" y1="128" x2="564" y2="128" class="arrow" marker-end="url(#ah)"/>
+
+    <line x1="273" y1="82" x2="273" y2="98" class="arrow" marker-end="url(#ah)"/>
+    <line x1="653" y1="82" x2="653" y2="98" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="20" y="176" width="720" height="30" rx="5" class="mem"/>
+    <text x="380" y="196" class="mid">RenderContext → rhi::Device → Vulkan → GPU (the same for both)</text>
+    <line x1="273" y1="156" x2="273" y2="174" class="arrow" marker-end="url(#ah)"/>
+    <line x1="653" y1="156" x2="653" y2="174" class="arrow" marker-end="url(#ah)"/>
+    <text x="190" y="232" class="mid small">Engine is a Renderer: every call below works on both</text>
+    <text x="570" y="232" class="mid small">you send its input: addInputEvent, setWindowSize</text>
+  </svg>
+  <figcaption>An <code>Engine</code> adds only the platform it picks (<code>EngineConfig::platform</code>): with <code>SDL</code> it opens its window and reads the events; <code>NATIVE</code> and <code>HEADLESS</code> do what a <code>Renderer</code> does. <code>examples/21_renderer</code> uses a <code>Renderer</code> with no window, <code>examples/19_embedding</code> one on its own SDL3 windows.</figcaption>
+</figure>
+
+<div class="api" id="Renderer">
+  <pre class="sig">explicit Renderer(const RendererConfig&amp; config);</pre>
+  <div class="body">
+    <p>The renderer alone. With <code>config.nativeWindow</code> set it draws into that window (yours, which must outlive the renderer); without one it draws into offscreen images of <code>windowWidth</code> × <code>windowHeight</code> pixels, which <a href="#readFrame"><code>readFrame</code></a> copies back. It opens no window, reads no events (send yours with <a href="#addInputEvent"><code>addInputEvent</code></a>), and never stops by itself. <a href="types.html#RendererConfig"><code>RendererConfig</code></a> has the fields of <code>EngineConfig</code> but <code>platform</code>. Then it starts like an <code>Engine</code> (below), and <code>running()</code> says whether it did.</p>
+    <pre><code>rasm::RendererConfig config = {
+    .appName = "tiles",
+    .windowWidth = 1280,
+    .windowHeight = 720,
+    .shaderDir = "shaders"};
+rasm::Renderer renderer(config);
+if (!renderer.running())
+    return 1;</code></pre>
+  </div>
+</div>
+
 <div class="legend">
   <span><i class="cpu"></i>engine setup</span>
   <span><i class="mem"></i>GPU buffers and descriptor sets</span>
@@ -163,7 +221,7 @@
 <div class="api" id="Engine">
   <pre class="sig">Engine(const EngineConfig&amp; config);</pre>
   <div class="body">
-    <p>Opens the main window and sets up the whole renderer. It also resolves <code>shaderDir</code>, <code>assetRoot</code> and <code>cacheDir</code> (see <a href="#resolveAssetPath">paths</a>) and creates the default material. On any failure it logs an error and returns early, and <code>running()</code> stays false. A window width or height of 0 or less fails at once with <i>"Window dimensions must be positive."</i>.</p>
+    <p>A <code>Renderer</code> on the platform of <code>config.platform</code>: <code>SDL</code> opens the main window and reads its events, <code>NATIVE</code> draws into <code>config.nativeWindow</code>, <code>HEADLESS</code> into offscreen images. It opens the main window and sets up the whole renderer. It also resolves <code>shaderDir</code>, <code>assetRoot</code> and <code>cacheDir</code> (see <a href="#resolveAssetPath">paths</a>) and creates the default material. On any failure it logs an error and returns early, and <code>running()</code> stays false. A window width or height of 0 or less fails at once with <i>"Window dimensions must be positive."</i>.</p>
     <dl>
       <dt>config</dt><dd>Copied into the engine. Fields are in the <a href="#EngineConfig">EngineConfig</a> table below (also on <a href="types.html#EngineConfig">types.html</a>).</dd>
     </dl>
@@ -173,10 +231,10 @@ if (!engine.running())
   </div>
 </div>
 
-<div class="api" id="Engine-destructor">
-  <pre class="sig">~Engine();</pre>
+<div class="api" id="Renderer-destructor">
+  <pre class="sig">virtual ~Renderer();</pre>
   <div class="body">
-    <p>Waits for background loads that are still running, frees every GPU resource, destroys the window and shuts SDL down. Objects can be destroyed earlier, one by one: see <code>destroyEntity</code>, <code>destroyMesh</code> and the other <code>destroy*</code> calls in the table above.</p>
+    <p>An <code>Engine</code>'s destructor too, so deleting an <code>Engine</code> through a <code>Renderer*</code> is safe; no other method is virtual. It waits for background loads that are still running, frees every GPU resource, destroys the window and shuts SDL down. Objects can be destroyed earlier, one by one: see <code>destroyEntity</code>, <code>destroyMesh</code> and the other <code>destroy*</code> calls in the table above.</p>
   </div>
 </div>
 
@@ -355,7 +413,7 @@ engine.render(views.data(), static_cast&lt;uint32_t&gt;(views.size()));</code></
 {
     ViewRect            rect            = {};
     RenderTargetHandle  target;                         // valid: into this target, one color and no depth (R8G8B8A8_SRGB for a picture)
-    WindowHandle        window;                         // without a target: this window (Engine::addWindow); invalid: the main window
+    WindowHandle        window;                         // without a target: this window (Renderer::addWindow); invalid: the main window
 
     bool                operator==(const ViewOutput&amp;) const = default;
 };</pre>
@@ -723,7 +781,7 @@ const rasm::RenderTargetHandle resolved = engine.addTaaPass(graph, sceneTarget, 
 const rasm::RenderTargetHandle bloomTarget = bloom ? engine.addBloomPasses(graph, resolved, camera) : rasm::RenderTargetHandle{};
 if ((bloom &amp;&amp; !bloomTarget.isValid()) || !engine.addToneMapPass(graph, resolved, camera, bloomTarget))
     return 1;</code></pre>
-    <p>With <code>Engine::render</code>, one line turns it on: <code>config.bloom = true;</code> before the engine is made.</p>
+    <p>With <code>Renderer::render</code>, one line turns it on: <code>config.bloom = true;</code> before the engine is made.</p>
   </div>
 </div>
 
@@ -1093,9 +1151,9 @@ engine.setInspection(inspection);</code></pre>
 </div>
 
 <div class="api" id="getConfig">
-  <pre class="sig">EngineConfig getConfig() const;</pre>
+  <pre class="sig">RendererConfig getConfig() const;</pre>
   <div class="body">
-    <p>A copy of the engine's config. <code>shaderDir</code> and <code>assetRoot</code> are the resolved paths (an empty <code>assetRoot</code> stays empty), and <code>showStats</code> is its current value (<kbd>F1</kbd> changes it). Changing the copy changes nothing in the engine.</p>
+    <p>A copy of the renderer's config: an <code>Engine</code>'s is its <code>EngineConfig</code> without <code>platform</code>. <code>shaderDir</code> and <code>assetRoot</code> are the resolved paths (an empty <code>assetRoot</code> stays empty), and <code>showStats</code> is its current value (<kbd>F1</kbd> changes it). Changing the copy changes nothing in the engine.</p>
   </div>
 </div>
 
@@ -1116,21 +1174,20 @@ engine.setInspection(inspection);</code></pre>
 
 <h3 id="native">Your own window</h3>
 
-<p>Give the engine your window's native handles, its size in points and pixels, and the display's scale. Each frame, send it your window's events and size changes before <code>render</code> (or <code>beginFrame</code>). Your window must live longer than the engine. <code>examples/19_embedding</code> does this with an SDL3 window of its own; its <code>--headless</code> run opens the window hidden and plays a scripted input.</p>
+<p>Give a <code>Renderer</code> (or an <code>Engine</code> with <code>PlatformType::NATIVE</code>) your window's native handles, its size in points and pixels, and the display's scale. Each frame, send it your window's events and size changes before <code>render</code> (or <code>beginFrame</code>). Your window must live longer than the renderer. <code>examples/19_embedding</code> does this with an SDL3 window of its own; its <code>--headless</code> run opens the window hidden and plays a scripted input.</p>
 
-<pre><code>rasm::EngineConfig config = {
+<pre><code>rasm::RendererConfig config = {
     .appName = "editor",
-    .platform = rasm::PlatformType::NATIVE,
     .windowWidth = 1280,
     .windowHeight = 720,
     .nativeWindow = {.type = rasm::NativeWindowType::WINDOWS, .window = hwnd, .pixelWidth = 1920, .pixelHeight = 1080, .contentScale = 1.5f},
     .ui = true};
-rasm::Engine engine(config);
+rasm::Renderer renderer(config);
 while (editorRunning)
 {
     // Your loop: turn each of your window's events into an InputEvent.
-    engine.addInputEvent({.type = rasm::InputEventType::MOUSE_MOVE, .x = 640.0f, .y = 360.0f});
-    engine.render(scene, camera);
+    renderer.addInputEvent({.type = rasm::InputEventType::MOUSE_MOVE, .x = 640.0f, .y = 360.0f});
+    renderer.render(scene, camera);
 }</code></pre>
 
 <div class="api" id="addInputEvent">
@@ -1159,7 +1216,7 @@ void setWindowContentScale(WindowHandle window, float scale);</pre>
 
 <h3 id="headless">Headless: no window</h3>
 
-<p>With <code>EngineConfig::platform = PlatformType::HEADLESS</code> the engine opens no window, starts no SDL and reads no events of its own. The device has no surface. Each frame renders into one of two offscreen images of <code>windowWidth</code> × <code>windowHeight</code> pixels, which take the place of the swapchain: the tone map and every pass that writes "the swapchain" write there, and <a href="#readFrame"><code>readFrame</code></a> copies one back. With <code>EngineConfig::ui</code> the UI runs with no input unless you send some with <a href="#addInputEvent"><code>addInputEvent</code></a>: the RASM window and the windows of <a href="#setUiCallback"><code>setUiCallback</code></a> are drawn as with a window, and <code>readFrame</code> copies them. <code>running()</code> stays true until the engine is destroyed, so the program decides how many frames to render. <code>examples/16_headless</code> renders a scene and writes a PNG, and every example takes <code>--headless --frames N --out <samp>file.png</samp></code> (<code>examples/exampleArgs.h</code>): it renders N frames with no window, writes frame N and exits.</p>
+<p>A <code>Renderer</code> without <code>nativeWindow</code> is headless (<code>examples/21_renderer</code>), and so is an <code>Engine</code> with <code>EngineConfig::platform = PlatformType::HEADLESS</code>. It opens no window, starts no SDL and reads no events of its own. The device has no surface. Each frame renders into one of two offscreen images of <code>windowWidth</code> × <code>windowHeight</code> pixels, which take the place of the swapchain: the tone map and every pass that writes "the swapchain" write there, and <a href="#readFrame"><code>readFrame</code></a> copies one back. With <code>EngineConfig::ui</code> the UI runs with no input unless you send some with <a href="#addInputEvent"><code>addInputEvent</code></a>: the RASM window and the windows of <a href="#setUiCallback"><code>setUiCallback</code></a> are drawn as with a window, and <code>readFrame</code> copies them. <code>running()</code> stays true until the engine is destroyed, so the program decides how many frames to render. <code>examples/16_headless</code> renders a scene and writes a PNG, and every example takes <code>--headless --frames N --out <samp>file.png</samp></code> (<code>examples/exampleArgs.h</code>): it renders N frames with no window, writes frame N and exits.</p>
 
 <pre><code>rasm::EngineConfig config = {
     .appName = "thumbnails",

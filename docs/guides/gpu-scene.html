@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GPU Scene Tables · RASM</title>
 <meta name="description" content="The GPU scene tables (geometry, material, instance, draw lists), how an entity gets its rows and joins the draw lists, syncGpuScene step by step, and the runs by alpha mode and cull mode.">
-<meta name="rasm-sources" content="src/renderer/animation.cpp src/renderer/gpuScene.h src/renderer/gpuScene.cpp src/renderer/gpuTable.h src/renderer/gpuTable.cpp src/renderer/geometryPool.h src/renderer/geometryPool.cpp src/renderer/uberMaterialTypes.h shaders/lib/core.slang src/engine.cpp include/rasm/engine.h src/scene/entity.cpp src/scene/scene.cpp src/scene/transform.cpp src/assets/material.cpp src/assets/mesh.cpp include/rasm/types.h include/rasm/scene.h include/rasm/mesh.h include/rasm/transform.h shaders/passes/cull.slang shaders/passes/rasm.slang src/assets/meshLod.cpp src/assets/meshLod.h src/renderer/inspector.cpp">
+<meta name="rasm-sources" content="src/renderer/animation.cpp src/renderer/gpuScene.h src/renderer/gpuScene.cpp src/renderer/gpuTable.h src/renderer/gpuTable.cpp src/renderer/geometryPool.h src/renderer/geometryPool.cpp src/renderer/uberMaterialTypes.h shaders/lib/core.slang src/renderer/renderer.cpp include/rasm/renderer.h src/scene/entity.cpp src/scene/scene.cpp src/scene/transform.cpp src/assets/material.cpp src/assets/mesh.cpp include/rasm/types.h include/rasm/scene.h include/rasm/mesh.h include/rasm/transform.h shaders/passes/cull.slang shaders/passes/rasm.slang src/assets/meshLod.cpp src/assets/meshLod.h src/renderer/inspector.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -688,14 +688,14 @@
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>State: tables, lists, draw lists, scene views</td><td><code>GpuScene</code>, <code>EntityDrawState</code>, <code>SceneDrawList</code>, <code>DrawRun</code>, <code>SceneView</code> in <code>src/renderer/gpuScene.h</code></td></tr>
-  <tr><td>Creating the tables</td><td><code>Engine::createGpuScene</code> in <code>src/renderer/gpuScene.cpp</code>; <code>GeometryPool::create</code> in <code>src/renderer/geometryPool.cpp</code></td></tr>
-  <tr><td>The per-frame sync</td><td><code>Engine::syncGpuScene</code>, called from <code>Engine::beginFrame</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Creating the tables</td><td><code>Renderer::createGpuScene</code> in <code>src/renderer/gpuScene.cpp</code>; <code>GeometryPool::create</code> in <code>src/renderer/geometryPool.cpp</code></td></tr>
+  <tr><td>The per-frame sync</td><td><code>Renderer::syncGpuScene</code>, called from <code>Renderer::beginFrame</code> in <code>src/renderer/renderer.cpp</code></td></tr>
   <tr><td>Rows</td><td><code>queueInstanceRows</code>, <code>writeInstanceRows</code>, <code>updateDrawModes</code>, <code>writeMaterialRow</code>, <code>getCullMode</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Draw lists</td><td><code>addEntityToDrawList</code>, <code>markDrawListsDirty</code>, <code>rebuildDrawList</code>, <code>uploadDrawList</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Callers</td><td><code>src/scene/entity.cpp</code>, <code>src/scene/scene.cpp</code>, <code>src/assets/material.cpp</code></td></tr>
   <tr><td>Row structs</td><td><code>src/renderer/uberMaterialTypes.h</code> and <code>shaders/lib/core.slang</code></td></tr>
-  <tr><td>Table pointers</td><td><code>Engine::prepareSceneView</code> fills <code>SceneData</code> in <code>src/renderer/gpuScene.cpp</code>; read by <code>shaders/passes/rasm.slang</code> and <code>shaders/passes/cull.slang</code></td></tr>
-  <tr><td>The light table and the scene light lists</td><td><code>GpuLights</code> in <code>src/renderer/lightClusters.h</code>; <code>Engine::syncGpuLights</code>, called at the end of <code>syncGpuScene</code></td></tr>
+  <tr><td>Table pointers</td><td><code>Renderer::prepareSceneView</code> fills <code>SceneData</code> in <code>src/renderer/gpuScene.cpp</code>; read by <code>shaders/passes/rasm.slang</code> and <code>shaders/passes/cull.slang</code></td></tr>
+  <tr><td>The light table and the scene light lists</td><td><code>GpuLights</code> in <code>src/renderer/lightClusters.h</code>; <code>Renderer::syncGpuLights</code>, called at the end of <code>syncGpuScene</code></td></tr>
   <tr><td>LODs of a mesh</td><td><code>buildMeshLods</code> in <code>src/assets/meshLod.cpp</code>; the rows in <code>GeometryPool::upload</code></td></tr>
 </table>
 </div>

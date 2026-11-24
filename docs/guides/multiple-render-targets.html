@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Multiple Render Targets · RASM</title>
 <meta name="description" content="Multiple render targets: one pass that writes several images per pixel. Fragment shader outputs, the rules on formats, blending and limits, the memory and bandwidth cost, deferred shading, variants and pitfalls, and how RASM does it.">
-<meta name="rasm-sources" content="include/rasm/types.h include/rasm/render/resource.h src/rhi/resource.cpp src/rhi/renderContext.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/rhi/vulkan/vulkanDevice.cpp src/engine.cpp src/renderer/gpuScene.cpp shaders/passes/rasm.slang examples/01_render_graph/main.cpp">
+<meta name="rasm-sources" content="include/rasm/types.h include/rasm/render/resource.h src/rhi/resource.cpp src/rhi/renderContext.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/rhi/vulkan/vulkanDevice.cpp src/renderer/renderer.cpp src/renderer/gpuScene.cpp shaders/passes/rasm.slang examples/01_render_graph/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -876,7 +876,7 @@ auto pipeline = engine.createPipeline("background", source, compositeHandle);</c
 <h3>What happens to the formats</h3>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 330" role="img" aria-label="At creation, createRenderTarget checks the desc with checkRenderTargetDesc and makes one texture per color format plus a depth texture with createAttachments, each color bindless with LINEAR_CLAMP. Engine::createPipeline with the target copies its color and depth formats into PipelineDesc::colorAttachmentFormats, and the Vulkan pipeline gets the same blend state for every color: blending off, all channels written. Each frame, beginPass moves every color to an attachment and beginRendering starts the pass with one clear color and one load op for all colors. bindPipeline compares all formats with the pass's: if they match it binds, otherwise it logs an error and skips the draws. endPass moves every color to SAMPLED, and getRenderTargetTexture returns color i.">
+  <svg viewBox="0 0 760 330" role="img" aria-label="At creation, createRenderTarget checks the desc with checkRenderTargetDesc and makes one texture per color format plus a depth texture with createAttachments, each color bindless with LINEAR_CLAMP. Renderer::createPipeline with the target copies its color and depth formats into PipelineDesc::colorAttachmentFormats, and the Vulkan pipeline gets the same blend state for every color: blending off, all channels written. Each frame, beginPass moves every color to an attachment and beginRendering starts the pass with one clear color and one load op for all colors. bindPipeline compares all formats with the pass's: if they match it binds, otherwise it logs an error and skips the draws. endPass moves every color to SAMPLED, and getRenderTargetTexture returns color i.">
     <text x="20" y="20" class="title t-cpu">CPU · create the target</text>
     <rect x="20" y="30" width="190" height="56" rx="6" class="cpu"/>
     <text x="115" y="52" class="mid mono">RenderTargetDesc</text>
@@ -892,7 +892,7 @@ auto pipeline = engine.createPipeline("background", source, compositeHandle);</c
 
     <text x="20" y="120" class="title t-cpu">CPU · create the pipeline</text>
     <rect x="20" y="130" width="190" height="56" rx="6" class="cpu"/>
-    <text x="115" y="152" class="mid mono">Engine::createPipeline</text>
+    <text x="115" y="152" class="mid mono">Renderer::createPipeline</text>
     <text x="115" y="172" class="mid small">(name, source, target)</text>
     <line x1="210" y1="158" x2="238" y2="158" class="arrow cpu" marker-end="url(#ah-cpu)"/>
     <rect x="240" y="130" width="260" height="56" rx="6" class="cpu"/>
@@ -937,10 +937,10 @@ auto pipeline = engine.createPipeline("background", source, compositeHandle);</c
   <tr><td>Number of colors</td><td>4 to 8, from the device</td><td><code>MAX_COLOR_ATTACHMENTS</code> = 4, the minimum Vulkan guarantees, so no device query is needed.</td></tr>
   <tr><td>The list of formats</td><td>some APIs allow empty slots</td><td>No gaps. The list ends at the first <code>Format::UNKNOWN</code> (<code>colorAttachmentCount</code>). <code>checkRenderTargetDesc</code> rejects a desc with a gap, or without a depth format. A depth-only target (a shadow map) has no color.</td></tr>
   <tr><td>Depth</td><td>optional</td><td>Needed by every render target that passes draw into, even when no pass tests depth, as in the example. Only a <code>storage</code> target, which compute passes write, has none.</td></tr>
-  <tr><td>Blend state, write mask</td><td>per attachment, with independent blend</td><td>The same for every color: one <code>BlendMode</code> per pipeline, all four channels written (<code>VulkanDevice::createGraphicsPipeline</code>). So no independent blend is needed. A pipeline from <code>Engine::createPipeline</code> has blending off; only pipelines the engine makes itself blend, such as the transparent scene draws.</td></tr>
+  <tr><td>Blend state, write mask</td><td>per attachment, with independent blend</td><td>The same for every color: one <code>BlendMode</code> per pipeline, all four channels written (<code>VulkanDevice::createGraphicsPipeline</code>). So no independent blend is needed. A pipeline from <code>Renderer::createPipeline</code> has blending off; only pipelines the engine makes itself blend, such as the transparent scene draws.</td></tr>
   <tr><td>Clear value</td><td>per attachment</td><td>One <code>RenderTargetDesc::clearColor</code> for all colors.</td></tr>
   <tr><td>Load and store</td><td>per attachment</td><td>One load op for all colors (<code>AttachmentOps::loadColor</code>, set per pass by the render graph); colors are always stored. See <a href="load-store-ops.html">Load and store ops</a>.</td></tr>
-  <tr><td>Pipeline formats</td><td>exact list, in order</td><td><code>Engine::createPipeline</code> with a target copies its color and depth formats. <code>RenderContext::bindPipeline</code> compares all of them with the pass's; a mismatch logs an error and skips the pass's draws.</td></tr>
+  <tr><td>Pipeline formats</td><td>exact list, in order</td><td><code>Renderer::createPipeline</code> with a target copies its color and depth formats. <code>RenderContext::bindPipeline</code> compares all of them with the pass's; a mismatch logs an error and skips the pass's draws.</td></tr>
   <tr><td>Reading the result</td><td>sample as textures</td><td>Every color is bindless with <code>LINEAR_CLAMP</code>. <code>endPass</code> moves each to <code>SAMPLED</code>; <code>getRenderTargetTexture</code> with the attachment index returns it.</td></tr>
   <tr><td>Formats for packing</td><td>RG16, RGB10A2, RG16F</td><td>Only RG16F is in <code>Format</code>: <code>R16G16_SFLOAT</code>, the scene's <code>MOTION_FORMAT</code>. The other 4-byte color formats are <code>R8G8B8A8_UNORM</code>, <code>R8G8B8A8_SRGB</code>, <code>B8G8R8A8_SRGB</code> and <code>B8G8R8A8_UNORM</code>; the example's 1-bit mask takes 4 bytes.</td></tr>
   <tr><td>G-buffer from the scene</td><td>section 5</td><td>None. <code>addScenePasses</code> needs a target with a <code>SCENE_COLOR_FORMAT</code> color and <code>D32_SFLOAT</code> depth; it logs an error and adds no passes otherwise. The scene writes a second color only for TAA: a <code>MOTION_FORMAT</code> color, with one sample, gets each pixel's motion (<code>RASM_MOTION_VECTORS</code>, <a href="taa.html">TAA</a>). Its passes shade as they draw, so this is forward shading with two outputs, not a G-buffer.</td></tr>
@@ -959,12 +959,12 @@ auto pipeline = engine.createPipeline("background", source, compositeHandle);</c
   <tr><td>The target's data</td><td><code>RenderTarget</code>, <code>RenderTargetAttachments</code> in <code>include/rasm/types.h</code></td></tr>
   <tr><td>Desc checks</td><td><code>checkRenderTargetDesc</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
   <tr><td>One texture per color</td><td><code>createAttachments</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
-  <tr><td>Pipeline formats from a target</td><td><code>Engine::createPipeline</code> in <code>src/engine.cpp</code>, into <code>PipelineDesc::colorAttachmentFormats</code></td></tr>
+  <tr><td>Pipeline formats from a target</td><td><code>Renderer::createPipeline</code> in <code>src/renderer/renderer.cpp</code>, into <code>PipelineDesc::colorAttachmentFormats</code></td></tr>
   <tr><td>Blend state for every color</td><td><code>VulkanDevice::createGraphicsPipeline</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
-  <tr><td>Starting the pass</td><td><code>Engine::beginPass</code> in <code>src/engine.cpp</code>; <code>RenderContext::beginRendering</code>; <code>VulkanCommandBuffer::beginRendering</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
+  <tr><td>Starting the pass</td><td><code>Renderer::beginPass</code> in <code>src/renderer/renderer.cpp</code>; <code>RenderContext::beginRendering</code>; <code>VulkanCommandBuffer::beginRendering</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
   <tr><td>The format check</td><td><code>RenderContext::bindPipeline</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
-  <tr><td>Reading color <var>i</var></td><td><code>Engine::endPass</code>, <code>Engine::getRenderTargetTexture</code> in <code>src/engine.cpp</code></td></tr>
-  <tr><td>The scene's colors: color, and motion</td><td><code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code>; <code>RASM_MOTION_VECTORS</code> in <code>shaders/passes/rasm.slang</code></td></tr>
+  <tr><td>Reading color <var>i</var></td><td><code>Renderer::endPass</code>, <code>Renderer::getRenderTargetTexture</code> in <code>src/renderer/renderer.cpp</code></td></tr>
+  <tr><td>The scene's colors: color, and motion</td><td><code>Renderer::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code>; <code>RASM_MOTION_VECTORS</code> in <code>shaders/passes/rasm.slang</code></td></tr>
   <tr><td>The example</td><td>the Background and Present passes in <code>examples/01_render_graph/main.cpp</code></td></tr>
 </table>
 </div>

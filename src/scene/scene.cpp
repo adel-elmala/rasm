@@ -1,9 +1,9 @@
 #include "rasm/scene.h"
-#include "rasm/engine.h"
+#include "rasm/renderer.h"
 #include "renderer/environmentBake.h"
 #include "renderer/gpuScene.h"
 #include "renderer/lightClusters.h"
-#include "renderer/renderer.h"
+#include "renderer/viewGraph.h"
 
 #include "spdlog/spdlog.h"
 
@@ -11,7 +11,7 @@
 
 namespace rasm
 {
-    SceneHandle Engine::createScene()
+    SceneHandle Renderer::createScene()
     {
         const HandleSlot slot = registry.sceneHandles.allocate();
         if (slot.index == 0)
@@ -27,7 +27,7 @@ namespace rasm
         return id;
     }
 
-    void Engine::addEntityToScene(SceneHandle scene, EntityHandle entity)
+    void Renderer::addEntityToScene(SceneHandle scene, EntityHandle entity)
     {
         if (!isLive(scene))
         {
@@ -62,7 +62,7 @@ namespace rasm
     }
 
     // The entity stays; the scene's draw list is rebuilt without it, and drops it from Scene::entities then.
-    void Engine::removeEntityFromScene(SceneHandle scene, EntityHandle entity)
+    void Renderer::removeEntityFromScene(SceneHandle scene, EntityHandle entity)
     {
         if (!isLive(scene) || !isLive(entity))
         {
@@ -80,7 +80,7 @@ namespace rasm
         gpuScene->drawLists[scene.index].rebuild = true;
     }
 
-    void Engine::removeLightFromScene(SceneHandle scene, LightHandle light)
+    void Renderer::removeLightFromScene(SceneHandle scene, LightHandle light)
     {
         if (!isLive(scene) || !isLive(light))
         {
@@ -98,14 +98,14 @@ namespace rasm
         gpuLights->lists[scene.index].rebuild = true;
     }
 
-    // True when a render graph other than Engine::render's holds a view of the scene or camera, which would draw it after
-    // it is gone: the caller refuses then. Engine::render's graph holds one count of each view of its scene and camera.
-    bool Engine::viewHolds(SceneHandle scene, CameraHandle camera, const char *caller) const
+    // True when a render graph other than Renderer::render's holds a view of the scene or camera, which would draw it after
+    // it is gone: the caller refuses then. Renderer::render's graph holds one count of each view of its scene and camera.
+    bool Renderer::viewHolds(SceneHandle scene, CameraHandle camera, const char *caller) const
     {
         for (uint32_t i = 0; i < MAX_SCENE_VIEWS; ++i)
         {
             const SceneView &view = gpuScene->views[i];
-            const uint32_t own = renderer && renderer->draws(view.scene, view.camera, view.renderTarget) ? 1 : 0;
+            const uint32_t own = viewGraph && viewGraph->draws(view.scene, view.camera, view.renderTarget) ? 1 : 0;
             if (view.graphs <= own || !((scene.isValid() && view.scene == scene) || (camera.isValid() && view.camera == camera)))
                 continue;
             spdlog::error("{}: {} render graph(s) draw view {} (scene {}, camera {}) with it. Destroy those graphs first, or let them go out of scope.", caller,
@@ -115,7 +115,7 @@ namespace rasm
         return false;
     }
 
-    void Engine::destroyScene(SceneHandle scene)
+    void Renderer::destroyScene(SceneHandle scene)
     {
         if (!isLive(scene))
         {
@@ -124,8 +124,8 @@ namespace rasm
         }
         if (viewHolds(scene, {}, "destroyScene"))
             return;
-        if (renderer)
-            renderer->release(scene, {});
+        if (viewGraph)
+            viewGraph->release(scene, {});
 
         // Its index goes to the next scene, so no entity or light may keep its bit.
         const auto bit = static_cast<uint16_t>(1u << scene.index);
@@ -158,7 +158,7 @@ namespace rasm
         registry.sceneHandles.release(scene.index, scene.generation);
     }
 
-    void Engine::addCameraToScene(SceneHandle scene, CameraHandle camera)
+    void Renderer::addCameraToScene(SceneHandle scene, CameraHandle camera)
     {
         if (!isLive(scene))
         {
@@ -183,7 +183,7 @@ namespace rasm
         sceneRef.cameras.push_back(camera);
     }
 
-    void Engine::addLightToScene(SceneHandle scene, LightHandle light)
+    void Renderer::addLightToScene(SceneHandle scene, LightHandle light)
     {
         if (!isLive(scene))
         {
@@ -212,7 +212,7 @@ namespace rasm
         gpuLights->lists[scene.index].rebuild = true;
     }
 
-    void Engine::setSceneEnvironment(SceneHandle scene, const SceneEnvironment &environment)
+    void Renderer::setSceneEnvironment(SceneHandle scene, const SceneEnvironment &environment)
     {
         if (!isLive(scene))
         {

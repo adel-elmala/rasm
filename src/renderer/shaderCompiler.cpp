@@ -715,7 +715,7 @@ namespace rasm
         std::error_code errorCode;
         if (!std::filesystem::is_directory(libFolder, errorCode) || !std::filesystem::is_regular_file(uberShader, errorCode))
         {
-            spdlog::error("Shaders not found in {}. Copy them there, or set EngineConfig::shaderDir.", shaderDir);
+            spdlog::error("Shaders not found in {}. Copy them there, or set RendererConfig::shaderDir.", shaderDir);
             return false;
         }
         spdlog::info("Loading shaders from {}", shaderDir);

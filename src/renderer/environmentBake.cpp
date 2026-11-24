@@ -1,5 +1,5 @@
 #include "renderer/environmentBake.h"
-#include "rasm/engine.h"
+#include "rasm/renderer.h"
 #include "core/utils.h"
 #include "platform/paths.h"
 #include "renderer/uberMaterialTypes.h"
@@ -27,7 +27,7 @@ namespace rasm
 
         // A shader error logs and retries next frame, like the scene's pipelines, so a fix on disk is picked up. The LUT
         // needs only its own entry point, so an application without environments compiles only that one.
-        bool createBakePipelines(Engine &engine, Environments &environments, const std::string &shaderDir, bool lut, bool environment)
+        bool createBakePipelines(Renderer &engine, Environments &environments, const std::string &shaderDir, bool lut, bool environment)
         {
             if (bakePipelinesReady(environments, lut, environment))
                 return true;
@@ -138,7 +138,7 @@ namespace rasm
     }
 
     // The LUT depends on no environment, so it is made with the engine and baked in its first frame.
-    bool Engine::createEnvironments()
+    bool Renderer::createEnvironments()
     {
         environments->brdfLut = ctx.createTexture({.name = "BRDF LUT", .width = BRDF_LUT_SIZE, .height = BRDF_LUT_SIZE, .format = Format::R16G16B16A16_SFLOAT, .usage = TextureUsage::SAMPLED_STORAGE});
         if (!environments->brdfLut.isValid())
@@ -154,7 +154,7 @@ namespace rasm
     // environment per frame, since every bake writes the same storage slots, and only once the frames that last
     // wrote them are done. The textures end SAMPLED, in the states RenderContext tracks, so the passes after it and
     // the graph start from there.
-    void Engine::recordEnvironmentBakes()
+    void Renderer::recordEnvironmentBakes()
     {
         ZoneScoped;
 
@@ -202,7 +202,7 @@ namespace rasm
     // Runs after the frame's submits. A bake whose commands went out left its last texture SAMPLED; one in a frame that
     // was dropped had its states put back (RenderContext::discardRecording) and waits for the next frame, which bakes
     // the same textures again.
-    void Engine::finishEnvironmentBakes()
+    void Renderer::finishEnvironmentBakes()
     {
         Environments &state = *environments;
         const uint64_t frameValue = frameResources[frameCount].fenceValue;

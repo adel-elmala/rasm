@@ -1,5 +1,5 @@
 #include "renderer/inspector.h"
-#include "rasm/engine.h"
+#include "rasm/renderer.h"
 #include "core/utils.h"
 #include "platform/paths.h"
 #include "renderer/animation.h"
@@ -198,7 +198,7 @@ namespace rasm
     // Runs at the start of RenderGraph::execute. While the Buffers section is open it lists the graph's resources, and
     // the graph holds an Inspect pass for the picked one, named after it, which the UI pass reads. A new pick replaces
     // the pass; no pick, or a closed section, takes it out, so the graph is again the one without the UI.
-    void Engine::updateInspectPass(RenderGraph &graph)
+    void Renderer::updateInspectPass(RenderGraph &graph)
     {
         if (!ui || !inspector)
             return;
@@ -338,7 +338,7 @@ namespace rasm
         state.active = wanted;
     }
 
-    void Engine::recordInspect(const InspectEntry &entry)
+    void Renderer::recordInspect(const InspectEntry &entry)
     {
         Inspector &state = *inspector;
         if (!state.pipeline.isValid() && !state.pipelineTried)
@@ -412,7 +412,7 @@ namespace rasm
 
     // The RASM window's Buffers section: pick a resource of the frame's graph, then a face, sample, channel, Hi-Z level
     // or cluster slice where it has them. The Inspect pass copied it into the capture target this frame.
-    void Engine::drawBuffersSection()
+    void Renderer::drawBuffersSection()
     {
         Inspector &state = *inspector;
         state.shown = true;
@@ -521,7 +521,7 @@ namespace rasm
 
         if (state.active != picked || !state.capture.isValid())
         {
-            ImGui::TextDisabled(state.noUiPass ? "The graph has no UI pass (Engine::addUiPass), so nothing is copied." : "Copied from the next frame on.");
+            ImGui::TextDisabled(state.noUiPass ? "The graph has no UI pass (Renderer::addUiPass), so nothing is copied." : "Copied from the next frame on.");
             return;
         }
         const glm::uvec2 region = getInspectRegion(sourceSize, INSPECT_SIZE);
@@ -535,7 +535,7 @@ namespace rasm
 
     // The RASM window's GPU tables section: each table's rows and bytes, and one entity's rows field by field, from
     // the table's CPU copy (GpuTable::row), which is what each frame slot receives.
-    void Engine::drawTablesSection()
+    void Renderer::drawTablesSection()
     {
         ImGui::TextWrapped("What the CPU uploaded, from each table's CPU copy. Not read back from the GPU.");
         const TableView tables[] = {{&gpuScene->instances, static_cast<uint32_t>(gpuScene->instanceRows.end()), "InstanceData"},

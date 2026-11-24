@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="src/renderer/environmentBake.cpp width=device-width, initial-scale=1">
 <title>One Frame · RASM</title>
-<meta name="description" content="Engine::render, beginFrame, the scene passes and endFrame step by step: two frame slots, the timeline fences, swapchain acquire, one command buffer or a few batches with async compute, submit and present, skipped frames, resize, and where loads, scene sync, stats and culling run.">
-<meta name="rasm-sources" content="src/renderer/ui.cpp src/engine.cpp src/renderer/environmentBake.cpp include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/renderContext.h src/rhi/renderContext.cpp src/rhi/uploadManager.cpp src/renderer/toneMap.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanSwapchain.h src/rhi/vulkan/vulkanQueue.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/renderer/readback.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/renderer.h src/renderer/renderer.cpp src/renderer/frameStats.cpp src/renderer/frameStats.h src/renderer/statsOverlay.cpp src/renderer/renderGraph.cpp include/rasm/render/renderGraph.h src/rhi/textureStates.h src/rhi/textureStates.cpp src/rhi/device.h">
+<meta name="description" content="Renderer::render, beginFrame, the scene passes and endFrame step by step: two frame slots, the timeline fences, swapchain acquire, one command buffer or a few batches with async compute, submit and present, skipped frames, resize, and where loads, scene sync, stats and culling run.">
+<meta name="rasm-sources" content="src/renderer/ui.cpp src/renderer/renderer.cpp src/renderer/environmentBake.cpp include/rasm/renderer.h include/rasm/types.h include/rasm/window.h include/rasm/render/renderContext.h src/rhi/renderContext.cpp src/rhi/uploadManager.cpp src/renderer/toneMap.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanSwapchain.h src/rhi/vulkan/vulkanQueue.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/renderer/readback.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/viewGraph.h src/renderer/viewGraph.cpp src/renderer/frameStats.cpp src/renderer/frameStats.h src/renderer/statsOverlay.cpp src/renderer/renderGraph.cpp include/rasm/render/renderGraph.h src/rhi/textureStates.h src/rhi/textureStates.cpp src/rhi/device.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -46,7 +46,7 @@
 <div class="tldr">
   <h3>In short</h3>
   <ul>
-    <li><code>Engine::render</code> runs a render graph (<code>Renderer::render</code>): <code>beginFrame</code>, the scene passes from <code>addScenePasses</code> into a 16-bit float target, the <code>Tone Map</code> pass from <code>addToneMapPass</code> into the swapchain, with <code>EngineConfig::ui</code> the <code>UI</code> pass from <code>addUiPass</code> over it, <code>endFrame</code>. With a list of views, each view has its own target and tone map (<a href="multiple-views.html">Many views of one scene</a>).</li>
+    <li><code>Renderer::render</code> runs a render graph (<code>ViewGraph::render</code>): <code>beginFrame</code>, the scene passes from <code>addScenePasses</code> into a 16-bit float target, the <code>Tone Map</code> pass from <code>addToneMapPass</code> into the swapchain, with <code>EngineConfig::ui</code> the <code>UI</code> pass from <code>addUiPass</code> over it, <code>endFrame</code>. With a list of views, each view has its own target and tone map (<a href="multiple-views.html">Many views of one scene</a>).</li>
     <li>The scene passes are <code>Cull 1</code>, <code>Scene 1</code>, <code>Hi-Z</code>, <code>Cull 2</code>, <code>Scene 2</code> (only <code>Cull</code> and <code>Scene</code> without occlusion culling), then <code>Transparent</code>, which draws the see-through materials back to front. The graph puts the barriers between them.</li>
     <li><code>frameCount</code> is the <b>slot</b> (0 or 1), not a frame counter. <code>MAX_FRAMES_IN_FLIGHT</code> = 2.</li>
     <li>Each graphics submit signals the next value of <code>frameFence</code>, and each compute submit the next value of <code>computeFence</code>. Before a slot is reused, <code>beginFrame</code> waits for the values its last submits signaled.</li>
@@ -59,7 +59,7 @@
 <h2 id="ways"><span class="n">1</span>Three ways to run a frame</h2>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 196" role="img" aria-label="Engine::render builds a render graph with the scene passes and the tone-map pass once and runs it with RenderGraph::execute. RenderGraph::execute and a manual frame both call beginFrame first and endFrame last, with passes in between.">
+  <svg viewBox="0 0 760 196" role="img" aria-label="Renderer::render builds a render graph with the scene passes and the tone-map pass once and runs it with RenderGraph::execute. RenderGraph::execute and a manual frame both call beginFrame first and endFrame last, with passes in between.">
     <rect x="10" y="10" width="236" height="176" rx="8" class="zone"/>
     <text x="24" y="32" class="title mono">render(scene, camera)</text>
     <rect x="262" y="10" width="236" height="176" rx="8" class="zone"/>
@@ -67,7 +67,7 @@
     <rect x="514" y="10" width="236" height="176" rx="8" class="zone"/>
     <text x="528" y="32" class="title">Your own frame</text>
 
-    <rect x="24" y="44" width="208" height="26" rx="4" class="cpu"/><text x="128" y="61" class="mid mono">Renderer::render</text>
+    <rect x="24" y="44" width="208" height="26" rx="4" class="cpu"/><text x="128" y="61" class="mid mono">ViewGraph::render</text>
     <rect x="24" y="76" width="208" height="58" rx="4" class="ghost"/>
     <text x="128" y="98" class="mid small">first frame, or new views or sizes:</text>
     <text x="128" y="114" class="mid small">a new graph + addScenePasses</text>
@@ -177,7 +177,7 @@
       <path d="M470,170 H615 V112" class="arrow cpu" marker-end="url(#ah-cpu)"/>
       <text x="540" y="164" class="mid small">ok</text>
     </svg>
-    <p>The events come from the SDL platform and from the application's <code>Engine::addInputEvent</code>, all through one path (<a href="platform-layer.html">The platform layer</a>): quit, Esc (SDL only), F1–F3, resize, minimize, and the camera's input. While every SDL window is minimized, <code>pollEvents</code> waits up to 100 ms for an event (<code>SDL_WaitEventTimeout</code>), so skipped frames do not spin the CPU; a <code>NATIVE</code> application skips frames with a size of 0 (<code>setWindowSize</code>) and waits in its own loop. Each window is checked on its own (<code>Engine::updateSwapchain</code>): a minimized one sits the frame out, and the frame is skipped only when no window can show. A failed recreation keeps the window's <code>WindowFrame::outOfDate</code> set, so the next frame tries again.</p>
+    <p>The events come from the SDL platform and from the application's <code>Renderer::addInputEvent</code>, all through one path (<a href="platform-layer.html">The platform layer</a>): quit, Esc (SDL only), F1–F3, resize, minimize, and the camera's input. While every SDL window is minimized, <code>pollEvents</code> waits up to 100 ms for an event (<code>SDL_WaitEventTimeout</code>), so skipped frames do not spin the CPU; a <code>NATIVE</code> application skips frames with a size of 0 (<code>setWindowSize</code>) and waits in its own loop. Each window is checked on its own (<code>Renderer::updateSwapchain</code>): a minimized one sits the frame out, and the frame is skipped only when no window can show. A failed recreation keeps the window's <code>WindowFrame::outOfDate</code> set, so the next frame tries again.</p>
   </div>
 
   <div class="step">
@@ -336,7 +336,7 @@
       <text x="244" y="213" class="small">grows the slot's visible-draw and Hi-Z buffers; makes the pipelines once</text>
     </svg>
     <p><b>history · bake</b>: <code>clearNewHistory</code> clears new copies of history render targets (none in this app). Then <code>recordEnvironmentBakes</code> records the compute work that prepares image-based lighting, before any pass: the BRDF LUT in the engine's first frame, and an environment whose image has just loaded (<a href="image-based-lighting.html#in-rasm">Image-based lighting</a>). Most frames have none.<br><b>barrier G|C→C</b>: from the graph (G = graphics, C = compute). Last frame's <code>Scene 2</code> read what <code>Cull 1</code> writes.<br><b>ts</b>: a GPU timestamp, only while frame stats are measured. Every pass gets a pair, named after the pass.</p>
-    <p><code>beginFrame</code> acquires an image from every window that can show (<code>WindowFrame::acquired</code>, <code>rendered</code> false) and opens the graphics batch (<code>Engine::useQueue</code>), which begins the slot's command buffer. Each command buffer has its own pool, and <code>begin</code> resets it. That is safe because of the wait in step 3. Then <code>RenderGraph::execute</code> runs the passes in its order. Before each pass it records the barriers that the pass's declared reads and writes need, outside any render pass. With async compute, <code>Cull 1</code> records into a compute batch instead, and the graph adds waits between the queues (<a href="#batches">below</a>).</p>
+    <p><code>beginFrame</code> acquires an image from every window that can show (<code>WindowFrame::acquired</code>, <code>rendered</code> false) and opens the graphics batch (<code>Renderer::useQueue</code>), which begins the slot's command buffer. Each command buffer has its own pool, and <code>begin</code> resets it. That is safe because of the wait in step 3. Then <code>RenderGraph::execute</code> runs the passes in its order. Before each pass it records the barriers that the pass's declared reads and writes need, outside any render pass. With async compute, <code>Cull 1</code> records into a compute batch instead, and the graph adds waits between the queues (<a href="#batches">below</a>).</p>
     <p><code>Cull 1</code> is a compute pass, so its dispatches sit between render passes, in the same command buffer. <code>countMain</code> tests each draw against the frustum and last frame's visibility flags, and <code>writeMain</code> packs the visible ones into the view's visible-draw list. The <code>COMPUTE → COMPUTE</code> barrier between them is inside the pass. What they do is in <a href="frustum-culling.html#in-rasm">Frustum culling</a>, <a href="lod-selection.html#in-rasm">LOD selection</a> and <a href="stream-compaction.html#in-rasm">Stream compaction</a>. Then, since this scene has a point light with a range, <code>recordLightClusters</code> sorts it into the view's clusters: three dispatches under a GPU timer of their own, <code>Light Clusters</code> (<a href="clustered-lighting.html#in-rasm">Clustered lighting</a>).</p>
   </div>
 
@@ -383,7 +383,7 @@
       <path d="M300,235 H328 V176" class="arrow mem" marker-end="url(#ah-mem)"/>
       <text x="340" y="235" class="small">its address goes in the push constant</text>
     </svg>
-    <p><b>barrier C→G</b>: from the graph. <code>Cull 1</code> wrote the visible draws and counts these draws read.<br><b>image and depth</b> of <code>scene_hdr</code>, the 16-bit float target <code>Renderer</code> makes, start from <code>UNKNOWN</code> (discard): <code>Scene 1</code> is the target's first pass, so it clears both.</p>
+    <p><b>barrier C→G</b>: from the graph. <code>Cull 1</code> wrote the visible draws and counts these draws read.<br><b>image and depth</b> of <code>scene_hdr</code>, the 16-bit float target <code>ViewGraph</code> makes, start from <code>UNKNOWN</code> (discard): <code>Scene 1</code> is the target's first pass, so it clears both.</p>
     <p>A barrier call names only the new usage: <code>RenderContext</code> remembers the layout each texture is in (<code>TextureStates</code>). With <code>discard</code> set, as here, the old contents are dropped and the barrier starts from <code>UNKNOWN</code>. <code>acquireNextImage</code> marks the acquired swapchain image <code>UNKNOWN</code> too, and its barrier, in the <code>Tone Map</code> pass, waits at color output, after the acquire. Barriers must be recorded outside a render pass. See <a href="gpu-sync.html#in-rasm">GPU synchronization</a>.</p>
     <p>The draw lists and runs <code>drawSceneView</code> uses are in <a href="gpu-scene.html#runs">stop 3</a>. The ideas: <a href="gpu-driven.html">indirect draws</a>, <a href="device-addresses.html">device addresses</a> for the push constant, <a href="vertex-pulling.html">vertex pulling</a> and <a href="uber-shaders.html">the uber shader</a> for what each draw runs.</p>
   </div>
@@ -561,9 +561,9 @@
 </div>
 
 <ul>
-  <li>Each queue has one open batch (<code>Engine::useQueue</code>), and <code>FrameResources::commandBuffer</code> names the one being recorded.</li>
-  <li>A batch is closed when the other queue needs what it did (<code>Engine::waitForQueue</code>, called by the graph) or at the end of the frame.</li>
-  <li><code>endFrame</code> submits all batches together, in the order they were closed (<code>Engine::submitBatches</code>), so every wait is on a submit that already went out.</li>
+  <li>Each queue has one open batch (<code>Renderer::useQueue</code>), and <code>FrameResources::commandBuffer</code> names the one being recorded.</li>
+  <li>A batch is closed when the other queue needs what it did (<code>Renderer::waitForQueue</code>, called by the graph) or at the end of the frame.</li>
+  <li><code>endFrame</code> submits all batches together, in the order they were closed (<code>Renderer::submitBatches</code>), so every wait is on a submit that already went out.</li>
   <li>Their command buffers end only there, so the frame's last compute batch, closed long before the end, still takes the cull stats barrier.</li>
 </ul>
 
@@ -722,8 +722,8 @@
 <div class="table-wrap">
 <table>
   <tr><th>Per slot</th><th>Where</th></tr>
-  <tr><td>depth texture, fence values, the command buffer being recorded</td><td><code>FrameResources</code> in <code>Engine::frameResources</code></td></tr>
-  <tr><td>command buffers per queue, one per batch</td><td><code>Engine::batchCommandBuffers</code></td></tr>
+  <tr><td>depth texture, fence values, the command buffer being recorded</td><td><code>FrameResources</code> in <code>Renderer::frameResources</code></td></tr>
+  <tr><td>command buffers per queue, one per batch</td><td><code>Renderer::batchCommandBuffers</code></td></tr>
   <tr><td><code>SceneData</code> (a slot per scene view), cull stats</td><td><code>GpuScene</code></td></tr>
   <tr><td>visible draws with their draw counts, Hi-Z buffer</td><td><code>SceneView</code>, one per scene view in <code>GpuScene::views</code></td></tr>
   <tr><td>instance and material table buffers, draw list buffers</td><td><code>GpuTable</code>, <code>SceneDrawList::buffers</code></td></tr>
@@ -816,8 +816,8 @@
 </figure>
 
 <ol class="steps">
-  <li><b>The window reports a new pixel size.</b> With SDL, <code>SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED</code> sets <code>resized</code> and the new <code>pixelWidth</code> and <code>pixelHeight</code> in <code>pollEvents</code>; a <code>NATIVE</code> or headless application calls <code>Engine::setWindowSize</code>, which does the same.</li>
-  <li><b>The next <code>beginFrame</code> recreates.</b> It calls <code>Engine::recreateSwapchain</code>, which calls <code>RenderContext::recreateSwapchain</code>.</li>
+  <li><b>The window reports a new pixel size.</b> With SDL, <code>SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED</code> sets <code>resized</code> and the new <code>pixelWidth</code> and <code>pixelHeight</code> in <code>pollEvents</code>; a <code>NATIVE</code> or headless application calls <code>Renderer::setWindowSize</code>, which does the same.</li>
+  <li><b>The next <code>beginFrame</code> recreates.</b> It calls <code>Renderer::recreateSwapchain</code>, which calls <code>RenderContext::recreateSwapchain</code>.</li>
   <li><b>The swapchain is rebuilt.</b> A 0 × 0 surface returns <code>OUT_OF_DATE</code> and keeps the old swapchain. Otherwise it releases pending semaphores, waits until the device is idle, and builds the new swapchain.</li>
   <li><b>Image handles change.</b> The old swapchain image handles are dropped and new ones are registered. Handles from an earlier <code>getSwapchainImages</code> are no longer valid.</li>
   <li><b>Sizes follow.</b> <code>createSwapchainResources</code> calls <code>RenderContext::resizeRenderTargets</code>, which rebuilds every target with a <code>swapchainScale</code> at the new size, and <code>updateCameraAspectRatio</code>. The device is idle, so the old textures can be destroyed at once. A rebuilt target keeps its bindless slots, so the <code>Hi-Z</code> pass still finds its depth. The swapchain itself has no depth.</li>
@@ -897,16 +897,16 @@
 <div class="table-wrap">
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
-  <tr><td>Frame functions</td><td><code>Engine::render</code>, <code>Engine::beginFrame</code>, <code>Engine::endFrame</code>, <code>Engine::beginPass</code>, <code>Engine::endPass</code> in <code>src/engine.cpp</code></td></tr>
-  <tr><td>The graph behind <code>render</code></td><td><code>Renderer::render</code> in <code>src/renderer/renderer.cpp</code></td></tr>
-  <tr><td>Tone map</td><td><code>Engine::addToneMapPass</code> in <code>src/renderer/toneMap.cpp</code>; the shader in <code>shaders/passes/toneMap.slang</code></td></tr>
-  <tr><td>Load budget</td><td><code>Engine::finishLoads</code>, <code>LOAD_BUDGET</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Frame functions</td><td><code>Renderer::render</code>, <code>Renderer::beginFrame</code>, <code>Renderer::endFrame</code>, <code>Renderer::beginPass</code>, <code>Renderer::endPass</code> in <code>src/renderer/renderer.cpp</code></td></tr>
+  <tr><td>The graph behind <code>render</code></td><td><code>ViewGraph::render</code> in <code>src/renderer/viewGraph.cpp</code></td></tr>
+  <tr><td>Tone map</td><td><code>Renderer::addToneMapPass</code> in <code>src/renderer/toneMap.cpp</code>; the shader in <code>shaders/passes/toneMap.slang</code></td></tr>
+  <tr><td>Load budget</td><td><code>Renderer::finishLoads</code>, <code>LOAD_BUDGET</code> in <code>src/renderer/renderer.cpp</code></td></tr>
   <tr><td>Frame slot state</td><td><code>FrameResources</code> in <code>include/rasm/types.h</code>; <code>frameFence</code>, <code>frameFenceValue</code>, <code>computeFence</code>, <code>computeFenceValue</code>, <code>frameCount</code> in <code>include/rasm/engine.h</code></td></tr>
-  <tr><td>Batches</td><td><code>Engine::useQueue</code>, <code>Engine::waitForQueue</code>, <code>Engine::waitForQueueWork</code>, <code>Engine::closeBatch</code>, <code>Engine::submitBatches</code> in <code>src/engine.cpp</code></td></tr>
-  <tr><td>Resize</td><td><code>Engine::recreateSwapchain</code>, <code>Engine::createSwapchainResources</code> in <code>src/engine.cpp</code>; <code>RenderContext::recreateSwapchain</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
-  <tr><td>Events and minimize</td><td><code>Engine::pollEvents</code>, <code>addInputEvent</code>, <code>setWindowSize</code> in <code>src/engine.cpp</code>, the input state in <code>src/platform/input.cpp</code> and <code>src/platform/cameraInput.cpp</code>, the SDL events in <code>src/platform/sdlPlatform.cpp</code></td></tr>
-  <tr><td>Scene sync, scene passes</td><td><code>Engine::syncGpuScene</code>, <code>Engine::addScenePasses</code>, <code>Engine::prepareSceneView</code>, <code>Engine::recordSceneCulling</code>, <code>Engine::recordHiz</code>, <code>Engine::drawSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>Stats</td><td><code>Engine::updateFrameStats</code> in <code>src/renderer/frameStats.cpp</code></td></tr>
+  <tr><td>Batches</td><td><code>Renderer::useQueue</code>, <code>Renderer::waitForQueue</code>, <code>Renderer::waitForQueueWork</code>, <code>Renderer::closeBatch</code>, <code>Renderer::submitBatches</code> in <code>src/renderer/renderer.cpp</code></td></tr>
+  <tr><td>Resize</td><td><code>Renderer::recreateSwapchain</code>, <code>Renderer::createSwapchainResources</code> in <code>src/renderer/renderer.cpp</code>; <code>RenderContext::recreateSwapchain</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>Events and minimize</td><td><code>Renderer::pollEvents</code>, <code>addInputEvent</code>, <code>setWindowSize</code> in <code>src/renderer/renderer.cpp</code>, the input state in <code>src/platform/input.cpp</code> and <code>src/platform/cameraInput.cpp</code>, the SDL events in <code>src/platform/sdlPlatform.cpp</code></td></tr>
+  <tr><td>Scene sync, scene passes</td><td><code>Renderer::syncGpuScene</code>, <code>Renderer::addScenePasses</code>, <code>Renderer::prepareSceneView</code>, <code>Renderer::recordSceneCulling</code>, <code>Renderer::recordHiz</code>, <code>Renderer::drawSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Stats</td><td><code>Renderer::updateFrameStats</code> in <code>src/renderer/frameStats.cpp</code></td></tr>
   <tr><td>Acquire, submit, present</td><td><code>VulkanSwapchain</code> in <code>src/rhi/vulkan/vulkanSwapchain.cpp</code>, <code>VulkanQueue::submit</code> in <code>src/rhi/vulkan/vulkanQueue.cpp</code></td></tr>
   <tr><td>Graph frame</td><td><code>RenderGraph::execute</code>, <code>RenderGraph::bufferBarrier</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
   <tr><td>Texture layouts</td><td><code>RenderContext::transitionImageLayout</code>, <code>RenderContext::discardRecording</code> in <code>src/rhi/renderContext.cpp</code>; <code>TextureStates</code> in <code>src/rhi/textureStates.cpp</code></td></tr>

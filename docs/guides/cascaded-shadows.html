@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cascaded Shadow Maps · RASM</title>
 <meta name="description" content="How cascaded shadow maps work: split the camera's view by depth, give each slice its own shadow map, fit a stable box around each slice, snap it to whole texels, and pick the cascade per pixel. Then how RASM does it.">
-<meta name="rasm-sources" content="src/renderer/shadowCascades.cpp src/renderer/shadowCascades.h shaders/lib/shadow.slang shaders/lib/core.slang shaders/lib/pbr.slang src/renderer/gpuScene.cpp src/renderer/uberMaterialTypes.h include/rasm/scene.h include/rasm/engine.h examples/06_shadows/main.cpp">
+<meta name="rasm-sources" content="src/renderer/shadowCascades.cpp src/renderer/shadowCascades.h shaders/lib/shadow.slang shaders/lib/core.slang shaders/lib/pbr.slang src/renderer/gpuScene.cpp src/renderer/uberMaterialTypes.h include/rasm/scene.h include/rasm/renderer.h examples/06_shadows/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -390,7 +390,7 @@
 
 <h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
 
-<p>RASM has cascaded shadows for directional lights; a shaded view reads up to <code>MAX_VIEW_SHADOWS</code> (4) shadows. <code>Engine::addShadowPasses</code> makes the cascades: one depth-only render target and one set of scene passes per cascade, all drawn from the application's camera. It returns a <code>SceneShadow</code>, which <code>addScenePasses</code> takes for the view that is shaded with it. No light camera exists: every view of the shadow fits the cascades again each frame, with the same function, so the maps are drawn and read with the same matrices. <code>examples/06_shadows</code> shows it.</p>
+<p>RASM has cascaded shadows for directional lights; a shaded view reads up to <code>MAX_VIEW_SHADOWS</code> (4) shadows. <code>Renderer::addShadowPasses</code> makes the cascades: one depth-only render target and one set of scene passes per cascade, all drawn from the application's camera. It returns a <code>SceneShadow</code>, which <code>addScenePasses</code> takes for the view that is shaded with it. No light camera exists: every view of the shadow fits the cascades again each frame, with the same function, so the maps are drawn and read with the same matrices. <code>examples/06_shadows</code> shows it.</p>
 
 <pre><code>const rasm::SceneShadow shadow = engine.addShadowPasses(graph, scene, camera, rasm::ShadowDesc{.light = sun, .cascadeCount = CASCADE_COUNT, .size = 2048, .distance = 60.0f, .splitLambda = 0.7f});
 if (shadow.mapCount == 0 || !engine.addScenePasses(graph, scene, camera, sceneTarget, &amp;shadow, 1))
@@ -475,9 +475,9 @@ if (shadow.mapCount == 0 || !engine.addScenePasses(graph, scene, camera, sceneTa
 <div class="table-wrap">
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
-  <tr><td>The API</td><td><code>ShadowDesc</code>, <code>SceneShadow</code>, <code>MAX_SHADOW_CASCADES</code> in <code>include/rasm/scene.h</code>; <code>Engine::addShadowPasses</code>, <code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>The API</td><td><code>ShadowDesc</code>, <code>SceneShadow</code>, <code>MAX_SHADOW_CASCADES</code> in <code>include/rasm/scene.h</code>; <code>Renderer::addShadowPasses</code>, <code>Renderer::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Split and fit math</td><td><code>getShadowSplits</code>, <code>fitShadowCascade</code>, <code>ShadowCascade</code> in <code>src/renderer/shadowCascades.cpp</code>; tested in <code>tests/shadowCascadesTests.cpp</code></td></tr>
-  <tr><td>Fitting every frame</td><td><code>getShadowMaps</code> and <code>Engine::prepareSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Fitting every frame</td><td><code>getShadowMaps</code> and <code>Renderer::prepareSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>GPU fields</td><td><code>shadowMaps</code> in <code>SceneData</code> (a cascade's <code>matrix</code>, <code>texture</code> and <code>split</code>) and the light's <code>ShadowedLight</code> in <code>shadowedLights</code> (<code>firstMap</code>, <code>mapCount</code>): <code>src/renderer/uberMaterialTypes.h</code> and <code>shaders/lib/core.slang</code></td></tr>
   <tr><td>The lookup</td><td><code>sampleShadow</code> and <code>sampleShadowMap</code> in <code>shaders/lib/shadow.slang</code>; applied by <code>shadePBR</code> in <code>shaders/lib/pbr.slang</code></td></tr>
   <tr><td>An example</td><td><code>examples/06_shadows/main.cpp</code>: four cascades, and an inset with the four maps</td></tr>

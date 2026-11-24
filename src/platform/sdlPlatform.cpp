@@ -246,6 +246,11 @@ namespace rasm
         class SdlPlatform final : public Platform
         {
         public:
+            PlatformType type() const override
+            {
+                return PlatformType::SDL;
+            }
+
             Window createWindow(const WindowDesc &desc) override
             {
                 if (openWindows == 0 && !SDL_Init(SDL_INIT_VIDEO))

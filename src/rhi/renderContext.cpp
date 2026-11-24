@@ -1,5 +1,5 @@
 #include "rasm/render/renderContext.h"
-#include "rasm/engine.h"
+#include "rasm/window.h"
 #include "rhi/device.h"
 #include "rhi/memoryAliasing.h"
 #include "rhi/mipChain.h"
@@ -319,6 +319,11 @@ namespace rasm
         std::unique_ptr<rhi::Device>                                                                                            device;
         WindowSwapchain                                                                                                         windows[MAX_WINDOWS];
         rhi::Sampler*                                                                                                           samplers[static_cast<size_t>(SamplerType::COUNT)] = {};
+        bool                                                                                                                    headless        = false;    // windows get offscreen swapchains
+        bool                                                                                                                    sampledDepth    = true;     // RenderContextDesc::sampledDepth
+        DescriptorSetLayoutHandle                                                                                               bindlessLayout  = {};
+        DescriptorPoolHandle                                                                                                    bindlessPool    = {};
+        DescriptorSetHandle                                                                                                     bindlessSet     = {};
         rhi::UploadManager                                                                                                      uploads;        // the frames': on the graphics queue, in order with them
         rhi::UploadManager                                                                                                      transferUploads;    // the loads', with a transfer queue (loadUploads)
         bool                                                                                                                    loading         = false;    // between beginLoadUploads and endLoadUploads
@@ -525,7 +530,7 @@ namespace rasm
             window.images.clear();
         }
 
-        // An invalid handle names the main window, the first one an engine makes.
+        // An invalid handle names the main window, the first one a renderer makes.
         WindowSwapchain& windowOf(const WindowHandle& window)
         {
             const uint64_t index = window.isValid() ? window.index : MAIN_WINDOW_INDEX;
@@ -600,25 +605,29 @@ namespace rasm
     };
     // clang-format on
 
-    RenderContext::RenderContext(Engine *owner) : engine(owner), impl(std::make_unique<Impl>()) {}
+    RenderContext::RenderContext() : impl(std::make_unique<Impl>()) {}
 
     RenderContext::~RenderContext() = default;
 
-    bool RenderContext::initialize(Backend backend)
+    bool RenderContext::initialize(const RenderContextDesc &desc)
     {
-        const auto config = engine->getConfig();
-        const auto &window = engine->getMainWindow();
-
-        const bool headless = config.platform == PlatformType::HEADLESS;
-        impl->device = rhi::createDevice(backend, {.appName = config.appName,
-                                                   .window = headless ? nullptr : &window.native,
-                                                   .enableValidation = config.enableValidation,
-                                                   .enableSyncValidation = config.enableSyncValidation,
-                                                   .enableGpuValidation = config.enableGpuValidation,
-                                                   .asyncCompute = config.asyncCompute,
-                                                   .transferQueue = config.transferQueue,
-                                                   .hostImageCopy = config.hostImageCopy,
-                                                   .cacheDir = config.cacheDir});
+        if (desc.window == nullptr)
+        {
+            spdlog::error("RenderContext::initialize: the desc names no main window.");
+            return false;
+        }
+        const Window &window = *desc.window;
+        impl->headless = desc.headless;
+        impl->sampledDepth = desc.sampledDepth;
+        impl->device = rhi::createDevice(desc.backend, {.appName = desc.appName,
+                                                        .window = desc.headless ? nullptr : &window.native,
+                                                        .enableValidation = desc.enableValidation,
+                                                        .enableSyncValidation = desc.enableSyncValidation,
+                                                        .enableGpuValidation = desc.enableGpuValidation,
+                                                        .asyncCompute = desc.asyncCompute,
+                                                        .transferQueue = desc.transferQueue,
+                                                        .hostImageCopy = desc.hostImageCopy,
+                                                        .cacheDir = desc.cacheDir});
         if (!impl->device)
             return false;
 
@@ -627,7 +636,7 @@ namespace rasm
         if (impl->device->hasTransferQueue() && !impl->transferUploads.initialize(*impl->device, QueueType::TRANSFER))
             return false;
 
-        if (!createSwapchain(window.handle))
+        if (!createSwapchain(window))
             return false;
 
         // A small fixed set shared by every bindless texture, instead of one sampler per texture (P2).
@@ -638,7 +647,43 @@ namespace rasm
                 return false;
         }
 
+        // The one bindless set: every sampled texture and storage image, seen by every shader stage, written after binding.
+        impl->bindlessLayout = createBindlessDescriptorSetLayout({.name = "BindlessDescriptorSetLayout",
+                                                                  .stage = ShaderType::ALL,
+                                                                  .count = MAX_BINDLESS_TEXTURES,
+                                                                  .type = DescriptorType::COMBINED_IMAGE_SAMPLER,
+                                                                  .storageImageCount = MAX_BINDLESS_STORAGE_IMAGES});
+        if (!impl->bindlessLayout.isValid())
+        {
+            spdlog::error("Failed to create bindless descriptor set layout.");
+            return false;
+        }
+        impl->bindlessPool = createDescriptorPool({.name = "BindlessDescriptorPool",
+                                                   .sizes = {{.type = DescriptorType::COMBINED_IMAGE_SAMPLER, .count = MAX_BINDLESS_TEXTURES},
+                                                             {.type = DescriptorType::STORAGE_IMAGE, .count = MAX_BINDLESS_STORAGE_IMAGES}},
+                                                   .maxSets = 1});
+        if (!impl->bindlessPool.isValid())
+        {
+            spdlog::error("Failed to create bindless descriptor pool.");
+            return false;
+        }
+        impl->bindlessSet = allocateDescriptorSet("BindlessDescriptorSet", impl->bindlessPool, impl->bindlessLayout);
+        if (!impl->bindlessSet.isValid())
+        {
+            spdlog::error("Failed to allocate bindless descriptor set.");
+            return false;
+        }
         return true;
+    }
+
+    DescriptorSetLayoutHandle RenderContext::getBindlessDescriptorSetLayout() const
+    {
+        return impl->bindlessLayout;
+    }
+
+    DescriptorSetHandle RenderContext::getBindlessDescriptorSet() const
+    {
+        return impl->bindlessSet;
     }
 
     void RenderContext::cleanup()
@@ -1109,7 +1154,7 @@ namespace rasm
         for (uint32_t i = 0; i < count; ++i)
         {
             TextureDesc textureDescs[MAX_COLOR_ATTACHMENTS + 1];
-            const uint32_t textureCount = attachmentTextureDescs(impl->renderTargetInfos[group.targets[i].index].desc, extent, engine->config.occlusionCulling, textureDescs);
+            const uint32_t textureCount = attachmentTextureDescs(impl->renderTargetInfos[group.targets[i].index].desc, extent, impl->sampledDepth, textureDescs);
             firstRequests[i] = static_cast<uint32_t>(requests.size());
             for (uint32_t t = 0; t < textureCount; ++t)
             {
@@ -1186,7 +1231,7 @@ namespace rasm
         const uint32_t copies = desc.history ? MAX_FRAMES_IN_FLIGHT : 1;
         const uint32_t colorCount = renderTarget.colorCount;
         TextureDesc textureDescs[MAX_COLOR_ATTACHMENTS + 1];
-        const bool hasDepth = attachmentTextureDescs(desc, getSwapchainExtent(), engine->config.occlusionCulling, textureDescs) > colorCount;
+        const bool hasDepth = attachmentTextureDescs(desc, getSwapchainExtent(), impl->sampledDepth, textureDescs) > colorCount;
         const TextureDesc &depthDesc = textureDescs[colorCount];
         const bool sampledDepth = hasDepth && depthDesc.usage == TextureUsage::SAMPLED_DEPTH_ATTACHMENT;
 
@@ -1320,11 +1365,11 @@ namespace rasm
             const auto &attachment = renderTarget.attachments[i];
             bool bindless = true;
             for (uint32_t c = 0; c < colorCount && bindless; ++c)
-                bindless = engine->addBindlessTexture(engine->getBindlessDescriptorSet(), attachment.color[c], SamplerType::LINEAR_CLAMP, colorSlots[i][c]) != UINT32_MAX;
+                bindless = updateBindlessDescriptorSet(impl->bindlessSet, attachment.color[c], SamplerType::LINEAR_CLAMP, colorSlots[i][c]) != UINT32_MAX;
             if (bindless && sampledDepth)
-                bindless = engine->addBindlessTexture(engine->getBindlessDescriptorSet(), attachment.depth, SamplerType::NEAREST_CLAMP, depthSlots[i]) != UINT32_MAX;
+                bindless = updateBindlessDescriptorSet(impl->bindlessSet, attachment.depth, SamplerType::NEAREST_CLAMP, depthSlots[i]) != UINT32_MAX;
             for (uint32_t c = 0; c < colorCount && bindless && desc.storage; ++c)
-                bindless = updateBindlessStorageImage(engine->getBindlessDescriptorSet(), renderTarget.storageSlots[i][c], attachment.color[c], 0);
+                bindless = updateBindlessStorageImage(impl->bindlessSet, renderTarget.storageSlots[i][c], attachment.color[c], 0);
             if (!bindless)
             {
                 spdlog::error("Failed to make render target '{}' bindless.", desc.name);
@@ -1450,17 +1495,17 @@ namespace rasm
         return true;
     }
 
-    // A window of the engine gets a swapchain: the device's own surface for the main window, a surface of its own for
-    // another; a headless engine gets an offscreen one of the window's size.
-    bool RenderContext::createSwapchain(const WindowHandle &window)
+    // A window gets a swapchain: the device's own surface for the main window, a surface of its own for another; a
+    // headless context gives it an offscreen one of the window's size.
+    bool RenderContext::createSwapchain(const Window &data)
     {
+        const WindowHandle window = data.handle;
         WindowSwapchain &target = impl->windowOf(window);
         if (!checkArgument(target.swapchain == nullptr, __func__, "the window has a swapchain."))
             return false;
-        const Window &data = engine->getWindow(window);
         const bool main = !window.isValid() || window.index == MAIN_WINDOW_INDEX;
         // Without a window the frames render into textures of the device, which present nothing.
-        if (engine->config.platform == PlatformType::HEADLESS)
+        if (impl->headless)
         {
             target.offscreen = std::make_unique<rhi::OffscreenSwapchain>(*impl->device);
             if (target.offscreen->initialize({.width = data.pixelWidth, .height = data.pixelHeight}))
@@ -2262,12 +2307,11 @@ namespace rasm
         return target.swapchain->present();
     }
 
-    SwapchainStatus RenderContext::recreateSwapchain(const WindowHandle &window)
+    SwapchainStatus RenderContext::recreateSwapchain(const Window &data)
     {
-        WindowSwapchain &target = impl->windowOf(window);
+        WindowSwapchain &target = impl->windowOf(data.handle);
         if (!target.swapchain)
             return SwapchainStatus::FAILURE;
-        const Window &data = engine->getWindow(window);
         auto status = target.swapchain->resize(data.pixelWidth, data.pixelHeight);
         if (status == SwapchainStatus::FAILURE)
             spdlog::error("Failed to recreate the swapchain.");

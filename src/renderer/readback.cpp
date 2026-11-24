@@ -1,5 +1,5 @@
 #include "renderer/readback.h"
-#include "rasm/engine.h"
+#include "rasm/renderer.h"
 #include "platform/paths.h"
 
 #include "glm/gtc/packing.hpp"
@@ -205,12 +205,12 @@ namespace rasm
         return true;
     }
 
-    ReadbackHandle Engine::readFrame(ReadbackFormat format)
+    ReadbackHandle Renderer::readFrame(ReadbackFormat format)
     {
         return readFrame(WindowHandle{}, format);
     }
 
-    ReadbackHandle Engine::readFrame(WindowHandle window, ReadbackFormat format)
+    ReadbackHandle Renderer::readFrame(WindowHandle window, ReadbackFormat format)
     {
         if (window.isValid() && !isLive(window))
         {
@@ -222,7 +222,7 @@ namespace rasm
         const TextureDesc desc = swapchain.imageHandles.empty() ? TextureDesc{} : ctx.getTextureDesc(swapchain.imageHandles[0]);
         if (!desc.readable)
         {
-            spdlog::error("readFrame: the window's surface does not allow copies from its images (no TRANSFER_SRC in its supported usage). A headless engine (EngineConfig::platform) can always be read.");
+            spdlog::error("readFrame: the window's surface does not allow copies from its images (no TRANSFER_SRC in its supported usage). A headless engine (RendererConfig::platform) can always be read.");
             return {};
         }
         const HandleSlot slot = registry.readbackHandles.allocate();
@@ -231,7 +231,7 @@ namespace rasm
         return handle;
     }
 
-    ReadbackHandle Engine::readTexture(const TextureHandle &texture, ReadbackFormat format, uint32_t layer, uint32_t mip)
+    ReadbackHandle Renderer::readTexture(const TextureHandle &texture, ReadbackFormat format, uint32_t layer, uint32_t mip)
     {
         const TextureDesc &desc = ctx.getTextureDesc(texture);
         if (desc.format == Format::UNKNOWN)
@@ -263,7 +263,7 @@ namespace rasm
         return handle;
     }
 
-    bool Engine::isReadbackReady(ReadbackHandle readback)
+    bool Renderer::isReadbackReady(ReadbackHandle readback)
     {
         for (const auto &pending : readbacks->pending)
         {
@@ -273,7 +273,7 @@ namespace rasm
         return false;
     }
 
-    bool Engine::takeReadback(ReadbackHandle readback, ReadbackImage &image)
+    bool Renderer::takeReadback(ReadbackHandle readback, ReadbackImage &image)
     {
         auto it = std::find_if(readbacks->pending.begin(), readbacks->pending.end(), [readback](const PendingReadback &pending)
                                { return pending.handle == readback; });
@@ -304,7 +304,7 @@ namespace rasm
     }
 
     // In the frame's last graphics batch, after every pass and the UI, before the swapchain image goes to PRESENT_SRC.
-    void Engine::recordReadbacks()
+    void Renderer::recordReadbacks()
     {
         const bool any = std::any_of(readbacks->pending.begin(), readbacks->pending.end(), [](const PendingReadback &pending)
                                      { return !pending.recorded && !pending.failed; });
@@ -354,7 +354,7 @@ namespace rasm
 
     // After submitBatches: the copies recorded this frame are done at the frame's fence value. A frame that did not go
     // out took its copies with it, so they are recorded again in the next one.
-    void Engine::finishReadbackSubmit(bool submitted)
+    void Renderer::finishReadbackSubmit(bool submitted)
     {
         for (auto &pending : readbacks->pending)
         {

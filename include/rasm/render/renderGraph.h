@@ -12,7 +12,7 @@
 
 namespace rasm
 {
-    class Engine;
+    class Renderer;
     class RenderContext;
 
     struct FrameBuffers
@@ -42,7 +42,7 @@ namespace rasm
         bool                                compute             = false;
         bool                                async               = false;
         bool                                writesSwapchain     = false;
-        WindowHandle                        window;                     // the swapchain's window: the main one when the graph has an engine
+        WindowHandle                        window;                     // the swapchain's window: the main one when the graph has a renderer
         bool                                encodedSwapchain    = false;    // draws the swapchain through its UNORM view (AttachmentOps::encodedColor): the UI pass
 
         // For Sorting
@@ -88,9 +88,9 @@ namespace rasm
     class RenderGraph
     {
         friend class PassBuilder;
-        friend class Engine;
+        friend class Renderer;
     public:
-                           RenderGraph(Engine* owner) : engine(owner) {}
+                           RenderGraph(Renderer* owner) : renderer(owner) {}
                            RenderGraph(const RenderGraph&) = delete;
                            RenderGraph(RenderGraph&& other) noexcept;
                            ~RenderGraph();
@@ -160,10 +160,10 @@ namespace rasm
         std::vector<uint32_t>                                       transientLastPasses;
         uint64_t                                                    transientUses[QUEUE_COUNT] = {}; // per queue, the batch value of this frame's last pass that used a transient target
         bool                                                        transientsPlaced = false;
-        std::vector<uint32_t>                                       sceneViews;     // Engine::addScenePasses's views
-        bool                                                        animationPass = false;  // Engine::addAnimationPass ran
-        uint32_t                                                    inspectPass = UINT32_MAX;   // Engine::updateInspectPass's: it runs right after the last pass it reads from
-        Engine*                                                     engine   = nullptr;
+        std::vector<uint32_t>                                       sceneViews;     // Renderer::addScenePasses's views
+        bool                                                        animationPass = false;  // Renderer::addAnimationPass ran
+        uint32_t                                                    inspectPass = UINT32_MAX;   // Renderer::updateInspectPass's: it runs right after the last pass it reads from
+        Renderer*                                                   renderer = nullptr;
         bool                                                        compiled = false;
     };
 }

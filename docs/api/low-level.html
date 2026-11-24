@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RenderContext and Resources · RASM</title>
 <meta name="description" content="The low-level API: every RenderContext method grouped by task, the resource descriptors and enums of render/resource.h, and the rules for recording, uploading and reading back.">
-<meta name="rasm-sources" content="include/rasm/render/renderContext.h include/rasm/render/resource.h include/rasm/engine.h include/rasm/types.h src/rhi/renderContext.cpp src/rhi/resource.cpp src/rhi/uploadManager.cpp src/rhi/device.h src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanUtils.cpp src/engine.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp">
+<meta name="rasm-sources" content="include/rasm/render/renderContext.h include/rasm/render/resource.h include/rasm/renderer.h include/rasm/types.h src/rhi/renderContext.cpp src/rhi/resource.cpp src/rhi/uploadManager.cpp src/rhi/device.h src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanUtils.cpp src/renderer/renderer.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -77,7 +77,7 @@
 <div class="api" id="getBindlessDescriptorSet">
   <pre class="sig">DescriptorSetHandle getBindlessDescriptorSet();</pre>
   <div class="body">
-    <p>The engine's bindless texture set: <code>MAX_BINDLESS_TEXTURES</code> combined image samplers at set 0, binding 0, visible to every shader stage (<code>ShaderType::ALL</code>). Pipelines from <code>createPipeline</code> and <code>createComputePipeline</code> use its layout. Bind it with <code>bindDescriptorSet(commandBuffer, pipeline, set, 0)</code> before drawing or dispatching with a pipeline that samples textures. See <a href="materials.html">Materials and textures</a> for how textures get a slot.</p>
+    <p>The renderer's bindless texture set, which its <code>RenderContext</code> made (<code>RenderContext::getBindlessDescriptorSet</code> returns the same handle, and <code>getBindlessDescriptorSetLayout</code> its layout): <code>MAX_BINDLESS_TEXTURES</code> combined image samplers at set 0, binding 0, visible to every shader stage (<code>ShaderType::ALL</code>). Pipelines from <code>createPipeline</code> and <code>createComputePipeline</code> use its layout. Bind it with <code>bindDescriptorSet(commandBuffer, pipeline, set, 0)</code> before drawing or dispatching with a pipeline that samples textures. See <a href="materials.html">Materials and textures</a> for how textures get a slot.</p>
   </div>
 </div>
 
@@ -86,7 +86,7 @@
 <figure class="diagram">
   <svg viewBox="0 0 760 340" role="img" aria-label="Commands outside a render pass: dispatch, memoryBarrier, transitionImageLayout. Commands inside a render pass: draw, drawIndexed, drawIndexedIndirect and drawIndexedIndirectCount. beginRendering enters the pass and endRendering leaves it. Binding, push constants, viewport, scissor and cull mode are allowed in both.">
     <path d="M190,58 C190,18 570,18 570,58" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <text x="380" y="22" class="mid small">beginRendering (Engine::beginPass)</text>
+    <text x="380" y="22" class="mid small">beginRendering (Renderer::beginPass)</text>
 
     <rect x="10" y="60" width="360" height="150" rx="8" class="zone"/>
     <text x="26" y="84" class="title">Outside a render pass</text>
@@ -105,7 +105,7 @@
     <text x="406" y="198" class="small">skipped while the bound pipeline is rejected</text>
 
     <path d="M570,212 C570,252 190,252 190,212" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <text x="380" y="232" class="mid small">endRendering (Engine::endPass)</text>
+    <text x="380" y="232" class="mid small">endRendering (Renderer::endPass)</text>
 
     <rect x="10" y="266" width="740" height="64" rx="8" class="box"/>
     <text x="26" y="288" class="title">Allowed in both</text>
@@ -325,7 +325,7 @@ constexpr uint32_t QUEUE_COUNT = 2;</pre>
   <pre class="sig">void beginEmptyPass();
 void beginSwapchainFrame();</pre>
   <div class="body">
-    <p><code>beginEmptyPass</code> starts a pass with nothing to draw into, which <code>Engine::beginPass</code> uses for a window with no image this frame: its draws record nothing, and <code>endRendering</code> ends it. <code>beginSwapchainFrame</code> runs before a frame's acquires: only the windows acquired after it take part in that frame's submits and presents, so a window that kept an image from a frame that never went out (a failed submit) is presented only once it is acquired again.</p>
+    <p><code>beginEmptyPass</code> starts a pass with nothing to draw into, which <code>Renderer::beginPass</code> uses for a window with no image this frame: its draws record nothing, and <code>endRendering</code> ends it. <code>beginSwapchainFrame</code> runs before a frame's acquires: only the windows acquired after it take part in that frame's submits and presents, so a window that kept an image from a frame that never went out (a failed submit) is presented only once it is acquired again.</p>
   </div>
 </div>
 
@@ -344,21 +344,21 @@ void beginSwapchainFrame();</pre>
       <dt>face</dt><dd>Of a cube depth (<a href="#TextureDesc"><code>TextureDesc::cube</code></a>): the face to draw into, 0 to <code>CUBE_FACES</code> − 1. Must be 0 for any other depth.</dd>
     </dl>
     <p>Every attachment must have the same samples per pixel (<a href="#TextureDesc"><code>TextureDesc::samples</code></a>); a mix logs an error and returns <code>false</code>. Pipelines bound in the pass need that count too.</p>
-    <p><code>Engine::beginPass</code> calls this after the layout transitions, with its <code>ops</code> (a render graph sets them for each pass), and also sets the viewport, scissor and cull mode, so use <code>beginPass</code> unless you build the whole frame yourself.</p>
+    <p><code>Renderer::beginPass</code> calls this after the layout transitions, with its <code>ops</code> (a render graph sets them for each pass), and also sets the viewport, scissor and cull mode, so use <code>beginPass</code> unless you build the whole frame yourself.</p>
   </div>
 </div>
 
 <div class="api" id="endRendering">
   <pre class="sig">bool endRendering(const CommandBufferHandle&amp; commandBuffer);</pre>
   <div class="body">
-    <p>Ends the render pass. <code>Engine::endPass</code> calls it.</p>
+    <p>Ends the render pass. <code>Renderer::endPass</code> calls it.</p>
   </div>
 </div>
 
 <div class="api" id="copyTextureToBuffer">
   <pre class="sig">bool copyTextureToBuffer(const CommandBufferHandle&amp; commandBuffer, const TextureHandle&amp; texture, uint32_t layer, uint32_t mip, const BufferHandle&amp; buffer);</pre>
   <div class="body">
-    <p>Records a copy of one layer and mip of a readable texture (<code>TextureDesc::readable</code>) into the start of <code>buffer</code>, rows tightly packed (width × texel size bytes each; a depth gives its depth). The texture keeps its tracked use: it moves to a copy layout and back inside the copy. The bytes are visible to the host once the submit's fence is reached; then <a href="#readBuffer"><code>readBuffer</code></a> them from a buffer made with <code>hostReadable</code>. Refused with an error inside a render pass, and for a texture that is not readable, a multisampled one, a layer or mip it does not have, or one that holds nothing yet. <a href="engine.html#readTexture"><code>Engine::readTexture</code></a> does all of it for you, at the end of a frame.</p>
+    <p>Records a copy of one layer and mip of a readable texture (<code>TextureDesc::readable</code>) into the start of <code>buffer</code>, rows tightly packed (width × texel size bytes each; a depth gives its depth). The texture keeps its tracked use: it moves to a copy layout and back inside the copy. The bytes are visible to the host once the submit's fence is reached; then <a href="#readBuffer"><code>readBuffer</code></a> them from a buffer made with <code>hostReadable</code>. Refused with an error inside a render pass, and for a texture that is not readable, a multisampled one, a layer or mip it does not have, or one that holds nothing yet. <a href="engine.html#readTexture"><code>Renderer::readTexture</code></a> does all of it for you, at the end of a frame.</p>
   </div>
 </div>
 
@@ -572,7 +572,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
 <div class="api" id="destroyBuffer">
   <pre class="sig">void destroyBuffer(const BufferHandle&amp; buffer);</pre>
   <div class="body">
-    <p>The handle is invalid at once: a later call with it logs an error, even when a new buffer took its index. The buffer itself, with any upload still queued for it, is freed once the GPU has finished every frame that may use it (<a href="../guides/resource-lifetime.html">deferred destruction</a>), so the call never waits. <a href="engine.html#destroyBuffer"><code>Engine::destroyBuffer</code></a> calls it.</p>
+    <p>The handle is invalid at once: a later call with it logs an error, even when a new buffer took its index. The buffer itself, with any upload still queued for it, is freed once the GPU has finished every frame that may use it (<a href="../guides/resource-lifetime.html">deferred destruction</a>), so the call never waits. <a href="engine.html#destroyBuffer"><code>Renderer::destroyBuffer</code></a> calls it.</p>
   </div>
 </div>
 
@@ -617,7 +617,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
       <dt>cube</dt><dd><code>true</code>: <code>CUBE_FACES</code> square layers, one per face of a cube, in Vulkan's order +X, −X, +Y, −Y, +Z, −Z. Its bindless slot holds a cube view, which a shader reads as a <var>SamplerCube</var>; each face also has its own view, which <a href="#beginRendering"><code>beginRendering</code></a> draws into. A render target with <code>RenderTargetDesc::cube</code> makes one for its depth. Only a depth attachment (<code>DEPTH_STENCIL_ATTACHMENT</code> or <code>SAMPLED_DEPTH_ATTACHMENT</code>) or a <code>SAMPLED_STORAGE</code> texture can be a cube: <code>createTexture</code> rejects any other usage with an error.</dd>
       <dt>mipLevels</dt><dd>0: the rule above. Any other count makes that many levels, at most the full chain down to 1 × 1. Only a <code>SAMPLED_STORAGE</code> texture (compute writes its mips) or a <code>SAMPLED</code> one (<code>fillTexture</code> copies them, or makes them for RGBA8) may ask for more than 1: <code>createTexture</code> refuses any other with an error, since an attachment is drawn into one mip.</dd>
       <dt>samples</dt><dd>Samples per pixel: 1, or 2, 4 or 8 for a color or depth attachment of one mip, not a cube, in a count the device has (<a href="#supportsSampleCount"><code>supportsSampleCount</code></a>); <code>createTexture</code> refuses anything else with an error. A render target sets it from <code>RenderTargetDesc::samples</code>. A shader reads such a texture sample by sample, as a <var>Sampler2DMS</var>.</dd>
-      <dt>readable</dt><dd><code>true</code> adds copy-source usage (<code>VK_IMAGE_USAGE_TRANSFER_SRC_BIT</code>), so <a href="#copyTextureToBuffer"><code>copyTextureToBuffer</code></a> and <a href="engine.html#readTexture"><code>Engine::readTexture</code></a> can copy it. <code>RenderTargetDesc::readable</code> sets it on a target's textures.</dd>
+      <dt>readable</dt><dd><code>true</code> adds copy-source usage (<code>VK_IMAGE_USAGE_TRANSFER_SRC_BIT</code>), so <a href="#copyTextureToBuffer"><code>copyTextureToBuffer</code></a> and <a href="engine.html#readTexture"><code>Renderer::readTexture</code></a> can copy it. <code>RenderTargetDesc::readable</code> sets it on a target's textures.</dd>
       <dt>encodedView</dt><dd>For an <code>R8G8B8A8_SRGB</code> attachment that is not a cube: the texture also gets an <code>R8G8B8A8_UNORM</code> view of mip 0, which a pass with <code>AttachmentOps::encodedColor</code> draws through (its pipelines are made for <code>R8G8B8A8_UNORM</code>), so blending works on the stored sRGB codes. A headless engine's offscreen swapchain images have it, so the UI blends as on a window. Other formats ignore it.</dd>
     </dl>
   </div>
@@ -754,7 +754,7 @@ float takeUploadGpuMs();</pre>
 <div class="api" id="destroyTexture">
   <pre class="sig">void destroyTexture(const TextureHandle&amp; texture);</pre>
   <div class="body">
-    <p>The handle is invalid at once. The texture and its bindless slot are freed once the GPU has finished every frame that may sample them; then a new texture can take the slot. A render target's texture is refused: destroy the render target. Materials keep the slot number, so use <a href="engine.html#destroyTexture"><code>Engine::destroyTexture</code></a> for a texture a material may use: it removes it from the materials first.</p>
+    <p>The handle is invalid at once. The texture and its bindless slot are freed once the GPU has finished every frame that may sample them; then a new texture can take the slot. A render target's texture is refused: destroy the render target. Materials keep the slot number, so use <a href="engine.html#destroyTexture"><code>Renderer::destroyTexture</code></a> for a texture a material may use: it removes it from the materials first.</p>
     <p><span class="tag">errors</span> Swapchain images are refused: <code>Swapchain images belong to the swapchain and can't be destroyed.</code></p>
   </div>
 </div>
@@ -762,7 +762,7 @@ float takeUploadGpuMs();</pre>
 <div class="api" id="getBindlessTextureIndex">
   <pre class="sig">uint32_t getBindlessTextureIndex(const TextureHandle&amp; texture) const;</pre>
   <div class="body">
-    <p>The texture's slot in binding 0 of the bindless set, or <code>UINT32_MAX</code> (the same value as <code>INVALID_TEXTURE_INDEX</code>) for a texture without one, or one that was destroyed. One array access, no hash. <a href="materials.html#getBindlessTextureIndex">Engine::getBindlessTextureIndex</a> calls it.</p>
+    <p>The texture's slot in binding 0 of the bindless set, or <code>UINT32_MAX</code> (the same value as <code>INVALID_TEXTURE_INDEX</code>) for a texture without one, or one that was destroyed. One array access, no hash. <a href="materials.html#getBindlessTextureIndex">Renderer::getBindlessTextureIndex</a> calls it.</p>
   </div>
 </div>
 
@@ -773,7 +773,7 @@ float takeUploadGpuMs();</pre>
     SamplerType sampler = SamplerType::LINEAR_REPEAT,
     uint32_t slot = MAX_BINDLESS_TEXTURES);</pre>
   <div class="body">
-    <p>Writes <code>texture</code> with <code>sampler</code> into a slot of the bindless set and returns the slot, which shaders use as the array index. The descriptor promises the sampled layout, so the texture must be in it when a shader reads it. A texture holds one slot until it is destroyed; <a href="#getBindlessTextureIndex">getBindlessTextureIndex</a> gives it. <a href="materials.html#addBindlessTexture">Engine::addBindlessTexture</a> calls this.</p>
+    <p>Writes <code>texture</code> with <code>sampler</code> into a slot of the bindless set and returns the slot, which shaders use as the array index. The descriptor promises the sampled layout, so the texture must be in it when a shader reads it. A texture holds one slot until it is destroyed; <a href="#getBindlessTextureIndex">getBindlessTextureIndex</a> gives it. <a href="materials.html#addBindlessTexture">Renderer::addBindlessTexture</a> calls this.</p>
     <dl>
       <dt>slot</dt><dd><code>MAX_BINDLESS_TEXTURES</code> (the default): the texture's own slot when it has one, unchanged (a frame in flight may sample it; another sampler logs an error: make a second texture), else a freed slot, else the next one never used. A smaller value takes that slot: the texture that held it loses it, and the texture gives back the slot it had. A slot that waits for the GPU after a destroy is refused. Only name a slot no frame in flight samples.</dd>
     </dl>
@@ -810,7 +810,7 @@ float takeUploadGpuMs();</pre>
 
 <h2><span class="n">6</span>Shaders, pipelines and descriptors</h2>
 
-<p>Most applications use <a href="render-graph.html#createPipeline">Engine::createPipeline</a> and <a href="render-graph.html#createComputePipeline">Engine::createComputePipeline</a>, which compile Slang source and call the functions below. Use these directly only for a pipeline with other attachment formats or topology.</p>
+<p>Most applications use <a href="render-graph.html#createPipeline">Renderer::createPipeline</a> and <a href="render-graph.html#createComputePipeline">Renderer::createComputePipeline</a>, which compile Slang source and call the functions below. Use these directly only for a pipeline with other attachment formats or topology.</p>
 
 <div class="api" id="createShader">
   <pre class="sig">ShaderHandle createShader(const ShaderDesc&amp; desc);</pre>
@@ -872,14 +872,14 @@ float takeUploadGpuMs();</pre>
     <dl>
       <dt>computeShader</dt><dd>Valid for a compute pipeline; then leave the vertex and fragment shaders invalid.</dd>
       <dt>taskShader, meshShader</dt><dd>Both valid, with <code>fragmentShader</code> and no <code>vertexShader</code>, for a mesh pipeline (<code>ShaderType::TASK</code>, <code>ShaderType::MESH</code>), drawn with <a href="#drawMeshTasksIndirect"><code>drawMeshTasksIndirect</code></a>. It has no vertex input and no topology: the mesh shader writes the triangles. Only where <a href="#hasMeshShaders"><code>hasMeshShaders</code></a> is true.</dd>
-      <dt>descriptorSetLayout</dt><dd>Required. Usually the engine's bindless layout (the one <code>Engine::createPipeline</code> uses).</dd>
+      <dt>descriptorSetLayout</dt><dd>Required. Usually the engine's bindless layout (the one <code>Renderer::createPipeline</code> uses).</dd>
       <dt>topology</dt><dd>See <a href="types.html#PrimitiveTopology">PrimitiveTopology</a>.</dd>
       <dt>colorAttachmentFormats</dt><dd>One per color attachment, ending at the first <code>UNKNOWN</code> (count them with <code>colorAttachmentCount</code>). Must equal the color formats of the pass the pipeline is used in, in order, or <code>bindPipeline</code> rejects it. Every attachment gets the same blend state, from <code>blendMode</code>.</dd>
       <dt>depthStencilAttachmentFormat</dt><dd>The same for the depth format. With a depth format the depth test is on (reversed-Z, <code>GREATER_OR_EQUAL</code>).</dd>
-      <dt>blendMode</dt><dd>See <a href="types.html#BlendMode">BlendMode</a>. <code>Engine::createPipeline</code> always uses <code>NONE</code>.</dd>
+      <dt>blendMode</dt><dd>See <a href="types.html#BlendMode">BlendMode</a>. <code>Renderer::createPipeline</code> always uses <code>NONE</code>.</dd>
       <dt>depthWrite</dt><dd>Writes depth when there is a depth format. <code>false</code> keeps the test but not the write, as see-through draws need.</dd>
       <dt>depthTest</dt><dd>Tests depth when there is a depth format. <code>false</code> draws over everything, as the culling view's ghosts do; depth is then not written either.</dd>
-      <dt>samples</dt><dd>The sample count of the attachments it draws into: 1, 2, 4 or 8, of those the device has (<code>createPipeline</code> refuses any other with an error); <code>bindPipeline</code> rejects it in a pass with another. <code>Engine::createPipeline(name, source, renderTarget)</code> takes the target's.</dd>
+      <dt>samples</dt><dd>The sample count of the attachments it draws into: 1, 2, 4 or 8, of those the device has (<code>createPipeline</code> refuses any other with an error); <code>bindPipeline</code> rejects it in a pass with another. <code>Renderer::createPipeline(name, source, renderTarget)</code> takes the target's.</dd>
       <dt>alphaToCoverage</dt><dd>Color 0's alpha decides which samples a fragment covers, for cut-outs with several samples per pixel (<a href="../guides/msaa.html#a2c">alpha-to-coverage</a>). Both fields take part in equality and the hash.</dd>
     </dl>
   </div>
@@ -1003,7 +1003,7 @@ struct BindlessDescriptorSetLayoutDescHash
 <div class="api" id="RenderContext-createRenderTarget">
   <pre class="sig">RenderTargetHandle createRenderTarget(const RenderTargetDesc&amp; desc);</pre>
   <div class="body">
-    <p>What <a href="render-graph.html#createRenderTarget">Engine::createRenderTarget</a> calls: a color and a depth texture, or one pair per frame slot with <code>history</code>, the colors made bindless with <code>LINEAR_CLAMP</code>. See <a href="render-graph.html#RenderTargetDesc">RenderTargetDesc</a>. The copies of a history target are cleared to <code>clearColor</code> by <a href="#clearNewHistory">clearNewHistory</a> at the start of the next frame.</p>
+    <p>What <a href="render-graph.html#createRenderTarget">Renderer::createRenderTarget</a> calls: a color and a depth texture, or one pair per frame slot with <code>history</code>, the colors made bindless with <code>LINEAR_CLAMP</code>. See <a href="render-graph.html#RenderTargetDesc">RenderTargetDesc</a>. The copies of a history target are cleared to <code>clearColor</code> by <a href="#clearNewHistory">clearNewHistory</a> at the start of the next frame.</p>
     <p><span class="tag">errors</span> These stop in the debugger in a debug build and return an invalid handle: a gap in <code>colorFormats</code> (<code>a render target's color formats can't have a gap.</code>), or no depth format (<code>a render target needs a depth format.</code>). <code>createTransientRenderTarget</code> checks the same.</p>
   </div>
 </div>
@@ -1038,7 +1038,7 @@ void destroyRenderTarget(const RenderTargetHandle&amp; renderTarget);</pre>
 <div class="api" id="clearNewHistory">
   <pre class="sig">void clearNewHistory(const CommandBufferHandle&amp; commandBuffer);</pre>
   <div class="body">
-    <p>Records a clear to <code>clearColor</code> of every history copy made since the last call, and leaves the colors in the sampled layout. So the previous frame's copy can be read on the first frame, and after a resize. <code>Engine::beginFrame</code> calls it, before any pass. If the frame is not submitted, <code>discardRecording</code> keeps the clears for the next call.</p>
+    <p>Records a clear to <code>clearColor</code> of every history copy made since the last call, and leaves the colors in the sampled layout. So the previous frame's copy can be read on the first frame, and after a resize. <code>Renderer::beginFrame</code> calls it, before any pass. If the frame is not submitted, <code>discardRecording</code> keeps the clears for the next call.</p>
   </div>
 </div>
 
@@ -1179,17 +1179,17 @@ void destroyRenderTarget(const RenderTargetHandle&amp; renderTarget);</pre>
 <div class="api" id="acquireNextImage">
   <pre class="sig">[[nodiscard]] SwapchainStatus acquireNextImage(uint32_t&amp; imageIndex, const WindowHandle&amp; window = {});
 [[nodiscard]] SwapchainStatus present(const WindowHandle&amp; window = {});
-[[nodiscard]] SwapchainStatus recreateSwapchain(const WindowHandle&amp; window = {});</pre>
+[[nodiscard]] SwapchainStatus recreateSwapchain(const Window&amp; window);</pre>
   <div class="body">
-    <p>The swapchain steps of <code>beginFrame</code>, <code>endFrame</code> and a resize, for one window (an invalid handle: the main window). Each returns a <a href="types.html#SwapchainStatus">SwapchainStatus</a>. An acquired image makes the window part of the next submits' waits and presents (<a href="#SubmitInfo"><code>SubmitInfo</code></a>) until its <code>present</code>. <code>recreateSwapchain</code> sizes the swapchain from the window's pixel size; on success the swapchain image handles change. Use <code>Engine::recreateSwapchain</code>, which also rebuilds what is sized from the main window.</p>
+    <p>The swapchain steps of <code>beginFrame</code>, <code>endFrame</code> and a resize, for one window (an invalid handle: the main window). Each returns a <a href="types.html#SwapchainStatus">SwapchainStatus</a>. An acquired image makes the window part of the next submits' waits and presents (<a href="#SubmitInfo"><code>SubmitInfo</code></a>) until its <code>present</code>. <code>recreateSwapchain</code> sizes the swapchain from the window's pixel size; on success the swapchain image handles change. Use <code>Renderer::recreateSwapchain</code>, which also rebuilds what is sized from the main window.</p>
   </div>
 </div>
 
 <div class="api" id="createSwapchain">
-  <pre class="sig">bool createSwapchain(const WindowHandle&amp; window);
+  <pre class="sig">bool createSwapchain(const Window&amp; window);
 void destroySwapchain(const WindowHandle&amp; window);</pre>
   <div class="body">
-    <p>A window's swapchain, which <a href="engine.html#addWindow"><code>Engine::addWindow</code></a> and <a href="engine.html#removeWindow"><code>removeWindow</code></a> call. The main window's uses the surface the device was made with; another window's makes a surface of its own from its <code>NativeWindow</code>, and fails, logged, when the GPU's graphics queue can't present to it. A headless engine gets an offscreen swapchain of the window's pixel size. <code>destroySwapchain</code> waits for the device to be idle, since the frames in flight may still use the images, and the surface goes with the swapchain.</p>
+    <p>A window's swapchain, which <a href="engine.html#addWindow"><code>Renderer::addWindow</code></a> and <a href="engine.html#removeWindow"><code>removeWindow</code></a> call. <code>createSwapchain</code> and <code>recreateSwapchain</code> take the <code>Window</code> itself (its handle, <code>NativeWindow</code> and pixel size), since the context knows no renderer. The main window's uses the surface the device was made with; another window's makes a surface of its own from its <code>NativeWindow</code>, and fails, logged, when the GPU's graphics queue can't present to it. A headless engine gets an offscreen swapchain of the window's pixel size. <code>destroySwapchain</code> waits for the device to be idle, since the frames in flight may still use the images, and the surface goes with the swapchain.</p>
   </div>
 </div>
 
@@ -1247,19 +1247,35 @@ glm::uvec2                 getSwapchainExtent(const WindowHandle&amp; window = {
 <div class="api" id="queryVRAMStats">
   <pre class="sig">VRAMStats queryVRAMStats();</pre>
   <div class="body">
-    <p>The memory budget and usage of the GPU heaps, from the driver, right now. See <a href="types.html#VRAMStats">VRAMStats</a>. <code>Engine::queryMemoryStats</code> returns the same.</p>
+    <p>The memory budget and usage of the GPU heaps, from the driver, right now. See <a href="types.html#VRAMStats">VRAMStats</a>. <code>Renderer::queryMemoryStats</code> returns the same.</p>
   </div>
 </div>
 
 <h2><span class="n">10</span>Lifetime</h2>
 
 <div class="api" id="RenderContext">
-  <pre class="sig">     RenderContext(Engine* owner);
+  <pre class="sig">     RenderContext();
      ~RenderContext();
-bool initialize(Backend backend);
-void cleanup();</pre>
+bool initialize(const RenderContextDesc&amp; desc);
+void cleanup();
+
+struct RenderContextDesc
+{
+    Backend       backend                 = Backend::VULKAN;
+    std::string   appName                 = {};
+    const Window* window                  = nullptr;
+    bool          headless                = false;
+    bool          enableValidation        = false;
+    bool          enableSyncValidation    = false;
+    bool          enableGpuValidation     = false;
+    bool          asyncCompute            = false;
+    bool          transferQueue           = true;
+    bool          hostImageCopy           = true;
+    bool          sampledDepth            = true;
+    std::string   cacheDir                = {};
+};</pre>
   <div class="body">
-    <p>The <code>Engine</code> owns its <code>RenderContext</code>, initializes it in its constructor and cleans it up in its destructor. Do not create another one or call these. <code>initialize</code> creates the device for the backend (only <code>VULKAN</code> exists), the swapchain and the six samplers. <code>cleanup</code> waits until the GPU is idle and destroys every object it still holds.</p>
+    <p>The <code>Renderer</code> owns its <code>RenderContext</code>, initializes it in its constructor and cleans it up in its destructor. Do not create another one or call these. The context knows no renderer: <code>initialize</code> gets everything from the <code>RenderContextDesc</code>, the main <code>window</code> (whose <code>NativeWindow</code> makes the device's surface), <code>headless</code> (no surface; every window gets an offscreen swapchain) and <code>sampledDepth</code> (render target depths are <code>SAMPLED</code> and bindless, for Hi-Z culling: <code>RendererConfig::occlusionCulling</code>). It creates the device for the backend (only <code>VULKAN</code> exists), the main window's swapchain, the six samplers and the bindless set (<code>getBindlessDescriptorSetLayout</code>, <code>getBindlessDescriptorSet</code>), which it fills itself for render targets. <code>cleanup</code> waits until the GPU is idle and destroys every object it still holds.</p>
   </div>
 </div>
 

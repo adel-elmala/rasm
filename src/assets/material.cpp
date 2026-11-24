@@ -1,5 +1,5 @@
 #include "rasm/material.h"
-#include "rasm/engine.h"
+#include "rasm/renderer.h"
 #include "assets/ktxImage.h"
 #include "assets/meshImport.h"
 #include "core/workerPool.h"
@@ -69,12 +69,12 @@ namespace rasm
         }
     }
 
-    MaterialHandle Engine::createMaterial(MaterialType type, std::vector<TextureHandle> textures, bool doubleSided)
+    MaterialHandle Renderer::createMaterial(MaterialType type, std::vector<TextureHandle> textures, bool doubleSided)
     {
         const HandleSlot slot = registry.materialHandles.allocate();
         if (slot.index == 0)
         {
-            spdlog::error("The material table is full: {} materials are alive. EngineConfig::maxMaterials ({}) sets its size.", registry.materialHandles.liveCount(), config.maxMaterials);
+            spdlog::error("The material table is full: {} materials are alive. RendererConfig::maxMaterials ({}) sets its size.", registry.materialHandles.liveCount(), config.maxMaterials);
             return {};
         }
         const MaterialHandle handle{slot.index, slot.generation};
@@ -132,7 +132,7 @@ namespace rasm
     // Entities made with it, and the sub-meshes of the mesh whose import made it, let go of it; their rows are rewritten
     // with the entity's material or the default one, so the row can take the next material at once (each frame slot has
     // its own copy of the table). Its textures stay: they are the application's, or its mesh's.
-    void Engine::destroyMaterial(MaterialHandle material)
+    void Renderer::destroyMaterial(MaterialHandle material)
     {
         if (!isLive(material))
         {
@@ -154,7 +154,7 @@ namespace rasm
     }
 
     // Nothing is searched when nothing uses the material, the usual case when a mesh and its entities go first.
-    void Engine::detachMaterial(MaterialHandle material)
+    void Renderer::detachMaterial(MaterialHandle material)
     {
         const uint32_t users = material.index < registry.materialUsers.size() ? registry.materialUsers[material.index] : 0;
         const MeshHandle owner = material.index < registry.materialOwners.size() ? registry.materialOwners[material.index] : MeshHandle{};
@@ -184,7 +184,7 @@ namespace rasm
         refreshEntitiesAfterMaterialChange();
     }
 
-    void Engine::updateMaterial(MaterialHandle material, const Material &values)
+    void Renderer::updateMaterial(MaterialHandle material, const Material &values)
     {
         if (!isLive(material))
         {
@@ -212,7 +212,7 @@ namespace rasm
             refreshEntitiesAfterMaterialChange();
     }
 
-    MaterialHandle Engine::loadMaterial(const tinygltf::Model &model, int materialIndex, GltfImportCache &cache)
+    MaterialHandle Renderer::loadMaterial(const tinygltf::Model &model, int materialIndex, GltfImportCache &cache)
     {
         if (materialIndex < 0 || materialIndex >= static_cast<int>(model.materials.size()))
             return {};
@@ -224,7 +224,7 @@ namespace rasm
         const HandleSlot slot = registry.materialHandles.allocate();
         if (slot.index == 0)
         {
-            spdlog::error("The material table is full: {} materials are alive. EngineConfig::maxMaterials ({}) sets its size.", registry.materialHandles.liveCount(), config.maxMaterials);
+            spdlog::error("The material table is full: {} materials are alive. RendererConfig::maxMaterials ({}) sets its size.", registry.materialHandles.liveCount(), config.maxMaterials);
             return {};
         }
         const MaterialHandle handle{slot.index, slot.generation};
@@ -371,7 +371,7 @@ namespace rasm
         return handle;
     }
 
-    const Material &Engine::getMaterial(const MaterialHandle &handle)
+    const Material &Renderer::getMaterial(const MaterialHandle &handle)
     {
         if (isLive(handle))
             return registry.materials[handle.index];

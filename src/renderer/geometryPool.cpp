@@ -57,12 +57,12 @@ namespace rasm
     static_assert(sizeof(MorphDelta) == sizeof(gfx::MorphDelta), "MorphDelta must match the shader's MorphDelta");
 
     // Every mesh lives in these buffers, so its CPU copy can go after upload (P6). Their size is fixed for the
-    // engine's lifetime, so apps size them through EngineConfig. A vertex stays one 64-byte cache line: an attribute
+    // engine's lifetime, so apps size them through RendererConfig. A vertex stays one 64-byte cache line: an attribute
     // that only some meshes have (vertex colors, a skinned vertex's joints and weights, morph targets) is a stream of its
     // own, and a sub-mesh without it costs nothing there. The sub-mesh's row says where its part of the stream starts,
     // or -1. The morph stream is target-major: the Skin pass reads one target for 64 neighbouring vertices at once, and
     // a target whose weight is 0 is not read at all.
-    bool GeometryPool::create(RenderContext &ctx, const EngineConfig &config)
+    bool GeometryPool::create(RenderContext &ctx, const RendererConfig &config)
     {
         if (config.geometryPoolVertices == 0 || config.geometryPoolIndices == 0 || config.geometryPoolColors == 0 || config.geometryPoolSkins == 0 ||
             config.geometryPoolMorphs == 0 || config.geometryPoolSubMeshes == 0 || config.geometryPoolMeshlets == 0)
@@ -135,7 +135,7 @@ namespace rasm
 
     // Takes a range of each stream the sub-mesh uses and a row of the table: all of them or none, so a mesh that does not
     // fit takes nothing. Returns false only when a stream has no free range that large. A range is free when no frame uses
-    // it: Engine::destroyMesh frees them after the GPU is done.
+    // it: Renderer::destroyMesh frees them after the GPU is done.
     bool GeometryPool::allocate(const ObjRaw &raw, MeshGeometry &geometry)
     {
         const size_t lodCount = getLodCount(raw);
@@ -174,7 +174,7 @@ namespace rasm
         if (morph && geometry.meshletCount > 0 && !meshletRanges.allocate(geometry.meshletCount, firstMeshlet))
         {
             if (!meshletsFullLogged)
-                spdlog::warn("The meshlet pool is full ({}/{} meshlets, EngineConfig::geometryPoolMeshlets): a sub-mesh of {} meshlets is drawn whole.", meshletRanges.used(),
+                spdlog::warn("The meshlet pool is full ({}/{} meshlets, RendererConfig::geometryPoolMeshlets): a sub-mesh of {} meshlets is drawn whole.", meshletRanges.used(),
                              meshletRanges.capacity(), geometry.meshletCount);
             meshletsFullLogged = true;
             geometry.meshletCount = 0;
@@ -185,7 +185,7 @@ namespace rasm
         if (morph && meshletDataCount > 0 && !meshletDataRanges.allocate(meshletDataCount, firstMeshletData))
         {
             if (!meshletDataFullLogged)
-                spdlog::warn("The meshlet data pool is full ({}/{} words, EngineConfig::geometryPoolMeshletData): a sub-mesh of {} meshlets is drawn whole.", meshletDataRanges.used(),
+                spdlog::warn("The meshlet data pool is full ({}/{} words, RendererConfig::geometryPoolMeshletData): a sub-mesh of {} meshlets is drawn whole.", meshletDataRanges.used(),
                              meshletDataRanges.capacity(), geometry.meshletCount);
             meshletDataFullLogged = true;
             meshletRanges.free(firstMeshlet, geometry.meshletCount);
@@ -244,7 +244,7 @@ namespace rasm
     void GeometryPool::logFull(size_t subMeshCount) const
     {
         spdlog::error("The geometry pool is full: a mesh of {} sub-meshes does not fit. In use: {}/{} vertices, {}/{} indices, {}/{} colors, {}/{} skins, {}/{} "
-                      "morph deltas, {}/{} meshlets, {}/{} sub-meshes; the largest free ranges are {} vertices and {} indices. EngineConfig::geometryPoolVertices, "
+                      "morph deltas, {}/{} meshlets, {}/{} sub-meshes; the largest free ranges are {} vertices and {} indices. RendererConfig::geometryPoolVertices, "
                       "geometryPoolIndices, geometryPoolColors, geometryPoolSkins, geometryPoolMorphs, geometryPoolMeshlets and geometryPoolSubMeshes set its size.",
                       subMeshCount, vertexRanges.used(), vertexRanges.capacity(), indexRanges.used(), indexRanges.capacity(), colorRanges.used(), colorRanges.capacity(),
                       skinRanges.used(), skinRanges.capacity(), morphRanges.used(), morphRanges.capacity(), meshletRanges.used(), meshletRanges.capacity(), subMeshRows.used(),

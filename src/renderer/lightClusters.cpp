@@ -1,5 +1,5 @@
 #include "renderer/lightClusters.h"
-#include "rasm/engine.h"
+#include "rasm/renderer.h"
 #include "core/utils.h"
 #include "platform/paths.h"
 #include "renderer/uberMaterialTypes.h"
@@ -88,24 +88,24 @@ namespace rasm
         return std::min(static_cast<int32_t>(t * static_cast<float>(CLUSTER_SLICES)), static_cast<int32_t>(CLUSTER_SLICES) - 1);
     }
 
-    bool Engine::createGpuLights()
+    bool Renderer::createGpuLights()
     {
         // A row per light handle, and handles start at 1.
         if (config.maxLights == 0 || config.maxLights == UINT32_MAX)
         {
-            spdlog::error("EngineConfig::maxLights is {}; it must be at least 1 and less than {}.", config.maxLights, UINT32_MAX);
+            spdlog::error("RendererConfig::maxLights is {}; it must be at least 1 and less than {}.", config.maxLights, UINT32_MAX);
             return false;
         }
         if (!gpuLights->lights.create(ctx, "Light Table", sizeof(gfx::Light), config.maxLights + 1))
         {
-            spdlog::error("Failed to create the light table of EngineConfig::maxLights = {} lights ({} B each, one copy per frame slot). Lower maxLights.",
+            spdlog::error("Failed to create the light table of RendererConfig::maxLights = {} lights ({} B each, one copy per frame slot). Lower maxLights.",
                           config.maxLights, sizeof(gfx::Light));
             return false;
         }
         return true;
     }
 
-    void Engine::writeLightRow(LightHandle light)
+    void Renderer::writeLightRow(LightHandle light)
     {
         // Only an engine that failed to start has no table.
         if (light.index >= gpuLights->lights.capacity())
@@ -121,7 +121,7 @@ namespace rasm
         gpuLights->lights.setRow(static_cast<uint32_t>(light.index), &row);
     }
 
-    void Engine::markLightListsDirty(LightHandle light)
+    void Renderer::markLightListsDirty(LightHandle light)
     {
         const uint16_t scenes = light.index < gpuLights->lightScenes.size() ? gpuLights->lightScenes[light.index] : 0;
         for (uint32_t i = 0; i < MAX_SCENES; ++i)
@@ -133,7 +133,7 @@ namespace rasm
 
     // Runs in syncGpuScene, after the slot's fence wait. Only the scenes whose lights changed rebuild their lists, and
     // only changed light rows are uploaded: nothing here walks every light every frame.
-    void Engine::syncGpuLights()
+    void Renderer::syncGpuLights()
     {
         ZoneScoped;
 
@@ -187,7 +187,7 @@ namespace rasm
     }
 
     // A shaded view's clusters, one buffer per frame slot. Without them its pixels shade every light.
-    void Engine::createViewClusters(uint32_t viewIndex)
+    void Renderer::createViewClusters(uint32_t viewIndex)
     {
         ViewClusters &clusters = gpuLights->views[viewIndex];
         clusters = {};
@@ -206,7 +206,7 @@ namespace rasm
         }
     }
 
-    void Engine::releaseViewClusters(uint32_t viewIndex)
+    void Renderer::releaseViewClusters(uint32_t viewIndex)
     {
         ViewClusters &clusters = gpuLights->views[viewIndex];
         for (auto &buffer : clusters.buffers)
@@ -219,7 +219,7 @@ namespace rasm
 
     // The scene's lights in the view's SceneData, and whether its clusters are built this frame. Shadowed lights are
     // already in it: the clusters leave them out, since the view shades them with their shadows.
-    void Engine::writeSceneLights(uint32_t viewIndex, SceneHandle scene, gfx::SceneData &sceneData)
+    void Renderer::writeSceneLights(uint32_t viewIndex, SceneHandle scene, gfx::SceneData &sceneData)
     {
         const auto frame = static_cast<uint32_t>(frameCount);
         ViewClusters &clusters = gpuLights->views[viewIndex];
@@ -268,7 +268,7 @@ namespace rasm
 
     // lightsMain puts each local light's sphere in view space and keeps those in the frustum, tilesMain lists the
     // spheres that touch each screen tile's column, and clustersMain the ones of its tile that touch each cluster's box.
-    void Engine::recordLightClusters(uint32_t viewIndex, uint64_t sceneDataAddress)
+    void Renderer::recordLightClusters(uint32_t viewIndex, uint64_t sceneDataAddress)
     {
         if (!gpuLights->views[viewIndex].active)
             return;

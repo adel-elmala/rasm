@@ -1,5 +1,5 @@
 #include "rasm/render/renderGraph.h"
-#include "rasm/engine.h"
+#include "rasm/renderer.h"
 
 #include "spdlog/spdlog.h"
 #include "tracy/Tracy.hpp"
@@ -150,12 +150,12 @@ namespace rasm
                    (pass.outputRenderTarget.isValid() && transient(pass.outputRenderTarget));
         }
 
-        // An unnamed resource shows its handle as #index:generation. A graph without an engine (the tests) has no names.
-        std::string labelOf(Engine *engine, const ResourceKey &key)
+        // An unnamed resource shows its handle as #index:generation. A graph without a renderer (the tests) has no names.
+        std::string labelOf(Renderer *renderer, const ResourceKey &key)
         {
             std::string kind;
             std::string name;
-            RenderContext *ctx = engine ? &engine->getRenderContext() : nullptr;
+            RenderContext *ctx = renderer ? &renderer->getRenderContext() : nullptr;
             switch (key.kind)
             {
             case ResourceKind::TEXTURE:
@@ -211,10 +211,10 @@ namespace rasm
                 current = mark;
         }
 
-        // A storage render target, which compute passes write. Without an engine (the tests) every target may be one.
-        bool isStorageTarget(Engine *engine, RenderTargetHandle renderTarget)
+        // A storage render target, which compute passes write. Without a renderer (the tests) every target may be one.
+        bool isStorageTarget(Renderer *renderer, RenderTargetHandle renderTarget)
         {
-            return !engine || engine->getRenderContext().getRenderTargetDesc(renderTarget).storage;
+            return !renderer || renderer->getRenderContext().getRenderTargetDesc(renderTarget).storage;
         }
 
         // Passes next to each other in the order share a GPU timer when both are compute passes on one queue with the
@@ -227,14 +227,14 @@ namespace rasm
         // A depth texture is sampleable when it is D32_SFLOAT and occlusion culling is on, its target is depth-only, or
         // its target has a MOTION_FORMAT second color (TextureUsage::SAMPLED_DEPTH_ATTACHMENT, see depthTextureDesc in
         // renderContext.cpp).
-        bool canReadDepth(const Engine *engine, const Pass &pass, const RenderTarget *target)
+        bool canReadDepth(const Renderer *renderer, const Pass &pass, const RenderTarget *target)
         {
-            if (!engine || !target)
+            if (!renderer || !target)
                 return true;
             const bool motion = target->colorCount == 2 && target->colorFormats[1] == MOTION_FORMAT;
-            if ((engine->getConfig().occlusionCulling || target->colorCount == 0 || motion) && target->depthFormat == Format::D32_SFLOAT)
+            if ((renderer->getConfig().occlusionCulling || target->colorCount == 0 || motion) && target->depthFormat == Format::D32_SFLOAT)
                 return true;
-            spdlog::error("Pass '{}' reads a depth texture that can't be sampled: it needs D32_SFLOAT depth, and EngineConfig::occlusionCulling unless its target is depth-only or has a MOTION_FORMAT color; the read is ignored.", pass.name);
+            spdlog::error("Pass '{}' reads a depth texture that can't be sampled: it needs D32_SFLOAT depth, and RendererConfig::occlusionCulling unless its target is depth-only or has a MOTION_FORMAT color; the read is ignored.", pass.name);
             return false;
         }
     }
@@ -271,27 +271,27 @@ namespace rasm
         sceneViews = std::exchange(other.sceneViews, {});
         animationPass = std::exchange(other.animationPass, false);
         inspectPass = std::exchange(other.inspectPass, UINT32_MAX);
-        engine = other.engine;
+        renderer = other.renderer;
         compiled = other.compiled;
         return *this;
     }
 
     void RenderGraph::destroyTargets()
     {
-        if (engine && !transientTargets.empty())
-            engine->getRenderContext().destroyRenderTargets(transientTargets.data(), static_cast<uint32_t>(transientTargets.size()));
-        if (engine && !historyTargets.empty())
-            engine->getRenderContext().destroyRenderTargets(historyTargets.data(), static_cast<uint32_t>(historyTargets.size()));
+        if (renderer && !transientTargets.empty())
+            renderer->getRenderContext().destroyRenderTargets(transientTargets.data(), static_cast<uint32_t>(transientTargets.size()));
+        if (renderer && !historyTargets.empty())
+            renderer->getRenderContext().destroyRenderTargets(historyTargets.data(), static_cast<uint32_t>(historyTargets.size()));
         transientTargets.clear();
         historyTargets.clear();
     }
 
     void RenderGraph::releaseSceneViews()
     {
-        if (engine)
+        if (renderer)
         {
             for (uint32_t view : sceneViews)
-                engine->releaseSceneView(view);
+                renderer->releaseSceneView(view);
         }
         sceneViews.clear();
     }
@@ -316,7 +316,7 @@ namespace rasm
         addPass(std::move(name), setup, std::move(execute));
         auto &pass = passes.back();
         pass.compute = true;
-        if (pass.outputRenderTarget.isValid() && !isStorageTarget(engine, pass.outputRenderTarget))
+        if (pass.outputRenderTarget.isValid() && !isStorageTarget(renderer, pass.outputRenderTarget))
         {
             spdlog::error("Compute pass '{}' can write only a storage render target (RenderTargetDesc::storage); the write is ignored.", pass.name);
             pass.outputRenderTarget = {};
@@ -379,9 +379,9 @@ namespace rasm
                 spdlog::error("Pass '{}' must write either one render target or the swapchain.", pass.name);
                 valid = false;
             }
-            const bool cube = engine && pass.outputRenderTarget.isValid() && engine->getRenderContext().getRenderTargetDesc(pass.outputRenderTarget).cube;
-            // Without an engine (a test) the target's desc is unknown, so any face passes.
-            if (engine && pass.outputFace >= (cube ? CUBE_FACES : 1))
+            const bool cube = renderer && pass.outputRenderTarget.isValid() && renderer->getRenderContext().getRenderTargetDesc(pass.outputRenderTarget).cube;
+            // Without a renderer (a test) the target's desc is unknown, so any face passes.
+            if (renderer && pass.outputFace >= (cube ? CUBE_FACES : 1))
             {
                 spdlog::error("Pass '{}' writes face {}, and its target has {}.", pass.name, pass.outputFace, cube ? CUBE_FACES : 1);
                 valid = false;
@@ -393,7 +393,7 @@ namespace rasm
                 valid = false;
             }
             // A storage target's colors are not attachments, so only compute passes write them.
-            if (!pass.compute && pass.outputRenderTarget.isValid() && engine && engine->getRenderContext().getRenderTargetDesc(pass.outputRenderTarget).storage)
+            if (!pass.compute && pass.outputRenderTarget.isValid() && renderer && renderer->getRenderContext().getRenderTargetDesc(pass.outputRenderTarget).storage)
             {
                 spdlog::error("Pass '{}' draws into a storage render target; only compute passes write one.", pass.name);
                 valid = false;
@@ -541,14 +541,14 @@ namespace rasm
         ZoneScoped;
 
         // The RASM window's Buffers section adds or takes out its Inspect pass before the graph compiles.
-        engine->updateInspectPass(*this);
+        renderer->updateInspectPass(*this);
         if (!compiled)
             compile();
 
-        auto &ctx = engine->getRenderContext();
+        auto &ctx = renderer->getRenderContext();
         const bool placed = compiled && placeTransients();
 
-        if (!engine->beginFrame(camera))
+        if (!renderer->beginFrame(camera))
             return;
 
         std::fill(std::begin(transientUses), std::end(transientUses), 0);
@@ -562,12 +562,12 @@ namespace rasm
             // a compute queue both are the graphics batch, and nothing waits across queues. A batch that can't be
             // opened drops the frame, and endFrame submits nothing.
             // A window with no image this frame (minimized, out of date, removed) draws nothing.
-            if (pass.writesSwapchain && !(engine->isLive(pass.window) && engine->frameOf(pass.window).acquired))
+            if (pass.writesSwapchain && !(renderer->isLive(pass.window) && renderer->frameOf(pass.window).acquired))
                 continue;
-            if (!engine->useQueue(pass.async ? QueueType::COMPUTE : QueueType::GRAPHICS))
+            if (!renderer->useQueue(pass.async ? QueueType::COMPUTE : QueueType::GRAPHICS))
                 break;
-            const QueueType queue = engine->recordingQueue;
-            const auto commandBuffer = engine->getCurrentFrameResources().commandBuffer;
+            const QueueType queue = renderer->recordingQueue;
+            const auto commandBuffer = renderer->getCurrentFrameResources().commandBuffer;
 
             // Barriers are not allowed inside a render pass, so all of them go before the pass begins. beginPass
             // moves the attachments it draws to, and endPass leaves a render target's color SAMPLED for its readers.
@@ -581,12 +581,12 @@ namespace rasm
             {
                 const QueueType other = otherQueue(queue);
                 if (transientUses[static_cast<uint32_t>(other)] > 0)
-                    engine->waitForQueue(queue, other, transientUses[static_cast<uint32_t>(other)]);
+                    renderer->waitForQueue(queue, other, transientUses[static_cast<uint32_t>(other)]);
                 ctx.aliasingBarrier(commandBuffer);
             }
             if (usesTransient(pass, transientTargets))
-                transientUses[static_cast<uint32_t>(queue)] = engine->openBatchValue(queue);
-            if (engine->asyncCompute)
+                transientUses[static_cast<uint32_t>(queue)] = renderer->openBatchValue(queue);
+            if (renderer->asyncCompute)
                 textureWaits(pass, queue);
             PipelineStage before = {};
             PipelineStage after = {};
@@ -595,18 +595,18 @@ namespace rasm
             for (auto texture : pass.inputTextures)
                 ctx.transitionImageLayout(commandBuffer, texture, TextureUsage::SAMPLED);
             for (auto renderTarget : pass.depthRenderTargets)
-                ctx.transitionImageLayout(commandBuffer, engine->getRenderTargetDepthTexture(renderTarget), TextureUsage::SAMPLED);
+                ctx.transitionImageLayout(commandBuffer, renderer->getRenderTargetDepthTexture(renderTarget), TextureUsage::SAMPLED);
             // A drawn target's colors are SAMPLED already (endPass), a storage target's are STORAGE after its writer; so is
             // the previous copy of a storage history target, which the frame before wrote.
             for (auto renderTarget : pass.inputRenderTargets)
             {
                 for (uint32_t i = 0; i < ctx.getRenderTarget(renderTarget).colorCount; ++i)
-                    ctx.transitionImageLayout(commandBuffer, engine->getRenderTargetTexture(renderTarget, i), TextureUsage::SAMPLED);
+                    ctx.transitionImageLayout(commandBuffer, renderer->getRenderTargetTexture(renderTarget, i), TextureUsage::SAMPLED);
             }
             for (auto renderTarget : pass.previousRenderTargets)
             {
                 for (uint32_t i = 0; i < ctx.getRenderTarget(renderTarget).colorCount; ++i)
-                    ctx.transitionImageLayout(commandBuffer, engine->getPreviousRenderTargetTexture(renderTarget, i), TextureUsage::SAMPLED);
+                    ctx.transitionImageLayout(commandBuffer, renderer->getPreviousRenderTargetTexture(renderTarget, i), TextureUsage::SAMPLED);
             }
 
             if (pass.compute)
@@ -618,31 +618,31 @@ namespace rasm
                     const auto transient = std::find(transientTargets.begin(), transientTargets.end(), pass.outputRenderTarget);
                     const bool first = transient != transientTargets.end() && transientFirstPasses[transient - transientTargets.begin()] == position;
                     for (uint32_t i = 0; i < ctx.getRenderTarget(pass.outputRenderTarget).colorCount; ++i)
-                        ctx.transitionImageLayout(commandBuffer, engine->getRenderTargetTexture(pass.outputRenderTarget, i), TextureUsage::STORAGE, first);
+                        ctx.transitionImageLayout(commandBuffer, renderer->getRenderTargetTexture(pass.outputRenderTarget, i), TextureUsage::STORAGE, first);
                 }
                 for (auto texture : pass.outputTextures)
                     ctx.transitionImageLayout(commandBuffer, texture, TextureUsage::STORAGE);
                 if (position == 0 || !sharesTimer(passes[executionOrder[position - 1]], pass))
-                    timer = engine->beginGpuTimer(commandBuffer, pass.timerName.empty() ? pass.name : pass.timerName);
+                    timer = renderer->beginGpuTimer(commandBuffer, pass.timerName.empty() ? pass.name : pass.timerName);
                 pass.execute(ctx);
                 if (position + 1 == passCount || !sharesTimer(pass, passes[executionOrder[position + 1]]))
-                    engine->endGpuTimer(commandBuffer, timer);
+                    renderer->endGpuTimer(commandBuffer, timer);
                 continue;
             }
-            engine->setRenderTarget(pass.outputRenderTarget, pass.outputFace);
-            engine->currentWindow = pass.window;
-            engine->beginPass(pass.name, pass.attachmentOps);
+            renderer->setRenderTarget(pass.outputRenderTarget, pass.outputFace);
+            renderer->currentWindow = pass.window;
+            renderer->beginPass(pass.name, pass.attachmentOps);
             pass.execute(ctx);
-            engine->endPass();
-            engine->resetRenderTarget();
+            renderer->endPass();
+            renderer->resetRenderTarget();
         }
-        engine->endFrame();
+        renderer->endFrame();
 
         // F3 (or the RASM window's button) asks the next graph that runs for its dump, in the compiled order.
-        if (std::exchange(engine->graphDumpRequested, false))
+        if (std::exchange(renderer->graphDumpRequested, false))
         {
-            engine->graphDump = dump();
-            spdlog::info("{}", engine->graphDump);
+            renderer->graphDump = dump();
+            spdlog::info("{}", renderer->graphDump);
         }
     }
 
@@ -666,7 +666,7 @@ namespace rasm
         const auto positions = static_cast<uint32_t>(order.size());
         std::string text = "Render graph: " + std::to_string(passes.size()) + " passes, " +
                            (compiled ? "in the order they run" : "not compiled, in the order they were added") +
-                           (engine ? (engine->asyncCompute ? ", async compute on" : ", async compute off") : "") + "\n";
+                           (renderer ? (renderer->asyncCompute ? ", async compute on" : ", async compute off") : "") + "\n";
         std::vector<LifetimeRow> rows;
         std::unordered_map<ResourceKey, uint32_t, ResourceKeyHash> rowOf;
         for (uint32_t position = 0; position < positions; ++position)
@@ -676,7 +676,7 @@ namespace rasm
             std::vector<std::string> writes;
             auto use = [&](const ResourceKey &key, char mark, const char *note)
             {
-                const std::string label = labelOf(engine, key);
+                const std::string label = labelOf(renderer, key);
                 (mark == 'W' ? writes : reads).push_back(label + note);
                 markUse(rows, rowOf, key, label, position, positions, mark);
             };
@@ -690,7 +690,7 @@ namespace rasm
             }
 
             // Without async compute an async pass runs on the graphics queue, like any compute pass.
-            const bool onComputeQueue = pass.async && engine && engine->asyncCompute;
+            const bool onComputeQueue = pass.async && renderer && renderer->asyncCompute;
             const char *queue = onComputeQueue ? "async compute" : (pass.compute ? "compute" : "graphics");
             text += "\n[" + std::to_string(position) + "] " + pass.name + " (" + queue + ")\n";
             text += "    reads:  " + joined(reads) + "\n";
@@ -699,7 +699,7 @@ namespace rasm
             {
                 const AttachmentOps &ops = pass.attachmentOps;
                 const std::string depth = pass.writesSwapchain ? "no depth" : std::string(ops.loadDepth ? "load depth" : "clear depth") + ", " + (ops.storeDepth ? "store depth" : "discard depth");
-                const bool cube = engine && pass.outputRenderTarget.isValid() && engine->getRenderContext().getRenderTargetDesc(pass.outputRenderTarget).cube;
+                const bool cube = renderer && pass.outputRenderTarget.isValid() && renderer->getRenderContext().getRenderTargetDesc(pass.outputRenderTarget).cube;
                 const std::string face = cube ? ", face " + std::to_string(pass.outputFace) + (ops.firstWrite ? ", first write" : "") : "";
                 text += std::string("    attachments: ") + (ops.loadColor ? "load color" : "clear color") + ", " + depth + face + "\n";
             }
@@ -748,7 +748,7 @@ namespace rasm
     {
         if (transientTargets.empty())
             return true;
-        auto &ctx = engine->getRenderContext();
+        auto &ctx = renderer->getRenderContext();
         const bool missing = std::any_of(transientTargets.begin(), transientTargets.end(), [&ctx](const RenderTargetHandle &target)
                                          {
                                              const RenderTargetAttachments &attachments = ctx.getRenderTarget(target).attachments[0];
@@ -858,8 +858,8 @@ namespace rasm
     {
         const PipelineStage stage = pass.compute ? PipelineStage::COMPUTE : PipelineStage::GRAPHICS;
         const auto q = static_cast<uint32_t>(queue);
-        const uint64_t value = engine ? engine->openBatchValue(queue) : 0;
-        const uint32_t slot = engine ? static_cast<uint32_t>(engine->frameCount) : 0;
+        const uint64_t value = renderer ? renderer->openBatchValue(queue) : 0;
+        const uint32_t slot = renderer ? static_cast<uint32_t>(renderer->frameCount) : 0;
         before = {};
         after = {};
 
@@ -913,8 +913,8 @@ namespace rasm
     {
         const QueueType other = otherQueue(queue);
         const QueueUse &use = access.queues[static_cast<uint32_t>(other)];
-        if (engine && (use.writeStages != PipelineStage{} || (writes && use.readStages != PipelineStage{})))
-            engine->waitForQueue(queue, other, use.value);
+        if (renderer && (use.writeStages != PipelineStage{} || (writes && use.readStages != PipelineStage{})))
+            renderer->waitForQueue(queue, other, use.value);
     }
 
     // Textures order across queues only: within a queue their layout transitions do. Every use counts as a write,
@@ -922,7 +922,7 @@ namespace rasm
     void RenderGraph::textureWaits(const Pass &pass, QueueType queue)
     {
         const PipelineStage stage = pass.compute ? PipelineStage::COMPUTE : PipelineStage::GRAPHICS;
-        const uint64_t value = engine->openBatchValue(queue);
+        const uint64_t value = renderer->openBatchValue(queue);
         auto use = [&](TextureHandle texture)
         {
             if (!texture.isValid())
@@ -933,11 +933,11 @@ namespace rasm
             access.queues[static_cast<uint32_t>(queue)] = {.writeStages = stage, .value = value};
         };
         // A render target's colors and depth, from this frame's slot, or only the colors from the previous one.
-        const uint32_t slot = static_cast<uint32_t>(engine->frameCount);
+        const uint32_t slot = static_cast<uint32_t>(renderer->frameCount);
         const uint32_t previousSlot = (slot + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT;
         auto useRenderTarget = [&](RenderTargetHandle renderTarget, bool previous)
         {
-            const RenderTarget &data = engine->getRenderContext().getRenderTarget(renderTarget);
+            const RenderTarget &data = renderer->getRenderContext().getRenderTarget(renderTarget);
             if (previous && !data.history)
                 return;
             const RenderTargetAttachments &attachments = data.attachments[previous ? previousSlot : slot];
@@ -956,41 +956,41 @@ namespace rasm
         for (auto renderTarget : pass.previousRenderTargets)
             useRenderTarget(renderTarget, true);
         for (auto renderTarget : pass.depthRenderTargets)
-            use(engine->getRenderTargetDepthTexture(renderTarget));
+            use(renderer->getRenderTargetDepthTexture(renderTarget));
         if (pass.outputRenderTarget.isValid())
             useRenderTarget(pass.outputRenderTarget, false);
         if (pass.writesSwapchain)
         {
-            const Engine::WindowFrame &window = engine->frameOf(pass.window);
+            const Renderer::WindowFrame &window = renderer->frameOf(pass.window);
             use(window.swapchain.imageHandles[window.imageIdx]);
         }
     }
 
     TextureHandle RenderGraph::createTexture(const TextureDesc &desc)
     {
-        auto handle = engine->createTexture(desc);
+        auto handle = renderer->createTexture(desc);
         return handle;
     }
 
     BufferHandle RenderGraph::createBuffer(const BufferDesc &desc)
     {
-        auto handle = engine->createBuffer(desc);
+        auto handle = renderer->createBuffer(desc);
         return handle;
     }
 
     // A history target lives across frames, in memory of its own, until the graph is destroyed. So does a readable one,
-    // which Engine::readTexture copies at the end of the frame, after later passes could have reused shared memory. Any
+    // which Renderer::readTexture copies at the end of the frame, after later passes could have reused shared memory. Any
     // other is transient: its memory is the graph's to share.
     RenderTargetHandle RenderGraph::createRenderTarget(const RenderTargetDesc &desc)
     {
         if (desc.history || desc.readable)
         {
-            const RenderTargetHandle handle = engine->createRenderTarget(desc);
+            const RenderTargetHandle handle = renderer->createRenderTarget(desc);
             if (handle.isValid())
                 historyTargets.push_back(handle);
             return handle;
         }
-        auto handle = engine->getRenderContext().createTransientRenderTarget(desc);
+        auto handle = renderer->getRenderContext().createTransientRenderTarget(desc);
         if (handle.isValid())
         {
             transientTargets.push_back(handle);
@@ -1026,7 +1026,7 @@ namespace rasm
 
     void RenderGraph::readPrevious(uint32_t passIdx, RenderTargetHandle h)
     {
-        if (engine && !engine->getRenderContext().getRenderTarget(h).history)
+        if (renderer && !renderer->getRenderContext().getRenderTarget(h).history)
         {
             spdlog::error("Pass '{}' reads the previous frame of a render target created without history; the read is ignored.", passes[passIdx].name);
             return;
@@ -1036,8 +1036,8 @@ namespace rasm
 
     void RenderGraph::readDepth(uint32_t passIdx, RenderTargetHandle h)
     {
-        const RenderTarget *target = engine ? &engine->getRenderContext().getRenderTarget(h) : nullptr;
-        if (canReadDepth(engine, passes[passIdx], target))
+        const RenderTarget *target = renderer ? &renderer->getRenderContext().getRenderTarget(h) : nullptr;
+        if (canReadDepth(renderer, passes[passIdx], target))
             passes[passIdx].depthRenderTargets.push_back(h);
     }
 
@@ -1062,7 +1062,7 @@ namespace rasm
     void RenderGraph::writeSwapchain(uint32_t passIdx, WindowHandle window)
     {
         passes[passIdx].writesSwapchain = true;
-        passes[passIdx].window = !window.isValid() && engine ? engine->getMainWindow().handle : window;
+        passes[passIdx].window = !window.isValid() && renderer ? renderer->getMainWindow().handle : window;
     }
 
     TextureHandle PassBuilder::createTexture(const TextureDesc &desc)

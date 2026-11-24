@@ -1,5 +1,5 @@
 #include "renderer/ui.h"
-#include "rasm/engine.h"
+#include "rasm/renderer.h"
 #include "core/utils.h"
 #include "platform/paths.h"
 #include "platform/uiPlatform.h"
@@ -71,7 +71,7 @@ namespace rasm
         // A texture ImGui asks for, or one that changed: a new texture with all of its pixels in a slot nobody samples,
         // and the old one released. A texture that can't be made keeps the request, so ImGui's old texture stays drawn
         // and the next frame tries again.
-        void updateUiTexture(Engine &engine, RenderContext &ctx, Ui &ui, ImTextureData &texture)
+        void updateUiTexture(Renderer &engine, RenderContext &ctx, Ui &ui, ImTextureData &texture)
         {
             if (texture.Status == ImTextureStatus_WantDestroy)
             {
@@ -145,9 +145,9 @@ namespace rasm
         return capacity;
     }
 
-    // Startup with EngineConfig::ui: the context, its input from the engine's InputEvents and the pipeline. The font atlas is made by the
+    // Startup with RendererConfig::ui: the context, its input from the engine's InputEvents and the pipeline. The font atlas is made by the
     // first frame's texture requests. A failure leaves the UI off and the engine running.
-    bool Engine::createUi()
+    bool Renderer::createUi()
     {
         IMGUI_CHECKVERSION();
         ui = std::make_unique<Ui>();
@@ -181,7 +181,7 @@ namespace rasm
         return true;
     }
 
-    void Engine::destroyUi()
+    void Renderer::destroyUi()
     {
         if (!ui)
             return;
@@ -205,7 +205,7 @@ namespace rasm
 
     // Runs in beginFrame after the slot's fence wait and before syncGpuScene, so what the UI changes reaches this frame.
     // Without the RASM window and a callback nothing is built: no ImGui frame, no events, no draws.
-    void Engine::buildUi(CameraHandle camera)
+    void Renderer::buildUi(CameraHandle camera)
     {
         ui->draws.clear();
         ui->drawn = false;
@@ -307,7 +307,7 @@ namespace rasm
     }
 
     // Records the frame's UI into the open render pass on the swapchain.
-    void Engine::drawUi()
+    void Renderer::drawUi()
     {
         ui->drawn = true;
         if (ui->draws.empty())
@@ -327,7 +327,7 @@ namespace rasm
     }
 
     // The frame's last draw on the swapchain, after the tone map. It keeps the image and has no depth.
-    bool Engine::addUiPass(RenderGraph &graph, const RenderTargetHandle *shown, uint32_t shownCount)
+    bool Renderer::addUiPass(RenderGraph &graph, const RenderTargetHandle *shown, uint32_t shownCount)
     {
         if (!ui)
             return false;
@@ -354,13 +354,13 @@ namespace rasm
     }
 
     // A frame whose graph has no UI pass gets one in endFrame, so the RASM window shows in every application.
-    void Engine::drawUiFallback()
+    void Renderer::drawUiFallback()
     {
         if (!ui || ui->drawn || ui->draws.empty())
             return;
         if (!ui->fallbackLogged)
         {
-            spdlog::debug("No UI pass drew the UI this frame, so endFrame draws it in a render pass of its own; Engine::addUiPass after the tone map saves it.");
+            spdlog::debug("No UI pass drew the UI this frame, so endFrame draws it in a render pass of its own; Renderer::addUiPass after the tone map saves it.");
             ui->fallbackLogged = true;
         }
         const auto renderTarget = currentRenderTarget;
@@ -372,18 +372,18 @@ namespace rasm
         setRenderTarget(renderTarget, face);
     }
 
-    void Engine::setUiCallback(std::function<void()> callback)
+    void Renderer::setUiCallback(std::function<void()> callback)
     {
         if (!ui)
         {
-            spdlog::warn("setUiCallback: the UI is off (EngineConfig::ui), so the callback never runs.");
+            spdlog::warn("setUiCallback: the UI is off (RendererConfig::ui), so the callback never runs.");
             return;
         }
         ui->callback = std::move(callback);
     }
 
     // A loaded texture that no material samples yet gets its bindless slot here, as a material would give it.
-    uint64_t Engine::getUiTexture(const TextureHandle &texture)
+    uint64_t Renderer::getUiTexture(const TextureHandle &texture)
     {
         uint32_t index = getBindlessTextureIndex(texture);
         if (index == UINT32_MAX && texture.isValid() && isLoaded(texture))

@@ -790,7 +790,7 @@ float limit = scene->lodErrorPixels / (pixelsPerUnit * sphere.scale);</code></pr
   <tr><td>Swapping the index range</td><td><code>getLodDraw</code>, <code>getDrawGeometry</code> in <code>shaders/lib/lodSelection.slang</code></td></tr>
   <tr><td>Where it is called</td><td><code>countMain</code> (picks, counts, packs with <code>CULL_LOD_SHIFT</code>) and <code>writeMain</code> (unpacks, writes) in <code>shaders/passes/cull.slang</code></td></tr>
   <tr><td>Sphere and scale</td><td><code>getWorldSphere</code> in <code>shaders/lib/frustumCulling.slang</code></td></tr>
-  <tr><td>Settings on the GPU</td><td><code>SceneData::lodErrorPixels</code>, <code>SceneData::forcedLod</code>, <code>viewportHeight</code> in <code>shaders/lib/core.slang</code>; filled in <code>Engine::prepareSceneView</code>, <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Settings on the GPU</td><td><code>SceneData::lodErrorPixels</code>, <code>SceneData::forcedLod</code>, <code>viewportHeight</code> in <code>shaders/lib/core.slang</code>; filled in <code>Renderer::prepareSceneView</code>, <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Settings for the app</td><td><code>EngineConfig::lodErrorPixels</code>, <code>EngineConfig::forcedLod</code>, <code>EngineConfig::meshLods</code> in <code>include/rasm/types.h</code></td></tr>
   <tr><td>The F2 key</td><td><code>SDLK_F2</code> in <code>src/platform/sdlPlatform.cpp</code></td></tr>
   <tr><td>Stats per level</td><td><code>STATS_LOD_DRAWS</code> in <code>cull.slang</code>; <code>drawsPerLod</code>, <code>trianglesVisibleLod0</code> in <code>src/renderer/frameStats.cpp</code>; shown by <code>src/renderer/statsOverlay.cpp</code></td></tr>

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "rasm/types.h"
+#include "rasm/window.h"
 #include "rasm/render/resource.h"
 
 namespace rasm::rhi
@@ -17,7 +18,23 @@ namespace rasm::rhi
 
 namespace rasm
 {
-    class Engine;
+    // What the device is made for. window is the main window (its native handle makes the device's surface, its pixel
+    // size the first swapchain); headless makes no surface, and every window gets an offscreen swapchain instead.
+    struct RenderContextDesc
+    {
+        Backend                             backend                 = Backend::VULKAN;
+        std::string                         appName                 = {};
+        const Window*                       window                  = nullptr;
+        bool                                headless                = false;
+        bool                                enableValidation        = false;
+        bool                                enableSyncValidation    = false;
+        bool                                enableGpuValidation     = false;
+        bool                                asyncCompute            = false;
+        bool                                transferQueue           = true;
+        bool                                hostImageCopy           = true;
+        bool                                sampledDepth            = true;     // render target depths are SAMPLED and bindless, for Hi-Z culling
+        std::string                         cacheDir                = {};       // the pipeline cache's folder; "": none
+    };
 
     struct FenceValue
     {
@@ -40,9 +57,9 @@ namespace rasm
     class RenderContext
     {
     public:
-                                            RenderContext(Engine* owner);
+                                            RenderContext();
                                             ~RenderContext();
-        bool                                initialize(Backend backend);
+        bool                                initialize(const RenderContextDesc& desc);
         void                                cleanup();
         BufferHandle                        createBuffer(const BufferDesc& desc);
         TextureHandle                       createTexture(const TextureDesc& desc);
@@ -62,13 +79,16 @@ namespace rasm
         void                                clearNewHistory(const CommandBufferHandle& commandBuffer);
         void                                resizeRenderTargets();
         // A fixed-size target at a new size, its texture handles and bindless slots kept. Call it only once the GPU is
-        // done with every frame that used the target (Engine::resizeRenderTarget waits for them).
+        // done with every frame that used the target (Renderer::resizeRenderTarget waits for them).
         bool                                resizeRenderTarget(const RenderTargetHandle& renderTarget, uint32_t width, uint32_t height);
         const RenderTarget&                 getRenderTarget(const RenderTargetHandle& handle);
         RenderTargetDesc                    getRenderTargetDesc(const RenderTargetHandle& handle);
-        // A window's swapchain (an invalid handle: the main window's). Engine::addWindow makes one, removeWindow destroys
-        // it, waiting for the device.
-        bool                                createSwapchain(const WindowHandle& window);
+        // The set every texture slot and storage image is in, made by initialize; pipelines take its layout.
+        DescriptorSetLayoutHandle           getBindlessDescriptorSetLayout() const;
+        DescriptorSetHandle                 getBindlessDescriptorSet() const;
+        // A window's swapchain, from its native handle and pixel size (an invalid handle: the main window's).
+        // Renderer::addWindow makes one, removeWindow destroys it, waiting for the device.
+        bool                                createSwapchain(const Window& window);
         void                                destroySwapchain(const WindowHandle& window);
         std::vector<TextureHandle>          getSwapchainImages(const WindowHandle& window = {});
         Format                              getSwapchainImageFormat(const WindowHandle& window = {});
@@ -114,7 +134,8 @@ namespace rasm
         float                               takeUploadGpuMs();
         bool                                supportsTextureFormat(Format format) const;
         bool                                supportsSampleCount(uint32_t samples) const;
-        [[nodiscard]] SwapchainStatus       recreateSwapchain(const WindowHandle& window = {});
+        // At the window's pixel size now.
+        [[nodiscard]] SwapchainStatus       recreateSwapchain(const Window& window);
         bool                                beginRendering(const CommandBufferHandle& commandBuffer, const TextureHandle* colorAttachments, uint32_t colorCount, TextureHandle depthAttachment, const glm::vec4& clearColor, const AttachmentOps& ops = {}, uint32_t face = 0);
         bool                                endRendering(const CommandBufferHandle& commandBuffer);
         // A pass with nothing to draw into (a window with no image this frame): its draws record nothing until endRendering.
@@ -163,7 +184,6 @@ namespace rasm
         void                                destroyAttachments(RenderTarget& renderTarget);
         bool                                placeGroup(uint32_t group);
 
-        Engine*                 engine  = nullptr;
         std::unique_ptr<Impl>   impl;
     };
 }

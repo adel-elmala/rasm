@@ -951,7 +951,7 @@ namespace rasm::rhi
 
     // Task and mesh shaders, where the GPU has them and its limits hold the meshlet passes: a task workgroup of 64
     // threads (a chunk of 64 meshlets) and a mesh workgroup of 64 threads that writes up to 64 vertices and 124 triangles.
-    // Enabled whenever present, so EngineConfig::meshletPath can change at run time; it costs nothing unused.
+    // Enabled whenever present, so RendererConfig::meshletPath can change at run time; it costs nothing unused.
     bool VulkanDevice::enableMeshShaders()
     {
         if (!physicalDevice.is_extension_present(VK_EXT_MESH_SHADER_EXTENSION_NAME))

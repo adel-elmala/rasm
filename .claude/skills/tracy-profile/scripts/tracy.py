@@ -24,7 +24,7 @@ import time
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 SKILL = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 INSTALL_ROOT = os.path.join(REPO, "build", "tracy-tools")
-DEFAULT_ANCHOR = "rasm::Engine::beginFrame"
+DEFAULT_ANCHOR = "rasm::Renderer::beginFrame"
 PORT = 8086
 
 

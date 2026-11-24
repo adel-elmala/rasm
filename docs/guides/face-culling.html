@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Face Culling · RASM</title>
 <meta name="description" content="How back-face culling works: winding order from the signed area on screen, front-face conventions, double-sided materials, and why mirrored transforms and a Y flip reverse the winding. Then how RASM does it.">
-<meta name="rasm-sources" content="src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/engine.cpp src/renderer/statsOverlay.cpp src/assets/material.cpp include/rasm/types.h include/rasm/material.h include/rasm/engine.h shaders/passes/rasm.slang shaders/lib/pbr.slang src/renderer/uberMaterialTypes.h src/renderer/animation.cpp">
+<meta name="rasm-sources" content="src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/renderer/renderer.cpp src/renderer/statsOverlay.cpp src/assets/material.cpp include/rasm/types.h include/rasm/material.h include/rasm/renderer.h shaders/passes/rasm.slang shaders/lib/pbr.slang src/renderer/uberMaterialTypes.h src/renderer/animation.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -735,9 +735,9 @@
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>The modes</td><td><code>CullMode</code> in <code>include/rasm/types.h</code></td></tr>
-  <tr><td>Choosing a mode</td><td><code>getCullMode</code>, <code>Engine::updateDrawModes</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>Runs in the draw list</td><td><code>Engine::rebuildDrawList</code> in <code>src/renderer/gpuScene.cpp</code>; <code>DrawRun</code> in <code>src/renderer/gpuScene.h</code>; <code>MAX_DRAW_RUNS</code> in <code>src/renderer/uberMaterialTypes.h</code></td></tr>
-  <tr><td>Drawing the runs</td><td><code>Engine::drawSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Choosing a mode</td><td><code>getCullMode</code>, <code>Renderer::updateDrawModes</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Runs in the draw list</td><td><code>Renderer::rebuildDrawList</code> in <code>src/renderer/gpuScene.cpp</code>; <code>DrawRun</code> in <code>src/renderer/gpuScene.h</code>; <code>MAX_DRAW_RUNS</code> in <code>src/renderer/uberMaterialTypes.h</code></td></tr>
+  <tr><td>Drawing the runs</td><td><code>Renderer::drawSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Front face, dynamic cull mode</td><td><code>VulkanDevice::createGraphicsPipeline</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
   <tr><td>Setting the mode, the Y flip</td><td><code>VulkanCommandBuffer::setCullMode</code>, <code>VulkanCommandBuffer::setViewport</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
   <tr><td>Double-sided flag</td><td><code>Material</code> in <code>include/rasm/material.h</code>; read from glTF in <code>src/assets/material.cpp</code></td></tr>

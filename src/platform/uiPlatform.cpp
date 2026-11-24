@@ -129,7 +129,7 @@ namespace rasm
     }
 
     // ImGui lays out in points, the window's size, and draws at the pixels per point, so a HiDPI window gets sharp text
-    // at the same size. The step is the engine's deltaTime (EngineConfig::fixedDeltaTime, else the measured frame
+    // at the same size. The step is the engine's deltaTime (RendererConfig::fixedDeltaTime, else the measured frame
     // time); ImGui needs it above 0, which the first frame's is not.
     void newUiPlatformFrame(const Window &window, float deltaTime)
     {

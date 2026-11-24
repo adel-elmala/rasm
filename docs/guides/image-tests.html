@@ -335,7 +335,7 @@
   <tr><td><samp>skinning</samp>, <samp>morph</samp>, <samp>node_anim</samp></td><td>CesiumMan and two foxes at 1.25 s; MorphStressTest at fixed weights; AnimatedCube at 0.3 s</td></tr>
   <tr><td><samp>many_lights</samp>, <samp>local_shadows</samp></td><td>1024 point lights in clusters; a spot light's shadow map and a point light's cube</td></tr>
   <tr><td><samp>ktx2</samp>, <samp>materials</samp></td><td>FlightHelmet's Basis textures; texture transforms, vertex colors, a quantized mesh</td></tr>
-  <tr><td><samp>views</samp>, <samp>views_window2</samp></td><td><code>Engine::render</code> with four views: split screen, a map in the corner without bloom, and a security camera drawn into a view texture first, which a screen in the scene shows (<a href="multiple-views.html">Many views of one scene</a>), and the security camera in a second, offscreen window (<code>Engine::addWindow</code>), which <samp>views_window2</samp> reads (<code>readFrame(window)</code>); their steady frames, like every test's, make no heap allocation</td></tr>
+  <tr><td><samp>views</samp>, <samp>views_window2</samp></td><td><code>Renderer::render</code> with four views: split screen, a map in the corner without bloom, and a security camera drawn into a view texture first, which a screen in the scene shows (<a href="multiple-views.html">Many views of one scene</a>), and the security camera in a second, offscreen window (<code>Renderer::addWindow</code>), which <samp>views_window2</samp> reads (<code>readFrame(window)</code>); their steady frames, like every test's, make no heap allocation</td></tr>
   <tr><td><samp>debug_normals</samp></td><td>the normals debug view</td></tr>
   <tr><td><samp>determinism</samp></td><td>the helmet again in the same process: it must equal <samp>helmet_ibl</samp> exactly (T = 0, F = 0)</td></tr>
   <tr><td><samp>meshlets</samp>, <samp>meshlet_sponza</samp></td><td>the helmet and Sponza drawn by <a href="meshlets.html">meshlets</a> on the vertex-pulling path: they must equal <samp>helmet_ibl</samp> and <samp>sponza</samp> exactly (T = 0, F = 0)</td></tr>
@@ -356,7 +356,7 @@
 <div class="table-wrap">
 <table>
   <tr><th>This page</th><th>RASM</th></tr>
-  <tr><td>A fixed scene and time</td><td>Each test waits for its loads (<code>Engine::waitForLoads</code>), renders <code>ImageTest::frames</code> frames (4, or 16 for TAA) with <code>setAnimationTime</code> at its fixed time, then <code>readFrame</code>. No UI, no stats.</td></tr>
+  <tr><td>A fixed scene and time</td><td>Each test waits for its loads (<code>Renderer::waitForLoads</code>), renders <code>ImageTest::frames</code> frames (4, or 16 for TAA) with <code>setAnimationTime</code> at its fixed time, then <code>readFrame</code>. No UI, no stats.</td></tr>
   <tr><td>The compare</td><td><code>compareImages</code>: the largest channel difference per pixel; red over T, orange at or under T, gray where equal. <code>readPng</code> reads the golden.</td></tr>
   <tr><td>A software rasterizer, pinned</td><td>lavapipe from mesa-dist-win 26.3.0, SHA-256 checked, with <code class="lang-text">LP_NATIVE_VECTOR_WIDTH=256</code>. The thread count did not change a pixel (<code class="lang-text">LP_NUM_THREADS=1</code> against the default gave the same PNG), so it is not pinned.</td></tr>
   <tr><td>An asset that can't be stored</td><td>Sponza (CRYENGINE Limited License) is fetched from a pinned commit of KhronosGroup/glTF-Sample-Assets into <samp>build/test-assets/</samp>.</td></tr>

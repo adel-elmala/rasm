@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bloom · RASM</title>
 <meta name="description" content="How bloom works: light brighter than white spreads like it does in a real lens. A blur at many sizes made cheaply with a chain of half-size images, the 13-tap down filter and the Karis average, the tent up filter, mixing it in without a threshold so the light's total stays the same, small images, pitfalls. Then how RASM does it with compute passes that write images in the render graph.">
-<meta name="rasm-sources" content="src/renderer/bloom.cpp src/renderer/bloom.h shaders/passes/bloom.slang shaders/passes/toneMap.slang src/renderer/toneMap.cpp src/renderer/renderer.cpp src/renderer/renderGraph.cpp src/rhi/renderContext.cpp include/rasm/engine.h include/rasm/camera.h include/rasm/types.h include/rasm/render/resource.h src/scene/camera.cpp src/renderer/uberMaterialTypes.h examples/09_gltf_materials/main.cpp tests/bloomTests.cpp">
+<meta name="rasm-sources" content="src/renderer/bloom.cpp src/renderer/bloom.h shaders/passes/bloom.slang shaders/passes/toneMap.slang src/renderer/toneMap.cpp src/renderer/viewGraph.cpp src/renderer/renderGraph.cpp src/rhi/renderContext.cpp include/rasm/renderer.h include/rasm/camera.h include/rasm/types.h include/rasm/render/resource.h src/scene/camera.cpp src/renderer/uberMaterialTypes.h examples/09_gltf_materials/main.cpp tests/bloomTests.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -369,11 +369,11 @@
 
 <h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
 
-<p><code>Engine::addBloomPasses</code> adds the chain to a <a href="render-graphs.html">render graph</a> as 11 compute passes, after the scene passes. Each pass reads its inputs by sampling and writes one image, a <b>storage render target</b>; the graph does the barriers. The tone map then mixes the result in. With <code>Engine::render</code>, one line turns it on, before the engine is made:</p>
+<p><code>Renderer::addBloomPasses</code> adds the chain to a <a href="render-graphs.html">render graph</a> as 11 compute passes, after the scene passes. Each pass reads its inputs by sampling and writes one image, a <b>storage render target</b>; the graph does the barriers. The tone map then mixes the result in. With <code>Renderer::render</code>, one line turns it on, before the engine is made:</p>
 
 <pre><code>config.bloom = true;</code></pre>
 
-<p>The chain reads one value per pixel. <code>Engine::render</code> gives it the view's HDR target after anti-aliasing (<code>EngineConfig::antiAliasing</code>): <code>scene_hdr</code> without it, its MSAA resolve <samp>scene_hdr_resolved</samp> (<a href="msaa.html#in-rasm">MSAA</a>), or the TAA result <samp>scene_hdr_taa</samp> (<a href="taa.html">TAA</a>). The tone map reads the same target. A multisampled source logs an error and adds no pass: resolve it first with <code>Engine::addMsaaResolvePass</code>.</p>
+<p>The chain reads one value per pixel. <code>Renderer::render</code> gives it the view's HDR target after anti-aliasing (<code>EngineConfig::antiAliasing</code>): <code>scene_hdr</code> without it, its MSAA resolve <samp>scene_hdr_resolved</samp> (<a href="msaa.html#in-rasm">MSAA</a>), or the TAA result <samp>scene_hdr_taa</samp> (<a href="taa.html">TAA</a>). The tone map reads the same target. A multisampled source logs an error and adds no pass: resolve it first with <code>Renderer::addMsaaResolvePass</code>.</p>
 
 <div class="legend">
   <span><i class="gpu"></i>compute passes of the graph</span>
@@ -457,7 +457,7 @@
 </table>
 </div>
 
-<p>A storage target is still a render target: it is sized from the window (<code>swapchainScale</code>) and resized with it, its memory is laid out with the graph's other transient targets, and its colors are in the bindless set for sampling. Each color also has a <b>storage slot</b> in binding 1 of the bindless set for the target's life, which <code>Engine::getRenderTargetStorageIndex</code> returns. The shader writes it as <code>gStorageImages[pc.target][uint3(id.xy, 0)]</code>.</p>
+<p>A storage target is still a render target: it is sized from the window (<code>swapchainScale</code>) and resized with it, its memory is laid out with the graph's other transient targets, and its colors are in the bindless set for sampling. Each color also has a <b>storage slot</b> in binding 1 of the bindless set for the target's life, which <code>Renderer::getRenderTargetStorageIndex</code> returns. The shader writes it as <code>gStorageImages[pc.target][uint3(id.xy, 0)]</code>.</p>
 
 <div class="callout">
   <strong>Write-only, read by sampling</strong>
@@ -473,9 +473,9 @@
   <tr><td>Small images</td><td>stop at the last level of at least 2 × 2</td><td>The same, with <code>BLOOM_MIN_LEVEL_SIZE</code> (2): every frame, <code>Bloom Down 1</code> reads the levels' sizes and <code>getBloomLevelCount</code> picks the levels that run, so a resize needs no new graph; the other passes read its count. The passes of the other levels dispatch nothing.</td></tr>
   <tr><td>Down filter</td><td>13 taps, Karis on the first step</td><td>The same: <code>firstDownsampleMain</code> (Karis) and <code>downsampleMain</code> in <code>shaders/passes/bloom.slang</code>.</td></tr>
   <tr><td>Up filter</td><td>tent, add, divide by the levels</td><td>The same: <code>upsampleMain</code>; <code>Bloom Up 1</code> multiplies by 1 / levels (<code>BloomPushConstants::scale</code>).</td></tr>
-  <tr><td>Mix</td><td>lerp before the curve, no threshold</td><td><code>Tone Map</code> samples the bloom (half size, bilinear) and draws <code>lerp(scene, bloom, Camera::bloomStrength)</code> before the exposure and AgX. Strength 0.04 by default, from 0 to 1 (<code>Engine::setCameraBloomStrength</code>).</td></tr>
+  <tr><td>Mix</td><td>lerp before the curve, no threshold</td><td><code>Tone Map</code> samples the bloom (half size, bilinear) and draws <code>lerp(scene, bloom, Camera::bloomStrength)</code> before the exposure and AgX. Strength 0.04 by default, from 0 to 1 (<code>Renderer::setCameraBloomStrength</code>).</td></tr>
   <tr><td>Format</td><td>a float format</td><td><code>SCENE_COLOR_FORMAT</code> (RGBA16F) for every level: a storage format on every target backend.</td></tr>
-  <tr><td>Turning it off</td><td>–</td><td>Strength 0, or while a debug view is shown (<code>Engine::setDebugView</code>): the passes dispatch nothing (the graph still records their barriers) and the tone map does not sample (<code>Engine::bloomRuns</code>, one rule for both). To drop the passes and their memory, build the graph without them. <code>EngineConfig::bloom</code> is off by default, so an engine update does not change how an application looks.</td></tr>
+  <tr><td>Turning it off</td><td>–</td><td>Strength 0, or while a debug view is shown (<code>Renderer::setDebugView</code>): the passes dispatch nothing (the graph still records their barriers) and the tone map does not sample (<code>Renderer::bloomRuns</code>, one rule for both). To drop the passes and their memory, build the graph without them. <code>EngineConfig::bloom</code> is off by default, so an engine update does not change how an application looks.</td></tr>
 </table>
 </div>
 
@@ -495,13 +495,13 @@
 <div class="table-wrap">
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
-  <tr><td>The passes</td><td><code>Engine::addBloomPasses</code> in <code>src/renderer/bloom.cpp</code>: the 11 targets and passes, <code>Pass::timerName</code> = <samp>Bloom</samp>; <code>Engine::createBloomPipelines</code>, made on the first pass that runs, retried on a shader error</td></tr>
+  <tr><td>The passes</td><td><code>Renderer::addBloomPasses</code> in <code>src/renderer/bloom.cpp</code>: the 11 targets and passes, <code>Pass::timerName</code> = <samp>Bloom</samp>; <code>Renderer::createBloomPipelines</code>, made on the first pass that runs, retried on a shader error</td></tr>
   <tr><td>The level rule</td><td><code>getBloomLevelSize</code>, <code>getBloomLevelCount</code>, <code>BLOOM_LEVELS</code>, <code>BLOOM_MIN_LEVEL_SIZE</code> in <code>src/renderer/bloom.h</code>; tested in <code>tests/bloomTests.cpp</code></td></tr>
   <tr><td>The filters</td><td><code>shaders/passes/bloom.slang</code>: <code>downsample</code>, <code>getKarisWeight</code>, <code>upsampleMain</code>; push constants <code>gfx::BloomPushConstants</code> in <code>src/renderer/uberMaterialTypes.h</code>, checked by <code>validateRasmStructs</code></td></tr>
-  <tr><td>The mix</td><td><code>fragMain</code> in <code>shaders/passes/toneMap.slang</code>; <code>Engine::addToneMapPass</code> in <code>src/renderer/toneMap.cpp</code> (its <code>bloom</code> argument)</td></tr>
+  <tr><td>The mix</td><td><code>fragMain</code> in <code>shaders/passes/toneMap.slang</code>; <code>Renderer::addToneMapPass</code> in <code>src/renderer/toneMap.cpp</code> (its <code>bloom</code> argument)</td></tr>
   <tr><td>Storage targets</td><td><code>RenderTargetDesc::storage</code> in <code>include/rasm/render/resource.h</code>; slots in <code>RenderContext::createRenderTarget</code> and <code>createTransientRenderTarget</code>, <code>src/rhi/renderContext.cpp</code>; the transitions in <code>RenderGraph::execute</code>, <code>src/renderer/renderGraph.cpp</code></td></tr>
-  <tr><td>Strength</td><td><code>Camera::bloomStrength</code> in <code>include/rasm/camera.h</code>; <code>Engine::setCameraBloomStrength</code>, <code>Engine::getCameraBloomStrength</code> in <code>src/scene/camera.cpp</code></td></tr>
-  <tr><td>Examples</td><td><code>examples/09_gltf_materials/main.cpp</code>: bloom on, <samp>--no-bloom</samp> to compare, <samp>--bloom-strength</samp> for <code>setCameraBloomStrength</code>; <code>Renderer::render</code> with <code>EngineConfig::bloom</code></td></tr>
+  <tr><td>Strength</td><td><code>Camera::bloomStrength</code> in <code>include/rasm/camera.h</code>; <code>Renderer::setCameraBloomStrength</code>, <code>Renderer::getCameraBloomStrength</code> in <code>src/scene/camera.cpp</code></td></tr>
+  <tr><td>Examples</td><td><code>examples/09_gltf_materials/main.cpp</code>: bloom on, <samp>--no-bloom</samp> to compare, <samp>--bloom-strength</samp> for <code>setCameraBloomStrength</code>; <code>ViewGraph::render</code> with <code>EngineConfig::bloom</code></td></tr>
 </table>
 </div>
 

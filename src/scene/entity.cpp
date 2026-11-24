@@ -1,4 +1,4 @@
-#include "rasm/engine.h"
+#include "rasm/renderer.h"
 #include "rasm/entity.h"
 #include "renderer/gpuScene.h"
 
@@ -6,7 +6,7 @@
 
 namespace rasm
 {
-    EntityHandle Engine::createEntity(const std::string &name, MeshHandle mesh, MaterialHandle material, Transform transform)
+    EntityHandle Renderer::createEntity(const std::string &name, MeshHandle mesh, MaterialHandle material, Transform transform)
     {
         if (mesh.isValid() && !isLive(mesh))
         {
@@ -51,7 +51,7 @@ namespace rasm
         return id;
     }
 
-    void Engine::updateTransform(EntityHandle entity, Transform transform)
+    void Renderer::updateTransform(EntityHandle entity, Transform transform)
     {
         if (!isLive(entity))
         {
@@ -65,7 +65,7 @@ namespace rasm
 
     // Its rows and animation ranges are free for another entity at once (releaseEntityRows), and the draw lists of its
     // scenes are rebuilt without it; they drop it from Scene::entities then.
-    void Engine::destroyEntity(EntityHandle entity)
+    void Renderer::destroyEntity(EntityHandle entity)
     {
         if (!isLive(entity))
         {
@@ -95,7 +95,7 @@ namespace rasm
         registry.entityHandles.release(entity.index, entity.generation);
     }
 
-    Transform Engine::getTransform(EntityHandle entity)
+    Transform Renderer::getTransform(EntityHandle entity)
     {
         if (!isLive(entity))
         {

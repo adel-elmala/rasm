@@ -1,5 +1,5 @@
 #include "renderer/animation.h"
-#include "rasm/engine.h"
+#include "rasm/renderer.h"
 #include "assets/morphImport.h"
 #include "core/utils.h"
 #include "platform/paths.h"
@@ -294,28 +294,28 @@ namespace rasm
         return bytes;
     }
 
-    bool Engine::createGpuAnimation()
+    bool Renderer::createGpuAnimation()
     {
         if (config.maxAnimatedEntities == 0 || config.maxAnimatedEntities > MAX_ANIMATE_GROUPS)
         {
-            spdlog::error("EngineConfig::maxAnimatedEntities is {}; it must be 1 to {}.", config.maxAnimatedEntities, MAX_ANIMATE_GROUPS);
+            spdlog::error("RendererConfig::maxAnimatedEntities is {}; it must be 1 to {}.", config.maxAnimatedEntities, MAX_ANIMATE_GROUPS);
             return false;
         }
         if (config.maxMorphWeights == 0)
         {
-            spdlog::error("EngineConfig::maxMorphWeights is 0; it must be at least 1.");
+            spdlog::error("RendererConfig::maxMorphWeights is 0; it must be at least 1.");
             return false;
         }
         GpuAnimation &animation = *gpuAnimation;
         if (!animation.entities.create(ctx, "Animated Entity Table", sizeof(gfx::AnimatedEntity), config.maxAnimatedEntities))
         {
-            spdlog::error("Failed to create the animated entity table of EngineConfig::maxAnimatedEntities = {} rows ({} B each, one copy per frame slot).",
+            spdlog::error("Failed to create the animated entity table of RendererConfig::maxAnimatedEntities = {} rows ({} B each, one copy per frame slot).",
                           config.maxAnimatedEntities, sizeof(gfx::AnimatedEntity));
             return false;
         }
         if (!animation.weightOverrides.create(ctx, "Morph Weight Override Table", sizeof(float), config.maxMorphWeights))
         {
-            spdlog::error("Failed to create the morph weight table of EngineConfig::maxMorphWeights = {} rows (4 B each, one copy per frame slot).", config.maxMorphWeights);
+            spdlog::error("Failed to create the morph weight table of RendererConfig::maxMorphWeights = {} rows (4 B each, one copy per frame slot).", config.maxMorphWeights);
             return false;
         }
         animation.pool = ctx.createBuffer({.name = "Animation Pool", .usage = BufferUsage::STORAGE, .size = std::max<uint64_t>(config.animationPoolBytes, 16)});
@@ -344,24 +344,24 @@ namespace rasm
         }
         if (!created)
         {
-            spdlog::error("Failed to create the animation buffers (EngineConfig::animationPoolBytes = {}).", config.animationPoolBytes);
+            spdlog::error("Failed to create the animation buffers (RendererConfig::animationPoolBytes = {}).", config.animationPoolBytes);
             return false;
         }
         return true;
     }
 
     // A mesh's animations take one range of the pool, freed with the mesh once the GPU is done with it.
-    uint64_t Engine::getMeshAnimationBytes(const GLTFRaw &raw) const
+    uint64_t Renderer::getMeshAnimationBytes(const GLTFRaw &raw) const
     {
         return getAnimationPoolBytes(raw.animation, countAnimatedSubMeshes(raw), countJointSpheres(raw), countMorphRadii(raw));
     }
 
-    uint64_t Engine::getAnimationPoolUsed() const
+    uint64_t Renderer::getAnimationPoolUsed() const
     {
         return gpuAnimation->poolRanges.used();
     }
 
-    bool Engine::uploadMeshAnimation(MeshHandle mesh, const GLTFRaw &raw)
+    bool Renderer::uploadMeshAnimation(MeshHandle mesh, const GLTFRaw &raw)
     {
         const uint64_t bytes = getMeshAnimationBytes(raw);
         if (bytes == 0)
@@ -407,7 +407,7 @@ namespace rasm
         // Every range is a multiple of 16 B, so every offset is too.
         if (!animation.poolRanges.allocate(bytes, info.poolOffset))
         {
-            spdlog::error("The animation pool has no free range of {} B ({}/{} B in use, the largest free range {} B). EngineConfig::animationPoolBytes sets its size.", bytes,
+            spdlog::error("The animation pool has no free range of {} B ({}/{} B in use, the largest free range {} B). RendererConfig::animationPoolBytes sets its size.", bytes,
                           animation.poolRanges.used(), animation.poolRanges.capacity(), animation.poolRanges.largestFree());
             return false;
         }
@@ -426,7 +426,7 @@ namespace rasm
         return true;
     }
 
-    void Engine::setAnimationTime(double seconds)
+    void Renderer::setAnimationTime(double seconds)
     {
         if (!std::isfinite(seconds))
         {
@@ -436,7 +436,7 @@ namespace rasm
         gpuAnimation->clock = seconds;
     }
 
-    void Engine::playAnimation(EntityHandle entity, const AnimationPlay &play)
+    void Renderer::playAnimation(EntityHandle entity, const AnimationPlay &play)
     {
         if (!isLive(entity))
         {
@@ -476,7 +476,7 @@ namespace rasm
         startAnimation(entity, play, gpuScene->syncCount + 1);
     }
 
-    void Engine::stopAnimation(EntityHandle entity)
+    void Renderer::stopAnimation(EntityHandle entity)
     {
         if (!isLive(entity))
         {
@@ -500,14 +500,14 @@ namespace rasm
         writeInstanceRows(entity, false);
     }
 
-    std::vector<AnimationClip> Engine::getAnimations(MeshHandle mesh) const
+    std::vector<AnimationClip> Renderer::getAnimations(MeshHandle mesh) const
     {
         if (!isLive(mesh))
             return {};
         return registry.meshes[mesh.index].animations;
     }
 
-    int32_t Engine::findAnimation(MeshHandle mesh, const std::string &name) const
+    int32_t Renderer::findAnimation(MeshHandle mesh, const std::string &name) const
     {
         if (!isLive(mesh))
             return -1;
@@ -523,7 +523,7 @@ namespace rasm
     // Weights past count follow the clip. A mesh that still loads keeps them until the entity has its row, and then
     // drops those past its weight count. The first call is a jump, with no motion from the frame before; the next ones
     // move the vertices smoothly, as a clip does.
-    void Engine::setMorphWeights(EntityHandle entity, const float *weights, uint32_t count)
+    void Renderer::setMorphWeights(EntityHandle entity, const float *weights, uint32_t count)
     {
         if (!isLive(entity))
         {
@@ -573,7 +573,7 @@ namespace rasm
         }
     }
 
-    void Engine::clearMorphWeights(EntityHandle entity)
+    void Renderer::clearMorphWeights(EntityHandle entity)
     {
         if (!isLive(entity))
         {
@@ -592,7 +592,7 @@ namespace rasm
         writeAnimationRow(entity);
     }
 
-    std::vector<std::string> Engine::getMorphTargetNames(MeshHandle mesh) const
+    std::vector<std::string> Renderer::getMorphTargetNames(MeshHandle mesh) const
     {
         if (!isLive(mesh))
             return {};
@@ -600,7 +600,7 @@ namespace rasm
     }
 
     // One row per weight of the entity: setMorphWeights's value, or NaN, where the Animate pass takes the clip's.
-    void Engine::writeMorphWeightRows(EntityHandle entity)
+    void Renderer::writeMorphWeightRows(EntityHandle entity)
     {
         GpuAnimation &animation = *gpuAnimation;
         const EntityAnimation &state = animation.entityStates[entity.index];
@@ -613,7 +613,7 @@ namespace rasm
     }
 
     // From syncGpuScene, once the entity has its instance rows: the frame of this sync draws the pose first.
-    void Engine::startPendingAnimation(EntityHandle entity)
+    void Renderer::startPendingAnimation(EntityHandle entity)
     {
         if (gpuAnimation->entityStates.size() <= entity.index || !gpuAnimation->entityStates[entity.index].pending)
             return;
@@ -623,7 +623,7 @@ namespace rasm
     }
 
     // A play takes the entity's row on its first pose (takeAnimationRow).
-    void Engine::startAnimation(EntityHandle entity, const AnimationPlay &play, uint32_t firstSync)
+    void Renderer::startAnimation(EntityHandle entity, const AnimationPlay &play, uint32_t firstSync)
     {
         GpuAnimation &animation = *gpuAnimation;
         const MeshHandle mesh = registry.entities[entity.index].mesh;
@@ -645,7 +645,7 @@ namespace rasm
 
     // From syncGpuScene, once the entity has its instance rows: an entity of a skinned or morphed mesh that does not start
     // a play is posed by its skeleton's rest pose and its rest weights (glTF), so it takes its row now.
-    void Engine::poseAtRest(EntityHandle entity, uint32_t firstSync)
+    void Renderer::poseAtRest(EntityHandle entity, uint32_t firstSync)
     {
         GpuAnimation &animation = *gpuAnimation;
         const MeshHandle mesh = registry.entities[entity.index].mesh;
@@ -663,7 +663,7 @@ namespace rasm
 
     // The entity's first pose takes a table row and its ranges of transforms, pose nodes, joints, skinned vertices and
     // morph weights, which it keeps until it or its mesh is destroyed (releaseEntityAnimation).
-    bool Engine::takeAnimationRow(EntityHandle entity, uint32_t firstSync)
+    bool Renderer::takeAnimationRow(EntityHandle entity, uint32_t firstSync)
     {
         GpuAnimation &animation = *gpuAnimation;
         EntityAnimation &state = animation.entityStates[entity.index];
@@ -678,14 +678,14 @@ namespace rasm
             }
             if (animation.entityRows >= animation.entities.capacity() && animation.freeRows.empty())
             {
-                spdlog::error("The animated entity table is full: entity {} cannot be posed ({} rows in use). EngineConfig::maxAnimatedEntities sets its size.",
+                spdlog::error("The animated entity table is full: entity {} cannot be posed ({} rows in use). RendererConfig::maxAnimatedEntities sets its size.",
                               entity.index, animation.entities.capacity());
                 return false;
             }
             uint64_t firstWeight = 0;
             if (!animation.weightRanges.allocate(info.weightCount, firstWeight))
             {
-                spdlog::error("The morph weight table is full: entity {} cannot be posed ({} weights, {}/{} in use, the largest free range {}). EngineConfig::maxMorphWeights sets its size.",
+                spdlog::error("The morph weight table is full: entity {} cannot be posed ({} weights, {}/{} in use, the largest free range {}). RendererConfig::maxMorphWeights sets its size.",
                               entity.index, info.weightCount, animation.weightRanges.used(), animation.weightRanges.capacity(), animation.weightRanges.largestFree());
                 return false;
             }
@@ -740,7 +740,7 @@ namespace rasm
     // The row is written as stopped (clip -1), which the Animate and Skin passes skip, and goes on the free list with the
     // ranges. Both are reused at once: every frame slot has its own copy of the table, and the passes write the ranges
     // anew each frame for the entity that holds them, whose first frame has no motion from the frame before (resetSync).
-    void Engine::releaseEntityAnimation(EntityHandle entity)
+    void Renderer::releaseEntityAnimation(EntityHandle entity)
     {
         GpuAnimation &animation = *gpuAnimation;
         if (entity.index >= animation.entityStates.size())
@@ -762,7 +762,7 @@ namespace rasm
     }
 
     // The pool range holds data the GPU reads in frames still in flight, so it waits for them.
-    void Engine::releaseMeshAnimation(MeshHandle mesh)
+    void Renderer::releaseMeshAnimation(MeshHandle mesh)
     {
         GpuAnimation &animation = *gpuAnimation;
         if (mesh.index >= animation.meshes.size())
@@ -782,7 +782,7 @@ namespace rasm
     // slot's as the frame before. Their old rows are gone, so every playing entity starts its motion again in
     // firstSync. A new skinned vertex is not cleared: the Skin pass writes it in the frame its entity starts, before any
     // view reads it, and while the pipelines do not compile its transform holds zeros, which draws it as a point.
-    bool Engine::growAnimationBuffers(uint32_t transformCount, uint32_t poseCount, uint32_t jointCount, uint32_t skinnedCount, uint32_t firstSync)
+    bool Renderer::growAnimationBuffers(uint32_t transformCount, uint32_t poseCount, uint32_t jointCount, uint32_t skinnedCount, uint32_t firstSync)
     {
         GpuAnimation &animation = *gpuAnimation;
         if (transformCount <= animation.transformCapacity && poseCount <= animation.poseCapacity && jointCount <= animation.jointCapacity &&
@@ -853,14 +853,14 @@ namespace rasm
 
     // The draw list's cull mode follows the rest pose only, so such a sub-mesh is drawn without face culling: depth
     // still shows a closed mesh's outside, whichever way its matrix turns the winding.
-    bool Engine::animationCanMirror(MeshHandle mesh, uint32_t subMesh) const
+    bool Renderer::animationCanMirror(MeshHandle mesh, uint32_t subMesh) const
     {
         const GpuAnimation &animation = *gpuAnimation;
         return mesh.index < animation.meshes.size() && subMesh < animation.meshes[mesh.index].subMeshMirrors.size() &&
                animation.meshes[mesh.index].subMeshMirrors[subMesh] != 0;
     }
 
-    int32_t Engine::getAnimationRow(EntityHandle entity, uint32_t subMesh) const
+    int32_t Renderer::getAnimationRow(EntityHandle entity, uint32_t subMesh) const
     {
         const GpuAnimation &animation = *gpuAnimation;
         if (animation.entityStates.size() <= entity.index || (!animation.entityStates[entity.index].playing && !animation.entityStates[entity.index].rest))
@@ -870,7 +870,7 @@ namespace rasm
         return transform < 0 ? -1 : static_cast<int32_t>(state.firstTransform) + transform;
     }
 
-    void Engine::writeAnimationRow(EntityHandle entity)
+    void Renderer::writeAnimationRow(EntityHandle entity)
     {
         const GpuAnimation &animation = *gpuAnimation;
         if (animation.entityStates.size() <= entity.index || animation.entityStates[entity.index].row == UINT32_MAX)
@@ -908,7 +908,7 @@ namespace rasm
     }
 
     // The clock's base moves when the clock leaves its window, and the playing rows get their phase at the new base.
-    void Engine::syncGpuAnimation()
+    void Renderer::syncGpuAnimation()
     {
         GpuAnimation &animation = *gpuAnimation;
         const double base = getAnimationBase(animation.base, animation.clock);
@@ -925,7 +925,7 @@ namespace rasm
         animation.weightOverrides.upload(ctx, static_cast<uint32_t>(frameCount));
     }
 
-    void Engine::addAnimationPass(RenderGraph &graph)
+    void Renderer::addAnimationPass(RenderGraph &graph)
     {
         if (graph.animationPass)
             return;
@@ -958,7 +958,7 @@ namespace rasm
     // A shader error logs and retries the next frame; until then the animated parts are not drawn right. Once an
     // entity with skinned vertices plays, the Skin pipeline is made here too, so the Animate pass runs only when the
     // Skin pass can follow it.
-    void Engine::recordAnimation()
+    void Renderer::recordAnimation()
     {
         ZoneScoped;
         GpuAnimation &animation = *gpuAnimation;
@@ -1005,7 +1005,7 @@ namespace rasm
 
     // Runs after this frame's Animate pass, with its frame data: x is the entity's row, y its next 64 skinned vertices,
     // which morph targets move first and joints then.
-    void Engine::recordSkinning()
+    void Renderer::recordSkinning()
     {
         ZoneScoped;
         const GpuAnimation &animation = *gpuAnimation;

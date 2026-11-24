@@ -19,7 +19,7 @@ namespace rasm::rhi
         return createImages(desc.width, desc.height);
     }
 
-    // Readable, so Engine::readFrame can copy any frame, and with a UNORM view, which the UI draws through as on a window.
+    // Readable, so Renderer::readFrame can copy any frame, and with a UNORM view, which the UI draws through as on a window.
     bool OffscreenSwapchain::createImages(uint32_t width, uint32_t height)
     {
         for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)

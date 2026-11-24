@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Render Graphs · RASM</title>
 <meta name="description" content="How render graphs (frame graphs) work: passes that declare reads and writes, the dependency graph, Kahn's topological sort, culling unused passes, automatic barriers and layout transitions, transient resources and memory aliasing, async compute, and what RASM's render graph does and does not do.">
-<meta name="rasm-sources" content="include/rasm/render/renderGraph.h src/renderer/renderGraph.cpp src/rhi/memoryAliasing.h src/rhi/memoryAliasing.cpp tests/memoryAliasingTests.cpp src/rhi/textureStates.h src/rhi/textureStates.cpp src/rhi/renderContext.cpp src/engine.cpp tests/renderGraphTests.cpp tests/textureStatesTests.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp src/renderer/renderer.cpp src/renderer/inspector.cpp">
+<meta name="rasm-sources" content="include/rasm/render/renderGraph.h src/renderer/renderGraph.cpp src/rhi/memoryAliasing.h src/rhi/memoryAliasing.cpp tests/memoryAliasingTests.cpp src/rhi/textureStates.h src/rhi/textureStates.cpp src/rhi/renderContext.cpp src/renderer/renderer.cpp tests/renderGraphTests.cpp tests/textureStatesTests.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp src/renderer/viewGraph.cpp src/renderer/inspector.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -889,7 +889,7 @@ if order has fewer passes than the graph: there is a cycle</code></pre>
 
 <h2 id="in-rasm"><span class="n">11</span>In RASM</h2>
 
-<p>RASM's render graph is a small one. It sorts passes with Kahn's algorithm, records the texture transitions and buffer barriers that their declarations need, picks each pass's load ops, and places transient render targets in shared memory. It does not cull passes. A pass added with <code>RenderGraph::addAsyncComputePass</code> runs on a compute queue when the engine has one (<a href="#rasm-queues">across queues</a>, below). The graph is <b>retained</b>: you add the passes once, and <code>RenderGraph::execute</code> runs them every frame. The scene is graph passes too: <code>Engine::addScenePasses</code> adds them to any graph, and <code>Engine::render</code> runs a graph that holds only them (<code>Renderer::render</code>).</p>
+<p>RASM's render graph is a small one. It sorts passes with Kahn's algorithm, records the texture transitions and buffer barriers that their declarations need, picks each pass's load ops, and places transient render targets in shared memory. It does not cull passes. A pass added with <code>RenderGraph::addAsyncComputePass</code> runs on a compute queue when the engine has one (<a href="#rasm-queues">across queues</a>, below). The graph is <b>retained</b>: you add the passes once, and <code>RenderGraph::execute</code> runs them every frame. The scene is graph passes too: <code>Renderer::addScenePasses</code> adds them to any graph, and <code>Renderer::render</code> runs a graph that holds only them (<code>ViewGraph::render</code>).</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 250" role="img" aria-label="Example 01: the scene passes draw the scene into offscreen_rt. Trail reads it and last frame's copy of trail_rt, and draws this frame's copy. Background reads trail_rt and draws composite_rt. Present samples composite_rt and draws to the swapchain. offscreen_rt and composite_rt are transient and share memory. Example 04: Animate is a compute pass that writes Particle Positions, Draw reads them and draws to the swapchain, with a barrier before Animate and one before Draw.">
@@ -1011,7 +1011,7 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
     <text x="600" y="264" class="mid title">endFrame()</text>
     <text x="600" y="280" class="mid small">overlay, → PRESENT_SRC, submit batches</text>
   </svg>
-  <figcaption>Each pass records into the open batch of its queue (<code>Engine::useQueue</code>): an async compute pass into the compute batch when there is a compute queue, every other pass into the graphics batch. Without a compute queue the frame is one command buffer (see <a href="frame-loop.html">the frame loop</a>). Each pass gets a <a href="gpu-timing.html">GPU timer</a> named after it; compute passes in a row with one <code>Pass::timerName</code> share one, as the 11 passes of <a href="bloom.html">bloom</a> share <code>Bloom</code>.</figcaption>
+  <figcaption>Each pass records into the open batch of its queue (<code>Renderer::useQueue</code>): an async compute pass into the compute batch when there is a compute queue, every other pass into the graphics batch. Without a compute queue the frame is one command buffer (see <a href="frame-loop.html">the frame loop</a>). Each pass gets a <a href="gpu-timing.html">GPU timer</a> named after it; compute passes in a row with one <code>Pass::timerName</code> share one, as the 11 passes of <a href="bloom.html">bloom</a> share <code>Bloom</code>.</figcaption>
 </figure>
 
 <h3>Barriers in RASM</h3>
@@ -1032,7 +1032,7 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
   <tr><td><code>write(buffer)</code></td><td>one <code>memoryBarrier</code>: the last write and the reads since → this pass's stage</td><td>if any pass used it before</td></tr>
   <tr><td><code>write(texture)</code></td><td><code>transitionImageLayout(texture, STORAGE)</code> in a compute pass</td><td>a graphics pass's texture write only orders passes</td></tr>
   <tr><td><code>read</code> or <code>write</code> of a per-frame buffer array</td><td>like <code>read(buffer)</code> or <code>write(buffer)</code>, for the buffer of this frame's slot only</td><td>every slot's buffer still orders the passes</td></tr>
-  <tr><td>a resource the other queue used</td><td>no barrier: a semaphore wait at the start of this queue's batch (<code>Engine::waitForQueue</code>)</td><td>with async compute only (<a href="#rasm-queues">below</a>)</td></tr>
+  <tr><td>a resource the other queue used</td><td>no barrier: a semaphore wait at the start of this queue's batch (<code>Renderer::waitForQueue</code>)</td><td>with async compute only (<a href="#rasm-queues">below</a>)</td></tr>
 </table>
 </div>
 
@@ -1153,10 +1153,10 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
 <div class="table-wrap">
 <table>
   <tr><th>This pass</th><th>The other queue</th><th>The graph</th></tr>
-  <tr><td>reads a buffer</td><td>wrote it</td><td><code>Engine::waitForQueue</code> with the value of that queue's batch</td></tr>
+  <tr><td>reads a buffer</td><td>wrote it</td><td><code>Renderer::waitForQueue</code> with the value of that queue's batch</td></tr>
   <tr><td>writes a buffer</td><td>wrote it or read it</td><td>the same</td></tr>
   <tr><td>uses a texture or a render target</td><td>used it</td><td>the same: every texture use counts as a write, since the first use on a queue is often a layout transition</td></tr>
-  <tr><td>is a transient target's first pass</td><td>used a transient target this frame</td><td><code>Engine::waitForQueue</code> with the value of its last such pass (<code>transientUses</code>): the memory may have held what it used</td></tr>
+  <tr><td>is a transient target's first pass</td><td>used a transient target this frame</td><td><code>Renderer::waitForQueue</code> with the value of its last such pass (<code>transientUses</code>): the memory may have held what it used</td></tr>
   <tr><td>uses an undeclared resource</td><td>–</td><td>nothing, like no barrier</td></tr>
 </table>
 </div>
@@ -1239,7 +1239,7 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
 
 <p>A render target has up to <code>MAX_COLOR_ATTACHMENTS</code> color textures, which one pass draws together (<a href="multiple-render-targets.html">Multiple render targets</a>), and one depth texture. It has <b>one</b> set of attachments that every frame draws. That is safe with <a href="frames-in-flight.html">frames in flight</a>: on one queue, frame N+1's passes run after frame N's, and the first use in frame N+1 is a barrier that waits for frame N's reads. A use on the other queue waits for frame N's use instead, since the state carries over between frames.</p>
 
-<p>A target created with <code>history = true</code> is RASM's <b>imported history resource</b>: it holds one set per frame slot. A pass draws this frame's copy and reads the copy the previous frame drew with <code>PassBuilder::readPrevious</code>. That read adds no edge, so a pass may read the old copy of the target it draws to. <code>RenderContext::createRenderTarget</code> marks each new copy, and <code>Engine::beginFrame</code> clears it to <code>clearColor</code> before any pass, so the first frame does not read garbage, in a graph or not (more in <a href="temporal-history.html#in-rasm">History buffers</a>). Look the textures up in <code>execute</code>, every frame:</p>
+<p>A target created with <code>history = true</code> is RASM's <b>imported history resource</b>: it holds one set per frame slot. A pass draws this frame's copy and reads the copy the previous frame drew with <code>PassBuilder::readPrevious</code>. That read adds no edge, so a pass may read the old copy of the target it draws to. <code>RenderContext::createRenderTarget</code> marks each new copy, and <code>Renderer::beginFrame</code> clears it to <code>clearColor</code> before any pass, so the first frame does not read garbage, in a graph or not (more in <a href="temporal-history.html#in-rasm">History buffers</a>). Look the textures up in <code>execute</code>, every frame:</p>
 
 <pre><code>auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
 auto current = engine.getBindlessTextureIndex(engine.getRenderTargetTexture(trailHandle));
@@ -1263,7 +1263,7 @@ auto previous = engine.getBindlessTextureIndex(engine.getPreviousRenderTargetTex
   <tr><td>Size</td><td>often relative to the screen</td><td><code>RenderTargetDesc::swapchainScale</code>; a resize rebuilds the target, or places its group again, with the device idle.</td></tr>
   <tr><td>Load and store</td><td>per pass</td><td>Per pass, but inferred: passes on one target run in add order, the first clears it, later ones load color and depth, and the one before a load or a depth read stores its depth (<code>RenderGraph::assignAttachmentOps</code>). There is no way to ask for a load on the first pass, or for <samp>DONT_CARE</samp>.</td></tr>
   <tr><td>Async compute</td><td>a second queue, a semaphore on each edge between queues</td><td>Opt-in (<code>EngineConfig::asyncCompute</code>), and only for passes added with <code>addAsyncComputePass</code>. An edge between queues is a wait at the start of a batch. Resources are shared by both queues, with no ownership transfers. The loads' copies run on a third queue, outside the graph (<a href="transfer-queue.html">transfer queues</a>).</td></tr>
-  <tr><td>Everything in the graph</td><td>the whole frame</td><td>Almost: the scene's culling and draws are graph passes (<code>addScenePasses</code>), and <code>Engine::render</code> runs a graph. Only <code>endFrame</code> records outside it: the empty <samp>Clear</samp> pass, the stats overlay and the barrier to <code>PRESENT_SRC</code>.</td></tr>
+  <tr><td>Everything in the graph</td><td>the whole frame</td><td>Almost: the scene's culling and draws are graph passes (<code>addScenePasses</code>), and <code>Renderer::render</code> runs a graph. Only <code>endFrame</code> records outside it: the empty <samp>Clear</samp> pass, the stats overlay and the barrier to <code>PRESENT_SRC</code>.</td></tr>
 </table>
 </div>
 
@@ -1275,13 +1275,13 @@ auto previous = engine.getBindlessTextureIndex(engine.getPreviousRenderTargetTex
   <tr><td>Graph, pass, builder types</td><td><code>RenderGraph</code>, <code>Pass</code>, <code>PassBuilder</code> in <code>include/rasm/render/renderGraph.h</code></td></tr>
   <tr><td>Add, sort, run</td><td><code>RenderGraph::addPass</code>, <code>RenderGraph::addComputePass</code>, <code>RenderGraph::addAsyncComputePass</code>, <code>RenderGraph::compile</code>, <code>RenderGraph::execute</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
   <tr><td>Buffer barriers, waits across queues</td><td><code>RenderGraph::bufferBarrier</code>, <code>RenderGraph::waitForOtherQueue</code>, <code>RenderGraph::textureWaits</code> in <code>src/renderer/renderGraph.cpp</code>; <code>Access</code>, <code>QueueUse</code> in <code>include/rasm/render/renderGraph.h</code></td></tr>
-  <tr><td>Batches</td><td><code>Engine::useQueue</code>, <code>Engine::waitForQueue</code>, <code>Engine::closeBatch</code>, <code>Engine::submitBatches</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Batches</td><td><code>Renderer::useQueue</code>, <code>Renderer::waitForQueue</code>, <code>Renderer::closeBatch</code>, <code>Renderer::submitBatches</code> in <code>src/renderer/renderer.cpp</code></td></tr>
   <tr><td>Texture state</td><td><code>rhi::TextureStates</code> in <code>src/rhi/textureStates.cpp</code>; <code>RenderContext::transitionImageLayout</code>, <code>RenderContext::discardRecording</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
-  <tr><td>The scene passes, and the graph of <code>Engine::render</code></td><td><code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code>; <code>Renderer::render</code> in <code>src/renderer/renderer.cpp</code>, one graph for a list of views (<a href="multiple-views.html">Many views of one scene</a>)</td></tr>
-  <tr><td>Pass begin and end, frame end</td><td><code>Engine::beginPass</code>, <code>Engine::endPass</code>, <code>Engine::endFrame</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>The scene passes, and the graph of <code>Renderer::render</code></td><td><code>Renderer::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code>; <code>ViewGraph::render</code> in <code>src/renderer/viewGraph.cpp</code>, one graph for a list of views (<a href="multiple-views.html">Many views of one scene</a>)</td></tr>
+  <tr><td>Pass begin and end, frame end</td><td><code>Renderer::beginPass</code>, <code>Renderer::endPass</code>, <code>Renderer::endFrame</code> in <code>src/renderer/renderer.cpp</code></td></tr>
   <tr><td>Transient layout</td><td><code>RenderGraph::transientLifetimes</code> in <code>src/renderer/renderGraph.cpp</code>; <code>RenderContext::placeTransientRenderTargets</code>, <code>RenderContext::destroyRenderTargets</code>, <code>RenderContext::aliasingBarrier</code> in <code>src/rhi/renderContext.cpp</code>; <code>rhi::packAliased</code> in <code>src/rhi/memoryAliasing.cpp</code>; <code>VulkanDevice::createPlacedTexture</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
-  <tr><td>Render targets and history</td><td><code>RenderContext::createRenderTarget</code> in <code>src/rhi/renderContext.cpp</code>; <code>Engine::getRenderTargetTexture</code>, <code>Engine::getPreviousRenderTargetTexture</code>, <code>Engine::getRenderTargetDepthTexture</code> in <code>src/engine.cpp</code>; <code>RenderContext::clearNewHistory</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
-  <tr><td>Debugging</td><td><code>RenderGraph::dump</code> in <code>src/renderer/renderGraph.cpp</code>: the passes in run order and a lifetime table. <kbd>F3</kbd> logs it for the graph of <code>Engine::render</code> (<code>Engine::pollEvents</code> sets <code>graphDumpRequested</code>, <code>Engine::render</code> hands it to <code>Renderer::render</code>)</td></tr>
+  <tr><td>Render targets and history</td><td><code>RenderContext::createRenderTarget</code> in <code>src/rhi/renderContext.cpp</code>; <code>Renderer::getRenderTargetTexture</code>, <code>Renderer::getPreviousRenderTargetTexture</code>, <code>Renderer::getRenderTargetDepthTexture</code> in <code>src/renderer/renderer.cpp</code>; <code>RenderContext::clearNewHistory</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>Debugging</td><td><code>RenderGraph::dump</code> in <code>src/renderer/renderGraph.cpp</code>: the passes in run order and a lifetime table. <kbd>F3</kbd> logs it for the graph of <code>Renderer::render</code> (<code>Renderer::pollEvents</code> sets <code>graphDumpRequested</code>, <code>Renderer::render</code> hands it to <code>ViewGraph::render</code>)</td></tr>
   <tr><td>Tests</td><td><code>tests/renderGraphTests.cpp</code> (sort, checks, buffer barriers, per-frame buffers, lifetimes, the dump), <code>tests/memoryAliasingTests.cpp</code>, <code>tests/textureStatesTests.cpp</code></td></tr>
   <tr><td>Examples</td><td><code>examples/01_render_graph/main.cpp</code>, <code>examples/04_compute/main.cpp</code>, <code>examples/20_views/main.cpp</code> (the graph of a list of views)</td></tr>
 </table>

@@ -12,7 +12,7 @@ options: --preset x64-debug  --examples 00_hello_scene,02_gltf  --frame 60  --to
 
 Output goes to build/verify/<preset>/ (screens/, diffs/, logs/, baseline/).
 Every example runs headless (--headless, examples/exampleArgs.h): no window, it renders N frames and
-writes frame N through Engine::readFrame. --windowed runs them in a window under GFXReconstruct
+writes frame N through Renderer::readFrame. --windowed runs them in a window under GFXReconstruct
 (Vulkan SDK) instead: its layer quits the app after frame N, and gfxrecon-replay renders that frame
 to PNG; --keep-captures keeps those captures for frame-debug.
 """
@@ -211,7 +211,7 @@ def message_key(text):
 
 # Examples that only render without a window: they present nothing for GFXR to count, so even with --windowed
 # they run headless.
-HEADLESS_EXAMPLES = ("16_headless",)
+HEADLESS_EXAMPLES = ("16_headless", "21_renderer")
 # Every example gets these (exampleArgs.h): a fixed time step, and every load in place before frame 1 (C16).
 RUN_ARGS = ["--fixed-step", "--wait-for-loads"]
 

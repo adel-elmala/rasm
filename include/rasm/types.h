@@ -66,7 +66,7 @@ namespace rasm
         NativeWindowType type                = NativeWindowType::NONE;
         void*            display             = nullptr;  // WINDOWS: HINSTANCE (nullptr: the executable's); X11: Display*; XCB: xcb_connection_t*; WAYLAND: wl_display*
         void*            window              = nullptr;  // WINDOWS: HWND; X11: Window; XCB: xcb_window_t; WAYLAND: wl_surface*; METAL: CAMetalLayer*
-        uint32_t         pixelWidth          = 0;        // the drawable's size in pixels; 0: EngineConfig::windowWidth x windowHeight
+        uint32_t         pixelWidth          = 0;        // the drawable's size in pixels; 0: the config's windowWidth x windowHeight
         uint32_t         pixelHeight         = 0;
         float            contentScale        = 1.0f;     // the display's scale setting (1.5 at 150 %), which sizes the UI
     };
@@ -100,6 +100,11 @@ namespace rasm
         EAC_R11G11_UNORM,
         R16G16_SFLOAT,          // the last value: VulkanDevice::FORMAT_COUNT
     };
+
+    // The scene passes' HDR color, and a scene target's optional second color: each pixel's motion since the last frame,
+    // in UV units, for addTaaPass.
+    constexpr Format    SCENE_COLOR_FORMAT          = Format::R16G16B16A16_SFLOAT;
+    constexpr Format    MOTION_FORMAT               = Format::R16G16_SFLOAT;
 
     enum class ShaderType
     {
@@ -144,8 +149,8 @@ namespace rasm
         FAILURE
     };
 
-    // How Engine::render smooths edges. MSAA_nX draws the scene with n samples per pixel and resolves them in a pass of
-    // the graph (Engine::addMsaaResolvePass). TAA jitters the view and blends the frames (Engine::addTaaPass).
+    // How Renderer::render smooths edges. MSAA_nX draws the scene with n samples per pixel and resolves them in a pass of
+    // the graph (Renderer::addMsaaResolvePass). TAA jitters the view and blends the frames (Renderer::addTaaPass).
     enum class AntiAliasing
     {
         NONE,
@@ -176,7 +181,7 @@ namespace rasm
         AUTO,
     };
 
-    // What the RASM window's Buffers section shows of a frame resource (Engine::setInspection).
+    // What the RASM window's Buffers section shows of a frame resource (Renderer::setInspection).
     enum class InspectKind
     {
         COLOR,              // a color of a render target: a motion color as a direction and length, any other one with exposure
@@ -202,6 +207,56 @@ namespace rasm
         EntityHandle entity                  = {};       // the GPU tables' rows of this entity
     };
 
+    // What a Renderer is made with: EngineConfig without the platform, which a Renderer does not choose (its windows are
+    // the application's, or offscreen images). A field added here goes into EngineConfig too, and into toRendererConfig.
+    struct RendererConfig
+    {
+        std::string  appName                 = {};
+        int          windowWidth             = 0;        // in points, which mouse positions use; headless: the offscreen swapchain's size in pixels
+        int          windowHeight            = 0;
+        NativeWindow nativeWindow            = {};       // the application's window to draw into; type NONE: offscreen images (headless)
+        bool         enableValidation        = false;
+        bool         enableSyncValidation    = false;
+        bool         enableGpuValidation     = false;
+        Backend      preferredBackend        = Backend::VULKAN;
+        std::string  assetRoot               = {};
+        std::string  shaderDir               = {};
+        std::string  cacheDir                = "cache";  // compiled shaders and the pipeline cache, beside the executable (an absolute path as is); "": no disk caches
+        uint32_t     geometryPoolVertices    = 1u << 21; // 64 B each: 128 MiB
+        uint32_t     geometryPoolColors      = 1u << 20; // 4 B each: 4 MiB
+        uint32_t     geometryPoolSkins       = 1u << 20; // a skinned vertex's joints and weights, 16 B each: 16 MiB
+        uint32_t     geometryPoolMorphs      = 1u << 20; // a morph target's change to a vertex, 24 B each: 24 MiB
+        uint32_t     geometryPoolIndices     = 1u << 24; // 4 B each: 64 MiB
+        uint32_t     geometryPoolSubMeshes   = 1u << 14; // 200 B each
+        uint32_t     geometryPoolMeshlets    = 1u << 17; // a meshlet's bounds and index range, 48 B each: 6 MiB
+        uint32_t     geometryPoolMeshletData = 1u << 23; // with mesh shaders: meshlets' vertices and triangles, 4 B each (32 MiB, about 50k meshlets)
+        uint32_t     maxInstances            = 1u << 16; // 164 B each, twice (one copy per frame slot)
+        uint32_t     maxLights               = 1u << 14; // 56 B each, twice
+        uint32_t     maxMaterials            = 1u << 12; // materials alive at once, 220 B each, twice
+        uint32_t     maxAnimatedEntities     = 1u << 14; // entities that play a clip, 120 B each, twice
+        uint32_t     animationPoolBytes      = 16u << 20; // the nodes, key times and values of every loaded animation
+        uint32_t     maxMorphWeights         = 1u << 16; // the morph weights of every posed entity, 4 B each, four times
+        uint32_t     loadThreads             = 0;        // workers that read and decode loads; 0: the hardware's threads minus one for the main thread (at least 1). A game with threads of its own sets fewer
+        uint64_t     loadMemoryBudget        = 512ull << 20; // decoded loads in memory at once (in jobs, or waiting for upload); a load that would pass it waits in the queue
+        bool         showStats               = false;
+        float        fixedDeltaTime          = 0.0f;     // seconds per frame for the cameras, the UI and the stats' refresh; 0: the measured frame time
+        bool         occlusionCulling        = true;     // two-pass Hi-Z culling in the scene passes; false keeps frustum culling only
+        bool         meshLods                = true;
+        float        lodErrorPixels          = 1.0f;
+        int32_t      forcedLod               = -1;
+        MeshletPath  meshletPath             = MeshletPath::AUTO; // Renderer::setMeshletPath; AUTO: MESH_SHADERS where the GPU has them, else OFF
+        uint32_t     maxViewMeshlets         = 1u << 16; // VERTEX_PULLING: meshlet draws per scene view and frame slot, 20 B each (1.3 MiB); past it a mesh is drawn whole
+        bool         asyncCompute            = false;
+        bool         transferQueue           = true;     // loads copy their data on a queue family that only copies (the copy engine), where the GPU has one; else on the graphics queue
+        bool         clusteredLighting       = true;     // false: every pixel shades every light of the scene
+        bool         hostImageCopy           = true;     // where the device copies a format on the host into video memory at full speed; false: every texture comes from the staging ring
+        bool         bloom                   = false;    // Renderer::render adds the bloom passes (Camera::bloomStrength)
+        bool         ui                      = false;    // Dear ImGui (CMake RASM_IMGUI): the RASM window on F1 and Renderer::setUiCallback
+        AntiAliasing antiAliasing            = AntiAliasing::NONE; // Renderer::render's scene target: MSAA draws it with several samples per pixel
+    };
+
+    // What an Engine is made with: the RendererConfig fields, flat (designated initializers), and the platform. A
+    // renderer field added here goes into RendererConfig too, and into toRendererConfig.
     struct EngineConfig
     {
         std::string  appName                 = {};
@@ -238,16 +293,65 @@ namespace rasm
         bool         meshLods                = true;
         float        lodErrorPixels          = 1.0f;
         int32_t      forcedLod               = -1;
-        MeshletPath  meshletPath             = MeshletPath::AUTO; // Engine::setMeshletPath; AUTO: MESH_SHADERS where the GPU has them, else OFF
+        MeshletPath  meshletPath             = MeshletPath::AUTO; // Renderer::setMeshletPath; AUTO: MESH_SHADERS where the GPU has them, else OFF
         uint32_t     maxViewMeshlets         = 1u << 16; // VERTEX_PULLING: meshlet draws per scene view and frame slot, 20 B each (1.3 MiB); past it a mesh is drawn whole
         bool         asyncCompute            = false;
         bool         transferQueue           = true;     // loads copy their data on a queue family that only copies (the copy engine), where the GPU has one; else on the graphics queue
         bool         clusteredLighting       = true;     // false: every pixel shades every light of the scene
         bool         hostImageCopy           = true;     // where the device copies a format on the host into video memory at full speed; false: every texture comes from the staging ring
-        bool         bloom                   = false;    // Engine::render adds the bloom passes (Camera::bloomStrength)
-        bool         ui                      = false;    // Dear ImGui (CMake RASM_IMGUI): the RASM window on F1 and Engine::setUiCallback
-        AntiAliasing antiAliasing            = AntiAliasing::NONE; // Engine::render's scene target: MSAA draws it with several samples per pixel
+        bool         bloom                   = false;    // Renderer::render adds the bloom passes (Camera::bloomStrength)
+        bool         ui                      = false;    // Dear ImGui (CMake RASM_IMGUI): the RASM window on F1 and Renderer::setUiCallback
+        AntiAliasing antiAliasing            = AntiAliasing::NONE; // Renderer::render's scene target: MSAA draws it with several samples per pixel
     };
+
+    // The renderer's part of an EngineConfig. tests/rendererConfigTests.cpp checks that every field arrives.
+    inline RendererConfig toRendererConfig(const EngineConfig& config)
+    {
+        return {
+            .appName                 = config.appName,
+            .windowWidth             = config.windowWidth,
+            .windowHeight            = config.windowHeight,
+            .nativeWindow            = config.nativeWindow,
+            .enableValidation        = config.enableValidation,
+            .enableSyncValidation    = config.enableSyncValidation,
+            .enableGpuValidation     = config.enableGpuValidation,
+            .preferredBackend        = config.preferredBackend,
+            .assetRoot               = config.assetRoot,
+            .shaderDir               = config.shaderDir,
+            .cacheDir                = config.cacheDir,
+            .geometryPoolVertices    = config.geometryPoolVertices,
+            .geometryPoolColors      = config.geometryPoolColors,
+            .geometryPoolSkins       = config.geometryPoolSkins,
+            .geometryPoolMorphs      = config.geometryPoolMorphs,
+            .geometryPoolIndices     = config.geometryPoolIndices,
+            .geometryPoolSubMeshes   = config.geometryPoolSubMeshes,
+            .geometryPoolMeshlets    = config.geometryPoolMeshlets,
+            .geometryPoolMeshletData = config.geometryPoolMeshletData,
+            .maxInstances            = config.maxInstances,
+            .maxLights               = config.maxLights,
+            .maxMaterials            = config.maxMaterials,
+            .maxAnimatedEntities     = config.maxAnimatedEntities,
+            .animationPoolBytes      = config.animationPoolBytes,
+            .maxMorphWeights         = config.maxMorphWeights,
+            .loadThreads             = config.loadThreads,
+            .loadMemoryBudget        = config.loadMemoryBudget,
+            .showStats               = config.showStats,
+            .fixedDeltaTime          = config.fixedDeltaTime,
+            .occlusionCulling        = config.occlusionCulling,
+            .meshLods                = config.meshLods,
+            .lodErrorPixels          = config.lodErrorPixels,
+            .forcedLod               = config.forcedLod,
+            .meshletPath             = config.meshletPath,
+            .maxViewMeshlets         = config.maxViewMeshlets,
+            .asyncCompute            = config.asyncCompute,
+            .transferQueue           = config.transferQueue,
+            .clusteredLighting       = config.clusteredLighting,
+            .hostImageCopy           = config.hostImageCopy,
+            .bloom                   = config.bloom,
+            .ui                      = config.ui,
+            .antiAliasing            = config.antiAliasing,
+        };
+    }
 
     // What the engine-wide pools hold now: live objects, and the used part of each pool. A destroyed object's share comes
     // back once the GPU has finished the frames that may use it, so a streaming application stays flat.

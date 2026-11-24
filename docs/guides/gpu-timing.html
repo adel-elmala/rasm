@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GPU Timing · RASM</title>
 <meta name="description" content="How to measure a frame: CPU time and GPU time, timestamp queries, reading results frames later without stalling, per-pass timers, GPU counters written with atomics and read back, 64-bit counts from 32-bit atomics, smoothing, memory numbers, and how RASM does it.">
-<meta name="rasm-sources" content="src/renderer/frameStats.cpp src/renderer/frameStats.h include/rasm/engine.h src/engine.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/renderGraph.cpp shaders/passes/cull.slang src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/platform/sdlPlatform.cpp src/platform/platform.h include/rasm/render/resource.h">
+<meta name="rasm-sources" content="src/renderer/frameStats.cpp src/renderer/frameStats.h include/rasm/renderer.h src/renderer/renderer.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/renderGraph.cpp shaders/passes/cull.slang src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/platform/sdlPlatform.cpp src/platform/platform.h include/rasm/render/resource.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -687,7 +687,7 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
 
 <h2 id="in-rasm"><span class="n">11</span>In RASM</h2>
 
-<p>RASM collects one set of numbers per frame into a public <code>FrameStats</code>. The application reads it with <code>Engine::getFrameStats</code>; the <a href="bitmap-text.html#in-rasm">stats overlay</a> draws it on screen. Everything follows sections 3 to 9: timestamp pairs per pass, one query pool and one counter buffer per frame slot, read after the slot's fence.</p>
+<p>RASM collects one set of numbers per frame into a public <code>FrameStats</code>. The application reads it with <code>Renderer::getFrameStats</code>; the <a href="bitmap-text.html#in-rasm">stats overlay</a> draws it on screen. Everything follows sections 3 to 9: timestamp pairs per pass, one query pool and one counter buffer per frame slot, read after the slot's fence.</p>
 
 <figure class="diagram">
   <svg viewBox="0 -12 760 312" role="img" aria-label="Five sources fill FrameStats: frameTime gives cpuFrameMs, the timestamp query pool of the slot gives gpuFrameMs and gpuTimers, drawTotals gives draws and triangles, the cull stats buffer gives the visible counts and LOD counts, and queryVRAMStats gives memory. getFrameStats and the overlay read FrameStats.">
@@ -749,7 +749,7 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
   <tr><td>The frame on the graphics queue</td><td><code>beginFrame</code>, ended in <code>endFrame</code></td><td>"Frame" (always timer 0, not listed)</td></tr>
   <tr><td>Each graphics pass</td><td><code>beginPass</code> / <code>endPass</code></td><td>the pass name: "Scene 1" and "Scene 2" of the scene passes ("Scene" without occlusion culling), "Tone Map", "Clear" for the empty swapchain pass, or your graph pass's name</td></tr>
   <tr><td>Each render graph compute pass, on its queue</td><td><code>RenderGraph::execute</code></td><td>the pass name: "Cull 1", "Hi-Z" and "Cull 2" of the scene passes ("Cull" without occlusion culling), or your graph pass's name</td></tr>
-  <tr><td>The application's own work</td><td><code>Engine::beginGpuTimer</code> / <code>Engine::endGpuTimer</code></td><td>its own name</td></tr>
+  <tr><td>The application's own work</td><td><code>Renderer::beginGpuTimer</code> / <code>Renderer::endGpuTimer</code></td><td>its own name</td></tr>
 </table>
 </div>
 
@@ -879,11 +879,11 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>Public types</td><td><code>FrameStats</code>, <code>GpuTimer</code>, <code>MAX_GPU_TIMERS</code> in <code>include/rasm/engine.h</code>; <code>VRAMStats</code> in <code>include/rasm/render/resource.h</code></td></tr>
   <tr><td>Per-slot state</td><td><code>FrameStatsSlot</code>, <code>FrameStatsCollector</code> in <code>src/renderer/frameStats.h</code></td></tr>
-  <tr><td>Timers, read-back, reset</td><td><code>Engine::updateFrameStats</code>, <code>Engine::beginGpuTimer</code>, <code>Engine::endGpuTimer</code>, <code>Engine::getFrameStats</code> in <code>src/renderer/frameStats.cpp</code></td></tr>
-  <tr><td>Frame and pass timers</td><td><code>Engine::beginFrame</code>, <code>Engine::endFrame</code>, <code>Engine::beginPass</code>, <code>Engine::endPass</code> in <code>src/engine.cpp</code>; <code>RenderGraph::execute</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
+  <tr><td>Timers, read-back, reset</td><td><code>Renderer::updateFrameStats</code>, <code>Renderer::beginGpuTimer</code>, <code>Renderer::endGpuTimer</code>, <code>Renderer::getFrameStats</code> in <code>src/renderer/frameStats.cpp</code></td></tr>
+  <tr><td>Frame and pass timers</td><td><code>Renderer::beginFrame</code>, <code>Renderer::endFrame</code>, <code>Renderer::beginPass</code>, <code>Renderer::endPass</code> in <code>src/renderer/renderer.cpp</code>; <code>RenderGraph::execute</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
   <tr><td>Query pool, timestamps, VRAM</td><td><code>VulkanDevice::createTimestampQueryPool</code>, <code>VulkanDevice::getTimestamps</code>, <code>VulkanDevice::queryVRAMStats</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code>; <code>VulkanCommandBuffer::writeTimestamp</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
   <tr><td>Counters and draw totals</td><td><code>DrawTotals</code>, <code>cullStats</code>, <code>CULL_STATS_WORDS</code> in <code>src/renderer/gpuScene.h</code>; <code>countMain</code>, <code>addCount64</code> in <code>shaders/passes/cull.slang</code></td></tr>
-  <tr><td><code>frameTime</code>, <code>deltaTime</code>, <kbd>F1</kbd></td><td><code>Engine::pollEvents</code> in <code>src/engine.cpp</code>, the SDL events in <code>src/platform/sdlPlatform.cpp</code></td></tr>
+  <tr><td><code>frameTime</code>, <code>deltaTime</code>, <kbd>F1</kbd></td><td><code>Renderer::pollEvents</code> in <code>src/renderer/renderer.cpp</code>, the SDL events in <code>src/platform/sdlPlatform.cpp</code></td></tr>
 </table>
 </div>
 
@@ -892,7 +892,7 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
   <ul>
     <li>The <code>STATS_*</code> words in <code>cull.slang</code> match the <code>CULL_STATS_*</code> words in <code>gpuScene.h</code>.</li>
     <li>A slot's pool and counter buffer are read and reset only after that slot's fence wait (the frame order in <code>beginFrame</code>).</li>
-    <li><code>endFrame</code> records a <code>COMPUTE → HOST</code> barrier after the last pass, or with async compute <code>Engine::submitBatches</code> one at the end of the last compute batch; without it the CPU may read stale counters.</li>
+    <li><code>endFrame</code> records a <code>COMPUTE → HOST</code> barrier after the last pass, or with async compute <code>Renderer::submitBatches</code> one at the end of the last compute batch; without it the CPU may read stale counters.</li>
     <li>Only timers on the graphics queue count toward <code>gpuFrameMs</code>. A timer begins and ends on one queue.</li>
     <li><code>beginGpuTimer</code> may return <code>UINT32_MAX</code>; <code>endGpuTimer</code> must accept it and do nothing.</li>
   </ul>

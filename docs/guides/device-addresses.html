@@ -621,7 +621,7 @@ if (skinned &gt;= 0)
     return scene-&gt;skinnedVertsPtr[uint(skinned) + vertexID];
 return scene-&gt;vertsPtr[vertexID + draw-&gt;vertexOffset];</code></pre>
 
-<p>And <code>Engine::prepareSceneView</code> in <code>src/renderer/gpuScene.cpp</code> does the CPU-side pointer math for the sub-arrays (line breaks added):</p>
+<p>And <code>Renderer::prepareSceneView</code> in <code>src/renderer/gpuScene.cpp</code> does the CPU-side pointer math for the sub-arrays (line breaks added):</p>
 
 <pre><code>sceneData.cullSlotsPtr =
     sceneData.drawInfoPtr + static_cast&lt;uint64_t&gt;(visibleCapacity) * sizeof(gfx::DrawInfo);
@@ -638,7 +638,7 @@ sceneData.groupCountsPtr =
   <tr><td>Root pointer</td><td>a push constant with one pointer</td><td><code>PushConstants</code>: <code>scene</code> (8 bytes), plus <code>firstDraw</code> and <code>argument</code>: 16 bytes, <code>PUSH_CONSTANTS_SIZE</code>.</td></tr>
   <tr><td>Frame struct</td><td>one per frame or view</td><td>One <code>SceneData</code> per scene view (a scene, a camera and a target). Each frame slot has one "Scene Data Buffer" with room for <code>MAX_SCENE_VIEWS</code> = 16 of them; view <var>v</var> uses the buffer's address + <var>v</var> × 1824 (<code>getSceneDataAddress</code>).</td></tr>
   <tr><td>Sub-arrays</td><td>base + size of what comes before</td><td><code>cullSlotsPtr</code>, <code>groupCountsPtr</code> and <code>drawCountsPtr</code> point into the visible draw buffer, after the draws.</td></tr>
-  <tr><td>Stale addresses</td><td>write them again every frame</td><td>The same: <code>Engine::prepareSceneView</code> writes every address of a view every frame, from the current buffers. A buffer that grew is picked up at once: the draw lists, and the visible draws and Hi-Z, which <code>RenderContext::resizeBuffer</code> grows under the same handle but at a new address.</td></tr>
+  <tr><td>Stale addresses</td><td>write them again every frame</td><td>The same: <code>Renderer::prepareSceneView</code> writes every address of a view every frame, from the current buffers. A buffer that grew is picked up at once: the draw lists, and the visible draws and Hi-Z, which <code>RenderContext::resizeBuffer</code> grows under the same handle but at a new address.</td></tr>
   <tr><td>Null pointers</td><td>a flag says whether to read</td><td>Unused pointers stay 0 (<code>SceneData</code> starts as <code>{}</code>). <code>countMain</code> reads <code>visibilityPtr</code> and <code>hizPtr</code> only when <code>hizLevelCount</code> is not 0. A null <code>clustersPtr</code> is the flag itself: the pixel then shades every local light.</td></tr>
   <tr><td>Bounds</td><td>pass counts and check them</td><td>Counts travel with the data (<code>drawCount</code>, <code>runFirst</code>, <code>localLightCount</code>, sizes from <code>EngineConfig</code>), but shaders trust them: there is no bounds check on any pointer.</td></tr>
   <tr><td>Images</td><td>descriptors</td><td>Textures use one bindless descriptor set. The Hi-Z pyramid is <i>not</i> an image: it is a float buffer read through <code>hizPtr</code>, with its levels packed one after another.</td></tr>
@@ -655,7 +655,7 @@ sceneData.groupCountsPtr =
   <tr><td>Features, usage bit, VMA flag</td><td><code>src/rhi/vulkan/vulkanDevice.cpp</code>: device selection, <code>toVkBufferUsageFlags</code>, the allocator creation</td></tr>
   <tr><td>Getting the address</td><td><code>VulkanDevice::createBuffer</code>; <code>RenderContext::getBufferDeviceAddress</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
   <tr><td>The pointer structs</td><td><code>SceneData</code>, <code>PushConstants</code> in <code>shaders/lib/core.slang</code> and <code>src/renderer/uberMaterialTypes.h</code></td></tr>
-  <tr><td>Writing the addresses</td><td><code>Engine::prepareSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Writing the addresses</td><td><code>Renderer::prepareSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Reading through them</td><td><code>vertMain</code>, <code>fragMain</code> in <code>shaders/passes/rasm.slang</code>; <code>countMain</code>, <code>writeMain</code> in <code>shaders/passes/cull.slang</code>; <code>hizMain</code> in <code>shaders/passes/hiz.slang</code></td></tr>
 </table>
 </div>

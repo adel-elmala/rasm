@@ -12,7 +12,7 @@
 
 namespace rasm
 {
-    class Engine;
+    class Renderer;
     struct TaaState;
 
     // The frame's background, linear. The scene's HDR target clears to it, and the tone-map pass maps it like the
@@ -35,10 +35,10 @@ namespace rasm
         bool                        used                = false;    // in the list the graph was built from
     };
 
-    class Renderer
+    class ViewGraph
     {
     public:
-        explicit                    Renderer(Engine& owner);
+        explicit                    ViewGraph(Renderer& owner);
         void                        render(const View* views, uint32_t viewCount);
         // Lets go of its graph and of the views of this scene or camera, so they can be destroyed.
         void                        release(SceneHandle scene, CameraHandle camera);
@@ -50,7 +50,7 @@ namespace rasm
         bool                        addView(RenderGraph& graph, const View& view, glm::uvec2 size);
         void                        destroyState(ViewState& state);
 
-        Engine&                             engine;
+        Renderer&                           renderer;
         RenderGraph                         graph;
         std::vector<View>                   graphViews;             // the list the graph was built from; keeps its capacity
         std::vector<glm::uvec2>             graphSizes;             // each view's size in pixels then

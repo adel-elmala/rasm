@@ -1,6 +1,6 @@
 #include "rasm/camera.h"
-#include "rasm/engine.h"
-#include "renderer/renderer.h"
+#include "rasm/renderer.h"
+#include "renderer/viewGraph.h"
 
 #include "spdlog/spdlog.h"
 
@@ -91,7 +91,7 @@ namespace rasm
         }
     }
 
-    CameraHandle Engine::createCamera(CameraProjection projection, Transform transform)
+    CameraHandle Renderer::createCamera(CameraProjection projection, Transform transform)
     {
         if (!isValidProjection(projection))
             return {};
@@ -125,7 +125,7 @@ namespace rasm
         return handle;
     }
 
-    void Engine::destroyCamera(CameraHandle camera)
+    void Renderer::destroyCamera(CameraHandle camera)
     {
         if (!isLive(camera))
         {
@@ -134,15 +134,15 @@ namespace rasm
         }
         if (viewHolds({}, camera, "destroyCamera"))
             return;
-        if (renderer)
-            renderer->release({}, camera);
+        if (viewGraph)
+            viewGraph->release({}, camera);
         for (Scene &scene : registry.scenes)
             std::erase(scene.cameras, camera);
         registry.cameras[camera.index] = {};
         registry.cameraHandles.release(camera.index, camera.generation);
     }
 
-    void Engine::setCameraTransform(CameraHandle camera, Transform transform)
+    void Renderer::setCameraTransform(CameraHandle camera, Transform transform)
     {
         if (!isLive(camera))
         {
@@ -155,7 +155,7 @@ namespace rasm
         rig.targetTransform = transform;
     }
 
-    void Engine::setCameraProjection(CameraHandle camera, CameraProjection projection)
+    void Renderer::setCameraProjection(CameraHandle camera, CameraProjection projection)
     {
         if (!isLive(camera))
         {
@@ -168,7 +168,7 @@ namespace rasm
         registry.cameras[camera.index].projection = projection;
     }
 
-    void Engine::setCameraController(CameraHandle camera, CameraController controller)
+    void Renderer::setCameraController(CameraHandle camera, CameraController controller)
     {
         if (!isLive(camera))
         {
@@ -181,7 +181,7 @@ namespace rasm
         rig = createCameraRig(controller, rig.transform);
     }
 
-    void Engine::setCameraExposure(CameraHandle camera, float exposure)
+    void Renderer::setCameraExposure(CameraHandle camera, float exposure)
     {
         if (!isLive(camera))
         {
@@ -197,7 +197,7 @@ namespace rasm
         registry.cameras[camera.index].exposure = exposure;
     }
 
-    float Engine::getCameraExposure(CameraHandle camera)
+    float Renderer::getCameraExposure(CameraHandle camera)
     {
         if (!isLive(camera))
         {
@@ -208,7 +208,7 @@ namespace rasm
         return registry.cameras[camera.index].exposure;
     }
 
-    void Engine::setCameraBloomStrength(CameraHandle camera, float strength)
+    void Renderer::setCameraBloomStrength(CameraHandle camera, float strength)
     {
         if (!isLive(camera))
         {
@@ -225,7 +225,7 @@ namespace rasm
     }
 
     // addTaaPass compares the count with the one it saw last frame, so the camera's next frame drops its history.
-    void Engine::resetCameraHistory(CameraHandle camera)
+    void Renderer::resetCameraHistory(CameraHandle camera)
     {
         if (!isLive(camera))
         {
@@ -235,7 +235,7 @@ namespace rasm
         ++registry.cameras[camera.index].historyResets;
     }
 
-    float Engine::getCameraBloomStrength(CameraHandle camera)
+    float Renderer::getCameraBloomStrength(CameraHandle camera)
     {
         if (!isLive(camera))
         {
@@ -246,7 +246,7 @@ namespace rasm
         return registry.cameras[camera.index].bloomStrength;
     }
 
-    CameraController Engine::getCameraController(CameraHandle camera)
+    CameraController Renderer::getCameraController(CameraHandle camera)
     {
         if (!isLive(camera))
         {
@@ -257,7 +257,7 @@ namespace rasm
         return registry.cameras[camera.index].rig.controller;
     }
 
-    Transform Engine::getCameraTransform(CameraHandle camera)
+    Transform Renderer::getCameraTransform(CameraHandle camera)
     {
         if (!isLive(camera))
         {
@@ -268,7 +268,7 @@ namespace rasm
         return registry.cameras[camera.index].rig.transform;
     }
 
-    CameraProjection Engine::getCameraProjection(CameraHandle camera)
+    CameraProjection Renderer::getCameraProjection(CameraHandle camera)
     {
         if (!isLive(camera))
         {
@@ -279,7 +279,7 @@ namespace rasm
         return registry.cameras[camera.index].projection;
     }
 
-    void Engine::updateCameraAspectRatio(float aspect)
+    void Renderer::updateCameraAspectRatio(float aspect)
     {
         for (auto &camera : registry.cameras)
         {
@@ -287,7 +287,7 @@ namespace rasm
         }
     }
 
-    glm::mat4 Engine::getProjectionMatrix(CameraHandle camera)
+    glm::mat4 Renderer::getProjectionMatrix(CameraHandle camera)
     {
         if (!isLive(camera))
         {
@@ -298,7 +298,7 @@ namespace rasm
         return toProjectionMatrix(registry.cameras[camera.index].projection);
     }
 
-    glm::mat4 Engine::getProjectionMatrix(CameraHandle camera, float aspect)
+    glm::mat4 Renderer::getProjectionMatrix(CameraHandle camera, float aspect)
     {
         if (!isLive(camera))
         {
@@ -311,7 +311,7 @@ namespace rasm
         return toProjectionMatrix(projection);
     }
 
-    glm::mat4 Engine::getViewMatrix(CameraHandle camera)
+    glm::mat4 Renderer::getViewMatrix(CameraHandle camera)
     {
         if (!isLive(camera))
         {
@@ -330,7 +330,7 @@ namespace rasm
         return view;
     }
 
-    void Engine::updateCamera(CameraHandle camera, const CameraInput &input)
+    void Renderer::updateCamera(CameraHandle camera, const CameraInput &input)
     {
         if (!isLive(camera))
         {

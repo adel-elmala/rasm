@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Generational Handles · RASM</title>
 <meta name="description" content="How generational handles work: why not pointers or plain indices, index plus generation, free lists and slot maps, stale handle detection, bit budgets, type-safe tags, ownership and deferred destruction, dedup caches, and how RASM does it.">
-<meta name="rasm-sources" content="include/rasm/handle.h src/core/handle.cpp include/rasm/engine.h src/rhi/renderContext.cpp src/rhi/resource.cpp include/rasm/render/resource.h include/rasm/render/renderContext.h src/scene/entity.cpp src/assets/mesh.cpp src/assets/material.cpp src/assets/texture.cpp src/renderer/gpuScene.cpp src/renderer/readback.h tests/handleTests.cpp include/rasm/entity.h include/rasm/mesh.h include/rasm/light.h include/rasm/scene.h include/rasm/types.h">
+<meta name="rasm-sources" content="include/rasm/handle.h src/core/handle.cpp include/rasm/renderer.h src/rhi/renderContext.cpp src/rhi/resource.cpp include/rasm/render/resource.h include/rasm/render/renderContext.h src/scene/entity.cpp src/assets/mesh.cpp src/assets/material.cpp src/assets/texture.cpp src/renderer/gpuScene.cpp src/renderer/readback.h tests/handleTests.cpp include/rasm/entity.h include/rasm/mesh.h include/rasm/light.h include/rasm/scene.h include/rasm/types.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -694,7 +694,7 @@ void bindTexture(TextureHandle texture);</code></pre>
     <text x="534" y="88" class="mono">buffers.handles</text>
 
     <rect x="20" y="100" width="350" height="218" rx="8" class="zone"/>
-    <text x="36" y="122" class="title">Engine::registry · CPU objects</text>
+    <text x="36" y="122" class="title">Renderer::registry · CPU objects</text>
     <text x="36" y="144" class="mono">entities[handle.index]</text>
     <rect x="36"  y="156" width="60" height="40" rx="4" class="ghost"/>
     <text x="66"  y="172" class="mid mono t-faint">[0]</text>
@@ -836,9 +836,9 @@ void bindTexture(TextureHandle texture);</code></pre>
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>The handle, tags, aliases, hash</td><td><code>Handle</code>, <code>HandleHash</code>, <code>hashCombine</code> in <code>include/rasm/handle.h</code></td></tr>
   <tr><td>Making handles</td><td><code>HandlePool</code>, <code>HandleSlot</code> in <code>include/rasm/handle.h</code>; <code>src/core/handle.cpp</code>; tests in <code>tests/handleTests.cpp</code></td></tr>
-  <tr><td>CPU objects</td><td><code>Engine::Registry</code> in <code>include/rasm/engine.h</code>; <code>createEntity</code> in <code>src/scene/entity.cpp</code>, <code>loadMesh</code> in <code>src/assets/mesh.cpp</code>, <code>createMaterial</code> in <code>src/assets/material.cpp</code></td></tr>
+  <tr><td>CPU objects</td><td><code>Renderer::Registry</code> in <code>include/rasm/engine.h</code>; <code>createEntity</code> in <code>src/scene/entity.cpp</code>, <code>loadMesh</code> in <code>src/assets/mesh.cpp</code>, <code>createMaterial</code> in <code>src/assets/material.cpp</code></td></tr>
   <tr><td>GPU objects and lookups</td><td><code>RenderContext::Impl</code>, <code>lookup</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
-  <tr><td>Destroy</td><td><code>RenderContext::destroyBuffer</code>, <code>RenderContext::destroyTexture</code> in <code>src/rhi/renderContext.cpp</code>; <code>Engine::destroyTexture</code> in <code>src/assets/texture.cpp</code></td></tr>
+  <tr><td>Destroy</td><td><code>RenderContext::destroyBuffer</code>, <code>RenderContext::destroyTexture</code> in <code>src/rhi/renderContext.cpp</code>; <code>Renderer::destroyTexture</code> in <code>src/assets/texture.cpp</code></td></tr>
   <tr><td>Dedup caches</td><td><code>createShader</code>, <code>createPipeline</code>, <code>createBindlessDescriptorSetLayout</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
   <tr><td>Descriptor hashes</td><td><code>ShaderDescHash</code>, <code>PipelineDescHash</code>, <code>BindlessDescriptorSetLayoutDescHash</code> in <code>src/rhi/resource.cpp</code></td></tr>
 </table>

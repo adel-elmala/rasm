@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Types, Handles and Limits · RASM</title>
 <meta name="description" content="Handle and every handle alias, the enums and plain structs of types.h, Window, VRAMStats, and every compile-time limit with its value and header.">
-<meta name="rasm-sources" content="include/rasm/handle.h include/rasm/types.h include/rasm/readback.h include/rasm/window.h include/rasm/input.h include/rasm/render/resource.h include/rasm/engine.h include/rasm/entity.h include/rasm/light.h include/rasm/material.h include/rasm/mesh.h include/rasm/scene.h src/core/handle.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/rhi/device.cpp src/rhi/vulkan/vulkanUtils.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/assets/texture.cpp src/assets/material.cpp src/assets/mesh.cpp src/scene/camera.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/scene.cpp src/renderer/gpuScene.cpp src/renderer/frameStats.cpp src/engine.cpp">
+<meta name="rasm-sources" content="include/rasm/handle.h include/rasm/types.h include/rasm/readback.h include/rasm/window.h include/rasm/input.h include/rasm/render/resource.h include/rasm/renderer.h include/rasm/entity.h include/rasm/light.h include/rasm/material.h include/rasm/mesh.h include/rasm/scene.h src/core/handle.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/rhi/device.cpp src/rhi/vulkan/vulkanUtils.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/assets/texture.cpp src/assets/material.cpp src/assets/mesh.cpp src/scene/camera.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/scene.cpp src/renderer/gpuScene.cpp src/renderer/frameStats.cpp src/renderer/renderer.cpp tests/rendererConfigTests.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -267,7 +267,7 @@ public:
     LINE_STRIP,
 };</pre>
   <div class="body">
-    <p>How vertices form primitives, in <code>PipelineDesc::topology</code>. <code>Engine::createPipeline</code> always uses <code>TRIANGLE_LIST</code>; the others need <code>RenderContext::createPipeline</code>.</p>
+    <p>How vertices form primitives, in <code>PipelineDesc::topology</code>. <code>Renderer::createPipeline</code> always uses <code>TRIANGLE_LIST</code>; the others need <code>RenderContext::createPipeline</code>.</p>
   </div>
 </div>
 
@@ -358,7 +358,19 @@ public:
     AntiAliasing antiAliasing            = AntiAliasing::NONE;
 };</pre>
   <div class="body">
-    <p>The engine's settings, given to its constructor. Every field is explained on the <a href="engine.html#EngineConfig">Engine page</a>.</p>
+    <p>The engine's settings, given to its constructor. Every field is explained on the <a href="engine.html#EngineConfig">Engine page</a>. A field added to the renderer goes in both this struct and <code>RendererConfig</code>, and into <code>toRendererConfig</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="RendererConfig">
+  <pre class="sig">struct RendererConfig
+{
+    // every field of EngineConfig but platform, with the same defaults
+};
+
+inline RendererConfig toRendererConfig(const EngineConfig&amp; config);</pre>
+  <div class="body">
+    <p>A <a href="engine.html#Renderer"><code>Renderer</code></a>'s settings: <code>EngineConfig</code> without <code>platform</code>, which a <code>Renderer</code> does not choose. With <code>nativeWindow</code> set it draws into that window; without one it draws into offscreen images of <code>windowWidth</code> × <code>windowHeight</code> pixels. Both structs stay flat, so designated initializers work. <code>toRendererConfig</code> gives the renderer's part of an <code>EngineConfig</code>, as <code>Engine</code>'s constructor does; <code>tests/rendererConfigTests.cpp</code> checks that every field arrives.</p>
   </div>
 </div>
 
@@ -400,7 +412,7 @@ public:
     DEFAULT,    // View::antiAliasing: the EngineConfig value; in EngineConfig, NONE
 };</pre>
   <div class="body">
-    <p>How <code>Engine::render</code> smooths edges (<code>EngineConfig::antiAliasing</code>, or per view <a href="engine.html#View"><code>View::antiAliasing</code></a>, where <code>DEFAULT</code> takes the engine's value). <code>MSAA_nX</code> draws the scene with n samples per pixel and resolves them in a pass of the graph (<a href="engine.html#addMsaaResolvePass"><code>addMsaaResolvePass</code></a>); a count the device does not have falls back to the most it has, with a warning. <code>TAA</code> jitters the view and blends the frames (<a href="engine.html#addTaaPass"><code>addTaaPass</code></a>, <a href="../guides/taa.html">Temporal anti-aliasing</a>). See <a href="../guides/msaa.html">MSAA and alpha-to-coverage</a>.</p>
+    <p>How <code>Renderer::render</code> smooths edges (<code>EngineConfig::antiAliasing</code>, or per view <a href="engine.html#View"><code>View::antiAliasing</code></a>, where <code>DEFAULT</code> takes the engine's value). <code>MSAA_nX</code> draws the scene with n samples per pixel and resolves them in a pass of the graph (<a href="engine.html#addMsaaResolvePass"><code>addMsaaResolvePass</code></a>); a count the device does not have falls back to the most it has, with a warning. <code>TAA</code> jitters the view and blends the frames (<a href="engine.html#addTaaPass"><code>addTaaPass</code></a>, <a href="../guides/taa.html">Temporal anti-aliasing</a>). See <a href="../guides/msaa.html">MSAA and alpha-to-coverage</a>.</p>
   </div>
 </div>
 
@@ -417,7 +429,7 @@ public:
     MESHLETS,
 };</pre>
   <div class="body">
-    <p>What the scene's views show instead of their shading (<a href="engine.html#setDebugView"><code>Engine::setDebugView</code></a>). <code>OVERDRAW</code> and <code>LIGHT_COUNT</code> are counts, shown as a heat color. <code>MESHLETS</code> gives each meshlet of a draw drawn by meshlets its own color. See <a href="engine.html#debug-views">Debug views</a> for what each one shows and <a href="../guides/debug-views.html">the guide</a> for how to read it.</p>
+    <p>What the scene's views show instead of their shading (<a href="engine.html#setDebugView"><code>Renderer::setDebugView</code></a>). <code>OVERDRAW</code> and <code>LIGHT_COUNT</code> are counts, shown as a heat color. <code>MESHLETS</code> gives each meshlet of a draw drawn by meshlets its own color. See <a href="engine.html#debug-views">Debug views</a> for what each one shows and <a href="../guides/debug-views.html">the guide</a> for how to read it.</p>
   </div>
 </div>
 
@@ -430,7 +442,7 @@ public:
     AUTO,
 };</pre>
   <div class="body">
-    <p>How the scene passes draw a visible mesh whose LOD has 8 meshlets or more (<code>EngineConfig::meshletPath</code>, <a href="engine.html#setMeshletPath"><code>Engine::setMeshletPath</code></a>). <code>OFF</code>: the whole draw. <code>VERTEX_PULLING</code>: compute culls each meshlet and writes the visible ones as indirect draws, which the usual vertex shader draws. <code>MESH_SHADERS</code>: a task shader culls them inside the draw and mesh shaders draw the visible ones; where the GPU has no mesh shaders (<a href="low-level.html#hasMeshShaders"><code>RenderContext::hasMeshShaders</code></a>, e.g. MoltenVK) it draws by vertex pulling. <code>AUTO</code>, the default: <code>MESH_SHADERS</code> where the GPU has them, else <code>OFF</code>. All draw the same triangles. See <a href="../guides/meshlets.html">Meshlets and cluster culling</a>.</p>
+    <p>How the scene passes draw a visible mesh whose LOD has 8 meshlets or more (<code>EngineConfig::meshletPath</code>, <a href="engine.html#setMeshletPath"><code>Renderer::setMeshletPath</code></a>). <code>OFF</code>: the whole draw. <code>VERTEX_PULLING</code>: compute culls each meshlet and writes the visible ones as indirect draws, which the usual vertex shader draws. <code>MESH_SHADERS</code>: a task shader culls them inside the draw and mesh shaders draw the visible ones; where the GPU has no mesh shaders (<a href="low-level.html#hasMeshShaders"><code>RenderContext::hasMeshShaders</code></a>, e.g. MoltenVK) it draws by vertex pulling. <code>AUTO</code>, the default: <code>MESH_SHADERS</code> where the GPU has them, else <code>OFF</code>. All draw the same triangles. See <a href="../guides/meshlets.html">Meshlets and cluster culling</a>.</p>
   </div>
 </div>
 
@@ -446,7 +458,7 @@ public:
 constexpr uint32_t  INSPECT_ALL_SAMPLES     = UINT32_MAX;
 constexpr uint32_t  INSPECT_TILES           = 24;</pre>
   <div class="body">
-    <p>What the RASM window's Buffers section shows of a resource (<a href="engine.html#setInspection"><code>Engine::setInspection</code></a>).</p>
+    <p>What the RASM window's Buffers section shows of a resource (<a href="engine.html#setInspection"><code>Renderer::setInspection</code></a>).</p>
     <div class="table-wrap">
     <table>
       <tr><th>Kind</th><th>Reads</th><th>Shown as</th></tr>
@@ -475,7 +487,7 @@ constexpr uint32_t  INSPECT_TILES           = 24;</pre>
     EntityHandle entity                  = {};
 };</pre>
   <div class="body">
-    <p>What the RASM window's Buffers and GPU tables sections show (<a href="engine.html#setInspection"><code>Engine::setInspection</code></a>). Each field is a control of the window.</p>
+    <p>What the RASM window's Buffers and GPU tables sections show (<a href="engine.html#setInspection"><code>Renderer::setInspection</code></a>). Each field is a control of the window.</p>
     <dl>
       <dt>target</dt><dd>The render target's <code>RenderTargetDesc::name</code>; for <code>HIZ</code> and <code>LIGHT_CLUSTERS</code> the name of the scene view's target. Empty: nothing is copied.</dd>
       <dt>attachment</dt><dd><code>COLOR</code>: which color of the target.</dd>
@@ -640,7 +652,7 @@ struct RenderTarget
     uint64_t hostUsage     = 0;
 };</pre>
   <div class="body">
-    <p>GPU memory in bytes, summed over the memory heaps, from <a href="low-level.html#queryVRAMStats">queryVRAMStats</a>, <code>Engine::queryMemoryStats</code> or <code>FrameStats::memory</code>.</p>
+    <p>GPU memory in bytes, summed over the memory heaps, from <a href="low-level.html#queryVRAMStats">queryVRAMStats</a>, <code>Renderer::queryMemoryStats</code> or <code>FrameStats::memory</code>.</p>
     <dl>
       <dt>vramBudget, vramUsage</dt><dd>Device-local heaps (video memory): how much this process may use now, and how much it uses. The usage counts whole memory blocks, and the allocator puts many textures and buffers in one block, so it grows in steps (256 MiB on a large heap).</dd>
       <dt>vramAllocated</dt><dd>The bytes of the resources inside those blocks: what the buffers and textures take. Use it to see what a load or a destroy changed; the stats overlay and the RASM window show it as <samp>allocated</samp>.</dd>
@@ -714,7 +726,7 @@ if (rasm::readPng("golden.png", golden) &amp;&amp; golden.width == image.width)
 
 <h2 id="input"><span class="n">4</span>Input events in <code>rasm/input.h</code></h2>
 
-<p>What an application that owns its window sends with <a href="engine.html#addInputEvent"><code>Engine::addInputEvent</code></a>. RASM's SDL platform makes the same events from its window, so every input reaches the camera, Dear ImGui and the built-in keys the same way (<a href="../guides/platform-layer.html">The platform layer</a>). The types are plain: an enum for the kind and plain fields, so a C API can copy them as they are.</p>
+<p>What an application that owns its window sends with <a href="engine.html#addInputEvent"><code>Renderer::addInputEvent</code></a>. RASM's SDL platform makes the same events from its window, so every input reaches the camera, Dear ImGui and the built-in keys the same way (<a href="../guides/platform-layer.html">The platform layer</a>). The types are plain: an enum for the kind and plain fields, so a C API can copy them as they are.</p>
 
 <div class="api" id="InputEvent">
   <pre class="sig">struct InputEvent
