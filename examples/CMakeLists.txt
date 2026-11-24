@@ -22,3 +22,7 @@ rasm_add_example(18_meshlets)
 if (RASM_IMGUI)
     rasm_add_example(15_debug_ui)
 endif()
+# Opens its own SDL3 window and hands RASM the native handle, as an application with its own event loop does.
+find_package(SDL3 CONFIG REQUIRED)
+rasm_add_example(19_embedding)
+target_link_libraries(19_embedding PRIVATE SDL3::SDL3)

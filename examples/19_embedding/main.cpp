@@ -1,0 +1,455 @@
+#include "glm/glm.hpp"
+#include "glm/gtc/quaternion.hpp"
+
+#include "rasm/rasm.h"
+
+#include "exampleArgs.h"
+
+#include "SDL3/SDL.h"
+#if defined(__APPLE__)
+#include "SDL3/SDL_metal.h"
+#endif
+#if defined(RASM_IMGUI)
+#include "imgui.h"
+#endif
+
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <vector>
+
+// RASM in a window the application owns. The application opens an SDL3 window and runs its event loop, as a game with
+// its own window or an editor would; RASM gets the window's native handle (PlatformType::NATIVE: an HWND, a
+// CAMetalLayer, an X11 window or a Wayland surface) and draws into it, and the application passes on the input
+// (Engine::addInputEvent), the size (setWindowSize) and the display's scale (setWindowContentScale). Escape and closing
+// the window end the loop: an embedded engine never quits by itself. Drag to orbit the helmet; the UI window has a
+// checkbox and a text field.
+// --headless opens the window hidden and plays a scripted input instead of the user's: a drag that orbits the camera,
+// a click on the checkbox and the word RASM typed into the text field, then writes frame --frames (60) to --out, as
+// every example does, so the native surface, the swapchain and the input path run with nothing on screen. The script
+// needs about 40 frames. --no-window plays the same script on a headless engine (PlatformType::HEADLESS), for a
+// machine that cannot present to a hidden window.
+
+namespace
+{
+    constexpr uint32_t WIDTH = 1280;
+    constexpr uint32_t HEIGHT = 720;
+
+    struct UiTargets
+    {
+        float checkbox[2] = {};
+        float textField[2] = {};
+    };
+}
+
+namespace
+{
+    rasm::MeshHandle createCube(rasm::Engine &engine)
+    {
+        const glm::vec3 normals[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+        const glm::vec2 uvs[4] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+        std::vector<rasm::Vertex> vertices;
+        std::vector<uint32_t> indices;
+        for (const auto &n : normals)
+        {
+            const glm::vec3 u = std::abs(n.y) > 0.5f ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+            const glm::vec3 v = glm::cross(n, u);
+            const glm::vec3 corners[4] = {n - u - v, n + u - v, n + u + v, n - u + v};
+            const auto first = static_cast<uint32_t>(vertices.size());
+            for (int i = 0; i < 4; ++i)
+                vertices.push_back({.pos = corners[i] * 0.5f, .normal = n, .uv = {uvs[i], uvs[i], uvs[i]}, .tangent = glm::vec4(0.0f)});
+            for (uint32_t index : {0u, 1u, 2u, 0u, 2u, 3u})
+                indices.push_back(first + index);
+        }
+        return engine.createMesh(std::move(vertices), std::move(indices));
+    }
+
+    // The window's handles, as the device makes its surface from them. On macOS a Metal view gives the window a
+    // CAMetalLayer, which must outlive the engine.
+    bool getNativeWindow(SDL_Window *window, rasm::NativeWindow &native, SDL_MetalView &metalView)
+    {
+        const SDL_PropertiesID properties = SDL_GetWindowProperties(window);
+        (void)properties;
+        (void)metalView;
+#if defined(_WIN32)
+        native.type = rasm::NativeWindowType::WINDOWS;
+        native.display = SDL_GetPointerProperty(properties, SDL_PROP_WINDOW_WIN32_INSTANCE_POINTER, nullptr);
+        native.window = SDL_GetPointerProperty(properties, SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
+#elif defined(__APPLE__)
+        metalView = SDL_Metal_CreateView(window);
+        native.type = rasm::NativeWindowType::METAL;
+        native.window = metalView != nullptr ? SDL_Metal_GetLayer(metalView) : nullptr;
+#else
+        if (std::strcmp(SDL_GetCurrentVideoDriver(), "wayland") == 0)
+        {
+            native.type = rasm::NativeWindowType::WAYLAND;
+            native.display = SDL_GetPointerProperty(properties, SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, nullptr);
+            native.window = SDL_GetPointerProperty(properties, SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, nullptr);
+        }
+        else
+        {
+            native.type = rasm::NativeWindowType::X11;
+            native.display = SDL_GetPointerProperty(properties, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, nullptr);
+            native.window = reinterpret_cast<void *>(static_cast<uintptr_t>(SDL_GetNumberProperty(properties, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0)));
+        }
+#endif
+        int pixelWidth = 0;
+        int pixelHeight = 0;
+        SDL_GetWindowSizeInPixels(window, &pixelWidth, &pixelHeight);
+        native.pixelWidth = static_cast<uint32_t>(pixelWidth);
+        native.pixelHeight = static_cast<uint32_t>(pixelHeight);
+        const float scale = SDL_GetDisplayContentScale(SDL_GetDisplayForWindow(window));
+        native.contentScale = scale > 0.0f ? scale : 1.0f;
+        return native.window != nullptr;
+    }
+
+    // The key's meaning in the layout. RASM's SDL platform maps every key; this maps what the camera, the UI's text
+    // field and its shortcuts use.
+    rasm::Key toKey(SDL_Keycode key)
+    {
+        if (key >= SDLK_A && key <= SDLK_Z)
+            return static_cast<rasm::Key>(static_cast<uint32_t>(rasm::Key::A) + (key - SDLK_A));
+        if (key >= SDLK_0 && key <= SDLK_9)
+            return static_cast<rasm::Key>(static_cast<uint32_t>(rasm::Key::DIGIT_0) + (key - SDLK_0));
+        switch (key)
+        {
+        case SDLK_F1:
+            return rasm::Key::F1;
+        case SDLK_F2:
+            return rasm::Key::F2;
+        case SDLK_F3:
+            return rasm::Key::F3;
+        case SDLK_ESCAPE:
+            return rasm::Key::ESCAPE;
+        case SDLK_RETURN:
+            return rasm::Key::ENTER;
+        case SDLK_TAB:
+            return rasm::Key::TAB;
+        case SDLK_BACKSPACE:
+            return rasm::Key::BACKSPACE;
+        case SDLK_DELETE:
+            return rasm::Key::DEL;
+        case SDLK_HOME:
+            return rasm::Key::HOME;
+        case SDLK_END:
+            return rasm::Key::END;
+        case SDLK_LEFT:
+            return rasm::Key::LEFT;
+        case SDLK_RIGHT:
+            return rasm::Key::RIGHT;
+        case SDLK_UP:
+            return rasm::Key::UP;
+        case SDLK_DOWN:
+            return rasm::Key::DOWN;
+        case SDLK_LSHIFT:
+            return rasm::Key::LEFT_SHIFT;
+        case SDLK_RSHIFT:
+            return rasm::Key::RIGHT_SHIFT;
+        case SDLK_LCTRL:
+            return rasm::Key::LEFT_CTRL;
+        case SDLK_RCTRL:
+            return rasm::Key::RIGHT_CTRL;
+        default:
+            return rasm::Key::NONE;
+        }
+    }
+
+    // Where the key is: W/A/S/D move the camera by position, also on AZERTY. Other keys are left NONE, which RASM reads
+    // as "the same as key".
+    rasm::Key toPhysicalKey(SDL_Scancode scancode)
+    {
+        if (scancode >= SDL_SCANCODE_A && scancode <= SDL_SCANCODE_Z)
+            return static_cast<rasm::Key>(static_cast<uint32_t>(rasm::Key::A) + (scancode - SDL_SCANCODE_A));
+        return rasm::Key::NONE;
+    }
+
+    uint8_t toModifiers(SDL_Keymod mod)
+    {
+        return static_cast<uint8_t>(((mod & SDL_KMOD_SHIFT) != 0 ? rasm::KEY_MOD_SHIFT : 0) | ((mod & SDL_KMOD_CTRL) != 0 ? rasm::KEY_MOD_CTRL : 0) |
+                                    ((mod & SDL_KMOD_ALT) != 0 ? rasm::KEY_MOD_ALT : 0) | ((mod & SDL_KMOD_GUI) != 0 ? rasm::KEY_MOD_SUPER : 0));
+    }
+
+    // One SDL event to RASM. Returns false when the application should stop.
+    bool forwardEvent(rasm::Engine &engine, SDL_Window *window, const SDL_Event &event)
+    {
+        switch (event.type)
+        {
+        case SDL_EVENT_QUIT:
+            return false;
+        case SDL_EVENT_KEY_DOWN:
+        case SDL_EVENT_KEY_UP:
+            if (event.key.key == SDLK_ESCAPE && event.key.down)
+                return false;
+            engine.addInputEvent({.type = rasm::InputEventType::KEY,
+                                  .key = toKey(event.key.key),
+                                  .physicalKey = toPhysicalKey(event.key.scancode),
+                                  .down = event.key.down,
+                                  .repeat = event.key.repeat,
+                                  .modifiers = toModifiers(event.key.mod)});
+            break;
+        case SDL_EVENT_TEXT_INPUT:
+            // ASCII only, to stay short: RASM's SDL platform decodes all of UTF-8.
+            for (const char *c = event.text.text; *c != 0; ++c)
+            {
+                if (static_cast<unsigned char>(*c) < 0x80)
+                    engine.addInputEvent({.type = rasm::InputEventType::TEXT, .codepoint = static_cast<uint32_t>(*c)});
+            }
+            break;
+        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        case SDL_EVENT_MOUSE_BUTTON_UP:
+            if (event.button.button >= SDL_BUTTON_LEFT && event.button.button <= SDL_BUTTON_X2)
+            {
+                // SDL numbers left, middle, right; RASM left, right, middle.
+                const rasm::MouseButton buttons[] = {rasm::MouseButton::LEFT, rasm::MouseButton::MIDDLE, rasm::MouseButton::RIGHT, rasm::MouseButton::BACK, rasm::MouseButton::FORWARD};
+                engine.addInputEvent({.type = rasm::InputEventType::MOUSE_BUTTON, .down = event.button.down, .button = buttons[event.button.button - 1], .x = event.button.x, .y = event.button.y});
+                SDL_CaptureMouse(event.button.down || SDL_GetMouseState(nullptr, nullptr) != 0);
+            }
+            break;
+        case SDL_EVENT_MOUSE_MOTION:
+            engine.addInputEvent({.type = rasm::InputEventType::MOUSE_MOVE, .x = event.motion.x, .y = event.motion.y});
+            break;
+        case SDL_EVENT_MOUSE_WHEEL:
+            engine.addInputEvent({.type = rasm::InputEventType::MOUSE_WHEEL, .x = event.wheel.x, .y = event.wheel.y});
+            break;
+        case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+            engine.addInputEvent({.type = rasm::InputEventType::MOUSE_LEAVE});
+            break;
+        case SDL_EVENT_WINDOW_FOCUS_GAINED:
+        case SDL_EVENT_WINDOW_FOCUS_LOST:
+            engine.addInputEvent({.type = rasm::InputEventType::FOCUS, .down = event.type == SDL_EVENT_WINDOW_FOCUS_GAINED});
+            break;
+        case SDL_EVENT_WINDOW_RESIZED:
+        case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+        case SDL_EVENT_WINDOW_MINIMIZED:
+        case SDL_EVENT_WINDOW_RESTORED:
+        {
+            int width = 0;
+            int height = 0;
+            int pixelWidth = 0;
+            int pixelHeight = 0;
+            SDL_GetWindowSize(window, &width, &height);
+            SDL_GetWindowSizeInPixels(window, &pixelWidth, &pixelHeight);
+            // A minimized window is drawn at size 0: the engine skips its frames.
+            const bool minimized = (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) != 0;
+            engine.setWindowSize(static_cast<uint32_t>(width), static_cast<uint32_t>(height), minimized ? 0 : static_cast<uint32_t>(pixelWidth), minimized ? 0 : static_cast<uint32_t>(pixelHeight));
+            break;
+        }
+        case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
+        case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+        {
+            const float scale = SDL_GetDisplayContentScale(SDL_GetDisplayForWindow(window));
+            if (scale > 0.0f)
+                engine.setWindowContentScale(scale);
+            break;
+        }
+        default:
+            break;
+        }
+        return true;
+    }
+
+    // The scripted user of --headless: frame by frame, the events a person would make.
+    void playScript(rasm::Engine &engine, uint32_t frame, const UiTargets &targets)
+    {
+        const float x = 0.5f * static_cast<float>(WIDTH);
+        const float y = 0.6f * static_cast<float>(HEIGHT);
+        auto move = [&](float px, float py)
+        { engine.addInputEvent({.type = rasm::InputEventType::MOUSE_MOVE, .x = px, .y = py}); };
+        auto button = [&](float px, float py, bool down)
+        { engine.addInputEvent({.type = rasm::InputEventType::MOUSE_BUTTON, .down = down, .x = px, .y = py}); };
+
+        // A drag to the right and a little down orbits the camera around the helmet.
+        if (frame == 2)
+            move(x, y);
+        if (frame == 3)
+            button(x, y, true);
+        if (frame >= 4 && frame <= 18)
+            move(x + 14.0f * static_cast<float>(frame - 3), y + 2.0f * static_cast<float>(frame - 3));
+        if (frame == 19)
+            button(x + 14.0f * 15.0f, y + 30.0f, false);
+        // A click on the checkbox, then one in the text field and a word typed into it, where the UI put them.
+        if (frame == 22)
+            move(targets.checkbox[0], targets.checkbox[1]);
+        if (frame == 23)
+            button(targets.checkbox[0], targets.checkbox[1], true);
+        if (frame == 24)
+            button(targets.checkbox[0], targets.checkbox[1], false);
+        if (frame == 27)
+            move(targets.textField[0], targets.textField[1]);
+        if (frame == 28)
+            button(targets.textField[0], targets.textField[1], true);
+        if (frame == 29)
+            button(targets.textField[0], targets.textField[1], false);
+        if (frame == 32)
+        {
+            for (const char c : {'R', 'A', 'S', 'M'})
+                engine.addInputEvent({.type = rasm::InputEventType::TEXT, .codepoint = static_cast<uint32_t>(c)});
+        }
+    }
+
+    int run(ExampleArgs &args, SDL_Window *window, const rasm::NativeWindow &native)
+    {
+        rasm::EngineConfig config = {
+            .appName = "example_19",
+            .windowWidth = WIDTH,
+            .windowHeight = HEIGHT,
+            .enableValidation = true,
+            .preferredBackend = rasm::Backend::VULKAN,
+            .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
+            .shaderDir = RASM_EXAMPLE_SHADER_DIR,
+            .ui = true};
+        applyExampleArgs(args, config);
+        // With a window, also a hidden one, RASM draws into the application's; --no-window keeps the headless platform.
+        if (window != nullptr)
+        {
+            config.platform = rasm::PlatformType::NATIVE;
+            config.nativeWindow = native;
+        }
+
+        rasm::Engine engine(config);
+        if (!engine.running())
+        {
+            if (window != nullptr && args.headless)
+                std::fprintf(stderr, "error: RASM could not draw into the hidden window (see the log). --no-window runs the same script without a window.\n");
+            return 1;
+        }
+
+        const rasm::SceneHandle scene = engine.createScene();
+        const rasm::EnvironmentHandle sunset = engine.loadEnvironment("environments/venice_sunset_2k.hdr");
+        const rasm::MeshHandle helmet = engine.loadGLTF("models/gltf/DamagedHelmet/DamagedHelmet.gltf");
+        const rasm::MeshHandle cube = createCube(engine);
+        if (!sunset.isValid() || !helmet.isValid() || !cube.isValid())
+            return 1;
+        engine.setSceneEnvironment(scene, {.environment = sunset, .intensity = 1.0f, .rotation = 1.15f});
+
+        const rasm::MaterialHandle ground = engine.createMaterial(rasm::MaterialType::PBR);
+        rasm::Material groundValues = engine.getMaterial(ground);
+        groundValues.params[static_cast<uint32_t>(rasm::PbrParam::ROUGHNESS)] = 0.9f;
+        engine.updateMaterial(ground, groundValues);
+        engine.addEntityToScene(scene, engine.createEntity("ground", cube, ground, rasm::Transform{glm::vec3(0.0f, -1.2f, 0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(20.0f, 0.5f, 20.0f)}));
+        engine.addEntityToScene(scene, engine.createEntity("helmet", helmet, {}, rasm::Transform{}));
+
+        const rasm::CameraHandle camera = engine.createCamera(rasm::CameraProjection{.type = rasm::CameraProjection::Type::PERSPECTIVE,
+                                                                                     .perspective{.fovY = 45.0f, .aspect = static_cast<float>(WIDTH) / static_cast<float>(HEIGHT), .nearZ = 0.1f}},
+                                                              rasm::Transform{glm::vec3(0.0f, 0.4f, 4.2f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(1.0f)});
+        engine.setCameraController(camera, rasm::CameraController{
+                                               .type = rasm::CameraController::Type::TRACK_BALL,
+                                               .trackBall = {.radius = 4.2f, .center = glm::vec3(0.0f), .orbitSensitivity = 1.0f},
+                                               .easingSpeed = 6.0f});
+        engine.addCameraToScene(scene, camera);
+
+        const rasm::LightHandle sun = engine.createLight(rasm::LightType::DIRECTIONAL, glm::vec3(1.0f, 0.8f, 0.6f), glm::vec3(0.0f), glm::normalize(glm::vec3(-0.6f, -0.7f, -0.4f)), 2.0f, 0.0f);
+        engine.addLightToScene(scene, sun);
+        if (!camera.isValid() || !sun.isValid())
+            return 1;
+
+        UiTargets targets;
+#if defined(RASM_IMGUI)
+        bool blueSun = false;
+        char text[32] = "";
+        engine.setUiCallback(
+            [&]()
+            {
+                const float scale = ImGui::GetStyle().FontScaleDpi;
+                ImGui::SetNextWindowPos(ImVec2(10.0f * scale, 10.0f * scale), ImGuiCond_Always);
+                ImGui::SetNextWindowSize(ImVec2(300.0f * scale, 0.0f), ImGuiCond_Always);
+                ImGui::Begin("Embedded application");
+                if (ImGui::Checkbox("Blue sun", &blueSun))
+                {
+                    rasm::Light light = engine.getLight(sun);
+                    light.color = blueSun ? glm::vec3(0.4f, 0.6f, 1.0f) : glm::vec3(1.0f, 0.8f, 0.6f);
+                    engine.updateLight(sun, light);
+                }
+                targets.checkbox[0] = 0.5f * (ImGui::GetItemRectMin().x + ImGui::GetItemRectMax().x);
+                targets.checkbox[1] = 0.5f * (ImGui::GetItemRectMin().y + ImGui::GetItemRectMax().y);
+                ImGui::InputText("Name", text, sizeof(text));
+                targets.textField[0] = 0.5f * (ImGui::GetItemRectMin().x + ImGui::GetItemRectMax().x);
+                targets.textField[1] = 0.5f * (ImGui::GetItemRectMin().y + ImGui::GetItemRectMax().y);
+                ImGui::End();
+            });
+#endif
+
+        if (args.waitForLoads)
+            engine.waitForLoads();
+
+        // SDL starts text input on request; the UI asks for it while its text field has the focus.
+        bool textInput = false;
+        bool open = true;
+        for (uint32_t frame = 1; open && exampleRunning(engine, args); ++frame)
+        {
+            SDL_Event event;
+            while (SDL_PollEvent(&event))
+            {
+                // A scripted run takes no input from the hidden window.
+                if (!args.headless)
+                    open = forwardEvent(engine, window, event) && open;
+            }
+            if (args.headless)
+                playScript(engine, frame, targets);
+
+            engine.render(scene, camera);
+
+#if defined(RASM_IMGUI)
+            if (window != nullptr && ImGui::GetIO().WantTextInput != textInput)
+            {
+                textInput = ImGui::GetIO().WantTextInput;
+                if (textInput)
+                    SDL_StartTextInput(window);
+                else
+                    SDL_StopTextInput(window);
+            }
+#endif
+        }
+        (void)textInput;
+        return exampleExit(args);
+    }
+}
+
+int main(int argc, char **argv)
+{
+    ExampleArgs args = parseExampleArgs(argc, argv);
+    bool noWindow = false;
+    for (int i = 1; i < argc; ++i)
+        noWindow = noWindow || std::strcmp(argv[i], "--no-window") == 0;
+    if (noWindow && !args.headless)
+    {
+        std::fprintf(stderr, "error: --no-window needs --headless.\n");
+        return 1;
+    }
+    if (noWindow)
+        return run(args, nullptr, {});
+
+    if (!SDL_Init(SDL_INIT_VIDEO))
+    {
+        std::fprintf(stderr, "error: SDL_Init failed: %s\n", SDL_GetError());
+        return 1;
+    }
+#if defined(__APPLE__)
+    SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_METAL;
+#else
+    SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE;
+#endif
+    if (args.headless)
+        flags |= SDL_WINDOW_HIDDEN;
+    SDL_Window *window = SDL_CreateWindow("RASM in an application's window", static_cast<int>(WIDTH), static_cast<int>(HEIGHT), flags);
+    rasm::NativeWindow native;
+    SDL_MetalView metalView = nullptr;
+    int result = 1;
+    if (window == nullptr)
+        std::fprintf(stderr, "error: SDL_CreateWindow failed: %s\n", SDL_GetError());
+    else if (!getNativeWindow(window, native, metalView))
+        std::fprintf(stderr, "error: SDL gave no native handle for its window: %s\n", SDL_GetError());
+    else
+        result = run(args, window, native);
+
+    // The engine is gone by now: the window and its layer go after it.
+#if defined(__APPLE__)
+    if (metalView != nullptr)
+        SDL_Metal_DestroyView(metalView);
+#endif
+    if (window != nullptr)
+        SDL_DestroyWindow(window);
+    SDL_Quit();
+    return result;
+}
