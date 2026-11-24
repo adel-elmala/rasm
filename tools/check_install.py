@@ -88,6 +88,11 @@ def check_library(name, path):
         problems += [f"exports {e}" for e in exports if e.startswith("rasm_engine_") or e.startswith("rasm_asset_loader_")]
     elif not any(e.startswith("rasm_engine_create") for e in exports):
         problems.append("has no rasm_engine_create")
+    # The vcpkg libraries it loads are installed beside it, where it looks first.
+    if sys.platform == "darwin" and "path @loader_path " not in output(["otool", "-l", path]):
+        problems.append("has no @loader_path rpath")
+    if sys.platform.startswith("linux") and "$ORIGIN" not in output(["readelf", "-d", path]):
+        problems.append("has no $ORIGIN runpath")
     for problem in problems:
         print(f"  {name}: {problem}")
     print(f"{name}: {len(exports)} exports, {'OK' if not problems else 'FAIL'}")

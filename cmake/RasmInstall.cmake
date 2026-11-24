@@ -39,7 +39,9 @@ if (RASM_C_API)
     endif()
     install(TARGETS rasm_c_renderer rasm_c EXPORT rasmCTargets
             RUNTIME_DEPENDENCIES
-                PRE_EXCLUDE_REGEXES "^api-ms-" "^ext-ms-"
+                # The system's own: by name before they are looked for (macOS keeps them in the dyld cache, not on
+                # disk), and by the folder they were found in.
+                PRE_EXCLUDE_REGEXES "^api-ms-" "^ext-ms-" "^/usr/lib/" "^/System/"
                 POST_EXCLUDE_REGEXES ${rasm_system_libraries}
                 DIRECTORIES ${rasm_vcpkg_libraries}
             FRAMEWORK DESTINATION "${CMAKE_INSTALL_LIBDIR}"
