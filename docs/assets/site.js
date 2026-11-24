@@ -115,7 +115,7 @@ const SECTIONS = [
         title: "API reference",
         pages: [
             { path: "api/index.html",                 title: "Getting started" },
-            { path: "api/engine.html",                title: "Engine" },
+            { path: "api/engine.html",                title: "Engine and Renderer" },
             { path: "api/scene.html",                 title: "Scenes, entities, meshes, lights" },
             { path: "api/materials.html",             title: "Materials and textures" },
             { path: "api/camera.html",                title: "Cameras and input" },

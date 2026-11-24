@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Shader and pipeline caches · RASM</title>
 <meta name="description" content="Keep compiled shaders and pipelines on disk: the two compiles before a first frame, a cache key made of every input, hash width and collisions, what a cache file holds, the driver's pipeline cache and its header, safe writes, size limits, and how RASM does it.">
-<meta name="rasm-sources" content="src/core/cacheFile.h src/core/cacheFile.cpp src/renderer/shaderCache.h src/renderer/shaderCache.cpp src/renderer/shaderCompiler.h src/renderer/shaderCompiler.cpp src/rhi/vulkan/vulkanPipelineCache.h src/rhi/vulkan/vulkanPipelineCache.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanTypes.h src/rhi/device.h src/platform/paths.h src/platform/paths.cpp src/engine.cpp include/rasm/types.h examples/exampleArgs.h">
+<meta name="rasm-sources" content="src/core/cacheFile.h src/core/cacheFile.cpp src/renderer/shaderCache.h src/renderer/shaderCache.cpp src/renderer/shaderCompiler.h src/renderer/shaderCompiler.cpp src/rhi/vulkan/vulkanPipelineCache.h src/rhi/vulkan/vulkanPipelineCache.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanTypes.h src/rhi/device.h src/platform/paths.h src/platform/paths.cpp src/renderer/renderer.cpp include/rasm/types.h examples/exampleArgs.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -325,9 +325,9 @@
 <p><code>EngineConfig::cacheDir</code> is the folder of both caches: <samp>cache</samp> beside the executable by default, an absolute path as it is, and <code>""</code> for none. <code>resolveCacheDir</code> (in <code>src/platform/paths.cpp</code>) makes the folder and writes a test file; if that fails for a relative path, the caches go to the user's local cache folder plus <samp>rasm/&lt;executable name&gt;</samp>, with one log line; if that fails too, the engine runs without them.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 360" role="img" aria-label="Engine::createGraphicsPipeline calls ShaderCompiler::compileFromString for each stage. It hashes the base key with the module name, entry point and source. readCachedShader looks for cache/shaders/key.shader. A hit gives the SPIR-V and the struct layouts; a miss runs compileWithSlang and writeCachedShader. Both go to validateRasmStructs, then RenderContext::createPipeline, then vkCreateGraphicsPipelines with the pipeline cache, which VulkanPipelineCache loads at device start and saves at device end.">
+  <svg viewBox="0 0 760 360" role="img" aria-label="Renderer::createGraphicsPipeline calls ShaderCompiler::compileFromString for each stage. It hashes the base key with the module name, entry point and source. readCachedShader looks for cache/shaders/key.shader. A hit gives the SPIR-V and the struct layouts; a miss runs compileWithSlang and writeCachedShader. Both go to validateRasmStructs, then RenderContext::createPipeline, then vkCreateGraphicsPipelines with the pipeline cache, which VulkanPipelineCache loads at device start and saves at device end.">
     <rect x="20" y="20" width="230" height="50" rx="6" class="cpu"/>
-    <text x="135" y="42" class="mid small mono">Engine::create*Pipeline</text>
+    <text x="135" y="42" class="mid small mono">Renderer::create*Pipeline</text>
     <text x="135" y="60" class="mid small">once per stage</text>
     <line x1="250" y1="45" x2="296" y2="45" class="arrow cpu" marker-end="url(#ah-cpu)"/>
     <rect x="300" y="14" width="230" height="62" rx="6" class="box"/>
@@ -378,7 +378,7 @@
   <tr><th>This page</th><th>RASM</th></tr>
   <tr><td>Included files</td><td>The whole folder: every file under <samp>shaders/lib</samp> (relative path and bytes) is in the base key. A module that read a file outside it (<code>IModule::getDependencyFilePath</code>) is compiled but not cached.</td></tr>
   <tr><td>Compiler and options</td><td><code>getBuildTagString</code> of the Slang global session (the release, such as <samp>2026.2</samp>), and the Slang library file's name, size and write time (<code>getModulePath</code>), since a patched build of one release keeps the tag; the target's format and profile, and every entry of the session's and the target's option arrays, hashed from the arrays the session is made with, so a new option changes the key by itself.</td></tr>
-  <tr><td>Defines and entry point</td><td>The variants' defines are lines at the top of the source (<code>Engine::createScenePipeline</code>), so the source string holds them. The module name and the entry point are hashed too.</td></tr>
+  <tr><td>Defines and entry point</td><td>The variants' defines are lines at the top of the source (<code>Renderer::createScenePipeline</code>), so the source string holds them. The module name and the entry point are hashed too.</td></tr>
   <tr><td>Key</td><td><code>CacheKey</code>, FNV-1a 128 (<code>hashBytes</code>, <code>hashString</code> with the length first). The file is <samp>shaders/&lt;32 hex digits&gt;.shader</samp>, and its header holds the key again.</td></tr>
   <tr><td>File format</td><td><code>readCacheFile</code> / <code>writeCacheFile</code> in <code>src/core/cacheFile.cpp</code>: magic, version, key, size, FNV-1a 64 checksum, then the payload. Both caches use it. <code>CacheFileStatus</code> says <code>MISSING</code>, <code>STALE</code> or <code>CORRUPT</code>.</td></tr>
   <tr><td>Reflection</td><td>Each entry holds the push constants' struct name and every struct <code>pc</code> reaches (<code>StructLayout</code>: size, members, flattened fields). <code>validateRasmStructs</code> checks them on every compile and every hit; the inspector's GPU tables section reads them through <code>ShaderCompiler::findStructLayout</code>.</td></tr>

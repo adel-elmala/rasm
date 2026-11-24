@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Shadow Mapping · RASM</title>
 <meta name="description" content="How shadow mapping works: draw the scene's depth from the light, then compare each pixel's depth against it. The light's camera, the depth test, shadow acne and its fixes (depth bias, normal offset), soft edges with PCF, resolution and cascades. Then how RASM does it.">
-<meta name="rasm-sources" content="src/renderer/shadowCascades.cpp shaders/lib/shadow.slang shaders/passes/shadow.slang shaders/lib/pbr.slang shaders/passes/rasm.slang shaders/lib/core.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/uberMaterialTypes.h include/rasm/scene.h include/rasm/engine.h src/rhi/renderContext.cpp src/renderer/renderGraph.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp examples/06_shadows/main.cpp">
+<meta name="rasm-sources" content="src/renderer/shadowCascades.cpp shaders/lib/shadow.slang shaders/passes/shadow.slang shaders/lib/pbr.slang shaders/passes/rasm.slang shaders/lib/core.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/uberMaterialTypes.h include/rasm/scene.h include/rasm/renderer.h src/rhi/renderContext.cpp src/renderer/renderGraph.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp examples/06_shadows/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -745,9 +745,9 @@ lit    = d is not behind stored
 <div class="table-wrap">
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
-  <tr><td>The API</td><td><code>ShadowDesc</code>, <code>SceneShadow</code>, <code>MAX_SHADOW_CASCADES</code>, <code>MAX_VIEW_SHADOWS</code> in <code>include/rasm/scene.h</code>; <code>Engine::addShadowPasses</code>, <code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>The API</td><td><code>ShadowDesc</code>, <code>SceneShadow</code>, <code>MAX_SHADOW_CASCADES</code>, <code>MAX_VIEW_SHADOWS</code> in <code>include/rasm/scene.h</code>; <code>Renderer::addShadowPasses</code>, <code>Renderer::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Splits and boxes</td><td><code>getShadowSplits</code>, <code>fitShadowCascade</code> in <code>src/renderer/shadowCascades.cpp</code>; <code>getShadowMaps</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>Depth-only views, the cascades' matrices</td><td><code>Engine::prepareSceneView</code>, <code>Engine::drawSceneView</code> in <code>src/renderer/gpuScene.cpp</code>; <code>SceneView</code> in <code>src/renderer/gpuScene.h</code></td></tr>
+  <tr><td>Depth-only views, the cascades' matrices</td><td><code>Renderer::prepareSceneView</code>, <code>Renderer::drawSceneView</code> in <code>src/renderer/gpuScene.cpp</code>; <code>SceneView</code> in <code>src/renderer/gpuScene.h</code></td></tr>
   <tr><td>GPU fields</td><td><code>shadowMaps</code> (<code>gfx::ShadowMap</code>: <code>matrix</code>, <code>texture</code>, <code>split</code>), the shadowed lights' <code>shadowedLights</code> (<code>gfx::ShadowedLight</code>: <code>light</code>, <code>firstMap</code>, <code>mapCount</code>), and the LOD camera's <code>lodPixelsPerUnit</code>, <code>lodDepthPlane</code> in <code>SceneData</code>: <code>src/renderer/uberMaterialTypes.h</code> and <code>shaders/lib/core.slang</code></td></tr>
   <tr><td>The shadow pass shader</td><td><code>shaders/passes/shadow.slang</code></td></tr>
   <tr><td>The lookup and PCF</td><td><code>sampleShadow</code>, <code>sampleShadowMap</code>, <code>offsetLookup</code>, <code>getPcfWeights</code> in <code>shaders/lib/shadow.slang</code>; called from <code>shadePBR</code> in <code>shaders/lib/pbr.slang</code></td></tr>

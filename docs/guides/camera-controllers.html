@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Camera Controllers · RASM</title>
 <meta name="description" content="How mouse and keys become a camera pose: fly (FPS) cameras, orbit cameras (turntable and arcball), pitch clamping, frame-time scaling, and frame-rate independent exponential easing. Then how RASM does it.">
-<meta name="rasm-sources" content="include/rasm/camera.h include/rasm/cameraController.h include/rasm/cameraInput.h include/rasm/window.h include/rasm/input.h src/scene/camera.cpp src/scene/cameraController.cpp src/platform/cameraInput.cpp src/platform/input.h src/platform/input.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/engine.cpp tests/cameraTests.cpp tests/inputTests.cpp examples/05_city/main.cpp examples/19_embedding/main.cpp">
+<meta name="rasm-sources" content="include/rasm/camera.h include/rasm/cameraController.h include/rasm/cameraInput.h include/rasm/window.h include/rasm/input.h src/scene/camera.cpp src/scene/cameraController.cpp src/platform/cameraInput.cpp src/platform/input.h src/platform/input.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/renderer/renderer.cpp tests/cameraTests.cpp tests/inputTests.cpp examples/05_city/main.cpp examples/19_embedding/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -922,13 +922,13 @@ while (engine.running())
     engine.render(scene, camera);
 }</code></pre>
 
-<p>How events become a <code>CameraInput</code>: a <code>CameraInputState</code> takes them one by one (<code>addCameraInputEvent</code>), then gives the frame's input (<code>takeCameraInput</code>). The engine keeps one for the main window, and applies to it every event, from the SDL platform or from <code>Engine::addInputEvent</code> (<a href="platform-layer.html">The platform layer</a>). An application can keep one per view:</p>
+<p>How events become a <code>CameraInput</code>: a <code>CameraInputState</code> takes them one by one (<code>addCameraInputEvent</code>), then gives the frame's input (<code>takeCameraInput</code>). The engine keeps one for the main window, and applies to it every event, from the SDL platform or from <code>Renderer::addInputEvent</code> (<a href="platform-layer.html">The platform layer</a>). An application can keep one per view:</p>
 <ul>
   <li><code>mouseStart</code> is last frame's drag position, <code>mouseEnd</code> the newest one, both from <code>toInputNdc</code> in the <code>InputArea</code>: a rectangle in window points, the units of <code>InputEvent</code> mouse positions.</li>
-  <li>A press starts a drag only inside the area and not on the UI (<code>UiInputCapture</code>, from <code>Engine::getUiInputCapture</code>). The drag goes on outside the area until the release.</li>
+  <li>A press starts a drag only inside the area and not on the UI (<code>UiInputCapture</code>, from <code>Renderer::getUiInputCapture</code>). The drag goes on outside the area until the release.</li>
   <li><code>wheelDelta</code> is summed over the frame while the pointer is in the area. A wheel event has no position, so before the first move it counts in every area.</li>
   <li>W, A, S, D are held keys by position (<code>InputEvent::physicalKey</code>), so they stay in the same place on an AZERTY keyboard.</li>
-  <li><code>deltaTime</code> comes from <code>steady_clock</code>: 0 on the first frame, at most 0.1 s. With <code>EngineConfig::fixedDeltaTime</code> it is that step instead, so the easing is the same in every run. <code>Engine::getDeltaTime</code> returns it.</li>
+  <li><code>deltaTime</code> comes from <code>steady_clock</code>: 0 on the first frame, at most 0.1 s. With <code>EngineConfig::fixedDeltaTime</code> it is that step instead, so the easing is the same in every run. <code>Renderer::getDeltaTime</code> returns it.</li>
   <li>A <code>FOCUS</code> event that loses the focus lets go of every key and ends the drag, so no key stays held.</li>
 </ul>
 
@@ -963,8 +963,8 @@ while (engine.running())
   <tr><td>Types</td><td><code>CameraInput</code>, <code>CameraController</code>, <code>CameraRig</code> in <code>include/rasm/cameraController.h</code>; <code>CameraInputState</code>, <code>InputArea</code> in <code>include/rasm/cameraInput.h</code>; <code>Camera</code> in <code>include/rasm/camera.h</code></td></tr>
   <tr><td>Controllers and easing</td><td><code>createCameraRig</code>, <code>updateCameraRig</code>, <code>projectOnSphere</code> in <code>src/scene/cameraController.cpp</code></td></tr>
   <tr><td>Events to <code>CameraInput</code></td><td><code>addCameraInputEvent</code>, <code>takeCameraInput</code>, <code>toInputNdc</code> in <code>src/platform/cameraInput.cpp</code></td></tr>
-  <tr><td>The engine's path</td><td><code>Engine::pollEvents</code> and <code>Engine::beginFrame</code> in <code>src/engine.cpp</code>; <code>Engine::updateCamera</code>, <code>Engine::setCameraController</code> in <code>src/scene/camera.cpp</code></td></tr>
-  <tr><td>Setup</td><td><code>Engine::createCamera</code>, <code>Engine::setCameraTransform</code> in <code>src/scene/camera.cpp</code></td></tr>
+  <tr><td>The engine's path</td><td><code>Renderer::pollEvents</code> and <code>Renderer::beginFrame</code> in <code>src/renderer/renderer.cpp</code>; <code>Renderer::updateCamera</code>, <code>Renderer::setCameraController</code> in <code>src/scene/camera.cpp</code></td></tr>
+  <tr><td>Setup</td><td><code>Renderer::createCamera</code>, <code>Renderer::setCameraTransform</code> in <code>src/scene/camera.cpp</code></td></tr>
   <tr><td>Examples</td><td><code>examples/05_city</code>: a free-fly rig on the engine's input, a tour the user takes over; <code>examples/19_embedding</code>: its own <code>CameraInputState</code>, F switches orbit and fly</td></tr>
   <tr><td>Tests</td><td><code>tests/cameraTests.cpp</code>: frame-time movement, diagonal speed, the pitch clamp, orbit sphere, easing, rigs and <code>NONE</code>; <code>tests/inputTests.cpp</code>: areas, drags, the wheel, <code>pollEvents</code></td></tr>
 </table>
@@ -984,7 +984,7 @@ while (engine.running())
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>The engine's own input covers the whole main window; an application with several views (<code>Engine::render</code> with a list of <code>View</code>s) keeps one <code>CameraInputState</code> per view. A view in another window (<code>ViewOutput::window</code>) reads that window's events: each <code>InputEvent</code> names its window. There is no turntable or walk mode, and a fly camera has no keys for up, down or a faster speed.</p>
+  <p>The engine's own input covers the whole main window; an application with several views (<code>Renderer::render</code> with a list of <code>View</code>s) keeps one <code>CameraInputState</code> per view. A view in another window (<code>ViewOutput::window</code>) reads that window's events: each <code>InputEvent</code> names its window. There is no turntable or walk mode, and a fly camera has no keys for up, down or a faster speed.</p>
 </div>
 
 <h3>Further reading</h3>

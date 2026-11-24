@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Swapchain · RASM</title>
 <meta name="description" content="How a program shows its frames: the swapchain's ring of images, acquire, render and present, the semaphores between them, present modes and vsync, out-of-date swapchains and resize, and how RASM does it.">
-<meta name="rasm-sources" content="src/rhi/vulkan/vulkanSwapchain.h src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanQueue.cpp src/rhi/device.h src/rhi/renderContext.cpp src/engine.cpp include/rasm/types.h src/platform/sdlPlatform.cpp src/platform/platform.h src/rhi/offscreenSwapchain.cpp">
+<meta name="rasm-sources" content="src/rhi/vulkan/vulkanSwapchain.h src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanQueue.cpp src/rhi/device.h src/rhi/renderContext.cpp src/renderer/renderer.cpp include/rasm/types.h src/platform/sdlPlatform.cpp src/platform/platform.h src/rhi/offscreenSwapchain.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -533,7 +533,7 @@
 
 <h2 id="in-rasm"><span class="n">7</span>In RASM</h2>
 
-<p><code>VulkanSwapchain</code> builds the swapchain with vk-bootstrap and owns all of its sync objects. No semaphore crosses the RHI: a submit only names the swapchains, to wait for their images (<code>SubmitDesc::acquireSwapchains</code>) or to present them (<code>SubmitDesc::presentSwapchains</code>), and each swapchain fills in its waits and signals. Each window has its own swapchain (<code>Engine::addWindow</code>): the main window's uses the surface the device was chosen for, another makes a surface of its own, and the device checks that its graphics queue can present to it (<code>vkGetPhysicalDeviceSurfaceSupportKHR</code>). A frame is one submit, or with <a href="async-compute.html">async compute</a> a few (<a href="frame-loop.html">the frame loop</a>): the first graphics submit waits for every window's image, and the last one presents them all; each window is then presented with its own <code>vkQueuePresentKHR</code>. The engine's frame loop handles skipped frames and resize.</p>
+<p><code>VulkanSwapchain</code> builds the swapchain with vk-bootstrap and owns all of its sync objects. No semaphore crosses the RHI: a submit only names the swapchains, to wait for their images (<code>SubmitDesc::acquireSwapchains</code>) or to present them (<code>SubmitDesc::presentSwapchains</code>), and each swapchain fills in its waits and signals. Each window has its own swapchain (<code>Renderer::addWindow</code>): the main window's uses the surface the device was chosen for, another makes a surface of its own, and the device checks that its graphics queue can present to it (<code>vkGetPhysicalDeviceSurfaceSupportKHR</code>). A frame is one submit, or with <a href="async-compute.html">async compute</a> a few (<a href="frame-loop.html">the frame loop</a>): the first graphics submit waits for every window's image, and the last one presents them all; each window is then presented with its own <code>vkQueuePresentKHR</code>. The engine's frame loop handles skipped frames and resize.</p>
 
 <div class="callout">
   <strong>No window, no swapchain</strong>
@@ -696,7 +696,7 @@
   <li><b>Consume pending signals.</b> <code>releasePendingSemaphores</code> submits a wait-only batch for an image that was acquired but not submitted, and for one submitted but not presented.</li>
   <li><b>Go idle and rebuild.</b> The device waits idle, the old image views go, and the new swapchain is built with the old one as <code>oldSwapchain</code>. The old one is destroyed either way. If the build fails, there is no swapchain, and acquire reports <code>OUT_OF_DATE</code> until a rebuild works.</li>
   <li><b>New handles.</b> <code>RenderContext::recreateSwapchain</code> registers the new images under new texture handles.</li>
-  <li><b>Screen-sized resources.</b> <code>Engine::createSwapchainResources</code> rebuilds the render targets sized from the swapchain (<code>RenderContext::resizeRenderTargets</code>), which keep their bindless slots, and sets the camera aspect ratio from the swapchain's extent.</li>
+  <li><b>Screen-sized resources.</b> <code>Renderer::createSwapchainResources</code> rebuilds the render targets sized from the swapchain (<code>RenderContext::resizeRenderTargets</code>), which keep their bindless slots, and sets the camera aspect ratio from the swapchain's extent.</li>
 </ol>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
@@ -729,7 +729,7 @@
   <tr><td>The image wait, the present signals</td><td><code>getAcquireWait</code>, <code>onAcquireWaited</code>, <code>getPresentSignals</code>, <code>onSubmitted</code>; used by <code>VulkanQueue::submit</code> in <code>src/rhi/vulkan/vulkanQueue.cpp</code></td></tr>
   <tr><td>Result codes</td><td><code>SwapchainStatus</code> in <code>include/rasm/types.h</code></td></tr>
   <tr><td>Image handles, layout at acquire</td><td><code>RenderContext::acquireNextImage</code>, <code>recreateSwapchain</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
-  <tr><td>Skips, resize, present</td><td><code>Engine::beginFrame</code>, <code>endFrame</code>, <code>submitBatches</code>, <code>recreateSwapchain</code>, <code>createSwapchainResources</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Skips, resize, present</td><td><code>Renderer::beginFrame</code>, <code>endFrame</code>, <code>submitBatches</code>, <code>recreateSwapchain</code>, <code>createSwapchainResources</code> in <code>src/renderer/renderer.cpp</code></td></tr>
   <tr><td>Resize and minimize events</td><td><code>pollEvents</code> in <code>src/platform/sdlPlatform.cpp src/platform/platform.h</code></td></tr>
 </table>
 </div>

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Image-Based Lighting · RASM</title>
 <meta name="description" content="How image-based lighting works: a photo of the light all around (an environment map), stored as an equirectangular image or a cube map, split into diffuse light (an irradiance map) and specular light (a prefiltered map per roughness and a BRDF table: the split sum), importance sampling and filtered importance sampling against fireflies, the sky behind the scene, pitfalls, a worked example. Then how RASM does it.">
-<meta name="rasm-sources" content="src/assets/environment.cpp src/renderer/environmentBake.h src/renderer/environmentBake.cpp shaders/passes/environment.slang shaders/lib/environment.slang shaders/lib/cubeMap.slang shaders/lib/brdf.slang shaders/lib/pbr.slang shaders/passes/sky.slang src/renderer/gpuScene.cpp include/rasm/scene.h include/rasm/engine.h src/scene/scene.cpp src/engine.cpp examples/08_ibl/main.cpp">
+<meta name="rasm-sources" content="src/assets/environment.cpp src/renderer/environmentBake.h src/renderer/environmentBake.cpp shaders/passes/environment.slang shaders/lib/environment.slang shaders/lib/cubeMap.slang shaders/lib/brdf.slang shaders/lib/pbr.slang shaders/passes/sky.slang src/renderer/gpuScene.cpp include/rasm/scene.h include/rasm/renderer.h src/scene/scene.cpp src/renderer/renderer.cpp examples/08_ibl/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -411,13 +411,13 @@ engine.setSceneEnvironment(scene, rasm::SceneEnvironment{.environment = sunset, 
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>Input</td><td>an equirectangular panorama or a cube</td><td>A Radiance <samp>.hdr</samp> panorama only (<code>Engine::loadEnvironment</code>), decoded with <code>stbi_loadf</code>, clamped to 65504 and packed to half floats on a worker.</td></tr>
+  <tr><td>Input</td><td>an equirectangular panorama or a cube</td><td>A Radiance <samp>.hdr</samp> panorama only (<code>Renderer::loadEnvironment</code>), decoded with <code>stbi_loadf</code>, clamped to 65504 and packed to half floats on a worker.</td></tr>
   <tr><td>Cube size</td><td>a quarter of the width</td><td><code>getEnvironmentCubeSize</code>: a quarter of the width as a power of two, 64 to 1024 (<code>ENVIRONMENT_MIN_CUBE_SIZE</code>, <code>ENVIRONMENT_MAX_CUBE_SIZE</code>). 4 reads of the image per texel, v kept half a texel inside it (the sampler repeats, for u), then a 2x2 box per mip.</td></tr>
   <tr><td>Irradiance</td><td>a small cube or 9 SH numbers</td><td>A cube of <code>IRRADIANCE_CUBE_SIZE</code> (32), 512 cosine samples per texel, filtered importance sampling.</td></tr>
   <tr><td>Specular</td><td>one roughness per mip</td><td><code>SPECULAR_CUBE_SIZE</code> (256) with <code>SPECULAR_MIPS</code> (6): mip m is roughness m / 5, 256 GGX samples per texel, mip 0 a copy. The shader reads <code>roughness × 5</code>, with perceptual roughness.</td></tr>
   <tr><td>BRDF table</td><td>2 channels, per engine</td><td><code>BRDF_LUT_SIZE</code> (128), 512 samples, in an RGBA16F texture (x and y used), baked in the engine's first frame.</td></tr>
   <tr><td>Rotation, intensity</td><td>—</td><td><code>SceneEnvironment::rotation</code> turns every lookup around +Y in the shader, so turning needs no new bake; <code>intensity</code> scales the light and the sky.</td></tr>
-  <tr><td>Sky</td><td>—</td><td><code>Engine::drawSky</code> draws the environment cube (mip 0) where depth is still 0, after the view's last draw pass. In a target with motion (<a href="taa.html">TAA</a>) the ray takes out the jitter, and the sky writes the motion of the camera's turn only, since it is infinitely far. A <a href="debug-views.html">debug view</a> draws no sky.</td></tr>
+  <tr><td>Sky</td><td>—</td><td><code>Renderer::drawSky</code> draws the environment cube (mip 0) where depth is still 0, after the view's last draw pass. In a target with motion (<a href="taa.html">TAA</a>) the ray takes out the jitter, and the sky writes the motion of the camera's turn only, since it is infinitely far. A <a href="debug-views.html">debug view</a> draws no sky.</td></tr>
   <tr><td>Occlusion</td><td>AO, probes</td><td>Only the material's occlusion texture, on diffuse and specular alike. The environment light is not shadowed (<code>D23</code>).</td></tr>
   <tr><td>Lifetime</td><td>—</td><td>Until <code>destroyEnvironment</code>: its scenes then have none, and its textures and slots go once the GPU is done with them.</td></tr>
 </table>
@@ -428,12 +428,12 @@ engine.setSceneEnvironment(scene, rasm::SceneEnvironment{.environment = sunset, 
 <div class="table-wrap">
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
-  <tr><td>API</td><td><code>Engine::loadEnvironment</code>, <code>Engine::isLoaded</code>, <code>Engine::setSceneEnvironment</code>, <code>SceneEnvironment</code> in <code>include/rasm/scene.h</code></td></tr>
-  <tr><td>Loading</td><td><code>decodeEnvironment</code> and <code>Engine::finishEnvironmentLoad</code> in <code>src/assets/environment.cpp</code></td></tr>
-  <tr><td>The bake</td><td><code>Engine::recordEnvironmentBakes</code> and <code>Engine::finishEnvironmentBakes</code> in <code>src/renderer/environmentBake.cpp</code>; state in <code>Environments</code>, sizes and storage slots in <code>src/renderer/environmentBake.h</code></td></tr>
+  <tr><td>API</td><td><code>Renderer::loadEnvironment</code>, <code>Renderer::isLoaded</code>, <code>Renderer::setSceneEnvironment</code>, <code>SceneEnvironment</code> in <code>include/rasm/scene.h</code></td></tr>
+  <tr><td>Loading</td><td><code>decodeEnvironment</code> and <code>Renderer::finishEnvironmentLoad</code> in <code>src/assets/environment.cpp</code></td></tr>
+  <tr><td>The bake</td><td><code>Renderer::recordEnvironmentBakes</code> and <code>Renderer::finishEnvironmentBakes</code> in <code>src/renderer/environmentBake.cpp</code>; state in <code>Environments</code>, sizes and storage slots in <code>src/renderer/environmentBake.h</code></td></tr>
   <tr><td>Bake shaders</td><td><code>cubeMain</code>, <code>downsampleMain</code>, <code>specularMain</code>, <code>irradianceMain</code>, <code>brdfMain</code> in <code>shaders/passes/environment.slang</code></td></tr>
   <tr><td>Shading</td><td><code>getEnvironmentLight</code>, <code>getSampleMip</code>, <code>sampleGgx</code>, <code>getEquirectUV</code>, <code>toEnvironment</code> in <code>shaders/lib/environment.slang</code>; called from <code>shadePBR</code> in <code>shaders/lib/pbr.slang</code></td></tr>
-  <tr><td>Sky</td><td><code>Engine::drawSky</code> in <code>src/renderer/gpuScene.cpp</code>, <code>shaders/passes/sky.slang</code></td></tr>
+  <tr><td>Sky</td><td><code>Renderer::drawSky</code> in <code>src/renderer/gpuScene.cpp</code>, <code>shaders/passes/sky.slang</code></td></tr>
   <tr><td>Per view</td><td><code>writeSceneEnvironment</code> fills the <code>SceneData</code> environment fields in <code>prepareSceneView</code></td></tr>
   <tr><td>Example</td><td><code>examples/08_ibl/main.cpp</code>: spheres from rough to smooth and plastic to metal, DamagedHelmet, a sun lined up with the photo's</td></tr>
 </table>

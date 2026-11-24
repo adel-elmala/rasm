@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Frames in Flight · RASM</title>
 <meta name="description" content="How the CPU and the GPU work on different frames at the same time: frame slots, fences (binary and timeline), what to keep one copy of per slot, latency against throughput, where to wait, and how RASM does it.">
-<meta name="rasm-sources" content="src/engine.cpp include/rasm/engine.h include/rasm/types.h src/renderer/gpuTable.h src/renderer/gpuTable.cpp src/renderer/gpuScene.h src/renderer/gpuScene.cpp src/renderer/frameStats.h src/renderer/frameStats.cpp src/renderer/statsOverlay.h src/rhi/device.h src/rhi/renderContext.cpp src/rhi/uploadManager.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanQueue.cpp">
+<meta name="rasm-sources" content="src/renderer/renderer.cpp include/rasm/renderer.h include/rasm/types.h src/renderer/gpuTable.h src/renderer/gpuTable.cpp src/renderer/gpuScene.h src/renderer/gpuScene.cpp src/renderer/frameStats.h src/renderer/frameStats.cpp src/renderer/statsOverlay.h src/rhi/device.h src/rhi/renderContext.cpp src/rhi/uploadManager.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanQueue.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -623,7 +623,7 @@
 
 <h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
 
-<p>RASM uses two slots (<code>MAX_FRAMES_IN_FLIGHT</code> = 2) and one timeline fence per queue: <code>Engine::frameFence</code> for the graphics queue, and <code>Engine::computeFence</code> for the compute queue when <a href="async-compute.html">async compute</a> is on. A slot remembers the last value of each (<code>FrameResources::fenceValue</code>, <code>FrameResources::computeFenceValue</code>), and <code>beginFrame</code> waits for both. <code>frameCount</code> is the slot, 0 or 1, not a frame counter. Everything that writes a slot's resources runs right after the wait in <code>beginFrame</code>.</p>
+<p>RASM uses two slots (<code>MAX_FRAMES_IN_FLIGHT</code> = 2) and one timeline fence per queue: <code>Renderer::frameFence</code> for the graphics queue, and <code>Renderer::computeFence</code> for the compute queue when <a href="async-compute.html">async compute</a> is on. A slot remembers the last value of each (<code>FrameResources::fenceValue</code>, <code>FrameResources::computeFenceValue</code>), and <code>beginFrame</code> waits for both. <code>frameCount</code> is the slot, 0 or 1, not a frame counter. Everything that writes a slot's resources runs right after the wait in <code>beginFrame</code>.</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 360" role="img" aria-label="beginFrame waits on frameFence for the slot's fenceValue, and on computeFence for its computeFenceValue with async compute, then runs updateFrameStats, updateStatsOverlay (or buildUi, with the UI on) and syncGpuScene, which write only this slot's buffers, then acquires an image and opens the graphics batch. endFrame submits the frame's batches; each signals the next value of its queue's fence. Only when a submit succeeds do the last value and the slot's value of that fence take the new value. Then frameCount flips.">
@@ -678,8 +678,8 @@
 <div class="table-wrap">
 <table>
   <tr><th>Per slot</th><th>Where</th><th>Written by</th></tr>
-  <tr><td>Fence values</td><td><code>FrameResources</code> in <code>Engine::frameResources</code></td><td><code>submitBatches</code>; <code>beginFrame</code> waits for them</td></tr>
-  <tr><td>Command buffers, one per batch and queue</td><td><code>Engine::batchCommandBuffers</code></td><td>the passes; <code>FrameResources::commandBuffer</code> names the one being recorded</td></tr>
+  <tr><td>Fence values</td><td><code>FrameResources</code> in <code>Renderer::frameResources</code></td><td><code>submitBatches</code>; <code>beginFrame</code> waits for them</td></tr>
+  <tr><td>Command buffers, one per batch and queue</td><td><code>Renderer::batchCommandBuffers</code></td><td>the passes; <code>FrameResources::commandBuffer</code> names the one being recorded</td></tr>
   <tr><td>GPU tables: instances, materials, lights, animated entities, morph weight overrides</td><td><code>GpuTable::buffers</code></td><td><code>syncGpuScene</code>, through <code>GpuTable::upload</code></td></tr>
   <tr><td>Draw lists, one per scene</td><td><code>SceneDrawList::buffers</code></td><td><code>syncGpuScene</code>, through <code>uploadDrawList</code></td></tr>
   <tr><td>Scene data, one per scene view</td><td><code>GpuScene::sceneData</code> (host-visible)</td><td><code>prepareSceneView</code>, at the start of the view's <code>Cull</code> pass</td></tr>
@@ -760,7 +760,7 @@
   <tr><td>Where to wait</td><td>start of the frame</td><td>In <code>beginFrame</code>, after input, finished loads and swapchain recreation, before anything writes the slot.</td></tr>
   <tr><td>Value only on success</td><td>store it after the submit</td><td>The same: a failed submit leaves both values, and calls <code>discardRecording</code>.</td></tr>
   <tr><td>Wait timeout</td><td>a timeout</td><td>None: <code>waitForFence</code> waits with <code>UINT64_MAX</code>. A failed wait skips the frame.</td></tr>
-  <tr><td>Readback</td><td><var>N</var> frames late</td><td>The cull stats and GPU timers of a slot are read after its wait, so the overlay and the RASM window show the frame from two frames ago. <code>FrameStatsSlot::readFenceValue</code> skips a slot whose frame was never submitted. An image copy (<code>Engine::readFrame</code>, <code>Engine::readTexture</code>) rides in a frame's last graphics batch and keeps that frame's fence value, so <code>isReadbackReady</code> turns true about two frames later, and nothing waits (<a href="headless-readback.html">readback</a>).</td></tr>
+  <tr><td>Readback</td><td><var>N</var> frames late</td><td>The cull stats and GPU timers of a slot are read after its wait, so the overlay and the RASM window show the frame from two frames ago. <code>FrameStatsSlot::readFenceValue</code> skips a slot whose frame was never submitted. An image copy (<code>Renderer::readFrame</code>, <code>Renderer::readTexture</code>) rides in a frame's last graphics batch and keeps that frame's fence value, so <code>isReadbackReady</code> turns true about two frames later, and nothing waits (<a href="headless-readback.html">readback</a>).</td></tr>
   <tr><td>Other users of the timeline idea</td><td>uploads, deletes</td><td><code>UploadManager</code> has its own timeline, "Upload Fence" (and the loads' "Load Upload Fence" on the transfer queue), to free staging space. The release queue waits for the frame, compute and both upload fences before it frees a destroyed object (<a href="resource-lifetime.html">deferred destruction</a>).</td></tr>
   <tr><td>Swapchain images</td><td>separate from slots</td><td>Separate. The swapchain also keeps its own acquire semaphores and its own release timeline, so it does not depend on the frame fence. See <a href="swapchain.html#in-rasm">the swapchain</a>.</td></tr>
 </table>
@@ -773,7 +773,7 @@
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>The slot count</td><td><code>MAX_FRAMES_IN_FLIGHT</code> in <code>include/rasm/types.h</code></td></tr>
   <tr><td>Slot state</td><td><code>FrameResources</code> in <code>include/rasm/types.h</code>; <code>frameResources</code>, <code>frameFence</code>, <code>frameFenceValue</code>, <code>computeFence</code>, <code>computeFenceValue</code>, <code>batchCommandBuffers</code> in <code>include/rasm/engine.h</code></td></tr>
-  <tr><td>The wait, the submits, the flip</td><td><code>Engine::beginFrame</code>, <code>Engine::endFrame</code> and <code>Engine::submitBatches</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>The wait, the submits, the flip</td><td><code>Renderer::beginFrame</code>, <code>Renderer::endFrame</code> and <code>Renderer::submitBatches</code> in <code>src/renderer/renderer.cpp</code></td></tr>
   <tr><td>Per-slot tables</td><td><code>GpuTable</code> in <code>src/renderer/gpuTable.cpp</code></td></tr>
   <tr><td>Timeline fence</td><td><code>VulkanDevice::createFence</code>, <code>waitForFence</code>, <code>getFenceValue</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code>; signaled in <code>VulkanQueue::submit</code></td></tr>
 </table>

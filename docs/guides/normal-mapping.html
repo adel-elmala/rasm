@@ -973,7 +973,7 @@ B  ∝ (dp/dy · du/dx − dp/dx · du/dy) · sign(det)</code></pre>
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>Tangents on import</td><td><code>extractGLTFRaws</code> in <code>src/assets/meshImport.cpp</code></td></tr>
   <tr><td>Vertex layout</td><td><code>Vertex</code> in <code>include/rasm/mesh.h</code>; <code>VertexFull</code> in <code>shaders/lib/core.slang</code></td></tr>
-  <tr><td>Normal matrix</td><td><code>Engine::writeInstanceRows</code> in <code>src/renderer/gpuScene.cpp</code>; for animated sub-meshes <code>animateMain</code> in <code>shaders/passes/animate.slang</code>; read through <code>getNormalMatrix</code> in <code>shaders/lib/core.slang</code></td></tr>
+  <tr><td>Normal matrix</td><td><code>Renderer::writeInstanceRows</code> in <code>src/renderer/gpuScene.cpp</code>; for animated sub-meshes <code>animateMain</code> in <code>shaders/passes/animate.slang</code>; read through <code>getNormalMatrix</code> in <code>shaders/lib/core.slang</code></td></tr>
   <tr><td>Posed normals and tangents</td><td><code>skinMain</code> in <code>shaders/passes/skin.slang</code></td></tr>
   <tr><td>Normal, tangent and sign to world space</td><td><code>vertMain</code> in <code>shaders/passes/rasm.slang</code></td></tr>
   <tr><td>The TBN and the derivative frame</td><td><code>getNormalFromMap</code> in <code>shaders/lib/pbr.slang</code></td></tr>

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Getting Started · RASM</title>
 <meta name="description" content="Build RASM, link it into your own CMake project, write a first program, and learn the handles and the three ways to run a frame.">
-<meta name="rasm-sources" content="include/rasm/rasm.h include/rasm/engine.h include/rasm/handle.h include/rasm/types.h src/engine.cpp src/core/handle.cpp src/renderer/renderGraph.cpp src/platform/paths.cpp examples/00_hello_scene/main.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp examples/05_city/main.cpp cmake/rasmConfig.cmake.in cmake/RasmInstall.cmake cmake/RasmRuntimeDlls.cmake cmake/RasmAnalysis.cmake CMakeLists.txt CMakePresets.json src/CMakeLists.txt">
+<meta name="rasm-sources" content="include/rasm/rasm.h include/rasm/renderer.h include/rasm/handle.h include/rasm/types.h src/renderer/renderer.cpp src/core/handle.cpp src/renderer/renderGraph.cpp src/platform/paths.cpp examples/00_hello_scene/main.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp examples/05_city/main.cpp cmake/rasmConfig.cmake.in cmake/RasmInstall.cmake cmake/RasmRuntimeDlls.cmake cmake/RasmAnalysis.cmake CMakeLists.txt CMakePresets.json src/CMakeLists.txt">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -38,7 +38,7 @@
     <li>Every object is a <b>handle</b>. A function that fails logs an error and returns an invalid handle (<code>isValid()</code> is false).</li>
     <li>Files load in the background. You can use a mesh or texture handle at once; the object is drawn when its data is ready.</li>
     <li>Call the engine from one thread only. It has no locks.</li>
-    <li>No window needed: with <code>PlatformType::HEADLESS</code> frames render offscreen, and <code>readFrame</code> copies them back to the CPU (<a href="engine.html#headless">headless</a>).</li>
+    <li>No window needed: a <code>Renderer</code> without a window (or an <code>Engine</code> with <code>PlatformType::HEADLESS</code>) renders frames offscreen, and <code>readFrame</code> copies them back to the CPU (<a href="engine.html#headless">headless</a>).</li>
   </ul>
 </div>
 
@@ -299,7 +299,7 @@ while (engine.running())
 <h2 id="next"><span class="n">6</span>Where to go next</h2>
 
 <div class="cards">
-  <a class="card" href="engine.html"><b>Engine</b><span>EngineConfig, the frame functions, loading, frame stats, and an index of every method.</span></a>
+  <a class="card" href="engine.html"><b>Engine and Renderer</b><span>The all-in-one or the renderer alone, EngineConfig, the frame functions, loading, frame stats, and an index of every method.</span></a>
   <a class="card" href="scene.html"><b>Scenes, entities, meshes, lights</b><span>What goes into a scene and when changes reach the GPU.</span></a>
   <a class="card" href="materials.html"><b>Materials and textures</b><span>PBR and unlit materials, texture formats, bindless slots.</span></a>
   <a class="card" href="camera.html"><b>Cameras and input</b><span>Projections, controllers, the default mouse and keyboard controls, and driving cameras yourself.</span></a>

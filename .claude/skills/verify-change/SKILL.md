@@ -8,7 +8,7 @@ description: Verify a RASM code or shader change end to end. Build, unit tests, 
 One command checks everything CLAUDE.md asks for ("a change that adds validation messages is
 not done") plus image regressions. Every example runs **headless**, so no window opens: it gets
 `--headless --frames N --out <png>` (`examples/exampleArgs.h`), renders N frames into an offscreen swapchain with
-validation on, writes frame N through `Engine::readFrame` and exits. The UI is drawn headless too (with no input),
+validation on, writes frame N through `Renderer::readFrame` and exits. The UI is drawn headless too (with no input),
 so the RASM window and an example's own ImGui windows are in the screenshot.
 
 `--windowed` runs the examples in a window under the GFXReconstruct layer (Vulkan SDK) instead: the layer quits each
@@ -82,7 +82,7 @@ Frame N is pixel-exact between runs (tested: max diff 0) because the examples ro
 a fixed angle per frame, not by elapsed time, the camera has no input, `--fixed-step` sets
 `EngineConfig::fixedDeltaTime` to 1/60 s (the cameras' easing, the UI and the stats' refresh step by it, so the RASM
 window and the stats overlay renew their numbers on the same frames: `C15`), and with `--wait-for-loads`
-(`examples/exampleArgs.h`) every example that loads calls `Engine::waitForLoads` before its first frame, so
+(`examples/exampleArgs.h`) every example that loads calls `Renderer::waitForLoads` before its first frame, so
 frame N does not depend on how fast the loads ran (`C16`). The camera eases toward its target by `deltaTime`, but snaps to it once it is within float precision (`B24`), so a camera at rest does not drift. A DIFF only on equal-depth edges, different from run to run, points at something time-based like that. If an example starts
 animating by time, its diffs become noise. Make the animation per-frame, or exclude that example
 with `--examples`. `05_city` animates by wall clock, but the script runs every example with `--fixed-step`, which makes it

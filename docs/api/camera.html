@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cameras and Input · RASM</title>
 <meta name="description" content="Create and control cameras: projections, trackball and free-fly controllers, view and projection matrices, and the input that drives them.">
-<meta name="rasm-sources" content="include/rasm/camera.h include/rasm/cameraController.h include/rasm/cameraInput.h include/rasm/input.h src/scene/cameraController.cpp src/platform/cameraInput.cpp include/rasm/engine.h include/rasm/window.h include/rasm/scene.h src/scene/camera.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/engine.cpp src/renderer/gpuScene.cpp src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/taa.cpp src/scene/scene.cpp src/core/handle.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp">
+<meta name="rasm-sources" content="include/rasm/camera.h include/rasm/cameraController.h include/rasm/cameraInput.h include/rasm/input.h src/scene/cameraController.cpp src/platform/cameraInput.cpp include/rasm/renderer.h include/rasm/window.h include/rasm/scene.h src/scene/camera.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/renderer/renderer.cpp src/renderer/gpuScene.cpp src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/taa.cpp src/scene/scene.cpp src/core/handle.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -360,7 +360,7 @@ engine.setCameraController(camera, rasm::CameraController{
 <div class="api" id="setCameraBloomStrength">
   <pre class="sig">void setCameraBloomStrength(CameraHandle camera, float strength);</pre>
   <div class="body">
-    <p>How much the camera's image glows around bright light: the <a href="engine.html#addToneMapPass">tone-map pass</a> draws <code>lerp(scene, bloom, strength)</code> with the bloom of <a href="engine.html#addBloomPasses"><code>addBloomPasses</code></a>, like the haze of a real lens. 0.04 is the default. The passes read it every time they run, and at 0 they dispatch nothing. It has an effect only in a graph with the bloom passes (<code>EngineConfig::bloom</code> for <code>Engine::render</code>). How it works: <a href="../guides/bloom.html">Bloom</a>.</p>
+    <p>How much the camera's image glows around bright light: the <a href="engine.html#addToneMapPass">tone-map pass</a> draws <code>lerp(scene, bloom, strength)</code> with the bloom of <a href="engine.html#addBloomPasses"><code>addBloomPasses</code></a>, like the haze of a real lens. 0.04 is the default. The passes read it every time they run, and at 0 they dispatch nothing. It has an effect only in a graph with the bloom passes (<code>EngineConfig::bloom</code> for <code>Renderer::render</code>). How it works: <a href="../guides/bloom.html">Bloom</a>.</p>
     <dl>
       <dt>strength</dt><dd>The bloom's share of the image, from 0 to 1. A value outside, or NaN, logs an error and keeps the old one.</dd>
     </dl>
@@ -453,7 +453,7 @@ engine.resetCameraHistory(camera);</code></pre>
   <tr><td><kbd>Esc</kbd>, closing the window</td><td colspan="2"><code>running</code> returns false from now on</td></tr>
   <tr><td><kbd>F1</kbd></td><td colspan="2">shows or hides the stats (<code>EngineConfig::showStats</code>): the RASM window with <code>EngineConfig::ui</code>, else the stats overlay</td></tr>
   <tr><td><kbd>F2</kbd></td><td colspan="2">cycles the forced LOD: by distance, LOD 0, 1, … 7, by distance (<code>EngineConfig::forcedLod</code>)</td></tr>
-  <tr><td><kbd>F3</kbd></td><td colspan="2">logs the dump of the next render graph that runs, <code>Engine::render</code>'s or yours (<a href="render-graph.html#dump"><code>RenderGraph::dump</code></a>)</td></tr>
+  <tr><td><kbd>F3</kbd></td><td colspan="2">logs the dump of the next render graph that runs, <code>Renderer::render</code>'s or yours (<a href="render-graph.html#dump"><code>RenderGraph::dump</code></a>)</td></tr>
   <tr><td>A UI window under the mouse, or with the keyboard</td><td colspan="2">with <code>EngineConfig::ui</code>: the camera gets no drag, wheel or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>, and while a text field takes typing <kbd>Esc</kbd> and <kbd>F1</kbd>–<kbd>F3</kbd> do nothing (<a href="engine.html#ui">UI with Dear ImGui</a>)</td></tr>
 </table>
 </div>

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Texture uploads · RASM</title>
 <meta name="description" content="How a texture gets from a file into video memory: decode, mips, the GPU's tiled layout, a staging copy or host image copy, the memory types each may use, where to make the mips (offline, a CPU worker, GPU blits or compute), filtering color, data and normal maps, and sub-allocating textures.">
-<meta name="rasm-sources" content="src/rhi/mipChain.h src/rhi/mipChain.cpp src/rhi/vulkan/vulkanUtils.h src/rhi/vulkan/vulkanUtils.cpp src/rhi/vulkan/vulkanDevice.h src/rhi/vulkan/vulkanDevice.cpp src/rhi/uploadManager.cpp src/rhi/renderContext.cpp src/assets/texture.cpp src/assets/material.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/mesh.cpp src/engine.cpp include/rasm/types.h include/rasm/mesh.h include/rasm/engine.h include/rasm/render/resource.h examples/10_ktx2_textures/main.cpp tests/textureUploadTests.cpp">
+<meta name="rasm-sources" content="src/rhi/mipChain.h src/rhi/mipChain.cpp src/rhi/vulkan/vulkanUtils.h src/rhi/vulkan/vulkanUtils.cpp src/rhi/vulkan/vulkanDevice.h src/rhi/vulkan/vulkanDevice.cpp src/rhi/uploadManager.cpp src/rhi/renderContext.cpp src/assets/texture.cpp src/assets/material.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/mesh.cpp src/renderer/renderer.cpp include/rasm/types.h include/rasm/mesh.h include/rasm/renderer.h include/rasm/render/resource.h examples/10_ktx2_textures/main.cpp tests/textureUploadTests.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -438,9 +438,9 @@
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>Mips</td><td><code>buildTextureLevels</code>, <code>buildMipChain</code>, <code>getFullMipCount</code> in <code>src/rhi/mipChain.cpp</code></td></tr>
-  <tr><td>Worker: textures</td><td><code>decodeTexture</code>, <code>Engine::loadTexture</code>, <code>finishTextureLoad</code> in <code>src/assets/texture.cpp</code></td></tr>
+  <tr><td>Worker: textures</td><td><code>decodeTexture</code>, <code>Renderer::loadTexture</code>, <code>finishTextureLoad</code> in <code>src/assets/texture.cpp</code></td></tr>
   <tr><td>Worker: glTF images</td><td><code>planImageLevels</code>, <code>runImageWork</code>, <code>getImageLevelsKey</code> in <code>src/assets/meshImport.cpp</code>; <code>GLTFRaw::imageLevels</code> in <code>include/rasm/mesh.h</code></td></tr>
-  <tr><td>Queued fills</td><td><code>Engine::loadMaterial</code> in <code>src/assets/material.cpp</code>; <code>PendingTextureLoad</code> in <code>include/rasm/engine.h</code>; <code>finishLoads</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Queued fills</td><td><code>Renderer::loadMaterial</code> in <code>src/assets/material.cpp</code>; <code>PendingTextureLoad</code> in <code>include/rasm/engine.h</code>; <code>finishLoads</code> in <code>src/renderer/renderer.cpp</code></td></tr>
   <tr><td>Host copy or staging</td><td><code>VulkanDevice::queryFormatSupport</code>, <code>createTexture</code>, <code>fillTexture</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code>; <code>getHostCopyMemoryTypes</code> in <code>src/rhi/vulkan/vulkanUtils.cpp</code>; <code>UploadManager::uploadTexture</code> in <code>src/rhi/uploadManager.cpp</code></td></tr>
   <tr><td>Measure</td><td><samp>examples/10_ktx2_textures</samp> (<samp>--measure</samp>, <samp>--staging</samp>, <samp>--model</samp>)</td></tr>
   <tr><td>Tests</td><td><samp>tests/textureUploadTests.cpp</samp></td></tr>

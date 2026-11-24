@@ -2,7 +2,7 @@
 
 // Follow one call of the application down the layers, one step per layer, as the code does it.
 RasmLab.register("layer-calls", function (lab) {
-    const LAYERS = ["Application", "Engine", "RenderContext", "rhi::Device", "VulkanDevice", "GPU"];
+    const LAYERS = ["Application", "Renderer", "RenderContext", "rhi::Device", "VulkanDevice", "GPU"];
     const CLASSES = ["box", "cpu", "cpu", "cpu", "cpu", "gpu"];
     const BOX_X = 60;
     const BOX_W = 170;
@@ -15,17 +15,17 @@ RasmLab.register("layer-calls", function (lab) {
     const CALLS = {
         createEntity: {
             steps: [
-                { code: "engine.createEntity(\"crate\", mesh, material, transform)", text: "The application asks for an entity. It names the mesh and the material by handle." },
-                { via: "handles", code: "handleManager.getNextEntityHandle()", text: "Stores the Entity in registry.entities. queueInstanceRows puts it on a waiting list." },
+                { code: "renderer.createEntity(\"crate\", mesh, material, transform)", text: "The application asks for an entity. It names the mesh and the material by handle." },
+                { via: "handles", code: "registry.entityHandles.allocate()", text: "Stores the Entity in registry.entities. queueInstanceRows puts it on a waiting list." },
             ],
             back: "EntityHandle",
             gpu: "none",
-            end: "The call stops at Engine: no GPU object is made. syncGpuScene writes the entity's rows in a later beginFrame.",
+            end: "The call stops at Renderer: no GPU object is made. syncGpuScene writes the entity's rows in a later beginFrame.",
         },
         createBuffer: {
             steps: [
-                { code: "engine.createBuffer({.name = \"Particle Positions\", ...})", text: "The application describes the buffer in a BufferDesc." },
-                { via: "BufferDesc", code: "ctx.createBuffer(desc)", text: "Engine keeps nothing for a buffer. It passes the descriptor on." },
+                { code: "renderer.createBuffer({.name = \"Particle Positions\", ...})", text: "The application describes the buffer in a BufferDesc." },
+                { via: "BufferDesc", code: "ctx.createBuffer(desc)", text: "Renderer keeps nothing for a buffer. It passes the descriptor on." },
                 { via: "BufferDesc", code: "impl->device->createBuffer(desc)", text: "No dedup: always a new buffer. Its table maps a new BufferHandle to the rhi::Buffer*." },
                 { via: "BufferDesc", code: "virtual Buffer* createBuffer(const BufferDesc& desc) = 0", text: "The interface only. It names no Vulkan type." },
                 { via: "virtual call", code: "vmaCreateBuffer(allocator, ...)", text: "VMA makes the VkBuffer and its memory. A VulkanBuffer goes back up as an rhi::Buffer*." },
@@ -36,8 +36,8 @@ RasmLab.register("layer-calls", function (lab) {
         },
         render: {
             steps: [
-                { code: "engine.render(scene, camera)", text: "Once per frame. Follow one of its draws." },
-                { via: "handles", code: "renderer->render(...)  →  graph.execute(camera)", text: "The graph runs beginFrame, each pass and endFrame. A scene pass calls drawSceneView." },
+                { code: "renderer.render(scene, camera)", text: "Once per frame. Follow one of its draws." },
+                { via: "handles", code: "viewGraph->render(...)  →  graph.execute(camera)", text: "The graph runs beginFrame, each pass and endFrame. A scene pass calls drawSceneView." },
                 { via: "handles", code: "ctx.drawIndexedIndirectCount(commandBuffer, drawInfoBuffer, ...)", text: "Finds the rhi object behind each handle: lookup(impl->buffers, drawInfoBuffer, ...)." },
                 { via: "rhi:: pointers", code: "rhiCommandBuffer->drawIndexedIndirectCount(rhiBuffer, ...)", text: "A virtual call on rhi::CommandBuffer, declared in src/rhi/device.h." },
                 { via: "virtual call", code: "vkCmdDrawIndexedIndirectCount(commandBuffer, ...)", text: "VulkanCommandBuffer records the Vulkan command. Nothing is drawn yet." },

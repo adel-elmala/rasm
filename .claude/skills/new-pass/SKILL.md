@@ -17,19 +17,19 @@ is the working reference (forward pass into a render target, then an overlay pas
 | **Shadow** (the scene's depth from the sun) | `auto shadow = engine.addShadowPasses(graph, scene, camera, {.light = sun, .cascadeCount = 4, .distance = 60.0f})`, then `addScenePasses(graph, scene, camera, target, shadow)` for the shaded view | that directional light gets cascaded PCF shadows out to `distance`, fitted to `camera` every frame. Its depth-only targets are `shadow.cascades[i]`. Reference: `examples/06_shadows`. |
 | **Scene with its own shader** (normals view, ID buffer) | ✗ not possible from the app | the custom shader can't get the `SceneData` address. Needs an engine change: propose it first. |
 | **Compute** (culling, particles, buffer processing) | `engine.createComputePipeline` (`compMain`, or a named entry point), `graph.addComputePass`, `ctx.dispatch`; the graph adds the barriers around the pass | in the graph, writes **buffers** through device addresses, and **storage render targets** (`RenderTargetDesc::storage`: colors only, no depth): `builder.write(rt)` makes the graph move the target's colors to `STORAGE` before the pass and back to `SAMPLED` for a pass that `read`s it; the shader writes `[format("rgba16f")] RWTexture2DArray<float4>` at binding 1, slot `engine.getRenderTargetStorageIndex(rt)`, layer 0. Read inputs by sampling, never the image the pass writes. Not from an async pass. Engine-added compute passes next to each other can share a GPU timer (`Pass::timerName`, set through the `Engine` friend). Reference: `src/renderer/bloom.cpp` and `shaders/passes/bloom.slang`. It can read bindless textures with `Load`/`Sample` after `ctx.bindDescriptorSet(cmd, pipeline, engine.getBindlessDescriptorSet())`. A texture it reads must be in `SAMPLED` layout. Reference: `examples/04_compute`, and `hizMain` in `shaders/passes/hiz.slang`. |
-| **Pass built into the engine** (every app gets it) | `Engine::render` runs `Renderer`'s graph of the scene passes (`src/renderer/renderer.cpp`) | an engine change: propose it first. |
+| **Pass built into the engine** (every app gets it) | `Renderer::render` runs `ViewGraph`'s graph of the scene passes (`src/renderer/viewGraph.cpp`) | an engine change: propose it first. |
 
 ## 2. Current limits (check before designing)
 
 | Limit | Value | Where |
 |---|---|---|
 | Push constants | **16 bytes total** (`PUSH_CONSTANTS_SIZE`), one range every stage sees, in the pipeline layout all pipelines share | `createPipelineLayout` in `vulkanDevice.cpp`; `RenderContext::pushConstants` rejects more |
-| Entry points | `vertMain` + `fragMain` in **one source string** | `Engine::createPipeline` |
-| Attachments | 1 color (swapchain format) + `D32_SFLOAT` (reversed-Z) | `Engine::createPipeline` |
+| Entry points | `vertMain` + `fragMain` in **one source string** | `Renderer::createPipeline` |
+| Attachments | 1 color (swapchain format) + `D32_SFLOAT` (reversed-Z) | `Renderer::createPipeline` |
 | Fixed state | depth test + write `GREATER_OR_EQUAL` (reversed-Z, cleared to 0: a pass that writes its own depth puts the far plane at 0, not `z = w`), no blending, triangle list, no vertex input, front face counter-clockwise | `createGraphicsPipeline` |
 | Cull mode | dynamic: `beginPass` sets `NONE`, `ctx.setCullMode(commandBuffer, CullMode::BACK)` changes it for the pass | `VulkanCommandBuffer::setCullMode` |
 | Every pass **clears** its target | two passes can't accumulate into one target | `VulkanCommandBuffer::beginRendering`, review §3 |
-| Readable outputs | the **color** of an earlier render target, through its bindless index, and its **depth** with `occlusionCulling` or when the target is depth-only (`builder.readDepth(target)` / `readSwapchainDepth()`, `engine.getRenderTargetDepthTexture`; the graph makes the pass before store it) | `Engine::endPass`, `RenderGraph::compile` |
+| Readable outputs | the **color** of an earlier render target, through its bindless index, and its **depth** with `occlusionCulling` or when the target is depth-only (`builder.readDepth(target)` / `readSwapchainDepth()`, `engine.getRenderTargetDepthTexture`; the graph makes the pass before store it) | `Renderer::endPass`, `RenderGraph::compile` |
 | Ordering | from `builder.read`/`write` only, topologically sorted. The graph adds a global `memoryBarrier` before every compute pass and before the first graphics pass after one, plus the render target begin/end transitions. Dependent dispatches inside one compute pass need `ctx.memoryBarrier(COMPUTE, COMPUTE)` between them | `RenderGraph::compile` |
 | Camera | `execute(camera)` passes it to `beginFrame` (input and delta time); each `addScenePasses` call names its own camera | `RenderGraph::execute` |
 
@@ -107,5 +107,5 @@ graph.addPass(
 
 1. `verify-change` skill: baseline before, `run` after, with `--sync` (passes add barriers and layout transitions). New example → its screenshot has no baseline yet, so look at it (Read) and judge.
 2. Wrong output → `frame-debug` skill: `rdc.py actions` shows each pass's begin/draw, and `targets <eid>` shows what each pass wrote.
-3. Cost → GPU time per pass: run with `EngineConfig::showStats = true` (F1 toggles it) or read `Engine::getFrameStats()`; every pass gets a timer named after it. CPU cost → `tracy-profile`.
+3. Cost → GPU time per pass: run with `EngineConfig::showStats = true` (F1 toggles it) or read `Renderer::getFrameStats()`; every pass gets a timer named after it. CPU cost → `tracy-profile`.
 4. `finish-task` skill: architecture.md §9 if graph behavior changed, the plan item if it closes one.

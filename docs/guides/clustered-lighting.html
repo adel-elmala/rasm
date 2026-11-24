@@ -418,7 +418,7 @@
 <div class="table-wrap">
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
-  <tr><td>The light API</td><td><code>Engine::createLight</code>, <code>getLight</code>, <code>updateLight</code> in <code>src/scene/light.cpp</code>; <code>addLightToScene</code> in <code>src/scene/scene.cpp</code></td></tr>
+  <tr><td>The light API</td><td><code>Renderer::createLight</code>, <code>getLight</code>, <code>updateLight</code> in <code>src/scene/light.cpp</code>; <code>addLightToScene</code> in <code>src/scene/scene.cpp</code></td></tr>
   <tr><td>The light table and the scene lists</td><td><code>writeLightRow</code>, <code>syncGpuLights</code>, <code>buildSceneLightList</code> in <code>src/renderer/lightClusters.cpp</code></td></tr>
   <tr><td>A view's lights in <code>SceneData</code></td><td><code>writeSceneLights</code>, called by <code>prepareSceneView</code></td></tr>
   <tr><td>The three dispatches</td><td><code>recordLightClusters</code>; <code>lightsMain</code>, <code>tilesMain</code>, <code>clustersMain</code> in <code>shaders/passes/lightClusters.slang</code></td></tr>

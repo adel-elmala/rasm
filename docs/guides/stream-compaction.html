@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Stream Compaction · RASM</title>
 <meta name="description" content="How a GPU keeps the items that pass a test, packed and in order: atomic append, prefix sums (scan), Hillis–Steele and Blelloch scans, wave intrinsics, multi-level and decoupled look-back scans, writing a count for indirect draws, and how RASM packs its visible draws.">
-<meta name="rasm-sources" content="shaders/passes/cull.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/engine.cpp shaders/lib/core.slang src/renderer/uberMaterialTypes.h">
+<meta name="rasm-sources" content="shaders/passes/cull.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/renderer.cpp shaders/lib/core.slang src/renderer/uberMaterialTypes.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -1275,7 +1275,7 @@ void compactMain(uint3 id : SV_DispatchThreadID)
 
 <h3>When it runs</h3>
 
-<p>The culling is a compute pass of the <a href="render-graphs.html">render graph</a>, <code>Cull</code>, before the pass that draws, <code>Scene</code>. <code>Engine::addScenePasses</code> adds both. <code>Cull</code> declares that it writes the visible draws and the draw counts, and <code>Scene</code> that it reads them, so the graph records one barrier between them. Inside <code>Cull</code>, <code>Engine::recordSceneCulling</code> records <code>countMain</code>, a <code>COMPUTE → COMPUTE</code> barrier and <code>writeMain</code>. A shaded view's first culling pass then also sorts its lights into clusters (<code>recordLightClusters</code>, <a href="clustered-lighting.html#in-rasm">clustered lighting</a>).</p>
+<p>The culling is a compute pass of the <a href="render-graphs.html">render graph</a>, <code>Cull</code>, before the pass that draws, <code>Scene</code>. <code>Renderer::addScenePasses</code> adds both. <code>Cull</code> declares that it writes the visible draws and the draw counts, and <code>Scene</code> that it reads them, so the graph records one barrier between them. Inside <code>Cull</code>, <code>Renderer::recordSceneCulling</code> records <code>countMain</code>, a <code>COMPUTE → COMPUTE</code> barrier and <code>writeMain</code>. A shaded view's first culling pass then also sorts its lights into clusters (<code>recordLightClusters</code>, <a href="clustered-lighting.html#in-rasm">clustered lighting</a>).</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 210" role="img" aria-label="The frame's command buffer: the Cull pass runs countMain, a barrier and writeMain and writes the visible draws and counts. The graph records a compute to graphics barrier. The Scene pass reads them with one drawIndexedIndirectCount per run.">
@@ -1315,10 +1315,10 @@ void compactMain(uint3 id : SV_DispatchThreadID)
   <tr><td>Across groups</td><td>scan the group counts (multi-level) or decoupled look-back</td><td>No scan: each <code>writeMain</code> group adds up the counts of every earlier group of its run. O(groups) per group, O(groups²) per run.</td></tr>
   <tr><td>Dispatches</td><td>two or three</td><td>Two (<code>countMain</code>, <code>writeMain</code>). The scan of the group counts is folded into <code>writeMain</code>.</td></tr>
   <tr><td>Segments</td><td>separate counts per list, or a segmented scan</td><td>Groups never cross a run (<code>getCullGroup</code>), and each run has its own count in <code>drawCountsPtr</code>.</td></tr>
-  <tr><td>After the pack</td><td>—</td><td>The see-through run (<code>SceneData::blendRun</code>) is packed only by the late phase, then sorted back to front in place (<a href="gpu-sorting.html#in-rasm">sorting on the GPU</a>). A view without a late phase packs it in the early one: one without a Hi-Z sorts it then, and a frozen one (<code>Engine::setCullingFrozen</code>) that has a Hi-Z leaves it unsorted. Every other run keeps the list's order.</td></tr>
+  <tr><td>After the pack</td><td>—</td><td>The see-through run (<code>SceneData::blendRun</code>) is packed only by the late phase, then sorted back to front in place (<a href="gpu-sorting.html#in-rasm">sorting on the GPU</a>). A view without a late phase packs it in the early one: one without a Hi-Z sorts it then, and a frozen one (<code>Renderer::setCullingFrozen</code>) that has a Hi-Z leaves it unsorted. Every other run keeps the list's order.</td></tr>
   <tr><td>Count</td><td>written by the last group, or an atomic counter</td><td>Written by thread 0 of the run's last group, every frame. Nothing is cleared.</td></tr>
   <tr><td>Atomics</td><td>for positions, in the unordered methods</td><td>Only for the frame statistics (<code>cullStatsPtr</code>, with <code>InterlockedAdd</code>), never for positions.</td></tr>
-  <tr><td>Capacity</td><td>the worst case</td><td>The visible draw buffer holds at least as many draws as the draw list, then the scratch. It grows in <code>Engine::prepareSceneView</code> (<code>SceneView::visibleCapacity</code>).</td></tr>
+  <tr><td>Capacity</td><td>the worst case</td><td>The visible draw buffer holds at least as many draws as the draw list, then the scratch. It grows in <code>Renderer::prepareSceneView</code> (<code>SceneView::visibleCapacity</code>).</td></tr>
   <tr><td>What is copied</td><td>the item</td><td>The <code>DrawInfo</code>, with the index range of the LOD that <code>countMain</code> chose (<a href="lod-selection.html">LOD selection</a>). The LOD rides in the high bits of the slot. With <code>EngineConfig::meshletPath</code>, a big draw is written as chunks of meshlets instead, which a second compaction packs in the same order (<a href="meshlets.html#order">meshlets</a>).</td></tr>
 </table>
 </div>
@@ -1332,10 +1332,10 @@ void compactMain(uint3 id : SV_DispatchThreadID)
   <tr><td>Base from earlier groups, scatter, run count</td><td><code>writeMain</code> in <code>shaders/passes/cull.slang</code></td></tr>
   <tr><td>Which run and range a group covers</td><td><code>getCullGroup</code> in <code>shaders/passes/cull.slang</code></td></tr>
   <tr><td>Group size</td><td><code>CULL_GROUP_SIZE</code> in <code>shaders/passes/cull.slang</code> and <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>Scratch pointers, buffer layout, group count per view</td><td><code>Engine::prepareSceneView</code>, <code>getVisibleDrawLayout</code> in <code>src/renderer/gpuScene.cpp</code> (<code>SceneView::groupCount</code>)</td></tr>
-  <tr><td>Recording the dispatches and the barrier between them</td><td><code>Engine::recordSceneCulling</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>The <code>Cull</code> and <code>Scene</code> passes</td><td><code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>Runs of one alpha mode and cull mode</td><td><code>Engine::rebuildDrawList</code> in <code>src/renderer/gpuScene.cpp</code>, <code>DrawRun</code> in <code>src/renderer/gpuScene.h</code></td></tr>
+  <tr><td>Scratch pointers, buffer layout, group count per view</td><td><code>Renderer::prepareSceneView</code>, <code>getVisibleDrawLayout</code> in <code>src/renderer/gpuScene.cpp</code> (<code>SceneView::groupCount</code>)</td></tr>
+  <tr><td>Recording the dispatches and the barrier between them</td><td><code>Renderer::recordSceneCulling</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>The <code>Cull</code> and <code>Scene</code> passes</td><td><code>Renderer::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Runs of one alpha mode and cull mode</td><td><code>Renderer::rebuildDrawList</code> in <code>src/renderer/gpuScene.cpp</code>, <code>DrawRun</code> in <code>src/renderer/gpuScene.h</code></td></tr>
   <tr><td>The pointers</td><td><code>SceneData</code> in <code>shaders/lib/core.slang</code> and <code>src/renderer/uberMaterialTypes.h</code></td></tr>
 </table>
 </div>
@@ -1344,7 +1344,7 @@ void compactMain(uint3 id : SV_DispatchThreadID)
   <strong>Keep these true</strong>
   <ul>
     <li><code>CULL_GROUP_SIZE</code> is defined in <code>cull.slang</code> and in <code>gpuScene.cpp</code>. Change both, and the scratch size in <code>getVisibleDrawLayout</code> (one count per group, at most one group per 64 draws plus one per run).</li>
-    <li>A group must never cross a run. <code>getCullGroup</code> and the CPU's group count in <code>Engine::prepareSceneView</code> must agree.</li>
+    <li>A group must never cross a run. <code>getCullGroup</code> and the CPU's group count in <code>Renderer::prepareSceneView</code> must agree.</li>
     <li>Threads past the end of a run still reach every barrier, with <code>visible</code> = false. Do not return early in <code>countMain</code> or <code>writeMain</code>.</li>
     <li>The count must be written every time the culling runs, by the run's last group. Nothing clears it.</li>
     <li>A new pointer in <code>SceneData</code> is a CPU↔GPU struct change: follow <a href="struct-layout.html">the struct layout rules</a>.</li>

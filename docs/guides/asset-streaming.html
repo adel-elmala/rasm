@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Streaming Assets · RASM</title>
 <meta name="description" content="How to load meshes and textures without freezing the frame: worker threads and job queues, the hand-off to the main thread, per-frame upload budgets, placeholders, caching by path, failures and freeing the CPU copy, and how RASM does it.">
-<meta name="rasm-sources" content="src/assets/environment.cpp src/assets/mesh.cpp src/assets/texture.cpp src/rhi/mipChain.cpp src/assets/ktxImage.cpp src/assets/material.cpp src/assets/meshImport.cpp src/engine.cpp include/rasm/engine.h include/rasm/mesh.h src/renderer/geometryPool.cpp src/renderer/gpuScene.cpp src/rhi/uploadManager.cpp src/core/workerPool.cpp src/assets/loadJobs.h">
+<meta name="rasm-sources" content="src/assets/environment.cpp src/assets/mesh.cpp src/assets/texture.cpp src/rhi/mipChain.cpp src/assets/ktxImage.cpp src/assets/material.cpp src/assets/meshImport.cpp src/renderer/renderer.cpp include/rasm/renderer.h include/rasm/mesh.h src/renderer/geometryPool.cpp src/renderer/gpuScene.cpp src/rhi/uploadManager.cpp src/core/workerPool.cpp src/assets/loadJobs.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -1002,16 +1002,16 @@
 <div class="table-wrap">
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
-  <tr><td>Mesh loads</td><td><code>Engine::loadMesh</code>, <code>loadGLTF</code>, <code>createMesh</code>, <code>finishMeshLoad</code>, <code>isLoaded</code> in <code>src/assets/mesh.cpp</code></td></tr>
-  <tr><td>Texture loads</td><td><code>Engine::loadTexture</code>, <code>decodeTexture</code>, <code>finishTextureLoad</code> in <code>src/assets/texture.cpp</code></td></tr>
+  <tr><td>Mesh loads</td><td><code>Renderer::loadMesh</code>, <code>loadGLTF</code>, <code>createMesh</code>, <code>finishMeshLoad</code>, <code>isLoaded</code> in <code>src/assets/mesh.cpp</code></td></tr>
+  <tr><td>Texture loads</td><td><code>Renderer::loadTexture</code>, <code>decodeTexture</code>, <code>finishTextureLoad</code> in <code>src/assets/texture.cpp</code></td></tr>
   <tr><td>Worker pool</td><td><code>WorkerPool</code>, <code>LoadTicket</code> in <code>src/core/workerPool.cpp</code>; the load jobs, <code>runMeshImport</code> in <code>src/assets/mesh.cpp</code>, <code>MeshLoadJob</code> in <code>src/assets/loadJobs.h</code> (<a href="job-system.html">job systems</a>)</td></tr>
   <tr><td>Worker import</td><td><code>parseMeshFile</code>, <code>importGltf</code>, <code>importObj</code>, <code>runImageWork</code>, <code>finishImageWork</code> in <code>src/assets/meshImport.cpp</code>; animations, skins and morph targets in <code>src/assets/animationImport.cpp</code>, <code>src/assets/skinImport.cpp</code>, <code>src/assets/morphImport.cpp</code></td></tr>
-  <tr><td>glTF materials and images</td><td><code>Engine::loadMaterial</code> in <code>src/assets/material.cpp</code>; the images' work, <code>planImageLevels</code> and <code>planKtxImages</code> in <code>src/assets/meshImport.cpp</code></td></tr>
+  <tr><td>glTF materials and images</td><td><code>Renderer::loadMaterial</code> in <code>src/assets/material.cpp</code>; the images' work, <code>planImageLevels</code> and <code>planKtxImages</code> in <code>src/assets/meshImport.cpp</code></td></tr>
   <tr><td>Mips on the worker</td><td><code>buildTextureLevels</code> in <code>src/rhi/mipChain.cpp</code> (<a href="texture-uploads.html">texture uploads</a>)</td></tr>
-  <tr><td>Budget and pick-up</td><td><code>finishLoads</code>, <code>finishReadyLoads</code>, <code>waitForLoads</code>, <code>LOAD_BUDGET</code>, <code>resolveAssetPath</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Budget and pick-up</td><td><code>finishLoads</code>, <code>finishReadyLoads</code>, <code>waitForLoads</code>, <code>LOAD_BUDGET</code>, <code>resolveAssetPath</code> in <code>src/renderer/renderer.cpp</code></td></tr>
   <tr><td>Pending loads</td><td><code>PendingMeshLoad</code>, <code>PendingTextureLoad</code>, <code>pendingMeshes</code>, <code>pendingTextures</code> in <code>include/rasm/engine.h</code></td></tr>
   <tr><td>Result types and states</td><td><code>GLTFRaw</code>, <code>ObjRaw</code>, <code>MeshState</code> in <code>include/rasm/mesh.h</code>; <code>TextureRaw</code> in <code>include/rasm/types.h</code></td></tr>
-  <tr><td>Fit check and append</td><td><code>GeometryPool::fits</code>, <code>GeometryPool::upload</code> in <code>src/renderer/geometryPool.cpp</code>; <code>Engine::uploadMeshAnimation</code> in <code>src/renderer/animation.cpp</code></td></tr>
+  <tr><td>Fit check and append</td><td><code>GeometryPool::fits</code>, <code>GeometryPool::upload</code> in <code>src/renderer/geometryPool.cpp</code>; <code>Renderer::uploadMeshAnimation</code> in <code>src/renderer/animation.cpp</code></td></tr>
   <tr><td>Entities that wait</td><td><code>syncGpuScene</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Staging ring</td><td><code>UploadManager</code> in <code>src/rhi/uploadManager.cpp</code></td></tr>
   <tr><td>API</td><td><a href="../api/scene.html#loadMesh">loadMesh</a>, <a href="../api/materials.html#loadTexture">loadTexture</a>, <a href="../api/engine.html#waitForLoads">waitForLoads</a></td></tr>

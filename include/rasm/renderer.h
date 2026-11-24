@@ -90,7 +90,7 @@ namespace rasm
 
     // The renderer alone: the scene objects, the GPU scene and the frame, drawn into the application's windows
     // (RendererConfig::nativeWindow, addWindow with WindowDesc::native), or into offscreen images without one. It
-    // opens no window, reads no events (the application sends them with addInputEvent) and links no SDL. Engine is a
+    // opens no window, reads no events (the application sends them with addInputEvent) and starts no SDL. Engine is a
     // Renderer that opens its own windows with SDL.
     class Renderer
     {
@@ -245,7 +245,7 @@ namespace rasm
         void                        setInspection(const Inspection& inspection);
         const Inspection&           getInspection() const;
         // Copies the image this frame shows (the swapchain's, with the UI) to the CPU at the end of the frame. Call it
-        // before or during the frame you want: the copy goes into the next endFrame. Needs a headless engine or a
+        // before or during the frame you want: the copy goes into the next endFrame. Needs a headless renderer or a
         // surface that allows copies; returns invalid otherwise.
         ReadbackHandle              readFrame(ReadbackFormat format = ReadbackFormat::RGBA8_SRGB);
         // The same for another window. A window with no image in the frame that would copy it (minimized) is copied in a

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bindless Resources · RASM</title>
 <meta name="description" content="How bindless resources work: per-draw descriptor binding versus one big array indexed in the shader, descriptor indexing features, non-uniform indexing, slot allocation and free lists, slot lifetime with frames in flight, samplers, descriptor buffers, and how RASM does it.">
-<meta name="rasm-sources" content="src/engine.cpp src/assets/environment.cpp src/renderer/environmentBake.cpp src/assets/material.cpp src/assets/texture.cpp src/renderer/gpuScene.cpp src/renderer/uberMaterialTypes.h src/rhi/renderContext.cpp src/rhi/vulkan/vulkanDevice.cpp include/rasm/types.h include/rasm/engine.h include/rasm/material.h include/rasm/render/resource.h shaders/lib/core.slang shaders/lib/pbr.slang shaders/passes/rasm.slang shaders/passes/hiz.slang">
+<meta name="rasm-sources" content="src/renderer/renderer.cpp src/assets/environment.cpp src/renderer/environmentBake.cpp src/assets/material.cpp src/assets/texture.cpp src/renderer/gpuScene.cpp src/renderer/uberMaterialTypes.h src/rhi/renderContext.cpp src/rhi/vulkan/vulkanDevice.cpp include/rasm/types.h include/rasm/renderer.h include/rasm/material.h include/rasm/render/resource.h shaders/lib/core.slang shaders/lib/pbr.slang shaders/passes/rasm.slang shaders/passes/hiz.slang">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -733,7 +733,7 @@ free(slot):
   <tr><td>Pipeline layout</td><td>one for every shader</td><td>One, made with the set layout (<code>createPipelineLayout</code>, called from <code>VulkanDevice::createBindlessDescriptorSetLayout</code>) and destroyed with it: the set and one <code>PUSH_CONSTANTS_SIZE</code> range that the vertex, fragment and compute stages all see, and the task and mesh stages where the device has mesh shaders. Every pipeline, graphics, mesh or compute, uses it, so the set stays bound across pipeline changes and <code>RenderContext::pushConstants</code> needs no stage.</td></tr>
   <tr><td>Non-uniform indexing</td><td>mark per-pixel indices</td><td>Nothing is marked. The index comes from the draw's instance row (<code>materialIndex</code>, passed with <code>nointerpolation</code>), so it is the same for every pixel of one draw, and each draw of the indirect call is its own group. Other users index with a push constant (<code>01_render_graph</code>) or a <code>SceneData</code> field (<code>hiz.slang</code>).</td></tr>
   <tr><td>Slot allocation</td><td>counter + free list</td><td>The same: <code>freeBindlessSlots</code>, then the counter <code>nextBindlessTextureIndex</code>, in <code>RenderContext</code>. A texture holds one slot: asked again, it returns it unchanged, since a frame in flight may sample it (another sampler is an error). A caller may name a slot; the texture that held it loses it, and the counter moves past it.</td></tr>
-  <tr><td>Freeing, retire list</td><td>section 6</td><td>The same: <code>RenderContext::destroyTexture</code> gives the image and the slot to the release queue, which frees them once the GPU has finished every frame that may sample them (<a href="resource-lifetime.html#in-rasm">deferred destruction</a>). <code>Engine::destroyTexture</code> first removes the texture from every material that has it, so no row keeps the slot number. A render target that is rebuilt (on resize) or placed again keeps its slots: the device is idle then, and the new textures take the old slots. Dear ImGui's replaced textures go the same way.</td></tr>
+  <tr><td>Freeing, retire list</td><td>section 6</td><td>The same: <code>RenderContext::destroyTexture</code> gives the image and the slot to the release queue, which frees them once the GPU has finished every frame that may sample them (<a href="resource-lifetime.html#in-rasm">deferred destruction</a>). <code>Renderer::destroyTexture</code> first removes the texture from every material that has it, so no row keeps the slot number. A render target that is rebuilt (on resize) or placed again keeps its slots: the device is idle then, and the new textures take the old slots. Dear ImGui's replaced textures go the same way.</td></tr>
   <tr><td>Missing textures</td><td>"none" value or default textures</td><td>The "none" value: <code>INVALID_TEXTURE_INDEX</code> (0xFFFFFFFF) and a branch on <code>hasTexture</code>. No default textures. The shader uses the factor alone, which is the glTF rule. (The <i>default material</i> is a material, not a texture.)</td></tr>
   <tr><td>Samplers</td><td>combined or separate</td><td>Combined. Six shared samplers, one per <code>SamplerType</code>, picked when the slot is written (<code>LINEAR_REPEAT</code> by default). One handle has one slot, so a glTF image used with two samplers is uploaded twice.</td></tr>
   <tr><td>Placeholder while loading</td><td>gray or checker</td><td>None. A texture from <code>loadTexture</code> may get a slot before its pixels exist, but an entity is not drawn until every texture of its materials is loaded, so the empty image is never read.</td></tr>
@@ -749,15 +749,15 @@ free(slot):
   <tr><td><code>createMaterial</code></td><td>each valid texture it gets that has no slot yet</td><td><code>LINEAR_REPEAT</code></td></tr>
   <tr><td><code>updateMaterial</code></td><td>each valid texture of the new values that has no slot yet</td><td><code>LINEAR_REPEAT</code></td></tr>
   <tr><td><code>loadMaterial</code> (glTF)</td><td>each uploaded image, once per image, sampler and color space</td><td>from the glTF sampler (<code>toSamplerType</code>)</td></tr>
-  <tr><td><code>Engine::finishEnvironmentLoad</code></td><td>an environment's image (<code>LINEAR_REPEAT</code>, since it wraps around) and its three cubes</td><td><code>LINEAR_CLAMP</code></td></tr>
-  <tr><td><code>Engine::createEnvironments</code></td><td>the BRDF LUT, once</td><td><code>LINEAR_CLAMP</code></td></tr>
-  <tr><td><code>Engine::getUiTexture</code></td><td>a loaded texture that has no slot yet, for <code>ImGui::Image</code></td><td><code>LINEAR_REPEAT</code></td></tr>
+  <tr><td><code>Renderer::finishEnvironmentLoad</code></td><td>an environment's image (<code>LINEAR_REPEAT</code>, since it wraps around) and its three cubes</td><td><code>LINEAR_CLAMP</code></td></tr>
+  <tr><td><code>Renderer::createEnvironments</code></td><td>the BRDF LUT, once</td><td><code>LINEAR_CLAMP</code></td></tr>
+  <tr><td><code>Renderer::getUiTexture</code></td><td>a loaded texture that has no slot yet, for <code>ImGui::Image</code></td><td><code>LINEAR_REPEAT</code></td></tr>
   <tr><td>The UI (<code>buildUi</code>)</td><td>Dear ImGui's own textures</td><td><code>LINEAR_CLAMP</code></td></tr>
   <tr><td><code>RenderContext::createRenderTarget</code></td><td>each color texture (of each frame slot's copy, with <code>history</code>); with <code>occlusionCulling</code> (always for a depth-only target or one with a <code>MOTION_FORMAT</code> color), also a <code>D32_SFLOAT</code> depth texture. A rebuilt or re-placed target keeps its slots.</td><td><code>LINEAR_CLAMP</code>, depth <code>NEAREST_CLAMP</code></td></tr>
 </table>
 </div>
 
-<p><code>loadTexture</code> and <code>Engine::createTexture</code> do not take a slot. When all 1024 slots are held or wait for the GPU, <code>updateBindlessDescriptorSet</code> logs how many wait, and returns <code>UINT32_MAX</code>. <code>examples/17_streaming</code> pushes far more than 1024 textures through the set, a few each frame.</p>
+<p><code>loadTexture</code> and <code>Renderer::createTexture</code> do not take a slot. When all 1024 slots are held or wait for the GPU, <code>updateBindlessDescriptorSet</code> logs how many wait, and returns <code>UINT32_MAX</code>. <code>examples/17_streaming</code> pushes far more than 1024 textures through the set, a few each frame.</p>
 
 <h3>A material that waits for its texture</h3>
 
@@ -858,14 +858,14 @@ free(slot):
 <div class="table-wrap">
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
-  <tr><td>Set layout, pool and set</td><td><code>Engine::Engine</code> in <code>src/engine.cpp</code></td></tr>
-  <tr><td>Handle → slot</td><td><code>Engine::addBindlessTexture</code>, <code>Engine::getBindlessTextureIndex</code> in <code>src/engine.cpp</code>; <code>RenderContext::getBindlessTextureIndex</code></td></tr>
+  <tr><td>Set layout, pool and set</td><td><code>Engine::Engine</code> in <code>src/renderer/renderer.cpp</code></td></tr>
+  <tr><td>Handle → slot</td><td><code>Renderer::addBindlessTexture</code>, <code>Renderer::getBindlessTextureIndex</code> in <code>src/renderer/renderer.cpp</code>; <code>RenderContext::getBindlessTextureIndex</code></td></tr>
   <tr><td>Slot free list and counter, descriptor write, retire</td><td><code>RenderContext::updateBindlessDescriptorSet</code>, <code>RenderContext::destroyTexture</code> in <code>src/rhi/renderContext.cpp</code>; <code>VulkanDevice::updateBindlessTexture</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
   <tr><td>Layout flags and features</td><td><code>VulkanDevice::createBindlessDescriptorSetLayout</code>, <code>VulkanDevice::createDescriptorPool</code>, the device feature list in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
   <tr><td>The six samplers</td><td><code>samplerDesc</code>, <code>RenderContext::initialize</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
-  <tr><td>Slot numbers into the row</td><td><code>convertToGfxMaterial</code>, <code>Engine::writeMaterialRow</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>Materials that take slots</td><td><code>Engine::createMaterial</code>, <code>Engine::updateMaterial</code>, <code>Engine::loadMaterial</code> in <code>src/assets/material.cpp</code></td></tr>
-  <tr><td>Waiting for textures</td><td><code>texturesLoaded</code>, <code>Engine::refreshEntitiesAfterMaterialChange</code>, <code>Engine::syncGpuScene</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Slot numbers into the row</td><td><code>convertToGfxMaterial</code>, <code>Renderer::writeMaterialRow</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Materials that take slots</td><td><code>Renderer::createMaterial</code>, <code>Renderer::updateMaterial</code>, <code>Renderer::loadMaterial</code> in <code>src/assets/material.cpp</code></td></tr>
+  <tr><td>Waiting for textures</td><td><code>texturesLoaded</code>, <code>Renderer::refreshEntitiesAfterMaterialChange</code>, <code>Renderer::syncGpuScene</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Shader side</td><td><code>gTextures</code> in <code>shaders/passes/rasm.slang</code> and <code>shaders/passes/hiz.slang</code>; <code>hasTexture</code>, <code>sampleBaseColor</code> in <code>shaders/lib/core.slang</code></td></tr>
 </table>
 </div>
@@ -883,7 +883,7 @@ free(slot):
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>A texture destroyed through <code>RenderContext::destroyTexture</code> directly, not <code>Engine::destroyTexture</code>, stays in the materials that use it. The array size and the 256 materials are fixed at compile time (<code>D15</code>). No default textures. See also <a href="../api/materials.html#bindless">the bindless API</a>.</p>
+  <p>A texture destroyed through <code>RenderContext::destroyTexture</code> directly, not <code>Renderer::destroyTexture</code>, stays in the materials that use it. The array size and the 256 materials are fixed at compile time (<code>D15</code>). No default textures. See also <a href="../api/materials.html#bindless">the bindless API</a>.</p>
 </div>
 
 <h3>Further reading</h3>

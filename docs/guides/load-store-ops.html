@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Load and store ops · RASM</title>
 <meta name="description" content="What a render pass does with its attachments at the start and at the end: load ops (LOAD, CLEAR, DONT_CARE) and store ops (STORE, DONT_CARE, NONE), why they matter on tile-based GPUs, how to choose them, how a render graph infers them, and how RASM does it.">
-<meta name="rasm-sources" content="include/rasm/render/resource.h include/rasm/render/renderGraph.h include/rasm/engine.h src/rhi/vulkan/vulkanCommandBuffer.cpp src/renderer/renderGraph.cpp src/engine.cpp src/renderer/gpuScene.cpp src/renderer/statsOverlay.cpp src/renderer/ui.cpp src/renderer/taa.cpp src/rhi/renderContext.cpp src/rhi/textureStates.cpp examples/01_render_graph/main.cpp">
+<meta name="rasm-sources" content="include/rasm/render/resource.h include/rasm/render/renderGraph.h include/rasm/renderer.h src/rhi/vulkan/vulkanCommandBuffer.cpp src/renderer/renderGraph.cpp src/renderer/renderer.cpp src/renderer/gpuScene.cpp src/renderer/statsOverlay.cpp src/renderer/ui.cpp src/renderer/taa.cpp src/rhi/renderContext.cpp src/rhi/textureStates.cpp examples/01_render_graph/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -637,7 +637,7 @@
 
 <h2 id="in-rasm"><span class="n">8</span>In RASM</h2>
 
-<p>RASM uses Vulkan dynamic rendering, so the ops go into <code>VulkanCommandBuffer::beginRendering</code>. A pass describes them with three flags of <code>AttachmentOps</code>: <code>loadColor</code>, <code>loadDepth</code> and <code>storeDepth</code>. Its two other flags are not ops: <code>firstWrite</code> says a cube's other faces may be dropped, and <code>encodedColor</code> draws the swapchain through its UNORM view, for the UI. The render graph sets them for each pass in <code>RenderGraph::assignAttachmentOps</code>, when it compiles. A frame written by hand passes them to <code>Engine::beginPass</code>.</p>
+<p>RASM uses Vulkan dynamic rendering, so the ops go into <code>VulkanCommandBuffer::beginRendering</code>. A pass describes them with three flags of <code>AttachmentOps</code>: <code>loadColor</code>, <code>loadDepth</code> and <code>storeDepth</code>. Its two other flags are not ops: <code>firstWrite</code> says a cube's other faces may be dropped, and <code>encodedColor</code> draws the swapchain through its UNORM view, for the UI. The render graph sets them for each pass in <code>RenderGraph::assignAttachmentOps</code>, when it compiles. A frame written by hand passes them to <code>Renderer::beginPass</code>.</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 344" role="img" aria-label="Top: three graph passes on one target, in add order. The first clears color and depth and stores depth, because the second loads it. The second loads both and stores depth, because the third loads it. The third loads both and does not store depth. Color is always stored. Middle: with occlusion culling, Scene 1 clears and stores color and depth, the Hi-Z compute pass reads the depth with readDepth, Cull 2 culls, Scene 2 loads color and depth and stores depth, and Transparent loads both and stores depth only when TAA reads it. Bottom: endFrame runs a Clear pass if no pass drew the swapchain, then the UI if no graph pass drew it, or the stats overlay without a UI, which loads color and has no depth, then presents.">
@@ -728,7 +728,7 @@ engine.endPass();</code></pre>
   <tr><td>MSAA resolve</td><td>a store variant</td><td>Not a store op: a multisampled scene is resolved by a compute pass, <code>MSAA Resolve</code>, which weights each sample by its brightness, something a resolve attachment can't do (<a href="msaa.html#resolve">MSAA</a>).</td></tr>
   <tr><td>Merging passes</td><td>one pass, or subpasses</td><td>None. Each pass is its own rendering scope; the scene's early and late draws are two passes, <code>Scene 1</code> and <code>Scene 2</code>.</td></tr>
   <tr><td>History images</td><td>STORE, the next frame reads it</td><td>Color is stored anyway. Each frame's copy is cleared by its first pass; last frame's copy is sampled, not loaded (<a href="temporal-history.html">history buffers</a>). A new copy is cleared once at creation by an empty rendering scope (<code>RenderContext::clearNewHistory</code>).</td></tr>
-  <tr><td>Swapchain with no pass</td><td>the screen still reads it</td><td><code>Engine::endFrame</code> runs a "Clear" pass, so the image is in a known state when it is presented.</td></tr>
+  <tr><td>Swapchain with no pass</td><td>the screen still reads it</td><td><code>Renderer::endFrame</code> runs a "Clear" pass, so the image is in a known state when it is presented.</td></tr>
 </table>
 </div>
 
@@ -740,12 +740,12 @@ engine.endPass();</code></pre>
   <tr><td>The three flags</td><td><code>AttachmentOps</code> in <code>include/rasm/render/resource.h</code>; a graph pass keeps them in <code>Pass::attachmentOps</code></td></tr>
   <tr><td>Flags to Vulkan ops</td><td><code>VulkanCommandBuffer::beginRendering</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
   <tr><td>The graph picks them</td><td><code>RenderGraph::assignAttachmentOps</code>, called by <code>RenderGraph::compile</code>, in <code>src/renderer/renderGraph.cpp</code></td></tr>
-  <tr><td>Barrier with discard</td><td><code>Engine::beginPass</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Barrier with discard</td><td><code>Renderer::beginPass</code> in <code>src/renderer/renderer.cpp</code></td></tr>
   <tr><td>Discard means old usage unknown</td><td><code>TextureStates::transition</code> in <code>src/rhi/textureStates.cpp</code></td></tr>
-  <tr><td>The depth read between the scene passes</td><td><code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code>; <code>PassBuilder::readDepth</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
-  <tr><td>The "Clear" pass</td><td><code>Engine::endFrame</code> in <code>src/engine.cpp</code></td></tr>
-  <tr><td>Stats overlay pass</td><td><code>Engine::drawStatsOverlay</code> in <code>src/renderer/statsOverlay.cpp</code></td></tr>
-  <tr><td>UI pass, and the one endFrame adds</td><td><code>Engine::addUiPass</code>, <code>Engine::drawUiFallback</code> in <code>src/renderer/ui.cpp</code></td></tr>
+  <tr><td>The depth read between the scene passes</td><td><code>Renderer::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code>; <code>PassBuilder::readDepth</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
+  <tr><td>The "Clear" pass</td><td><code>Renderer::endFrame</code> in <code>src/renderer/renderer.cpp</code></td></tr>
+  <tr><td>Stats overlay pass</td><td><code>Renderer::drawStatsOverlay</code> in <code>src/renderer/statsOverlay.cpp</code></td></tr>
+  <tr><td>UI pass, and the one endFrame adds</td><td><code>Renderer::addUiPass</code>, <code>Renderer::drawUiFallback</code> in <code>src/renderer/ui.cpp</code></td></tr>
   <tr><td>Clearing new history copies</td><td><code>RenderContext::clearNewHistory</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
   <tr><td>A frame that uses the graph</td><td><code>examples/01_render_graph/main.cpp</code>: each pass draws its own target once, so every pass clears</td></tr>
 </table>
