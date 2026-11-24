@@ -324,7 +324,7 @@ engine.updateMaterial(pulse, values);</code></pre>
 <div class="api" id="loadTexture">
   <pre class="sig">TextureHandle loadTexture(const std::string&amp; path, Format format = Format::R8G8B8A8_SRGB);</pre>
   <div class="body">
-    <p>Starts loading a <samp>.png</samp>, <samp>.jpg</samp> or <samp>.jpeg</samp> image, or a <samp>.ktx2</samp> file. Images with fewer channels are expanded to RGBA.</p>
+    <p>Starts loading a <samp>.png</samp>, <samp>.jpg</samp> or <samp>.jpeg</samp> image, or a <samp>.ktx2</samp> file. Images with fewer channels are expanded to RGBA. An <a href="engine.html#AssetLoader"><code>AssetLoader</code></a> call; an <code>Engine</code> has it too, for its own loader.</p>
     <dl>
       <dt>path</dt><dd>Relative to <code>EngineConfig::assetRoot</code>, or absolute. The extension is checked in lower case only.</dd>
       <dt>format</dt><dd>The slot the texture is for. <code>R8G8B8A8_SRGB</code> (default) for a color slot: albedo and emissive. <code>R8G8B8A8_UNORM</code> for a data slot: normal, metallic-roughness and occlusion maps. Any other format logs "loadTexture takes R8G8B8A8_SRGB for a color slot or R8G8B8A8_UNORM for a data slot." and returns an invalid handle.</dd>
@@ -355,7 +355,7 @@ engine.updateMaterial(pulse, values);</code></pre>
 <div class="api" id="isLoaded-texture">
   <pre class="sig">bool isLoaded(TextureHandle texture) const;</pre>
   <div class="body">
-    <p>True when the texture's pixels are uploaded (also after a failed decode, which leaves it white). False while it loads and for an invalid handle. Textures that did not come from <code>loadTexture</code> (glTF textures, <code>createTexture</code>) are always loaded.</p>
+    <p>True when the texture's pixels are uploaded (also after a failed decode, which leaves it white). False while it loads and for an invalid handle. A <code>createTexture</code> texture is always loaded; a glTF import's is loaded once filled. A <code>Renderer</code> method: the renderer marks the textures a loader makes (<code>loadingTextures</code>) and never reads the loader.</p>
   </div>
 </div>
 

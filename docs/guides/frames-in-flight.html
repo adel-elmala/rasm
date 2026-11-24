@@ -772,7 +772,7 @@
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>The slot count</td><td><code>MAX_FRAMES_IN_FLIGHT</code> in <code>include/rasm/types.h</code></td></tr>
-  <tr><td>Slot state</td><td><code>FrameResources</code> in <code>include/rasm/types.h</code>; <code>frameResources</code>, <code>frameFence</code>, <code>frameFenceValue</code>, <code>computeFence</code>, <code>computeFenceValue</code>, <code>batchCommandBuffers</code> in <code>include/rasm/engine.h</code></td></tr>
+  <tr><td>Slot state</td><td><code>FrameResources</code> in <code>include/rasm/types.h</code>; <code>frameResources</code>, <code>frameFence</code>, <code>frameFenceValue</code>, <code>computeFence</code>, <code>computeFenceValue</code>, <code>batchCommandBuffers</code> in <code>include/rasm/renderer.h</code></td></tr>
   <tr><td>The wait, the submits, the flip</td><td><code>Renderer::beginFrame</code>, <code>Renderer::endFrame</code> and <code>Renderer::submitBatches</code> in <code>src/renderer/renderer.cpp</code></td></tr>
   <tr><td>Per-slot tables</td><td><code>GpuTable</code> in <code>src/renderer/gpuTable.cpp</code></td></tr>
   <tr><td>Timeline fence</td><td><code>VulkanDevice::createFence</code>, <code>waitForFence</code>, <code>getFenceValue</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code>; signaled in <code>VulkanQueue::submit</code></td></tr>

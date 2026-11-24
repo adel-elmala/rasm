@@ -3,9 +3,13 @@ include(CMakePackageConfigHelpers)
 set(RASM_INSTALL_CONFIG_DIR "${CMAKE_INSTALL_LIBDIR}/cmake/rasm")
 set(RASM_INSTALL_SHADER_DIR "${CMAKE_INSTALL_DATADIR}/rasm/shaders")
 
-install(TARGETS rasm EXPORT rasmTargets FILE_SET HEADERS)
+# Two export sets, so a renderer-only consumer (find_package(rasm COMPONENTS renderer)) loads rasm::renderer and needs
+# none of rasm::rasm's dependencies.
+install(TARGETS rasm_renderer EXPORT rasmRendererTargets FILE_SET HEADERS)
+install(TARGETS rasm EXPORT rasmTargets)
 install(DIRECTORY "${PROJECT_SOURCE_DIR}/shaders/lib" "${PROJECT_SOURCE_DIR}/shaders/passes"
         DESTINATION "${RASM_INSTALL_SHADER_DIR}")
+install(EXPORT rasmRendererTargets NAMESPACE rasm:: DESTINATION "${RASM_INSTALL_CONFIG_DIR}")
 install(EXPORT rasmTargets NAMESPACE rasm:: DESTINATION "${RASM_INSTALL_CONFIG_DIR}")
 
 # The install prefix and the build tree each get a config, because their shaders are in different places.
@@ -23,4 +27,5 @@ configure_package_config_file("${PROJECT_SOURCE_DIR}/cmake/rasmConfig.cmake.in" 
                               INSTALL_DESTINATION "${PROJECT_BINARY_DIR}"
                               INSTALL_PREFIX "${PROJECT_BINARY_DIR}"
                               PATH_VARS RASM_PACKAGE_SHADER_DIR)
+export(EXPORT rasmRendererTargets NAMESPACE rasm:: FILE "${PROJECT_BINARY_DIR}/rasmRendererTargets.cmake")
 export(EXPORT rasmTargets NAMESPACE rasm:: FILE "${PROJECT_BINARY_DIR}/rasmTargets.cmake")

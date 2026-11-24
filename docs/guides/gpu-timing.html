@@ -877,7 +877,7 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
 <div class="table-wrap">
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
-  <tr><td>Public types</td><td><code>FrameStats</code>, <code>GpuTimer</code>, <code>MAX_GPU_TIMERS</code> in <code>include/rasm/engine.h</code>; <code>VRAMStats</code> in <code>include/rasm/render/resource.h</code></td></tr>
+  <tr><td>Public types</td><td><code>FrameStats</code>, <code>GpuTimer</code>, <code>MAX_GPU_TIMERS</code> in <code>include/rasm/renderer.h</code>; <code>VRAMStats</code> in <code>include/rasm/render/resource.h</code></td></tr>
   <tr><td>Per-slot state</td><td><code>FrameStatsSlot</code>, <code>FrameStatsCollector</code> in <code>src/renderer/frameStats.h</code></td></tr>
   <tr><td>Timers, read-back, reset</td><td><code>Renderer::updateFrameStats</code>, <code>Renderer::beginGpuTimer</code>, <code>Renderer::endGpuTimer</code>, <code>Renderer::getFrameStats</code> in <code>src/renderer/frameStats.cpp</code></td></tr>
   <tr><td>Frame and pass timers</td><td><code>Renderer::beginFrame</code>, <code>Renderer::endFrame</code>, <code>Renderer::beginPass</code>, <code>Renderer::endPass</code> in <code>src/renderer/renderer.cpp</code>; <code>RenderGraph::execute</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>

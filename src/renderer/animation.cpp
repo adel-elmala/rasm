@@ -1,6 +1,6 @@
 #include "renderer/animation.h"
 #include "rasm/renderer.h"
-#include "assets/morphImport.h"
+#include "assets/meshData.h"
 #include "core/utils.h"
 #include "platform/paths.h"
 #include "renderer/animationTime.h"
@@ -1017,5 +1017,17 @@ namespace rasm
         ctx.bindPipeline(commandBuffer, animation.skinPipeline);
         ctx.pushConstants(commandBuffer, animation.skinPipeline, &pushConstants, sizeof(pushConstants), 0);
         ctx.dispatch(commandBuffer, animation.entityRows, (animation.maxSkinnedVertices + SKIN_GROUP_SIZE - 1) / SKIN_GROUP_SIZE);
+    }
+
+    std::vector<float> getMorphRadii(const ObjRaw &raw)
+    {
+        std::vector<float> radii(raw.morphTargetCount, 0.0f);
+        const size_t vertexCount = raw.vertices.size();
+        for (size_t t = 0; t < raw.morphTargetCount; ++t)
+        {
+            for (size_t v = 0; v < vertexCount && t * vertexCount + v < raw.morphs.size(); ++v)
+                radii[t] = std::max(radii[t], glm::length(raw.morphs[t * vertexCount + v].position));
+        }
+        return radii;
     }
 }

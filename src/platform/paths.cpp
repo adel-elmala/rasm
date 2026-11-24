@@ -1,7 +1,5 @@
 #include "platform/paths.h"
 
-#include "SDL3/SDL_error.h"
-#include "SDL3/SDL_filesystem.h"
 #include "spdlog/spdlog.h"
 
 #include <cstdlib>
@@ -21,16 +19,19 @@ namespace rasm
 {
     namespace
     {
+        // The folder of the executable, its links resolved.
         std::filesystem::path getExecutableDir()
         {
-            const char *basePath = SDL_GetBasePath();
-            if (basePath == nullptr)
+            const std::string executable = getModulePath(nullptr);
+            if (executable.empty())
             {
                 // An empty result leaves callers relative to the working directory, which is the best guess left.
-                spdlog::error("Failed to find the executable's directory: {}", SDL_GetError());
+                spdlog::error("Failed to find the executable's directory.");
                 return {};
             }
-            return pathFromUtf8(basePath);
+            std::error_code error;
+            const std::filesystem::path resolved = std::filesystem::weakly_canonical(pathFromUtf8(executable), error);
+            return (error ? pathFromUtf8(executable) : resolved).parent_path();
         }
 
         std::string getExecutableName()

@@ -438,9 +438,9 @@
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>Mips</td><td><code>buildTextureLevels</code>, <code>buildMipChain</code>, <code>getFullMipCount</code> in <code>src/rhi/mipChain.cpp</code></td></tr>
-  <tr><td>Worker: textures</td><td><code>decodeTexture</code>, <code>Renderer::loadTexture</code>, <code>finishTextureLoad</code> in <code>src/assets/texture.cpp</code></td></tr>
+  <tr><td>Worker: textures</td><td><code>decodeTexture</code>, <code>AssetLoader::loadTexture</code>, <code>finishTextureLoad</code> in <code>src/assets/texture.cpp</code></td></tr>
   <tr><td>Worker: glTF images</td><td><code>planImageLevels</code>, <code>runImageWork</code>, <code>getImageLevelsKey</code> in <code>src/assets/meshImport.cpp</code>; <code>GLTFRaw::imageLevels</code> in <code>include/rasm/mesh.h</code></td></tr>
-  <tr><td>Queued fills</td><td><code>Renderer::loadMaterial</code> in <code>src/assets/material.cpp</code>; <code>PendingTextureLoad</code> in <code>include/rasm/engine.h</code>; <code>finishLoads</code> in <code>src/renderer/renderer.cpp</code></td></tr>
+  <tr><td>Queued fills</td><td><code>AssetLoader::Impl::loadMaterial</code> in <code>src/assets/material.cpp</code>; <code>PendingTextureLoad</code> in <code>src/assets/assetLoaderImpl.h</code>; <code>finishLoads</code> in <code>src/assets/assetLoader.cpp</code></td></tr>
   <tr><td>Host copy or staging</td><td><code>VulkanDevice::queryFormatSupport</code>, <code>createTexture</code>, <code>fillTexture</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code>; <code>getHostCopyMemoryTypes</code> in <code>src/rhi/vulkan/vulkanUtils.cpp</code>; <code>UploadManager::uploadTexture</code> in <code>src/rhi/uploadManager.cpp</code></td></tr>
   <tr><td>Measure</td><td><samp>examples/10_ktx2_textures</samp> (<samp>--measure</samp>, <samp>--staging</samp>, <samp>--model</samp>)</td></tr>
   <tr><td>Tests</td><td><samp>tests/textureUploadTests.cpp</samp></td></tr>

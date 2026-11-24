@@ -358,19 +358,28 @@ public:
     AntiAliasing antiAliasing            = AntiAliasing::NONE;
 };</pre>
   <div class="body">
-    <p>The engine's settings, given to its constructor. Every field is explained on the <a href="engine.html#EngineConfig">Engine page</a>. A field added to the renderer goes in both this struct and <code>RendererConfig</code>, and into <code>toRendererConfig</code>.</p>
+    <p>The engine's settings, given to its constructor. Every field is explained on the <a href="engine.html#EngineConfig">Engine page</a>. A field goes in this struct and in its part's, <code>RendererConfig</code> or <code>AssetLoaderConfig</code>, and into the conversions below.</p>
   </div>
 </div>
 
 <div class="api" id="RendererConfig">
   <pre class="sig">struct RendererConfig
 {
-    // every field of EngineConfig but platform, with the same defaults
+    // every field of EngineConfig but platform, assetRoot, loadThreads and loadMemoryBudget, with the same defaults
 };
 
-inline RendererConfig toRendererConfig(const EngineConfig&amp; config);</pre>
+struct AssetLoaderConfig
+{
+    std::string  assetRoot               = {};
+    uint32_t     loadThreads             = 0;
+    uint64_t     loadMemoryBudget        = 512ull &lt;&lt; 20;
+};
+
+inline RendererConfig    toRendererConfig(const EngineConfig&amp; config);
+inline AssetLoaderConfig toAssetLoaderConfig(const EngineConfig&amp; config);
+inline EngineConfig      toEngineConfig(const RendererConfig&amp; config, PlatformType platform, const AssetLoaderConfig&amp; loader);</pre>
   <div class="body">
-    <p>A <a href="engine.html#Renderer"><code>Renderer</code></a>'s settings: <code>EngineConfig</code> without <code>platform</code>, which a <code>Renderer</code> does not choose. With <code>nativeWindow</code> set it draws into that window; without one it draws into offscreen images of <code>windowWidth</code> × <code>windowHeight</code> pixels. Both structs stay flat, so designated initializers work. <code>toRendererConfig</code> gives the renderer's part of an <code>EngineConfig</code>, as <code>Engine</code>'s constructor does; <code>tests/rendererConfigTests.cpp</code> checks that every field arrives.</p>
+    <p>An <code>EngineConfig</code> in its parts. A <a href="engine.html#Renderer"><code>Renderer</code></a>'s settings are <code>RendererConfig</code>: without <code>platform</code>, which a <code>Renderer</code> does not choose, and without the loading fields. With <code>nativeWindow</code> set it draws into that window; without one it draws into offscreen images of <code>windowWidth</code> × <code>windowHeight</code> pixels. An <a href="engine.html#AssetLoader"><code>AssetLoader</code></a>'s are <code id="AssetLoaderConfig">AssetLoaderConfig</code>: the folder relative paths resolve against (itself relative to the executable's folder), the worker threads (0: the hardware's minus one) and the bytes of decoded loads in memory at once. All three structs stay flat, so designated initializers work. <code>Engine</code>'s constructor splits its config with <code>toRendererConfig</code> and <code>toAssetLoaderConfig</code>, and <code>Engine::getConfig</code> joins it again with <code>toEngineConfig</code>; <code>tests/rendererConfigTests.cpp</code> checks that every field arrives both ways. A new field goes in <code>EngineConfig</code>, in its part's struct and in the conversions.</p>
   </div>
 </div>
 
@@ -862,7 +871,7 @@ engine.addInputEvent({.type = rasm::InputEventType::TEXT, .codepoint = 0x00E9});
   <tr id="MAX_PARAM_SLOTS"><td><code>MAX_PARAM_SLOTS</code><br><code>rasm/material.h</code></td><td>10 (<code>PbrParam::COUNT</code>)</td><td>Floats in <code>Material::params</code>, indexed by <a href="materials.html#PbrParam">PbrParam</a>.</td></tr>
   <tr id="MAX_VERTEX_UV_SETS"><td><code>MAX_VERTEX_UV_SETS</code><br><code>rasm/mesh.h</code></td><td>3</td><td>UV sets per <code>Vertex</code>. Mirrored in <code>shaders/lib/core.slang</code>.</td></tr>
   <tr id="MAX_MORPH_TARGETS"><td><code>MAX_MORPH_TARGETS</code><br><code>rasm/mesh.h</code></td><td>256</td><td>Morph targets per glTF primitive; the rest are dropped with a warning (<a href="scene.html#MorphDelta">MorphDelta</a>). Mirrored in <code>shaders/lib/geometryTypes.slang</code>.</td></tr>
-  <tr id="MAX_MESH_LODS"><td><code>MAX_MESH_LODS</code><br><code>rasm/mesh.h</code></td><td>8</td><td>LODs per sub-mesh, LOD 0 included, so <code>ObjRaw::lods</code> holds at most 7 (<a href="scene.html#MeshLod">MeshLod</a>). Mirrored in <code>shaders/lib/core.slang</code>.</td></tr>
+  <tr id="MAX_MESH_LODS"><td><code>MAX_MESH_LODS</code><br><code>rasm/mesh.h</code></td><td>8</td><td>LODs per sub-mesh, LOD 0 included, so <code>ObjRaw::lods</code> holds at most 7 (<a href="../guides/mesh-simplification.html">MeshLod</a>). Mirrored in <code>shaders/lib/core.slang</code>.</td></tr>
   <tr id="MAX_ENTITIES_PER_SCENE"><td><code>MAX_ENTITIES_PER_SCENE</code><br><code>rasm/scene.h</code></td><td>= <code>MAX_ENTITIES</code></td><td><code>addEntityToScene</code> per scene.</td></tr>
   <tr id="MAX_CAMERAS_PER_SCENE"><td><code>MAX_CAMERAS_PER_SCENE</code><br><code>rasm/scene.h</code></td><td>32</td><td><code>addCameraToScene</code> per scene (31 cameras exist at most, <code>MAX_CAMERAS</code>).</td></tr>
   <tr id="MAX_SCENES"><td><code>MAX_SCENES</code><br><code>rasm/scene.h</code></td><td>16</td><td>Scenes: 15 fit.</td></tr>

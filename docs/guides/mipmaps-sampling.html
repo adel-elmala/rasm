@@ -925,7 +925,7 @@ N    = min( ceil(ρmax / ρmin), maxAnisotropy )     number of samples
   <tr><td>Sampler objects</td><td><code>VulkanDevice::createSampler</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code>; <code>rhi::SamplerDesc</code> in <code>src/rhi/device.h</code></td></tr>
   <tr><td>The six sampler settings</td><td><code>samplerDesc</code> in <code>src/rhi/renderContext.cpp</code>; <code>SamplerType</code> in <code>include/rasm/render/resource.h</code></td></tr>
   <tr><td>glTF sampler mapping</td><td><code>toSamplerType</code> in <code>src/assets/material.cpp</code></td></tr>
-  <tr><td>When pixels arrive</td><td><code>Renderer::finishTextureLoad</code> in <code>src/assets/texture.cpp</code>; <code>Renderer::loadMaterial</code> in <code>src/assets/material.cpp</code></td></tr>
+  <tr><td>When pixels arrive</td><td><code>AssetLoader::Impl::finishTextureLoad</code> in <code>src/assets/texture.cpp</code>; <code>AssetLoader::Impl::loadMaterial</code> in <code>src/assets/material.cpp</code></td></tr>
 </table>
 </div>
 

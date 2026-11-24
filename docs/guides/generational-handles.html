@@ -755,7 +755,7 @@ void bindTexture(TextureHandle texture);</code></pre>
   <tr><td rowspan="6"><code>Engine</code> registry</td><td><code>Entity</code></td><td><code>MAX_ENTITIES</code> = 262,144 (2<sup>18</sup>) (262,143 alive at once)</td><td><code>include/rasm/entity.h</code></td></tr>
   <tr><td><code>Mesh</code></td><td>no count limit; its sub-meshes take rows of the geometry table (<code>EngineConfig::geometryPoolSubMeshes</code> = 16384) and ranges of the geometry pool</td><td><code>include/rasm/types.h</code></td></tr>
   <tr><td><code>Material</code></td><td><code>EngineConfig::maxMaterials</code> = 4096 alive at once</td><td><code>include/rasm/types.h</code></td></tr>
-  <tr><td><code>Camera</code></td><td><code>MAX_CAMERAS</code> = 32 (31 alive at once)</td><td><code>include/rasm/engine.h</code></td></tr>
+  <tr><td><code>Camera</code></td><td><code>MAX_CAMERAS</code> = 32 (31 alive at once)</td><td><code>include/rasm/renderer.h</code></td></tr>
   <tr><td><code>Light</code></td><td><code>EngineConfig::maxLights</code> = 16384</td><td><code>include/rasm/types.h</code></td></tr>
   <tr><td><code>Scene</code></td><td><code>MAX_SCENES</code> = 16 (15 alive at once)</td><td><code>include/rasm/scene.h</code></td></tr>
   <tr><td><code>Engine</code> readbacks</td><td><code>PendingReadback</code></td><td>no count limit; <code>takeReadback</code> releases its handle</td><td><code>src/renderer/readback.h</code></td></tr>
@@ -836,7 +836,7 @@ void bindTexture(TextureHandle texture);</code></pre>
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>The handle, tags, aliases, hash</td><td><code>Handle</code>, <code>HandleHash</code>, <code>hashCombine</code> in <code>include/rasm/handle.h</code></td></tr>
   <tr><td>Making handles</td><td><code>HandlePool</code>, <code>HandleSlot</code> in <code>include/rasm/handle.h</code>; <code>src/core/handle.cpp</code>; tests in <code>tests/handleTests.cpp</code></td></tr>
-  <tr><td>CPU objects</td><td><code>Renderer::Registry</code> in <code>include/rasm/engine.h</code>; <code>createEntity</code> in <code>src/scene/entity.cpp</code>, <code>loadMesh</code> in <code>src/assets/mesh.cpp</code>, <code>createMaterial</code> in <code>src/assets/material.cpp</code></td></tr>
+  <tr><td>CPU objects</td><td><code>Renderer::Registry</code> in <code>include/rasm/renderer.h</code>; <code>createEntity</code> in <code>src/scene/entity.cpp</code>, <code>loadMesh</code> in <code>src/assets/mesh.cpp</code>, <code>createMaterial</code> in <code>src/assets/material.cpp</code></td></tr>
   <tr><td>GPU objects and lookups</td><td><code>RenderContext::Impl</code>, <code>lookup</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
   <tr><td>Destroy</td><td><code>RenderContext::destroyBuffer</code>, <code>RenderContext::destroyTexture</code> in <code>src/rhi/renderContext.cpp</code>; <code>Renderer::destroyTexture</code> in <code>src/assets/texture.cpp</code></td></tr>
   <tr><td>Dedup caches</td><td><code>createShader</code>, <code>createPipeline</code>, <code>createBindlessDescriptorSetLayout</code> in <code>src/rhi/renderContext.cpp</code></td></tr>

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Engine and Renderer · RASM</title>
 <meta name="description" content="Renderer, the renderer alone, and Engine, a Renderer that opens its own window: construction and shutdown, the frame functions, loading, frame stats, paths and the window, plus an index of every method.">
-<meta name="rasm-sources" content="include/rasm/renderer.h include/rasm/engine.h src/engine.cpp include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h src/renderer/renderer.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/platform/headlessPlatform.cpp src/platform/nativePlatform.cpp include/rasm/input.h examples/19_embedding/main.cpp src/renderer/readback.cpp include/rasm/readback.h src/platform/paths.cpp src/renderer/frameStats.cpp src/renderer/gpuScene.cpp src/renderer/renderGraph.cpp src/renderer/viewGraph.cpp src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/msaaResolve.cpp src/renderer/taa.cpp src/renderer/engineUi.cpp src/renderer/debugViews.cpp src/renderer/inspector.cpp src/rhi/renderContext.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.cpp src/assets/mesh.cpp src/assets/texture.cpp src/renderer/geometryPool.cpp src/renderer/gpuTable.cpp CMakeLists.txt shaders/lib/shadow.slang shaders/passes/shadow.slang examples/06_shadows/main.cpp examples/21_renderer/main.cpp">
+<meta name="rasm-sources" content="include/rasm/renderer.h include/rasm/engine.h src/engine.cpp include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h src/renderer/renderer.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/platform/headlessPlatform.cpp src/platform/nativePlatform.cpp include/rasm/input.h examples/19_embedding/main.cpp src/renderer/readback.cpp include/rasm/readback.h src/platform/paths.cpp src/renderer/frameStats.cpp src/renderer/gpuScene.cpp src/renderer/renderGraph.cpp src/renderer/viewGraph.cpp src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/msaaResolve.cpp src/renderer/taa.cpp src/renderer/engineUi.cpp src/renderer/debugViews.cpp src/renderer/inspector.cpp src/rhi/renderContext.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.cpp src/assets/mesh.cpp src/assets/texture.cpp src/renderer/geometryPool.cpp src/renderer/gpuTable.cpp CMakeLists.txt shaders/lib/shadow.slang shaders/passes/shadow.slang examples/06_shadows/main.cpp examples/21_renderer/main.cpp include/rasm/assetLoader.h src/assets/assetLoader.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -59,6 +59,7 @@
   <tr><td><a href="#getCurrentFrameResources"><code>getCurrentFrameResources</code></a></td><td>this frame's command buffer and depth</td><td>this page</td></tr>
   <tr><td><a href="#recreateSwapchain"><code>recreateSwapchain</code></a></td><td>rebuild after a resize</td><td>this page</td></tr>
   <tr><td><a href="#waitForLoads"><code>waitForLoads</code></a></td><td>finish every background load now</td><td>this page</td></tr>
+  <tr><td><a href="#AssetLoader"><code>AssetLoader</code></a> / <a href="#getAssetLoader"><code>getAssetLoader</code></a></td><td>load files on worker threads, for a Renderer or an Engine</td><td>this page</td></tr>
   <tr><td><a href="#readFrame"><code>readFrame</code></a> / <a href="#readTexture"><code>readTexture</code></a></td><td>copy the frame or a texture to the CPU (screenshots, thumbnails, tests)</td><td>this page</td></tr>
   <tr><td><a href="#isReadbackReady"><code>isReadbackReady</code></a> / <a href="#takeReadback"><code>takeReadback</code></a></td><td>is the copy done, take its pixels</td><td>this page</td></tr>
   <tr><td><a href="#getFrameStats"><code>getFrameStats</code></a></td><td>frame times, draws, memory</td><td>this page</td></tr>
@@ -284,7 +285,7 @@ if (!engine.running())
   <tr><td><code>showStats</code></td><td><code>false</code></td><td>Shows the stats from the first frame: the RASM window with <code>ui</code>, the stats overlay without. <kbd>F1</kbd> toggles it at runtime.</td></tr>
   <tr><td><code>fixedDeltaTime</code></td><td><code>0.0f</code></td><td>Seconds per frame for the cameras' movement and easing, Dear ImGui and the refresh of the stats (every 0.25 s of these steps). 0: the measured time since the last frame, at most 0.1 s. A fixed step makes frame N the same in every run, for screenshots and image checks; the examples' <code>--fixed-step</code> sets 1/60. <code>FrameStats::cpuFrameMs</code> stays measured.</td></tr>
   <tr><td><code>occlusionCulling</code></td><td><code>true</code></td><td>Two-pass Hi-Z occlusion culling in the <a href="#addScenePasses">scene passes</a>: draws hidden behind others are not drawn. It also makes <code>D32_SFLOAT</code> depth textures sampleable, which <a href="render-graph.html#readDepth"><code>readDepth</code></a> needs (a depth-only target's depth always is, and so is that of a target with a <a href="types.html#MOTION_FORMAT"><code>MOTION_FORMAT</code></a> color, for TAA). <code>false</code> keeps frustum culling only. See <a href="../guides/occlusion-culling.html">occlusion culling</a>.</td></tr>
-  <tr><td><code>meshLods</code></td><td><code>true</code></td><td>Builds coarser levels of detail (<a href="scene.html#MeshLod">LODs</a>) of every sub-mesh with 1024 triangles or more as meshes load, on the worker thread for <code>loadMesh</code>. <code>false</code>: meshes have LOD 0 only.</td></tr>
+  <tr><td><code>meshLods</code></td><td><code>true</code></td><td>Builds coarser levels of detail (<a href="../guides/mesh-simplification.html">LODs</a>) of every sub-mesh with 1024 triangles or more as meshes load, on the worker thread for <code>loadMesh</code>. <code>false</code>: meshes have LOD 0 only.</td></tr>
   <tr><td><code>lodErrorPixels</code></td><td><code>1.0f</code></td><td>Culling draws the coarsest LOD whose error stays under this many pixels on screen. Larger is faster and coarser; 0 always draws LOD 0. See <a href="../guides/lod-selection.html">level of detail</a>.</td></tr>
   <tr><td><code>forcedLod</code></td><td><code>-1</code></td><td>For debugging. From 0 up, every draw uses this LOD (or its mesh's coarsest one), whatever the distance. -1 picks by distance. <kbd>F2</kbd> cycles it at runtime.</td></tr>
   <tr><td><code>meshletPath</code></td><td><code>MeshletPath::AUTO</code></td><td>How the <a href="#addScenePasses">scene passes</a> draw a visible mesh whose LOD has 8 meshlets or more (<a href="types.html#MeshletPath"><code>MeshletPath</code></a>). <code>OFF</code>: whole. <code>VERTEX_PULLING</code>: compute culls each meshlet (frustum, back faces, Hi-Z) and draws the visible ones by indirect draws. <code>MESH_SHADERS</code>: a task shader culls them inside the draw, and mesh shaders draw them (vertex pulling where the GPU has none). The image is the same either way. <code>AUTO</code> takes the mesh shaders where the GPU has them and is off elsewhere: on the RTX 3060 they cost about 1% when LODs already cut the triangles and save up to 30% on dense meshes, while vertex pulling costs 11% in the first case (<code>P28</code>). <a href="#setMeshletPath"><code>setMeshletPath</code></a> changes it at run time. See <a href="../guides/meshlets.html">meshlets</a>.</td></tr>
@@ -848,13 +849,41 @@ ctx.draw(commandBuffer, 3);</code></pre>
     <text x="10" y="178" class="small">A frame finishes loads until 4 ms have passed. The load that crosses the limit still finishes, so one big file can take longer.</text>
     <text x="10" y="196" class="small">Loads that finish together spread over several frames, so the frame rate stays smooth.</text>
   </svg>
-  <figcaption>Loading never blocks the frame unless you ask for it. The load functions are on <a href="scene.html#loadMesh">scene.html</a> (meshes) and <a href="materials.html#loadTexture">materials.html</a> (textures).</figcaption>
+  <figcaption>Loading never blocks the frame unless you ask for it. The load functions are on <a href="scene.html#loadMesh">scene.html</a> (meshes) and <a href="materials.html#loadTexture">materials.html</a> (textures). <code>finishLoads</code> is the <code>AssetLoader</code>'s; the renderer calls it at the start of <code>beginFrame</code>.</figcaption>
 </figure>
+
+<div class="api" id="AssetLoader">
+  <pre class="sig">AssetLoader(Renderer&amp; renderer, const AssetLoaderConfig&amp; config = {});
+~AssetLoader();
+MeshHandle        loadMesh(const std::string&amp; path);
+MeshHandle        loadGLTF(const std::string&amp; path);
+TextureHandle     loadTexture(const std::string&amp; path, Format format = Format::R8G8B8A8_SRGB);
+EnvironmentHandle loadEnvironment(const std::string&amp; path);
+void              waitForLoads();
+LoadStats         getLoadStats() const;
+std::string       resolveAssetPath(const std::string&amp; path) const;
+AssetLoaderConfig getConfig() const;</pre>
+  <div class="body">
+    <p>Loads files into a <code>Renderer</code> on worker threads: glTF and OBJ meshes with their materials and textures, PNG, JPEG and KTX2 textures, HDR environments. Every load returns a handle at once, and the renderer finishes the ready loads at the start of each frame. An <code>Engine</code> has one (<a href="#getAssetLoader"><code>getAssetLoader</code></a>), and its <code>loadMesh</code>, <code>loadGLTF</code>, <code>loadTexture</code>, <code>loadEnvironment</code> and <code>resolveAssetPath</code> call it. A <code>Renderer</code> alone gets one by making it; the loader is in the <code>rasm::rasm</code> library with the file libraries, so a program that links only <code>rasm::renderer</code> has none. Its settings are <a href="types.html#AssetLoaderConfig"><code>AssetLoaderConfig</code></a>.</p>
+    <p><span class="tag main-thread">main thread</span> <b>The renderer must outlive its loader</b>: make the loader after the renderer and destroy it first, as an <code>Engine</code> does with its own. A renderer destroyed first logs an error, the loader drops its loads, and every later call of the loader logs an error and returns an invalid handle; destroying the loader then is safe. One loader per renderer: a second one refuses every call. Destroying a loader drops what is still loading: those meshes stay not loaded and draw nothing, and those textures never become loaded.</p>
+    <pre><code>// From examples/19_embedding/main.cpp: a Renderer on the application's window, with a loader for its files.
+rasm::Renderer renderer(config);
+rasm::AssetLoader loader(renderer, {.assetRoot = RASM_EXAMPLE_ASSET_ROOT});
+const rasm::MeshHandle helmet = loader.loadGLTF("models/gltf/DamagedHelmet/DamagedHelmet.gltf");</code></pre>
+  </div>
+</div>
+
+<div class="api" id="getAssetLoader">
+  <pre class="sig">AssetLoader&amp; getAssetLoader();</pre>
+  <div class="body">
+    <p>An <code>Engine</code>'s own loader, made with the <code>EngineConfig</code>'s <code>assetRoot</code>, <code>loadThreads</code> and <code>loadMemoryBudget</code> (<code>toAssetLoaderConfig</code>). <code>Engine</code> only.</p>
+  </div>
+</div>
 
 <div class="api" id="waitForLoads">
   <pre class="sig">void waitForLoads();</pre>
   <div class="body">
-    <p>Finishes every pending mesh and texture load now: it uploads each result as soon as its workers are done, which frees its part of <code>EngineConfig::loadMemoryBudget</code> for the loads that wait for it, with no time limit. After it returns, <code>isLoaded</code> is true for every successful load. Entities that use them join their scenes' draw lists at the next <code>beginFrame</code>, so the first frame after it shows everything.</p>
+    <p>Finishes every pending mesh and texture load of the attached <code>AssetLoader</code> now (a renderer without one returns at once): it uploads each result as soon as its workers are done, which frees its part of <code>AssetLoaderConfig::loadMemoryBudget</code> for the loads that wait for it, with no time limit. After it returns, <code>isLoaded</code> is true for every successful load. Entities that use them join their scenes' draw lists at the next <code>beginFrame</code>, so the first frame after it shows everything.</p>
     <p><span class="tag main-thread">blocks the main thread</span> Use it before the main loop to avoid objects popping in, or in tests. Do not call it every frame.</p>
     <pre><code>auto mesh = engine.loadGLTF("models/gltf/coffee-room/scene.gltf");
 engine.waitForLoads();
@@ -1151,9 +1180,10 @@ engine.setInspection(inspection);</code></pre>
 </div>
 
 <div class="api" id="getConfig">
-  <pre class="sig">RendererConfig getConfig() const;</pre>
+  <pre class="sig">RendererConfig getConfig() const;   // Renderer
+EngineConfig   getConfig() const;   // Engine</pre>
   <div class="body">
-    <p>A copy of the renderer's config: an <code>Engine</code>'s is its <code>EngineConfig</code> without <code>platform</code>. <code>shaderDir</code> and <code>assetRoot</code> are the resolved paths (an empty <code>assetRoot</code> stays empty), and <code>showStats</code> is its current value (<kbd>F1</kbd> changes it). Changing the copy changes nothing in the engine.</p>
+    <p>A copy of the config. A <code>Renderer</code>'s is its <code>RendererConfig</code>; an <code>Engine</code>'s own <code>getConfig</code> gives the whole <code>EngineConfig</code> again, the platform and the loader's fields included (<code>toEngineConfig</code>). <code>assetRoot</code> is the loader's. <code>shaderDir</code> and <code>assetRoot</code> are the resolved paths (an empty <code>assetRoot</code> stays empty), and <code>showStats</code> is its current value (<kbd>F1</kbd> changes it). Changing the copy changes nothing in the engine.</p>
   </div>
 </div>
 

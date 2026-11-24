@@ -324,8 +324,8 @@
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>Header, format choice, transcode, warnings</td><td><code>readKtxInfo</code>, <code>chooseKtxFormat</code>, <code>getKtxMipCount</code>, <code>decodeKtx</code>, <code>warnAboutKtxFormat</code> in <code>src/assets/ktxImage.cpp</code>; tested by <code>tests/ktxImageTests.cpp</code>, which encodes small Basis files with libktx</td></tr>
-  <tr><td><samp>.ktx2</samp> through <code>loadTexture</code></td><td><code>Renderer::loadTexture</code>, <code>Renderer::finishTextureLoad</code> in <code>src/assets/texture.cpp</code></td></tr>
-  <tr><td>glTF <samp>KHR_texture_basisu</samp></td><td><code>getBasisuSource</code> and the worker's transcode in <code>src/assets/meshImport.cpp</code>; <code>Renderer::loadMaterial</code> in <code>src/assets/material.cpp</code></td></tr>
+  <tr><td><samp>.ktx2</samp> through <code>loadTexture</code></td><td><code>AssetLoader::loadTexture</code>, <code>AssetLoader::Impl::finishTextureLoad</code> in <code>src/assets/texture.cpp</code></td></tr>
+  <tr><td>glTF <samp>KHR_texture_basisu</samp></td><td><code>getBasisuSource</code> and the worker's transcode in <code>src/assets/meshImport.cpp</code>; <code>AssetLoader::Impl::loadMaterial</code> in <code>src/assets/material.cpp</code></td></tr>
   <tr><td>Block sizes, device formats, upload</td><td><code>getFormatBlock</code>, <code>getTextureLevelSize</code> in <code>src/rhi/device.cpp</code>; <code>VulkanDevice::supportsTextureFormat</code>, <code>VulkanDevice::fillTexture</code>; <code>UploadManager::uploadTexture</code></td></tr>
   <tr><td>Two-channel normals</td><td><code>MATERIAL_NORMAL_XY</code> in <code>src/renderer/uberMaterialTypes.h</code> and <code>shaders/lib/core.slang</code>; <code>getNormalFromMap</code> in <code>shaders/lib/pbr.slang</code></td></tr>
   <tr><td>Example</td><td><code>examples/10_ktx2_textures</code>: the Flight Helmet in KTX2 and a <samp>.ktx2</samp> through <code>loadTexture</code>; <samp>--model</samp> and <samp>--measure</samp> compare it with another glTF</td></tr>

@@ -13,6 +13,7 @@
 
 namespace rasm
 {
+    struct ObjRaw;
 
     // A mesh's animations in the animation pool.
     struct MeshAnimation
@@ -79,6 +80,8 @@ namespace rasm
         uint32_t                        recordedSync                                    = UINT32_MAX;   // the last sync whose frame ran the pass
     };
 
+    // Per morph target: the longest position change, which bounds how far a weight w moves any vertex (|w| times it).
+    std::vector<float>                  getMorphRadii(const ObjRaw& raw);
     uint64_t                            getAnimationPoolBytes(const AnimationRaw& animation, uint32_t subMeshCount, uint32_t sphereCount, uint32_t radiusCount);
     std::vector<uint8_t>                buildAnimationPoolData(const AnimationRaw& animation, const gfx::AnimationSubMeshData* subMeshes, uint32_t subMeshCount,
                                                                const glm::vec4* spheres, uint32_t sphereCount, const float* morphRadii, uint32_t radiusCount,

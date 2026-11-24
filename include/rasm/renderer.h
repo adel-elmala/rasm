@@ -2,6 +2,7 @@
 #pragma once
 
 #include "rasm/types.h"
+#include "rasm/assetLoader.h"
 #include "rasm/camera.h"
 #include "rasm/cameraInput.h"
 #include "rasm/entity.h"
@@ -23,19 +24,17 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
-
-namespace tinygltf { class Model; }
 
 namespace rasm
 {
 
     class GeometryPool;
+    class LoadHooks;
     class Platform;
     struct InputState;
     class ViewGraph;
-    class WorkerPool;
-    struct LoadTicket;
     class ShaderCompiler;
     struct GpuScene;
     struct GpuLights;
@@ -44,9 +43,7 @@ namespace rasm
     struct SceneDrawList;
     struct FrameStatsCollector;
     struct StatsOverlay;
-    struct MeshLoadJob;
-    struct TextureLoadJob;
-    struct EnvironmentLoadJob;
+    struct GLTFRaw;
     struct Ui;
     struct Inspector;
     struct Readbacks;
@@ -96,6 +93,7 @@ namespace rasm
     {
         friend class RenderGraph;
         friend class ViewGraph;
+        friend struct AssetLoader::Impl;
 
     public:
         explicit                    Renderer(const RendererConfig& config);
@@ -127,6 +125,7 @@ namespace rasm
         void                        destroyCamera(CameraHandle camera);
         void                        destroyScene(SceneHandle scene);
         PoolStats                   getPoolStats() const;
+        // The attached AssetLoader's (zero without one).
         LoadStats                   getLoadStats() const;
         void                        setSceneEnvironment(SceneHandle scene, const SceneEnvironment& environment);
         void                        setAnimationTime(double seconds);
@@ -138,15 +137,12 @@ namespace rasm
         void                        clearMorphWeights(EntityHandle entity);
         std::vector<std::string>    getMorphTargetNames(MeshHandle mesh) const;
         MeshHandle                  createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices, std::vector<uint32_t> colors = {});
-        MeshHandle                  loadMesh(const std::string& path);
-        MeshHandle                  loadGLTF(const std::string& path);
-        // format names the slot: R8G8B8A8_SRGB for color (base color, emissive), R8G8B8A8_UNORM for data (normal,
-        // metallic-roughness, occlusion). A .ktx2 file gets the best GPU format the device has for that slot.
-        TextureHandle               loadTexture(const std::string& path, Format format = Format::R8G8B8A8_SRGB);
-        EnvironmentHandle           loadEnvironment(const std::string& path);
+        // A mesh, texture or environment from an AssetLoader is in: its data is on the GPU (an environment: baked).
+        // Made with createMesh or createTexture, it is in at once.
         bool                        isLoaded(MeshHandle mesh) const;
         bool                        isLoaded(TextureHandle texture) const;
         bool                        isLoaded(EnvironmentHandle environment) const;
+        // Blocks until every load of the attached AssetLoader is in; returns at once without one.
         void                        waitForLoads();
         MaterialHandle              createMaterial(MaterialType type, std::vector<TextureHandle> textures = {}, bool doubleSided = false);
         void                        updateMaterial(MaterialHandle material, const Material& values);
@@ -268,7 +264,6 @@ namespace rasm
         DescriptorSetHandle         getBindlessDescriptorSet();
         const FrameResources&       getCurrentFrameResources();
         RendererConfig              getConfig() const;
-        std::string                 resolveAssetPath(const std::string& path) const;
         const Window&               getMainWindow() const;
         RenderContext&              getRenderContext();
         MeshSize                    getMeshByteSize(const MeshHandle& handle) const;
@@ -423,45 +418,12 @@ namespace rasm
     private:
         static constexpr Format     DEPTH_FORMAT    = Format::D32_SFLOAT;
 
-        // Each load's jobs run on the worker pool and write its job struct; finishLoads reads it once its ticket is done.
-        struct PendingMeshLoad
-        {
-            MeshHandle                          handle;
-            std::string                         path;
-            std::shared_ptr<MeshLoadJob>        job;
-            uint64_t                            movedBytes  = 0;    // of its budget bytes, those its textures took (finishMeshLoad)
-        };
-
-        // A load decodes on a worker (job); a glTF texture arrives decoded with its mesh (levels, which hold bytes of
-        // the load budget). Either is filled by finishLoads under its budget.
-        struct PendingTextureLoad
-        {
-            TextureHandle                       handle;
-            std::string                         path;
-            std::shared_ptr<TextureLoadJob>     job;
-            std::shared_ptr<const TextureRaw>   levels;
-            uint64_t                            bytes       = 0;
-            TextureFillProgress                 progress;               // the parts filled so far (P24)
-            bool                                filled      = false;    // its copies are on their way: it is loaded once the load uploads reach uploadValue
-            uint64_t                            uploadValue = 0;
-        };
-
-        struct PendingEnvironmentLoad
-        {
-            EnvironmentHandle                   handle;
-            std::string                         path;
-            std::shared_ptr<EnvironmentLoadJob> job;
-        };
-
         PipelineHandle              createGraphicsPipeline(const std::string& name, const std::string& shaderSource, const Format* colorFormats, Format depthFormat, const char* vertexEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite, uint32_t samples = 1, bool alphaToCoverage = false, bool depthTest = true);
         PipelineHandle              createMeshScenePipeline(const std::string& name, const std::string& shaderFile, const std::string& defines, const RenderTargetHandle& renderTarget, const char* meshEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite, bool alphaToCoverage = false);
         PipelineHandle              createScenePipeline(const std::string& name, const std::string& shaderFile, const std::string& defines, const RenderTargetHandle& renderTarget, const char* vertexEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite, bool alphaToCoverage = false, bool depthTest = true);
-        MaterialHandle              loadMaterial(const tinygltf::Model& model, int materialIndex, GltfImportCache& cache);
-        void                        finishMeshLoad(PendingMeshLoad& load);
-        bool                        finishTextureLoad(PendingTextureLoad& load, uint64_t maxBytes);
-        bool                        fillTextureLevels(TextureHandle texture, const TextureRaw& raw);
-        bool                        fillTextureLevels(TextureHandle texture, const TextureRaw& raw, TextureFillProgress& progress, uint64_t maxBytes);
-        void                        finishEnvironmentLoad(PendingEnvironmentLoad& load);
+        EnvironmentHandle           createEnvironment(const std::string& name);
+        bool                        setEnvironmentImage(EnvironmentHandle environment, const std::string& name, const EnvironmentRaw& raw);
+        void                        textureLoaded(TextureHandle texture);
         bool                        createEnvironments();
         void                        recordEnvironmentBakes();
         void                        finishEnvironmentBakes();
@@ -471,12 +433,6 @@ namespace rasm
         bool                        bloomPipelinesReady() const;
         bool                        bloomRuns(CameraHandle camera) const;
         bool                        createBloomPipelines();
-        void                        finishLoads(bool wait);
-        void                        freeOnWorker(std::shared_ptr<const void> result, uint64_t bytes);
-        void                        dropPendingLoad(LoadTicket& ticket, std::shared_ptr<const void> result);
-        bool                        finishReadyLoads(bool budgeted);
-        void                        publishUploadedLoads();
-        void                        dropTextureLoad(TextureHandle texture);
         bool                        createGpuScene();
         void                        syncGpuScene();
         void                        queueInstanceRows(EntityHandle entity);
@@ -546,12 +502,8 @@ namespace rasm
         void                        recordReadbacks();
         void                        finishReadbackSubmit(bool submitted);
 
-        std::unique_ptr<WorkerPool>                                             workers;
-        std::vector<PendingMeshLoad>                                            pendingMeshes;
-        std::unordered_map<TextureHandle, PendingTextureLoad, HandleHash>       pendingTextures;
-        std::vector<PendingEnvironmentLoad>                                     pendingEnvironments;
-        std::vector<std::pair<MeshHandle, uint64_t>>                            uploadingMeshes;    // finished, READY once the load uploads reach the value
-        uint64_t                                                                loadUploadValue     = 0;    // what the last finishReadyLoads uploaded is on the GPU at it
+        LoadHooks*                                                              loads               = nullptr;  // the attached AssetLoader's
+        std::unordered_set<TextureHandle, HandleHash>                           loadingTextures;    // made by a loader, not filled yet: isLoaded false
 
         bool                        isLive(const EntityHandle& entity) const;
         bool                        isLive(const MeshHandle& mesh) const;
@@ -585,10 +537,6 @@ namespace rasm
             std::vector<Light>       lights;
             std::vector<Scene>       scenes;
 
-            std::unordered_map<std::string, MeshHandle>                 loadedMeshes;
-            std::unordered_map<std::string, TextureHandle>              loadedTextures;
-            std::vector<std::string>                                    textureCacheKeys;   // by texture index: its loadedTextures key, for destroyTexture
-            std::vector<std::string>                                    meshPaths;          // by mesh index: its loadedMeshes key, for destroyMesh
             std::vector<uint32_t>                                       materialUsers;      // by material index: entities made with it
             std::vector<MeshHandle>                                     materialOwners;     // by material index: the mesh whose glTF import made it
         };

@@ -189,7 +189,7 @@ int main(int argc, char **argv)
 
     // The 3D view fills the image; the map is a square in the top-right corner, drawn over it.
     const float mapHeight = 0.36f;
-    // Nothing loads in the background here, so this returns at once; it keeps the examples' --wait-for-loads.
+    // No AssetLoader is attached, so this returns at once; it keeps the examples' --wait-for-loads.
     if (args.waitForLoads)
         renderer.waitForLoads();
 

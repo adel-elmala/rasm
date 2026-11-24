@@ -115,19 +115,6 @@ namespace rasm
         return static_cast<uint32_t>(targetCount);
     }
 
-    // Per target: the longest position change, which bounds how far a weight w moves any vertex (|w| times it).
-    std::vector<float> getMorphRadii(const ObjRaw &raw)
-    {
-        std::vector<float> radii(raw.morphTargetCount, 0.0f);
-        const size_t vertexCount = raw.vertices.size();
-        for (size_t t = 0; t < raw.morphTargetCount; ++t)
-        {
-            for (size_t v = 0; v < vertexCount && t * vertexCount + v < raw.morphs.size(); ++v)
-                radii[t] = std::max(radii[t], glm::length(raw.morphs[t * vertexCount + v].position));
-        }
-        return radii;
-    }
-
     // Each node that draws a morphed mesh gets its weights once in raw.morphWeights, at rest: the node's weights, else
     // the mesh's, else 0 (glTF). Its primitives use them from sub.firstWeight on. The names come from the mesh's
     // extras.targetNames when it has one per target. Returns each such glTF node's first weight.

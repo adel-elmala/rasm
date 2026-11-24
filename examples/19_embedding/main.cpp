@@ -20,9 +20,9 @@
 #include <string>
 #include <vector>
 
-// RASM in a window the application owns, with the renderer alone: a rasm::Renderer, no Engine. The application opens
-// an SDL3 window and runs its event loop, as a game with its own window or an editor would; the renderer gets the
-// window's native handle (RendererConfig::nativeWindow: an HWND, a CAMetalLayer, an X11 window or a Wayland surface)
+// RASM in a window the application owns, with a rasm::Renderer and a rasm::AssetLoader for its files, no Engine. The
+// application opens an SDL3 window and runs its event loop, as a game with its own window or an editor would; the
+// renderer gets the window's native handle (RendererConfig::nativeWindow: an HWND, a CAMetalLayer, an X11 window or a Wayland surface)
 // and draws into it, and the application passes on the input (Renderer::addInputEvent), the size (setWindowSize) and
 // the display's scale (setWindowContentScale). Escape and closing the window end the loop: the renderer never quits
 // by itself. The application also drives the camera: the renderer's camera has no controller
@@ -370,7 +370,6 @@ namespace
             .windowHeight = HEIGHT,
             .enableValidation = true,
             .preferredBackend = rasm::Backend::VULKAN,
-            .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
             .shaderDir = RASM_EXAMPLE_SHADER_DIR,
             .ui = true};
         applyExampleArgs(args, config);
@@ -386,10 +385,13 @@ namespace
                 std::fprintf(stderr, "error: RASM could not draw into the hidden window (see the log). --no-window runs the same script without a window.\n");
             return 1;
         }
+        // The files load on the loader's workers, and the renderer finishes them at the start of each frame. Made after
+        // the renderer, so it is destroyed first, as it must be.
+        rasm::AssetLoader loader(renderer, {.assetRoot = RASM_EXAMPLE_ASSET_ROOT});
 
         const rasm::SceneHandle scene = renderer.createScene();
-        const rasm::EnvironmentHandle sunset = renderer.loadEnvironment("environments/venice_sunset_2k.hdr");
-        const rasm::MeshHandle helmet = renderer.loadGLTF("models/gltf/DamagedHelmet/DamagedHelmet.gltf");
+        const rasm::EnvironmentHandle sunset = loader.loadEnvironment("environments/venice_sunset_2k.hdr");
+        const rasm::MeshHandle helmet = loader.loadGLTF("models/gltf/DamagedHelmet/DamagedHelmet.gltf");
         const rasm::MeshHandle cube = createCube(renderer);
         if (!sunset.isValid() || !helmet.isValid() || !cube.isValid())
             return 1;

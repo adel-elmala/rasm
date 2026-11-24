@@ -1,7 +1,7 @@
 // clang-format off
 #pragma once
 
-#include "rasm/mesh.h"
+#include "assets/meshData.h"
 #include "assets/ktxImage.h"
 
 #include <cstdint>
