@@ -446,7 +446,7 @@ engine.setCameraTransform(view.camera, view.rig.transform);</code></pre>
 <div class="api" id="beginPass">
   <pre class="sig">void beginPass(const std::string&amp; name = "Pass", const AttachmentOps&amp; ops = {});</pre>
   <div class="body">
-    <p>Starts rendering into the current target: the window, or the render target set with <a href="render-graph.html#setRenderTarget"><code>setRenderTarget</code></a>. By default it clears color and depth (their old contents are dropped), sets the viewport and scissor to the whole target, and sets cull mode to none. Only between <code>beginFrame</code> and <code>endFrame</code>.</p>
+    <p>Starts rendering into the current target: the window, or the render target set with <a href="render-graph.html#setRenderTarget"><code>setRenderTarget</code></a>. By default it clears color and depth (their old contents are dropped), sets the viewport and scissor to the whole target, and sets cull mode to none. Only between <code>beginFrame</code> and <code>endFrame</code>. A pass on a window with no image this frame (the main window minimized while another window shows) draws nothing: <code>beginFrame</code> returns true while any window has an image.</p>
     <dl>
       <dt>name</dt><dd>Label of the pass. It names the pass's GPU timer in <code>getFrameStats</code> and the stats overlay.</dd>
       <dt>ops</dt><dd>Which attachments to keep instead of clearing, and whether to keep depth at the end. See <a href="#AttachmentOps">AttachmentOps</a>. A render graph sets them for you.</dd>

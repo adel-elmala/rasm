@@ -17,6 +17,7 @@
 #include <deque>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace rasm
@@ -370,6 +371,7 @@ namespace rasm
         bool                                                                                                                    computeBound    = false; // a compute pipeline is bound, so dispatches are defined
         bool                                                                                                                    meshBound       = false; // the pass's pipeline is a mesh pipeline, for drawMeshTasksIndirect
         bool                                                                                                                    insidePass      = false; // between beginRendering and endRendering, where draws are allowed and dispatches and barriers are not
+        bool                                                                                                                    emptyPass       = false; // beginEmptyPass: the pass draws nothing
         Viewport                                                                                                                viewport;                // the last setViewport
 
         BufferHandle addBuffer(rhi::Buffer* buffer)
@@ -1920,6 +1922,14 @@ namespace rasm
         return impl->device->waitForFence(rhiFence, value, timeout);
     }
 
+    // A new frame names no window yet: a window that kept an image from a frame that never went out (a failed submit)
+    // takes part again only once it is acquired again, which hands that image out again.
+    void RenderContext::beginSwapchainFrame()
+    {
+        for (WindowSwapchain &window : impl->windows)
+            window.acquired = false;
+    }
+
     SwapchainStatus RenderContext::acquireNextImage(uint32_t &imageIndex, const WindowHandle &window)
     {
         ZoneScoped;
@@ -2044,11 +2054,21 @@ namespace rasm
         return true;
     }
 
+    // A pass with nothing to draw into, as for a window with no image this frame: its draws record nothing, and
+    // endRendering ends it without a rendering scope.
+    void RenderContext::beginEmptyPass()
+    {
+        impl->insidePass = true;
+        impl->emptyPass = true;
+    }
+
     bool RenderContext::endRendering(const CommandBufferHandle &commandBuffer)
     {
         impl->insidePass = false;
         std::fill(std::begin(impl->passColorFormats), std::end(impl->passColorFormats), Format::UNKNOWN);
         impl->passDepthFormat = Format::UNKNOWN;
+        if (std::exchange(impl->emptyPass, false))
+            return true;
 
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
         if (!rhiCommandBuffer)
@@ -2338,7 +2358,7 @@ namespace rasm
             return;
 
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
-        if (!impl->skipDraws && rhiCommandBuffer)
+        if (!impl->skipDraws && !impl->emptyPass && rhiCommandBuffer)
             rhiCommandBuffer->draw(vertexCount, instanceCount);
     }
 
@@ -2348,7 +2368,7 @@ namespace rasm
             return;
 
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
-        if (!impl->skipDraws && rhiCommandBuffer)
+        if (!impl->skipDraws && !impl->emptyPass && rhiCommandBuffer)
             rhiCommandBuffer->drawIndexed(indexCount, instanceCount, vertexOffset, firstIndex, firstInstance);
     }
 
@@ -2359,7 +2379,7 @@ namespace rasm
 
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
         auto *rhiBuffer = lookup(impl->buffers, drawInfoBuffer, __func__);
-        if (!impl->skipDraws && rhiCommandBuffer && rhiBuffer)
+        if (!impl->skipDraws && !impl->emptyPass && rhiCommandBuffer && rhiBuffer)
             rhiCommandBuffer->drawIndexedIndirect(rhiBuffer, offset, drawCount, stride);
     }
 
@@ -2371,7 +2391,7 @@ namespace rasm
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
         auto *rhiBuffer = lookup(impl->buffers, drawInfoBuffer, __func__);
         auto *rhiCountBuffer = lookup(impl->buffers, countBuffer, __func__);
-        if (!impl->skipDraws && rhiCommandBuffer && rhiBuffer && rhiCountBuffer)
+        if (!impl->skipDraws && !impl->emptyPass && rhiCommandBuffer && rhiBuffer && rhiCountBuffer)
             rhiCommandBuffer->drawIndexedIndirectCount(rhiBuffer, offset, rhiCountBuffer, countOffset, maxDrawCount, stride);
     }
 
@@ -2388,7 +2408,7 @@ namespace rasm
 
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
         auto *rhiBuffer = lookup(impl->buffers, buffer, __func__);
-        if (!impl->skipDraws && rhiCommandBuffer && rhiBuffer && drawCount > 0 &&
+        if (!impl->skipDraws && !impl->emptyPass && rhiCommandBuffer && rhiBuffer && drawCount > 0 &&
             checkArgument(rhiBuffer->desc.usage == BufferUsage::INDIRECT, __func__, "the buffer is not an INDIRECT buffer.") &&
             checkArgument(offset + static_cast<uint64_t>(drawCount - 1) * stride + 3 * sizeof(uint32_t) <= rhiBuffer->desc.size, __func__, "the commands reach past the buffer."))
             rhiCommandBuffer->drawMeshTasksIndirect(rhiBuffer, offset, drawCount, stride);

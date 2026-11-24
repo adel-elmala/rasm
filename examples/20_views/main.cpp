@@ -317,7 +317,7 @@ int main(int argc, char **argv)
             if (frame == 35)
                 second = engine.addWindow(secondDesc);
             // The same frame as the main window's copy (exampleRunning asks for it before this frame too).
-            if (frame == args.frames && second.isValid())
+            if (frame == args.frames && engine.getWindow(second).handle.isValid())
                 secondReadback = engine.readFrame(second);
         }
         engine.pollEvents();

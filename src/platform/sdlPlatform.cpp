@@ -206,16 +206,41 @@ namespace rasm
             return true;
         }
 
-        // The window an SDL event names, or the main window for an event that names none it knows.
+        // The window an SDL event names: the main window for an event that names none, and null for a window the
+        // engine no longer has (one just removed, whose last events are still queued).
         Window *findWindow(Window *windows, uint32_t count, SDL_WindowID id)
         {
+            if (id == 0)
+                return &windows[MAIN_WINDOW_INDEX];
             SDL_Window *sdlWindow = SDL_GetWindowFromID(id);
             for (uint32_t i = 0; sdlWindow != nullptr && i < count; ++i)
             {
                 if (windows[i].handle.isValid() && windows[i].platformWindow == sdlWindow)
                     return &windows[i];
             }
-            return &windows[MAIN_WINDOW_INDEX];
+            return nullptr;
+        }
+
+        // The window id of an event that has one, else 0.
+        SDL_WindowID getEventWindowId(const SDL_Event &event)
+        {
+            switch (event.type)
+            {
+            case SDL_EVENT_KEY_DOWN:
+            case SDL_EVENT_KEY_UP:
+                return event.key.windowID;
+            case SDL_EVENT_TEXT_INPUT:
+                return event.text.windowID;
+            case SDL_EVENT_MOUSE_BUTTON_DOWN:
+            case SDL_EVENT_MOUSE_BUTTON_UP:
+                return event.button.windowID;
+            case SDL_EVENT_MOUSE_MOTION:
+                return event.motion.windowID;
+            case SDL_EVENT_MOUSE_WHEEL:
+                return event.wheel.windowID;
+            default:
+                return event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST ? event.window.windowID : 0;
+            }
         }
 
         class SdlPlatform final : public Platform
@@ -293,6 +318,10 @@ namespace rasm
                 SDL_Event event;
                 while (SDL_PollEvent(&event))
                 {
+                    // An event of a window the engine has removed goes nowhere.
+                    Window *target = findWindow(windows, count, getEventWindowId(event));
+                    if (target == nullptr)
+                        continue;
                     switch (event.type)
                     {
                     case SDL_EVENT_QUIT:
@@ -302,7 +331,7 @@ namespace rasm
                     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
                     {
                         // The main window's close quits; another's is the application's to handle.
-                        Window &window = *findWindow(windows, count, event.window.windowID);
+                        Window &window = *target;
                         if (&window == &windows[MAIN_WINDOW_INDEX])
                             closed = true;
                         else
@@ -313,7 +342,7 @@ namespace rasm
                     case SDL_EVENT_KEY_UP:
                     {
                         const InputEvent key = {.type = InputEventType::KEY,
-                                                .window = findWindow(windows, count, event.key.windowID)->handle,
+                                                .window = target->handle,
                                                 .key = toKey(event.key.key),
                                                 .physicalKey = toPhysicalKey(event.key.scancode),
                                                 .down = event.key.down,
@@ -327,7 +356,7 @@ namespace rasm
                     {
                         const size_t first = events.size();
                         appendText(event.text.text, events);
-                        const WindowHandle window = findWindow(windows, count, event.text.windowID)->handle;
+                        const WindowHandle window = target->handle;
                         for (size_t i = first; i < events.size(); ++i)
                             events[i].window = window;
                         break;
@@ -339,7 +368,7 @@ namespace rasm
                         if (!toMouseButton(event.button.button, button))
                             break;
                         events.push_back({.type = InputEventType::MOUSE_BUTTON,
-                                          .window = findWindow(windows, count, event.button.windowID)->handle,
+                                          .window = target->handle,
                                           .down = event.button.down,
                                           .button = button,
                                           .x = event.button.x,
@@ -352,23 +381,23 @@ namespace rasm
                         break;
                     }
                     case SDL_EVENT_MOUSE_MOTION:
-                        events.push_back({.type = InputEventType::MOUSE_MOVE, .window = findWindow(windows, count, event.motion.windowID)->handle, .x = event.motion.x, .y = event.motion.y});
+                        events.push_back({.type = InputEventType::MOUSE_MOVE, .window = target->handle, .x = event.motion.x, .y = event.motion.y});
                         break;
                     case SDL_EVENT_MOUSE_WHEEL:
-                        events.push_back({.type = InputEventType::MOUSE_WHEEL, .window = findWindow(windows, count, event.wheel.windowID)->handle, .x = event.wheel.x, .y = event.wheel.y});
+                        events.push_back({.type = InputEventType::MOUSE_WHEEL, .window = target->handle, .x = event.wheel.x, .y = event.wheel.y});
                         break;
                     case SDL_EVENT_WINDOW_MOUSE_LEAVE:
-                        events.push_back({.type = InputEventType::MOUSE_LEAVE, .window = findWindow(windows, count, event.window.windowID)->handle});
+                        events.push_back({.type = InputEventType::MOUSE_LEAVE, .window = target->handle});
                         break;
                     case SDL_EVENT_WINDOW_FOCUS_GAINED:
                     case SDL_EVENT_WINDOW_FOCUS_LOST:
                         // Each window's own: the focus that moves to another window is a loss for the one it leaves.
-                        events.push_back({.type = InputEventType::FOCUS, .window = findWindow(windows, count, event.window.windowID)->handle, .down = event.type == SDL_EVENT_WINDOW_FOCUS_GAINED});
+                        events.push_back({.type = InputEventType::FOCUS, .window = target->handle, .down = event.type == SDL_EVENT_WINDOW_FOCUS_GAINED});
                         break;
                     case SDL_EVENT_WINDOW_RESIZED:
                     {
                         // Logical size, only used for mouse coordinates.
-                        Window &window = *findWindow(windows, count, event.window.windowID);
+                        Window &window = *target;
                         window.width = static_cast<uint32_t>(event.window.data1);
                         window.height = static_cast<uint32_t>(event.window.data2);
                         break;
@@ -376,7 +405,7 @@ namespace rasm
                     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                     {
                         // The swapchain, depth textures, viewport and camera aspect follow the pixel size (B17).
-                        Window &window = *findWindow(windows, count, event.window.windowID);
+                        Window &window = *target;
                         window.resized = true;
                         window.pixelWidth = static_cast<uint32_t>(event.window.data1);
                         window.pixelHeight = static_cast<uint32_t>(event.window.data2);
@@ -386,7 +415,7 @@ namespace rasm
                     case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
                     {
                         // Moved to another monitor, or its scale setting changed: the UI rescales on its next frame.
-                        Window &window = *findWindow(windows, count, event.window.windowID);
+                        Window &window = *target;
                         window.contentScale = getContentScale(toSdl(window));
                         break;
                     }
@@ -398,11 +427,11 @@ namespace rasm
                         }
                         break;
                     case SDL_EVENT_WINDOW_MINIMIZED:
-                        findWindow(windows, count, event.window.windowID)->minimized = true;
+                        target->minimized = true;
                         break;
                     case SDL_EVENT_WINDOW_RESTORED:
                     case SDL_EVENT_WINDOW_MAXIMIZED:
-                        findWindow(windows, count, event.window.windowID)->minimized = false;
+                        target->minimized = false;
                         break;
                     default:
                         break;

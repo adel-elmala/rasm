@@ -321,6 +321,14 @@ constexpr uint32_t QUEUE_COUNT = 2;</pre>
   </div>
 </div>
 
+<div class="api" id="beginEmptyPass">
+  <pre class="sig">void beginEmptyPass();
+void beginSwapchainFrame();</pre>
+  <div class="body">
+    <p><code>beginEmptyPass</code> starts a pass with nothing to draw into, which <code>Engine::beginPass</code> uses for a window with no image this frame: its draws record nothing, and <code>endRendering</code> ends it. <code>beginSwapchainFrame</code> runs before a frame's acquires: only the windows acquired after it take part in that frame's submits and presents, so a window that kept an image from a frame that never went out (a failed submit) is presented only once it is acquired again.</p>
+  </div>
+</div>
+
 <div class="api" id="beginRendering">
   <pre class="sig">bool beginRendering(const CommandBufferHandle&amp; commandBuffer,
                     const TextureHandle* colorAttachments,

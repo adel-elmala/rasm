@@ -273,9 +273,10 @@ namespace rasm
                                                                                    : "WindowDesc::native is for PlatformType::NATIVE; this platform opens its own windows.");
             return {};
         }
-        if ((headless || !hasNative) && (desc.width == 0 || desc.height == 0))
+        const bool sized = hasNative ? (desc.native.pixelWidth > 0 || desc.width > 0) && (desc.native.pixelHeight > 0 || desc.height > 0) : desc.width > 0 && desc.height > 0;
+        if (!sized)
         {
-            spdlog::error("addWindow: a window needs a width and a height.");
+            spdlog::error("addWindow: a window needs a width and a height (for a native window, its pixel size or WindowDesc's).");
             return {};
         }
         const HandleSlot slot = windowHandles.allocate();
@@ -969,6 +970,7 @@ namespace rasm
         // B4. Each window that can show gets an image; one that can't (minimized, out of date) sits this frame out, and
         // its passes are skipped. A frame with no image at all is skipped.
         bool anyAcquired = false;
+        ctx.beginSwapchainFrame();
         for (uint32_t i = 0; i < MAX_WINDOWS; ++i)
         {
             const Window &window = windows[i];
@@ -980,8 +982,10 @@ namespace rasm
             const auto status = ctx.acquireNextImage(frame.imageIdx, window.handle);
             if (status == SwapchainStatus::OUT_OF_DATE)
                 frame.outOfDate = true;
-            if (status == SwapchainStatus::SUBOPTIMAL)
-                frame.outOfDate = true; // The image is acquired and still usable; recreate after this frame.
+            // SUBOPTIMAL: the image is acquired and still usable, recreate after this frame. FAILURE: a new swapchain
+            // starts from a clean state.
+            if (status == SwapchainStatus::SUBOPTIMAL || status == SwapchainStatus::FAILURE)
+                frame.outOfDate = true;
             frame.acquired = status == SwapchainStatus::OK || status == SwapchainStatus::SUBOPTIMAL;
             anyAcquired = anyAcquired || frame.acquired;
         }
@@ -1242,6 +1246,12 @@ namespace rasm
         auto currentFrame = frameResources[frameCount];
         frameStats->passTimer = beginGpuTimer(currentFrame.commandBuffer, name);
         WindowFrame &window = frameOf(currentWindow);
+        // A window with no image this frame (minimized, out of date, removed): the pass draws nothing.
+        if (!currentRenderTarget.isValid() && (!window.acquired || (currentWindow.isValid() && !isLive(currentWindow))))
+        {
+            ctx.beginEmptyPass();
+            return;
+        }
         uint32_t width = window.swapchain.width;
         uint32_t height = window.swapchain.height;
         TextureHandle colors[MAX_COLOR_ATTACHMENTS] = {window.swapchain.imageHandles[window.imageIdx]};
@@ -1288,7 +1298,7 @@ namespace rasm
             for (uint32_t i = 0; i < renderTargetData.colorCount; ++i)
                 ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color[i], TextureUsage::SAMPLED);
         }
-        else
+        else if (frameOf(currentWindow).acquired)
         {
             // endFrame moves it to PRESENT_SRC.
             frameOf(currentWindow).rendered = true;
@@ -1316,6 +1326,11 @@ namespace rasm
 
     bool Engine::recreateSwapchain(WindowHandle window)
     {
+        if (window.isValid() && !isLive(window))
+        {
+            spdlog::error("recreateSwapchain: the window is invalid or was removed.");
+            return false;
+        }
         WindowFrame &frame = frameOf(window);
         auto status = ctx.recreateSwapchain(window);
         if (status != SwapchainStatus::OK)

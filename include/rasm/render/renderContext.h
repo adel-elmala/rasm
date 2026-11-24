@@ -89,6 +89,8 @@ namespace rasm
         TextureUsage                        getTextureState(const TextureHandle& texture);
         uint64_t                            getFenceValue(FenceHandle fence);
         bool                                waitForFence(FenceHandle fence, uint64_t value, uint64_t timeout = UINT64_MAX);
+        // Before the frame's acquires: only the windows acquired after it take part in the frame's submits and presents.
+        void                                beginSwapchainFrame();
         [[nodiscard]] SwapchainStatus       acquireNextImage(uint32_t& imageIndex, const WindowHandle& window = {});
         bool                                beginCommandBuffer(const CommandBufferHandle& commandBuffer);
         bool                                endCommandBuffer(const CommandBufferHandle& commandBuffer);
@@ -115,6 +117,8 @@ namespace rasm
         [[nodiscard]] SwapchainStatus       recreateSwapchain(const WindowHandle& window = {});
         bool                                beginRendering(const CommandBufferHandle& commandBuffer, const TextureHandle* colorAttachments, uint32_t colorCount, TextureHandle depthAttachment, const glm::vec4& clearColor, const AttachmentOps& ops = {}, uint32_t face = 0);
         bool                                endRendering(const CommandBufferHandle& commandBuffer);
+        // A pass with nothing to draw into (a window with no image this frame): its draws record nothing until endRendering.
+        void                                beginEmptyPass();
         bool                                setViewport(const CommandBufferHandle& commandBuffer, float x, float y, float width, float height, float minDepth = 0.0f, float maxDepth = 1.0f);
         const Viewport&                     getViewport() const;
         bool                                setScissor(const CommandBufferHandle& commandBuffer, int32_t x, int32_t y, uint32_t width, uint32_t height);
