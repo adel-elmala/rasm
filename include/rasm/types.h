@@ -148,6 +148,7 @@ namespace rasm
         MSAA_4X,
         MSAA_8X,
         TAA,
+        DEFAULT,    // View::antiAliasing: the EngineConfig value; in EngineConfig, NONE
     };
 
     enum class DebugView
@@ -320,6 +321,7 @@ namespace rasm
         glm::vec4 clearColor;
         bool history;
         uint32_t samples = 1;
+        uint32_t version = 0;   // counts the times its textures were made: a resize or a new placement keeps their handles but not their contents
         uint32_t storageSlots[rasm::MAX_FRAMES_IN_FLIGHT][rasm::MAX_COLOR_ATTACHMENTS] = {}; // binding 1 slot of each color of a storage target per frame slot, UINT32_MAX otherwise
     };
 

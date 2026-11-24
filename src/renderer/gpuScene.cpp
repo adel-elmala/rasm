@@ -840,7 +840,8 @@ namespace rasm
     // hold for every frame. The cull stats are not declared: the views only add to them atomically, and only the CPU
     // reads them, after the slot's fence, so views need no order between them. The draws read the shadows' maps, so
     // they run after the passes that drew them.
-    bool Engine::addScenePasses(RenderGraph &graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget, const SceneShadow *shadows, uint32_t shadowCount)
+    bool Engine::addScenePasses(RenderGraph &graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget, const SceneShadow *shadows, uint32_t shadowCount,
+                                const RenderTargetHandle *sampled, uint32_t sampledCount)
     {
         if (!isLive(camera))
         {
@@ -924,7 +925,23 @@ namespace rasm
             }
         }
 
-        return addSceneViewPasses(graph, scene, camera, renderTarget, 0, shadows, shadowCount, depthOnly);
+        // A view texture its materials sample orders the draws after its writer; drawing into it while it is sampled
+        // is not defined, and a target with no color has nothing to sample.
+        if (sampledCount > 0 && sampled == nullptr)
+        {
+            spdlog::error("addScenePasses: sampledCount is {} and sampled is null.", sampledCount);
+            return false;
+        }
+        for (uint32_t i = 0; i < sampledCount; ++i)
+        {
+            if (sampled[i] == renderTarget || !sampled[i].isValid() || ctx.getRenderTarget(sampled[i]).colorCount == 0)
+            {
+                spdlog::error("addScenePasses: a sampled target is a valid render target with a color, other than the one the view draws.");
+                return false;
+            }
+        }
+
+        return addSceneViewPasses(graph, scene, camera, renderTarget, 0, shadows, shadowCount, depthOnly, sampled, sampledCount);
     }
 
     // A light's shadow: depth-only maps, each drawn by its own scene view, with LODs from the camera. A directional
@@ -990,13 +1007,14 @@ namespace rasm
         for (uint32_t i = 0; i < viewCount; ++i)
         {
             const bool cube = type == LightType::POINT;
-            if (!addSceneViewPasses(graph, scene, camera, shadow.maps[cube ? 0 : i], cube ? i : 0, &shadow, 1, true))
+            if (!addSceneViewPasses(graph, scene, camera, shadow.maps[cube ? 0 : i], cube ? i : 0, &shadow, 1, true, nullptr, 0))
                 return {};
         }
         return shadow;
     }
 
-    bool Engine::addSceneViewPasses(RenderGraph &graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget, uint32_t face, const SceneShadow *shadows, uint32_t shadowCount, bool depthOnly)
+    bool Engine::addSceneViewPasses(RenderGraph &graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget, uint32_t face, const SceneShadow *shadows, uint32_t shadowCount, bool depthOnly,
+                                    const RenderTargetHandle *sampled, uint32_t sampledCount)
     {
         // A view's passes run once per frame: a second set would read its own visibility as last frame's.
         for (uint32_t heldView : graph.sceneViews)
@@ -1049,8 +1067,10 @@ namespace rasm
                 builder.write(sceneView.sortBuffers);
         };
         // A shaded view's draws also read where the frame before drew a skinned vertex, for motion.
-        auto drawScenePass = [&sceneView, &clusters, &animation, renderTarget, face](PassBuilder &builder)
+        auto drawScenePass = [&sceneView, &clusters, &animation, renderTarget, face, sampled, sampledCount](PassBuilder &builder)
         {
+            for (uint32_t i = 0; i < sampledCount; ++i)
+                builder.read(sampled[i]);
             builder.read(animation.transforms);
             builder.read(animation.skinnedVertices);
             if (!sceneView.depthOnly)
@@ -1202,7 +1222,7 @@ namespace rasm
         }
         if (freeSlot == UINT32_MAX)
         {
-            spdlog::error("At most {} views (scene, camera, target) can be held by render graphs at once.", MAX_SCENE_VIEWS);
+            spdlog::error("All {} scene views (MAX_SCENE_VIEWS) are held by render graphs (each view, shadow cascade and cube face takes one); this view is not drawn.", MAX_SCENE_VIEWS);
             return UINT32_MAX;
         }
 

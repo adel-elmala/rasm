@@ -105,7 +105,7 @@ namespace rasm
         for (uint32_t i = 0; i < MAX_SCENE_VIEWS; ++i)
         {
             const SceneView &view = gpuScene->views[i];
-            const uint32_t own = renderer && renderer->draws(view.scene, view.camera) ? 1 : 0;
+            const uint32_t own = renderer && renderer->draws(view.scene, view.camera, view.renderTarget) ? 1 : 0;
             if (view.graphs <= own || !((scene.isValid() && view.scene == scene) || (camera.isValid() && view.camera == camera)))
                 continue;
             spdlog::error("{}: {} render graph(s) draw view {} (scene {}, camera {}) with it. Destroy those graphs first, or let them go out of scope.", caller,
@@ -176,7 +176,7 @@ namespace rasm
 
         if (sceneRef.cameras.size() >= MAX_CAMERAS_PER_SCENE)
         {
-            spdlog::warn("Exceeded maximum cameras per scene.");
+            spdlog::error("addCameraToScene: the scene has {} cameras, the most it can hold (MAX_CAMERAS_PER_SCENE).", MAX_CAMERAS_PER_SCENE);
             return;
         }
 

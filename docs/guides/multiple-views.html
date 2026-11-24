@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Many Views of One Scene · RASM</title>
+<meta name="description" content="Split screen, picture-in-picture, editor viewports and render to texture: a view is a camera and an output, a viewport is a rect of the window, a view texture is an image other passes sample, and a view's history belongs to the view. How RASM draws a list of views in one frame.">
+<meta name="rasm-sources" content="include/rasm/view.h include/rasm/engine.h include/rasm/types.h include/rasm/scene.h include/rasm/render/renderContext.h src/renderer/view.cpp src/renderer/renderer.h src/renderer/renderer.cpp src/renderer/toneMap.cpp src/renderer/taa.h src/renderer/taa.cpp src/renderer/ui.cpp src/renderer/gpuScene.cpp src/rhi/renderContext.cpp src/engine.cpp examples/20_views/main.cpp tests/viewTests.cpp tests/image/imageTests.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/multiple-views.js"></script>
+</head>
+<body data-root="../" data-page="guides/multiple-views.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Culling and the frame</p>
+<h1>Many views of one scene</h1>
+<p class="lead">A game shows one camera in one window. Many programs need more: an editor with four viewports, a map application with a small map in the corner, a racing game in split screen, a security monitor in the scene that shows another camera. Each picture is a <b>view</b>: one camera's image of the scene, drawn into one place. This page explains how to draw several views in one frame: where each view goes, how a view becomes a texture, what each view must keep from frame to frame, and what an extra view costs. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>A <b>view</b> is a scene, a camera and an <b>output</b>: a part of the window (a <b>viewport</b>), or a texture.</li>
+    <li>Give a viewport as <b>fractions</b> of the window, and round each edge to a pixel. Views that touch then share their edge: no gap, no overlap.</li>
+    <li>Draw each view into a <b>target of its own size</b>, then copy it into its viewport in the last pass. Its post effects (bloom, TAA) stay inside it.</li>
+    <li>Views draw in <b>list order</b>: a later view goes over an earlier one. That is a picture-in-picture.</li>
+    <li>A <b>view texture</b> is a normal image: a material or the UI samples it. A pass after its writer sees this frame's picture, a pass before it sees the last frame's. A camera that sees its own screen gets the last frame: no cycle.</li>
+    <li>A view's <b>history</b> (last frame's depth and visibility, TAA) belongs to the view. Find it by what the view is (its camera and output), not by its place in the list.</li>
+    <li>An extra view costs a <b>fixed part</b> (culling, depth pyramid, small passes) and a <b>part per pixel</b>. Split one window in two and the pixel part stays about the same.</li>
+  </ul>
+</div>
+
+<h2 id="views"><span class="n">1</span>What a view is</h2>
+
+<p>All four pictures below draw the same scene. Only the cameras and the places differ.</p>
+
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A window cut in two halves: the left half shows player 1's camera, the right half player 2's.">
+      <rect x="20" y="15" width="200" height="100" rx="4" class="paper"/>
+      <rect x="20" y="15" width="100" height="100" class="cpu o-50"/><text x="70" y="70" class="mid small">player 1</text>
+      <rect x="120" y="15" width="100" height="100" class="gpu o-50"/><text x="170" y="70" class="mid small">player 2</text>
+    </svg>
+    <h4>Split screen</h4>
+    <p>Two cameras, each in half of the window.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The whole window shows the main camera, and a small square in its top-right corner shows a map from above.">
+      <rect x="20" y="15" width="200" height="100" rx="4" class="cpu o-50"/><text x="90" y="70" class="mid small">main camera</text>
+      <rect x="160" y="22" width="52" height="40" class="mem"/><text x="186" y="46" class="mid small">map</text>
+    </svg>
+    <h4>Picture-in-picture</h4>
+    <p>A small view drawn over a big one: a map, a rear mirror.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A window cut in four quarters: perspective, top, front and side views of one model, as in an editor.">
+      <rect x="20" y="15" width="200" height="100" rx="4" class="paper"/>
+      <rect x="20" y="15" width="100" height="50" class="cpu o-50"/><text x="70" y="44" class="mid small">perspective</text>
+      <rect x="120" y="15" width="100" height="50" class="gpu o-50"/><text x="170" y="44" class="mid small">top</text>
+      <rect x="20" y="65" width="100" height="50" class="gpu o-25"/><text x="70" y="94" class="mid small">front</text>
+      <rect x="120" y="65" width="100" height="50" class="cpu o-25"/><text x="170" y="94" class="mid small">side</text>
+    </svg>
+    <h4>Editor viewports</h4>
+    <p>Four views, often in panels the user resizes.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A security camera draws into a texture; a TV in the scene shows that texture.">
+      <rect x="20" y="25" width="70" height="44" class="mem"/><text x="55" y="51" class="mid small">texture</text>
+      <rect x="140" y="20" width="80" height="54" rx="3" class="solid"/><rect x="146" y="26" width="68" height="42" class="mem"/>
+      <line x1="90" y1="47" x2="144" y2="47" class="arrow mem" marker-end="url(#ah-mem)"/>
+      <text x="120" y="105" class="mid small">a camera's picture on a TV</text>
+    </svg>
+    <h4>Render to texture</h4>
+    <p>The view's output is an image that a material or the UI shows.</p>
+  </div>
+</div>
+
+<p>So a view needs three things: the <b>scene</b>, the <b>camera</b> and the <b>output</b>. The rest of this page is about the output and about what a view keeps.</p>
+
+<h2 id="viewport"><span class="n">2</span>Viewports: a rect of the window</h2>
+
+<p>A viewport says where a view goes in the window. Give it as <b>fractions</b> of the window, not in pixels: <samp>(0.5, 0, 0.5, 1)</samp> is the right half of any window. A resize then needs no new numbers.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="A window of 1281 by 720 pixels split at 0.5. Left rect x from 0 to round(640.5) = 641, right rect from 641 to 1281. Rounding each edge, not each width, makes the two share the edge at 641 with no gap and no overlap. Rounding x and width separately can give 640 + 640 = 1280 and leave the last column empty.">
+    <text x="20" y="22" class="title">a window of 1281 × 720 pixels, split at x = 0.5</text>
+    <rect x="20" y="34" width="360" height="160" class="cpu o-50"/>
+    <rect x="380" y="34" width="360" height="160" class="gpu o-50"/>
+    <line x1="380" y1="28" x2="380" y2="200" class="hot thick"/>
+    <text x="200" y="110" class="mid">left: (0, 0, 0.5, 1)</text>
+    <text x="560" y="110" class="mid">right: (0.5, 0, 0.5, 1)</text>
+    <text x="20" y="214" class="small mono">0</text>
+    <text x="380" y="214" class="mid small mono t-hot">round(0.5 × 1281) = 641</text>
+    <text x="740" y="214" class="end small mono">1281</text>
+    <text x="20" y="238" class="small">Round each edge, not each width: left is 0 to 641 (641 px), right 641 to 1281 (640 px). They share the edge at 641.</text>
+  </svg>
+  <figcaption>Rounding the width instead (640.5 → 640 for both) leaves one column of pixels that no view draws: a line of the clear color between the views.</figcaption>
+</figure>
+
+<p>Two more rules keep a viewport safe. Clamp the edges to the window, and keep at least one pixel, so a rect that is too small or partly outside still draws something defined.</p>
+
+<figure class="lab" data-lab="split-window" data-title="Split a window and round the edges">
+  <figcaption>Move the split and try the odd width: the two widths change, but the gap stays 0. Pick the width 7: every rect, the map too, keeps at least one pixel.</figcaption>
+</figure>
+
+<h2 id="own-target"><span class="n">3</span>One target per view</h2>
+
+<p>There are two ways to put two views in one window. You can draw both straight into the window's image, each with its own viewport. Or you can draw each view into a target of its own size and copy it into its viewport at the end, in the tone-map pass.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 150" role="img" aria-label="Both views draw into one big HDR image. A bright light near the edge of the left view glows into the right view through the blur, and the right view's last-frame history holds pixels of the left view.">
+      <rect x="10" y="20" width="300" height="100" class="paper"/>
+      <rect x="10" y="20" width="150" height="100" class="cpu o-25"/>
+      <rect x="160" y="20" width="150" height="100" class="gpu o-25"/>
+      <circle cx="150" cy="60" r="8" class="light"/>
+      <circle cx="160" cy="60" r="26" class="hot o-25"/>
+      <text x="160" y="140" class="mid small">one target: the glow crosses the edge</text>
+    </svg>
+    <h4>Views share one image</h4>
+    <p>Blurs (bloom) read across the edge, so light from one view glows into the next. A depth pyramid and a TAA history cover both views, so one view's culling and history read the other's pixels.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 150" role="img" aria-label="Each view draws into its own HDR target of its own size, with its own bloom and history. The tone-map pass copies each one into its rect of the window.">
+      <rect x="10" y="20" width="110" height="70" class="cpu o-50"/><text x="65" y="60" class="mid small">view A, 641 px</text>
+      <rect x="130" y="20" width="110" height="70" class="gpu o-50"/><text x="185" y="60" class="mid small">view B, 640 px</text>
+      <rect x="250" y="20" width="60" height="70" class="paper"/>
+      <line x1="120" y1="78" x2="262" y2="78" class="arrow" marker-end="url(#ah)"/>
+      <text x="280" y="60" class="mid small">window</text>
+      <text x="160" y="140" class="mid small">a target per view, copied at the end</text>
+    </svg>
+    <h4>A target per view</h4>
+    <p>Every effect stays inside its view. The target has the view's own size, so a pixel of it is a pixel of the screen. The cost is the memory of one more target per view.</p>
+  </div>
+</div>
+
+<p>The last pass, the tone map, reads the view's target and writes its rect of the window. It sets the <b>viewport</b> (where the picture goes) and the <b>scissor</b> (where pixels may change) to that rect.</p>
+
+<h2 id="order"><span class="n">4</span>Draw order: a later view goes on top</h2>
+
+<p>Views that write the same window draw one after the other. The first one clears the whole image; each later one keeps what is there and draws only its rect. So the list order is the stacking order, as in a painting.</p>
+
+<ol class="flow">
+  <li class="gpu">clear the window to the background</li>
+  <li class="gpu">view A draws its rect: the whole window</li>
+  <li class="gpu">view B draws its rect: the corner, over A</li>
+  <li class="gpu">the UI draws over both</li>
+</ol>
+
+<p>Part of view A is drawn and then covered by view B. For a small map in a corner that is cheap. For two big views that overlap a lot, it is better to make view A's rect smaller.</p>
+
+<h2 id="texture"><span class="n">5</span>Render to texture</h2>
+
+<p>A view's output can also be a texture: a <b>view texture</b>. It is a normal color image. A material samples it like a photo (a TV, a mirror, a portal), and the UI shows it (an editor's viewport panel). Two questions follow: <b>which frame</b> does a reader see, and what happens when the camera sees its own screen.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 260" role="img" aria-label="Frame N. The security view draws first and writes texture T. Then the main view draws; its TV material samples T and sees frame N's picture. The security camera itself also sees the TV; its draw runs before T is written, so it samples frame N-1's picture. No pass reads T while T is being drawn.">
+    <text x="20" y="22" class="title">frame N, passes in order</text>
+    <rect x="20" y="40" width="220" height="56" rx="6" class="gpu"/>
+    <text x="130" y="62" class="mid">security view: draw</text>
+    <text x="130" y="80" class="mid small">its TV shows T: frame N − 1</text>
+    <line x1="240" y1="68" x2="262" y2="68" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="264" y="40" width="200" height="56" rx="6" class="gpu"/>
+    <text x="364" y="62" class="mid">security view: tone map</text>
+    <text x="364" y="80" class="mid small">writes T</text>
+    <line x1="464" y1="68" x2="486" y2="68" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="488" y="40" width="252" height="56" rx="6" class="gpu"/>
+    <text x="614" y="62" class="mid">main view: draw</text>
+    <text x="614" y="80" class="mid small">its TV shows T: frame N</text>
+
+    <rect x="264" y="130" width="200" height="50" rx="6" class="mem"/>
+    <text x="364" y="160" class="mid mono">T</text>
+    <line x1="364" y1="96" x2="364" y2="128" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <path d="M364,180 V206 H614 V98" class="arrow ok" marker-end="url(#ah-ok)"/>
+    <text x="620" y="198" class="small t-ok">reads after the write</text>
+    <path d="M300,180 V226 H130 V98" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+    <text x="140" y="244" class="small t-hot">read before the write: still last frame's T</text>
+  </svg>
+  <figcaption>The texture is read only between its draws, never while it is an attachment. A camera that sees its own screen reads the picture of the frame before, so a TV inside a TV is one frame older at each step, and there is no cycle.</figcaption>
+</figure>
+
+<p>Two rules make this safe. The texture must <b>live across frames</b>: memory that another target reuses during the frame (transient memory) would hold garbage when a later frame reads it. And the texture must hold something defined <b>before the first frame draws it</b>: clear it when it is made.</p>
+
+<figure class="lab" data-lab="order-views" data-title="Who sees this frame's picture">
+  <figcaption>Move the texture view in the list. Every view after it sees this frame's picture on its TV; the views before it, and the security camera itself, see the last frame's.</figcaption>
+</figure>
+
+<h2 id="state"><span class="n">6</span>What a view keeps from frame to frame</h2>
+
+<p>A view is not drawn from nothing each frame. Occlusion culling reads the depth pyramid and the visibility of the last frame, and TAA blends this frame into last frame's image. That <b>history</b> belongs to one view: another camera's history is a different picture.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 150" role="img" aria-label="Histories kept by list place. The list was A, B. A new view C is put first, so C gets A's history and A gets B's: each view blends a wrong picture for a frame.">
+      <text x="20" y="28" class="small">last frame</text>
+      <rect x="90" y="14" width="60" height="22" class="cpu"/><text x="120" y="29" class="mid small">A</text>
+      <rect x="160" y="14" width="60" height="22" class="gpu"/><text x="190" y="29" class="mid small">B</text>
+      <text x="20" y="76" class="small">this frame</text>
+      <rect x="90" y="62" width="60" height="22" class="mem"/><text x="120" y="77" class="mid small">C</text>
+      <rect x="160" y="62" width="60" height="22" class="cpu"/><text x="190" y="77" class="mid small">A</text>
+      <rect x="230" y="62" width="60" height="22" class="gpu"/><text x="260" y="77" class="mid small">B</text>
+      <line x1="120" y1="36" x2="120" y2="60" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <line x1="190" y1="36" x2="190" y2="60" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <text x="160" y="118" class="mid small t-bad">place 1 → place 1: C blends A's picture</text>
+    </svg>
+    <h4>Kept by place in the list</h4>
+    <p>Adding, removing or moving one view hands every later view the wrong history: ghosts for a frame, and culling that draws too much or too little.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 150" role="img" aria-label="Histories kept by what the view is, its camera and output. A new view C gets a new, empty history; A and B keep theirs wherever they are in the list.">
+      <text x="20" y="28" class="small">last frame</text>
+      <rect x="90" y="14" width="60" height="22" class="cpu"/><text x="120" y="29" class="mid small">A</text>
+      <rect x="160" y="14" width="60" height="22" class="gpu"/><text x="190" y="29" class="mid small">B</text>
+      <text x="20" y="76" class="small">this frame</text>
+      <rect x="90" y="62" width="60" height="22" class="mem"/><text x="120" y="77" class="mid small">C</text>
+      <rect x="160" y="62" width="60" height="22" class="cpu"/><text x="190" y="77" class="mid small">A</text>
+      <rect x="230" y="62" width="60" height="22" class="gpu"/><text x="260" y="77" class="mid small">B</text>
+      <line x1="120" y1="36" x2="190" y2="60" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <line x1="190" y1="36" x2="260" y2="60" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <text x="160" y="118" class="mid small t-ok">C starts new; A and B keep their own</text>
+    </svg>
+    <h4>Kept by what the view is</h4>
+    <p>The key is the camera and the output. A view keeps its targets and history while it is in the list, wherever it is. A new key starts with an empty history.</p>
+  </div>
+</div>
+
+<p>A view whose rect changes size keeps its key, but its targets change size. The textures are made again, and their old contents are gone, so its history starts over for one frame. The GPU may still read the old textures in the frames in flight, so making them again waits for those frames: the same short wait a window resize has.</p>
+
+<h2 id="cost"><span class="n">7</span>What an extra view costs</h2>
+
+<p>Each view runs the whole scene pipeline: culling, the depth pyramid, the draws, the transparent pass, its post effects and the tone map. Part of that cost is fixed per view. The rest grows with the view's pixels, so cutting one window into parts moves pixels around but adds only the fixed part.</p>
+
+<div class="stats">
+  <div><b>1.27 ms</b><span>3 views: the main camera in the whole window, a map in the corner, a 320 × 180 view texture</span><small>layout 1</small></div>
+  <div><b>1.50 ms</b><span>4 views: split screen in two halves, the map and the view texture</span><small>layout 2</small></div>
+  <div><b>1.42 ms</b><span>5 views: four quarters and the view texture</span><small>layout 3</small></div>
+</div>
+
+<p>Measured in RASM's example below, 1920 × 1080, Release, on an RTX 3060, with TAA and bloom on the big views and neither on the map. Four quarters cost less than two halves here: one quarter is the map, without TAA and bloom, so fewer pixels go through them. A small view (a map, a mirror) is cheap: skip its bloom and TAA, and it costs mostly the fixed part.</p>
+
+<h2 id="input"><span class="n">8</span>Input per view</h2>
+
+<p>Each view's camera listens to its own rect of the window. A press inside the rect starts a drag that belongs to that view until the release, even when the mouse leaves the rect. The wheel goes to the view under the pointer. The rect in window points is the viewport's fractions times the window's size in points. The <a href="camera-controllers.html#who-drives">camera controllers</a> guide draws it: two views, two inputs, one window.</p>
+
+<h2 id="pitfalls"><span class="n">9</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>A line of the background color between two views</dt><dd>The viewports were rounded by width, not by edge. Round each edge, so touching views share it.</dd></div>
+  <div><dt>The glow of a lamp in one view shows in the next</dt><dd>Both views share one HDR image, and the blur reads across the edge. Give each view its own target.</dd></div>
+  <div><dt>Ghosts for one frame when a view is added</dt><dd>The histories are kept by list place. Key them by the view's camera and output.</dd></div>
+  <div><dt>A stretched picture in a narrow view</dt><dd>The projection used the window's aspect ratio. Fit it to the view's target instead.</dd></div>
+  <div><dt>The TV shows garbage, or a validation error about an image layout</dt><dd>The view texture was transient, or never cleared, so a reader found undefined data. Keep it across frames and clear it when it is made.</dd></div>
+  <div><dt>Dragging in one view turns another view's camera</dt><dd>Both cameras read the whole window's input. Give each camera the input of its own rect.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
+
+<p><code>Engine::render(views, count)</code> draws a list of <code>View</code>s in one frame: each is a scene, a camera and a <code>ViewOutput</code>, which is a <code>ViewRect</code> of the window or of a <code>target</code>. <code>Engine::render(scene, camera)</code> is the same with one view. <code>examples/20_views</code> shows split screen, a map, four views and a TV in the scene.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>the application and the engine</span>
+  <span><i class="gpu"></i>graph passes</span>
+  <span><i class="mem"></i>targets</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 370" role="img" aria-label="The application passes a list of views to Engine::render. Renderer::render compares the list and each view's size in pixels with the last frame's; only a change builds the graph again. For each view, a ViewState found by its camera and output target keeps its HDR target, named scene_hdr, scene_hdr_1 and so on, and with TAA its history target and TaaState, across graphs. The graph has, per view in list order, the scene passes, which read the view textures of the views before them, then MSAA resolve or TAA, bloom, and the tone map into the view's rect of the swapchain or of its target. The UI pass comes last and reads every view texture.">
+    <rect x="20" y="20" width="250" height="56" rx="6" class="cpu"/>
+    <text x="145" y="42" class="mid mono small">render(views, count)</text>
+    <text x="145" y="62" class="mid small">a View: scene, camera, output</text>
+    <line x1="270" y1="48" x2="296" y2="48" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="298" y="20" width="442" height="56" rx="6" class="cpu"/>
+    <text x="519" y="42" class="mid mono small">Renderer::render</text>
+    <text x="519" y="62" class="mid small">same list and sizes as last frame: run the graph; else build it again</text>
+
+    <text x="20" y="104" class="title">kept per view, found by its camera and output target</text>
+    <rect x="20" y="114" width="230" height="56" rx="6" class="mem"/>
+    <text x="135" y="136" class="mid mono small">ViewState</text>
+    <text x="135" y="156" class="mid small">scene_hdr, scene_hdr_1, ...</text>
+    <rect x="260" y="114" width="230" height="56" rx="6" class="mem"/>
+    <text x="375" y="136" class="mid small">TAA history + TaaState</text>
+    <text x="375" y="156" class="mid small">with TAA only</text>
+    <rect x="500" y="114" width="240" height="56" rx="6" class="mem"/>
+    <text x="620" y="136" class="mid small">its scene view</text>
+    <text x="620" y="156" class="mid small">Hi-Z, visibility, light clusters</text>
+
+    <text x="20" y="200" class="title">the graph, per view in list order</text>
+    <rect x="20" y="210" width="180" height="56" rx="6" class="gpu"/>
+    <text x="110" y="232" class="mid small">scene passes</text>
+    <text x="110" y="250" class="mid small">read earlier view textures</text>
+    <line x1="200" y1="238" x2="216" y2="238" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="218" y="210" width="150" height="56" rx="6" class="gpu dashed"/>
+    <text x="293" y="232" class="mid small">MSAA resolve or TAA</text>
+    <text x="293" y="250" class="mid small">View::antiAliasing</text>
+    <line x1="368" y1="238" x2="384" y2="238" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="386" y="210" width="120" height="56" rx="6" class="gpu dashed"/>
+    <text x="446" y="232" class="mid small">bloom</text>
+    <text x="446" y="250" class="mid small">View::bloom</text>
+    <line x1="506" y1="238" x2="522" y2="238" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="524" y="210" width="216" height="56" rx="6" class="gpu"/>
+    <rect x="520" y="206" width="224" height="64" rx="8" class="hot"/>
+    <text x="632" y="232" class="mid mono small">Tone Map</text>
+    <text x="632" y="250" class="mid small">into the rect: window or target</text>
+
+    <rect x="524" y="296" width="216" height="50" rx="6" class="gpu"/>
+    <text x="632" y="318" class="mid mono small">UI</text>
+    <text x="632" y="336" class="mid small">reads every view texture</text>
+    <line x1="632" y1="270" x2="632" y2="294" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="20" y="318" class="small">A view texture is a target the application makes: one color, no depth (R8G8B8A8_SRGB).</text>
+    <text x="20" y="336" class="small">A later view's tone map over the window loads it, so the list order is the stacking order.</text>
+  </svg>
+  <figcaption>The graph is built again when a view is added, removed, moved or resized; the kept state outlives it, so the other views keep their culling history and TAA. A frame with the same list allocates nothing.</figcaption>
+</figure>
+
+<pre><code>const rasm::ViewRect leftHalf = {.x = 0.0f, .y = 0.0f, .width = 0.5f, .height = 1.0f};
+const rasm::ViewRect rightHalf = {.x = 0.5f, .y = 0.0f, .width = 0.5f, .height = 1.0f};
+const rasm::ViewRect corner = {.x = 0.75f, .y = 0.0f, .width = 0.25f, .height = 0.4f};
+const rasm::View views[] = {
+    {.scene = scene, .camera = security, .output = {.target = tv}},
+    {.scene = scene, .camera = left, .output = {.rect = leftHalf}},
+    {.scene = scene, .camera = right, .output = {.rect = rightHalf}},
+    {.scene = scene, .camera = map, .output = {.rect = corner}, .bloom = rasm::ViewToggle::OFF},
+};
+engine.render(views, 4);</code></pre>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Viewport</td><td>fractions, edges rounded</td><td><code>ViewRect</code>; <code>getViewPixels</code> rounds each edge, clamps it to the image and keeps at least 1 × 1. The tone-map pass sets the viewport and the scissor to it when it runs, so a window resize moves it.</td></tr>
+  <tr><td>Target per view</td><td>a target of the view's size</td><td>Each view of <code>render(views, count)</code> has its own HDR target (<samp>scene_hdr</samp>, then <samp>scene_hdr_1</samp>, ...), made with <code>Engine::createRenderTarget</code> so it outlives the graph, at the rect's size in pixels. Bloom and MSAA resolve targets are the graph's, transient.</td></tr>
+  <tr><td>Post effects per view</td><td>skip them for small views</td><td><code>View::bloom</code> (<code>ViewToggle</code>) and <code>View::antiAliasing</code>; <code>DEFAULT</code> takes the <code>EngineConfig</code> value. A change of anti-aliasing makes the view's targets again.</td></tr>
+  <tr><td>View texture</td><td>kept across frames, cleared when made</td><td>A target the application makes with one color and no depth. Every target that is not transient starts cleared to its <code>clearColor</code> and <code>SAMPLED</code>. <code>getRenderTargetTexture</code> of a target without history is one texture for both frame slots, so a material can keep it.</td></tr>
+  <tr><td>This frame or last</td><td>after the writer: this frame</td><td><code>render</code> makes each view's scene passes read the view textures listed before it (<code>addScenePasses</code>'s <code>sampled</code>) and the UI pass read them all (<code>addUiPass</code>'s <code>shown</code>), so they run after the writers. A material that samples its own view's texture, or a later one's, sees the last frame.</td></tr>
+  <tr><td>History by key</td><td>camera and output</td><td><code>ViewState</code> keys on the camera and <code>ViewOutput::target</code> (the rect is not part of it). It keeps the HDR target, the TAA history and its <code>TaaState</code>; the scene view lives on because the new graph holds it before the old one lets go. Two views with one key: the second is left out with an error.</td></tr>
+  <tr><td>Resize</td><td>a short wait for the frames in flight</td><td><code>Engine::resizeRenderTarget</code> waits for the values both queues signaled last, only when the size in pixels changes, and keeps the texture handles and bindless slots (<code>RenderTarget::version</code> counts the new textures, so TAA starts over). A window resize waits for the device to be idle.</td></tr>
+  <tr><td>Limits</td><td>—</td><td><code>MAX_SCENE_VIEWS</code> (32) scene views, shadow maps included; <code>MAX_CAMERAS</code> (32). A view past the limit is left out with an error.</td></tr>
+  <tr><td>Input</td><td>one rect each</td><td><code>getInputArea(window, rect)</code> gives the <code>InputArea</code> for a view's <code>CameraInputState</code> (<a href="camera-controllers.html#who-drives">Camera controllers</a>). The built-in controller moves the camera of the first view in the window.</td></tr>
+  <tr><td>Windows</td><td>a view in another window</td><td>One window per engine today; more windows are the next step of the plan.</td></tr>
+</table>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The types</td><td><code>View</code>, <code>ViewOutput</code>, <code>ViewRect</code>, <code>ViewToggle</code>, <code>ViewPixels</code>, <code>getViewPixels</code>, <code>getInputArea</code> in <code>include/rasm/view.h</code> and <code>src/renderer/view.cpp</code></td></tr>
+  <tr><td>The list of views</td><td><code>Renderer::render</code>, <code>Renderer::build</code>, <code>Renderer::addView</code> and <code>ViewState</code> in <code>src/renderer/renderer.h</code> and <code>src/renderer/renderer.cpp</code></td></tr>
+  <tr><td>Into a rect or a texture</td><td><code>Engine::addToneMapPass</code> and <code>getToneMapPipeline</code> (one pipeline per output format, <code>MAX_TONE_MAP_FORMATS</code>) in <code>src/renderer/toneMap.cpp</code></td></tr>
+  <tr><td>Readers of view textures</td><td><code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code>; <code>Engine::addUiPass</code> in <code>src/renderer/ui.cpp</code></td></tr>
+  <tr><td>Kept TAA history</td><td><code>TaaState</code>, <code>getTaaHistoryDesc</code> in <code>src/renderer/taa.h</code>; the private <code>Engine::addTaaPass</code> with a history in <code>src/renderer/taa.cpp</code></td></tr>
+  <tr><td>Resize and clear</td><td><code>Engine::resizeRenderTarget</code> in <code>src/engine.cpp</code>; <code>RenderContext::resizeRenderTarget</code> and <code>createAttachments</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>Tests</td><td><code>tests/viewTests.cpp</code> (rects and input areas); the <samp>views</samp> image test in <code>tests/image/imageTests.cpp</code></td></tr>
+  <tr><td>Example</td><td><code>examples/20_views/main.cpp</code>: keys 1, 2, 3 for the layouts, <samp>--bench</samp> for the numbers above</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>A view's kept state is found by its camera and output target, never by its place in the list.</li>
+    <li>A frame with the same list and sizes compares and runs: no graph build, no heap allocation (the <samp>views</samp> image test counts them).</li>
+    <li>A view texture is not transient and starts cleared: any pass may sample it at any point of the frame.</li>
+    <li>Resizing a target waits only for the frames in flight, and only when its size in pixels changes.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Vulkan specification, "Fixed-Function Vertex Post-Processing: Controlling the Viewport", and "Scissor Test".</li>
+  <li>Yuriy O'Donnell, "FrameGraph: Extensible Rendering Architecture in Frostbite" (GDC 2017): views as parts of one frame graph.</li>
+  <li>Unreal Engine documentation, "Scene Capture": render to texture and its cost.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

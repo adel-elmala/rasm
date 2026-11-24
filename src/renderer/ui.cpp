@@ -327,14 +327,23 @@ namespace rasm
     }
 
     // The frame's last draw on the swapchain, after the tone map. It keeps the image and has no depth.
-    bool Engine::addUiPass(RenderGraph &graph)
+    bool Engine::addUiPass(RenderGraph &graph, const RenderTargetHandle *shown, uint32_t shownCount)
     {
         if (!ui)
             return false;
+        if (shownCount > 0 && shown == nullptr)
+        {
+            spdlog::error("addUiPass: shownCount is {} and shown is null.", shownCount);
+            return false;
+        }
         graph.addPass(
             "UI",
-            [](PassBuilder &builder)
-            { builder.writeSwapchain(); },
+            [shown, shownCount](PassBuilder &builder)
+            {
+                for (uint32_t i = 0; i < shownCount; ++i)
+                    builder.read(shown[i]);
+                builder.writeSwapchain();
+            },
             [this](RenderContext &)
             {
                 if (ui)

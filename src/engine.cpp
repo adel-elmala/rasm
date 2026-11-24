@@ -616,9 +616,41 @@ namespace rasm
         ctx.destroyBuffer(buffer);
     }
 
+    // A material may sample its colors (a view texture), so it loses them first, as with destroyTexture.
     void Engine::destroyRenderTarget(const RenderTargetHandle &renderTarget)
     {
+        if (ctx.isAlive(renderTarget))
+        {
+            const RenderTarget &target = ctx.getRenderTarget(renderTarget);
+            for (const RenderTargetAttachments &attachments : target.attachments)
+            {
+                for (uint32_t c = 0; c < target.colorCount; ++c)
+                    detachTexture(attachments.color[c]);
+            }
+        }
         ctx.destroyRenderTarget(renderTarget);
+    }
+
+    // The slots the target's textures keep may be read by a frame in flight, so a new size waits for those frames: the
+    // last values both queues signaled. Nothing else waits, and the old textures go through the release queue.
+    bool Engine::resizeRenderTarget(const RenderTargetHandle &renderTarget, uint32_t width, uint32_t height)
+    {
+        if (recordingFrame)
+        {
+            spdlog::error("resizeRenderTarget: a frame is being recorded; resize between frames.");
+            return false;
+        }
+        const RenderTarget &target = ctx.getRenderTarget(renderTarget);
+        if (target.colorCount == 0 && target.depthFormat == Format::UNKNOWN)
+            return false;
+        if (target.width == width && target.height == height)
+            return true;
+        if (!ctx.waitForFence(frameFence, frameFenceValue) || (asyncCompute && !ctx.waitForFence(computeFence, computeFenceValue)))
+        {
+            spdlog::error("resizeRenderTarget: the wait for the frames in flight failed.");
+            return false;
+        }
+        return ctx.resizeRenderTarget(renderTarget, width, height);
     }
 
     RenderGraph Engine::createRenderGraph()
@@ -639,8 +671,8 @@ namespace rasm
     PipelineHandle Engine::createPipeline(const std::string &name, const std::string &shaderSource, const RenderTargetHandle &renderTarget)
     {
         const auto &rt = ctx.getRenderTarget(renderTarget);
-        // Every render target has a depth format, so an invalid or stale handle is the one without.
-        if (rt.depthFormat == Format::UNKNOWN)
+        // Every render target has a color or a depth format, so an invalid or stale handle is the one with neither.
+        if (rt.depthFormat == Format::UNKNOWN && rt.colorCount == 0)
         {
             spdlog::error("Pipeline '{}' needs a valid render target.", name);
             return {};
@@ -750,6 +782,23 @@ namespace rasm
         return ctx.createPipeline({.name = "Compute Pipeline for " + name, .computeShader = shader, .descriptorSetLayout = bindlessDescriptorSetLayout});
     }
 
+    // Recreates the swapchain when the window changed size or it is out of date. Returns false when nothing can be
+    // presented: a minimized or zero-sized window (B5), or a failed recreation. Engine::render polls and calls it before
+    // beginFrame, so its views take the window's new size in the same frame.
+    bool Engine::updateSwapchain()
+    {
+        if (mainWindow.minimized || mainWindow.pixelWidth == 0 || mainWindow.pixelHeight == 0)
+            return false;
+        if (mainWindow.resized || swapchainOutOfDate)
+        {
+            mainWindow.resized = false;
+            swapchainOutOfDate = !recreateSwapchain();
+            if (swapchainOutOfDate)
+                return false;
+        }
+        return true;
+    }
+
     bool Engine::beginFrame(CameraHandle camera)
     {
         ZoneScoped;
@@ -765,17 +814,8 @@ namespace rasm
         ctx.tagReleases({.fence = frameFence, .value = frameFenceValue}, {.fence = computeFence, .value = computeFenceValue});
         ctx.collectReleases();
 
-        // Nothing can be presented to a minimized or zero-sized window (B5).
-        if (mainWindow.minimized || mainWindow.pixelWidth == 0 || mainWindow.pixelHeight == 0)
+        if (!updateSwapchain())
             return false;
-
-        if (mainWindow.resized || swapchainOutOfDate)
-        {
-            mainWindow.resized = false;
-            swapchainOutOfDate = !recreateSwapchain();
-            if (swapchainOutOfDate)
-                return false;
-        }
 
         // Wait for the GPU to finish the previous frame in this slot before its command buffers are reused.
         auto &currentFrame = frameResources[frameCount];
@@ -826,12 +866,15 @@ namespace rasm
         frameStats->frameTimer = beginGpuTimer(currentFrame.commandBuffer, "Frame");
         ctx.clearNewHistory(currentFrame.commandBuffer);
         recordEnvironmentBakes();
+        recordingFrame = true;
         return true;
     }
 
     void Engine::endFrame()
     {
         ZoneScoped;
+
+        recordingFrame = false;
 
         // The rest of the frame is graphics work, and the frame's last graphics submit presents.
         if (useQueue(QueueType::GRAPHICS))
@@ -1149,8 +1192,14 @@ namespace rasm
     void Engine::render(SceneHandle scene, CameraHandle camera)
     {
         // The renderer is made last in the constructor, so an engine that failed to start has none.
+        const View view = {.scene = scene, .camera = camera};
+        render(&view, 1);
+    }
+
+    void Engine::render(const View *views, uint32_t viewCount)
+    {
         if (renderer)
-            renderer->render({.scene = scene, .camera = camera});
+            renderer->render(views, viewCount);
     }
 
     void Engine::setInspection(const Inspection &value)
@@ -1177,7 +1226,7 @@ namespace rasm
 
 #if !defined(RASM_IMGUI)
     // Built without Dear ImGui: the UI is always off.
-    bool Engine::addUiPass(RenderGraph &)
+    bool Engine::addUiPass(RenderGraph &, const RenderTargetHandle *, uint32_t)
     {
         return false;
     }

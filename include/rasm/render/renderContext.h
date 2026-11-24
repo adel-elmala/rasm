@@ -61,6 +61,9 @@ namespace rasm
         void                                destroyRenderTarget(const RenderTargetHandle& renderTarget);
         void                                clearNewHistory(const CommandBufferHandle& commandBuffer);
         void                                resizeRenderTargets();
+        // A fixed-size target at a new size, its texture handles and bindless slots kept. Call it only once the GPU is
+        // done with every frame that used the target (Engine::resizeRenderTarget waits for them).
+        bool                                resizeRenderTarget(const RenderTargetHandle& renderTarget, uint32_t width, uint32_t height);
         const RenderTarget&                 getRenderTarget(const RenderTargetHandle& handle);
         RenderTargetDesc                    getRenderTargetDesc(const RenderTargetHandle& handle);
         std::vector<TextureHandle>          getSwapchainImages();
@@ -77,6 +80,7 @@ namespace rasm
         uint32_t                            getBindlessTextureIndex(const TextureHandle& texture) const;
         bool                                isAlive(const TextureHandle& texture) const;
         bool                                isAlive(const BufferHandle& buffer) const;
+        bool                                isAlive(const RenderTargetHandle& renderTarget) const;
         bool                                updateBindlessStorageImage(const DescriptorSetHandle& bindlessSet, uint32_t slot, const TextureHandle& texture, uint32_t mip);
         TextureUsage                        getTextureState(const TextureHandle& texture);
         uint64_t                            getFenceValue(FenceHandle fence);

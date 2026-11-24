@@ -855,7 +855,7 @@
 <table>
   <tr><th>Buffer</th><th>Kind</th><th>Copies</th><th>Written by</th></tr>
   <tr><td>Upload staging rings</td><td><code>hostVisible</code>, <code>BufferUsage::TRANSFER</code></td><td>1, or 2 with a transfer queue</td><td><code>UploadManager::upload</code></td></tr>
-  <tr><td>Scene data</td><td><code>hostVisible</code></td><td>1 per frame slot, room for <code>MAX_SCENE_VIEWS</code> = 16 scene views</td><td><code>prepareSceneView</code></td></tr>
+  <tr><td>Scene data</td><td><code>hostVisible</code></td><td>1 per frame slot, room for <code>MAX_SCENE_VIEWS</code> = 32 scene views</td><td><code>prepareSceneView</code></td></tr>
   <tr><td>Cull stats</td><td><code>hostVisible</code> + <code>hostReadable</code></td><td>1 per frame slot</td><td>the GPU; read by <code>updateFrameStats</code></td></tr>
   <tr><td>Readback buffers</td><td><code>hostReadable</code></td><td>1 per readback, freed when it is taken</td><td>the GPU's copy; read by <code>takeReadback</code></td></tr>
   <tr><td>Instance, material and light tables, animated entities, morph weight overrides</td><td>default</td><td>1 per frame slot</td><td><code>GpuTable::upload</code></td></tr>

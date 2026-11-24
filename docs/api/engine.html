@@ -40,6 +40,7 @@
   <tr><td><a href="#getConfig"><code>getConfig</code></a></td><td>the config, with resolved paths</td><td>this page</td></tr>
   <tr><td><a href="#resolveAssetPath"><code>resolveAssetPath</code></a></td><td>where an asset path points</td><td>this page</td></tr>
   <tr><td><a href="#render"><code>render</code></a></td><td>a whole frame, one scene</td><td>this page</td></tr>
+  <tr><td><a href="#render-views"><code>render(views, count)</code></a></td><td>a whole frame of several views: split screen, a map, view textures</td><td>this page</td></tr>
   <tr><td><a href="#beginFrame"><code>beginFrame</code></a> / <a href="#endFrame"><code>endFrame</code></a></td><td>start and finish a frame</td><td>this page</td></tr>
   <tr><td><a href="#beginPass"><code>beginPass</code></a> / <a href="#endPass"><code>endPass</code></a></td><td>start and finish a render pass</td><td>this page</td></tr>
   <tr><td><a href="#addScenePasses"><code>addScenePasses</code></a></td><td>add a scene's culling and draw passes to a graph</td><td>this page</td></tr>
@@ -105,6 +106,7 @@
   <tr><td><a href="render-graph.html#createPipeline"><code>createPipeline</code></a> / <a href="render-graph.html#createComputePipeline"><code>createComputePipeline</code></a></td><td>your own Slang shaders</td><td>render-graph.html</td></tr>
   <tr><td><a href="render-graph.html#createRenderTarget"><code>createRenderTarget</code></a></td><td>offscreen color + depth</td><td>render-graph.html</td></tr>
   <tr><td><a href="#destroyTexture"><code>destroyTexture</code></a> / <a href="#destroyBuffer"><code>destroyBuffer</code></a> / <a href="#destroyRenderTarget"><code>destroyRenderTarget</code></a></td><td>free GPU resources, once the GPU is done with them</td><td>engine.html</td></tr>
+  <tr><td><a href="#resizeRenderTarget"><code>resizeRenderTarget</code></a></td><td>a fixed-size target at a new size, keeping its texture handles</td><td>engine.html</td></tr>
   <tr><td><a href="scene.html#destroyEntity"><code>destroyEntity</code></a>, <a href="scene.html#destroyMesh"><code>destroyMesh</code></a>, <a href="materials.html#destroyMaterial"><code>destroyMaterial</code></a>, <a href="scene.html#destroyLight"><code>destroyLight</code></a>, <a href="scene.html#destroyEnvironment"><code>destroyEnvironment</code></a>, <a href="camera.html#destroyCamera"><code>destroyCamera</code></a>, <a href="scene.html#destroyScene"><code>destroyScene</code></a></td><td>destroy what you made; rows, ranges and indices are reused</td><td>scene.html, materials.html, camera.html</td></tr>
   <tr><td><a href="scene.html#removeEntityFromScene"><code>removeEntityFromScene</code></a> / <a href="scene.html#removeLightFromScene"><code>removeLightFromScene</code></a></td><td>take an entity or light out of a scene</td><td>scene.html</td></tr>
   <tr><td><a href="#getPoolStats"><code>getPoolStats</code></a></td><td>live objects and pool use, for streaming budgets</td><td>engine.html</td></tr>
@@ -247,7 +249,7 @@ if (!engine.running())
 
 <h2 id="frame"><span class="n">3</span>Run a frame</h2>
 
-<p>A frame is <code>beginFrame</code>, then one or more passes, then <code>endFrame</code>. <code>render</code> does all of it for one scene, through a render graph with the scene's passes. Here is what each part does inside:</p>
+<p>A frame is <code>beginFrame</code>, then one or more passes, then <code>endFrame</code>. <code>render</code> does all of it for one view, or for a list of views, through a render graph with the scenes' passes. Here is what each part does inside:</p>
 
 <div class="legend">
   <span><i class="cpu"></i>engine work on the CPU</span>
@@ -298,13 +300,125 @@ if (!engine.running())
 <div class="api" id="render">
   <pre class="sig">void render(SceneHandle scene, CameraHandle camera);</pre>
   <div class="body">
-    <p>One whole frame of the scene, drawn into the window. The engine keeps a <a href="render-graph.html">render graph</a> with the scene's passes (<a href="#addScenePasses"><code>addScenePasses</code></a> into a 16-bit float target, with <code>EngineConfig::bloom</code> <a href="#addBloomPasses"><code>addBloomPasses</code></a>, then <a href="#addToneMapPass"><code>addToneMapPass</code></a> into the swapchain, and with <code>EngineConfig::ui</code> <a href="#addUiPass"><code>addUiPass</code></a> over it) and runs it with <code>RenderGraph::execute</code>: <code>beginFrame(camera)</code>, the passes, <code>endFrame</code>. It builds the graph again only when <code>scene</code> or <code>camera</code> is not the same as in the last call, also after a failure: a view whose passes could not be added is not tried again until one of them changes. When <code>beginFrame</code> returns false, no pass runs.</p>
+    <p>One whole frame of the scene, drawn into the window: <a href="#render-views"><code>render(views, count)</code></a> with one <a href="#View"><code>View</code></a> of the whole window. The engine keeps a <a href="render-graph.html">render graph</a> with the scene's passes (<a href="#addScenePasses"><code>addScenePasses</code></a> into a 16-bit float target, <samp>scene_hdr</samp>, with <code>EngineConfig::bloom</code> <a href="#addBloomPasses"><code>addBloomPasses</code></a>, then <a href="#addToneMapPass"><code>addToneMapPass</code></a> into the swapchain, and with <code>EngineConfig::ui</code> <a href="#addUiPass"><code>addUiPass</code></a> over it) and runs it with <code>RenderGraph::execute</code>: <code>beginFrame(camera)</code>, the passes, <code>endFrame</code>. It builds the graph again only when <code>scene</code>, <code>camera</code> or the window's size in pixels changes, also after a failure: a view whose passes could not be added is not tried again until one of them changes. When <code>beginFrame</code> returns false, no pass runs.</p>
     <dl>
       <dt>scene</dt><dd>The scene to draw. Invalid: an error is logged once, and the window is only cleared.</dd>
       <dt>camera</dt><dd>Gets this frame's input (mouse, keys) and is the view. It does not need to be in the scene.</dd>
     </dl>
     <pre><code>while (engine.running())
     engine.render(scene, camera);</code></pre>
+  </div>
+</div>
+
+<div class="api" id="render-views">
+  <pre class="sig">void render(const View* views, uint32_t viewCount);</pre>
+  <div class="body">
+    <p>One frame of several views: split screen, a map over the scene, editor viewports, a camera's picture as a texture. Each <a href="#View"><code>View</code></a> is a scene, a camera and an output: a <a href="#ViewRect">rect</a> of the window, or a rect of a color target (a <b>view texture</b> that a material or <code>ImGui::Image</code> shows). How it works: <a href="../guides/multiple-views.html">Many views of one scene</a>.</p>
+    <ul>
+      <li>Each view gets the scene passes into an HDR target of its rect's size in pixels, an MSAA resolve or TAA by its anti-aliasing, its bloom, and a tone map into its rect. The UI pass comes last.</li>
+      <li>Views draw in list order: a later view's rect goes over an earlier one, and a view's scene passes see this frame's picture of the view textures listed before it (the views before it, and its own, see the last frame's).</li>
+      <li>A view keeps its HDR target, its culling history (Hi-Z, visibility) and its TAA history while its camera and <code>output.target</code> stay in the list, wherever it is in the list. Another view's insertion, removal or move does not reset it.</li>
+      <li>The graph is built again only when the list or a view's size in pixels changes; a frame with the same list and sizes allocates nothing. A view that changed size makes its targets again at the new size (<a href="#resizeRenderTarget"><code>resizeRenderTarget</code></a>: one wait for the frames in flight).</li>
+      <li>The camera of the first view in the window (no <code>output.target</code>) takes the built-in controller, through <code>beginFrame</code>; a list of view textures only gives it the first view's camera. <a href="camera.html#setCameraController"><code>CameraController::Type::NONE</code></a> turns it off. Give each other view's camera its own input with <a href="#getInputArea"><code>getInputArea</code></a>.</li>
+    </ul>
+    <dl>
+      <dt>views, viewCount</dt><dd>The list, read during the call only. A view with an invalid scene or camera, or with the camera and output target of an earlier view, is left out with an error, and the others draw. A view whose passes cannot be added (the <code>MAX_SCENE_VIEWS</code> limit, a target that is not one color with no depth and one sample, a destroyed target) is left out until the list changes; nothing is made for it. 0 views: the window shows the clear color and the UI.</dd>
+    </dl>
+    <pre><code>// From examples/20_views/main.cpp: the TV's picture first, then split screen and a map in the corner.
+views.clear();
+views.push_back({.scene = scene, .camera = security, .output = {.target = tv}, .bloom = rasm::ViewToggle::OFF, .antiAliasing = rasm::AntiAliasing::NONE});
+views.push_back({.scene = scene, .camera = main.camera, .output = {.rect = rects.rects[0]}});
+views.push_back({.scene = scene, .camera = side.camera, .output = {.rect = rects.rects[1]}});
+views.push_back({.scene = scene, .camera = map, .output = {.rect = rects.rects[2]}, .bloom = rasm::ViewToggle::OFF, .antiAliasing = rasm::AntiAliasing::NONE});
+engine.render(views.data(), static_cast&lt;uint32_t&gt;(views.size()));</code></pre>
+  </div>
+</div>
+
+<div class="api" id="View">
+  <pre class="sig">struct View
+{
+    SceneHandle         scene;
+    CameraHandle        camera;
+    ViewOutput          output          = {};
+    ViewToggle          bloom           = ViewToggle::DEFAULT;      // DEFAULT: EngineConfig::bloom
+    AntiAliasing        antiAliasing    = AntiAliasing::DEFAULT;    // DEFAULT: EngineConfig::antiAliasing
+
+    bool                operator==(const View&amp;) const = default;
+};</pre>
+  <div class="body">
+    <p>One view of <a href="#render-views"><code>render(views, count)</code></a>, in <code>rasm/view.h</code>. <code>bloom</code> and <code>antiAliasing</code> override the engine's settings for this view: a small map skips bloom and TAA and costs less. A change of <code>antiAliasing</code> makes the view's targets again, so its TAA history starts over.</p>
+  </div>
+</div>
+
+<div class="api" id="ViewOutput">
+  <pre class="sig">struct ViewOutput
+{
+    ViewRect            rect            = {};
+    RenderTargetHandle  target;                         // valid: into this target, one color and no depth (R8G8B8A8_SRGB for a picture)
+
+    bool                operator==(const ViewOutput&amp;) const = default;
+};</pre>
+  <div class="body">
+    <p>Where the tone map draws a view: <code>rect</code> of the window, or with <code>target</code> set, <code>rect</code> of that target. A view texture is a target you make with <a href="render-graph.html#createRenderTarget"><code>createRenderTarget</code></a>: one color, no depth, one sample. Make it <code>R8G8B8A8_SRGB</code>, the format of a color texture: the tone map writes linear light, and the sRGB format encodes it. It starts cleared to its <code>clearColor</code>, so it can be sampled before its first frame. Its texture (<a href="render-graph.html#getRenderTargetTexture"><code>getRenderTargetTexture</code></a>) is one handle for both frame slots, kept across <a href="#resizeRenderTarget"><code>resizeRenderTarget</code></a>: give it to a material's <code>textures</code> (the emissive slot for a screen) or to <a href="#getUiTexture"><code>getUiTexture</code></a>.</p>
+    <pre><code>// From examples/20_views/main.cpp
+const rasm::RenderTargetHandle tv = engine.createRenderTarget({.name = "tv",
+                                                               .width = TV_WIDTH,
+                                                               .height = TV_HEIGHT,
+                                                               .colorFormats = {rasm::Format::R8G8B8A8_SRGB},
+                                                               .clearColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f)});
+const rasm::TextureHandle tvPicture = engine.getRenderTargetTexture(tv);</code></pre>
+  </div>
+</div>
+
+<div class="api" id="ViewRect">
+  <pre class="sig">struct ViewRect
+{
+    float               x               = 0.0f;
+    float               y               = 0.0f;
+    float               width           = 1.0f;
+    float               height          = 1.0f;
+
+    bool                operator==(const ViewRect&amp;) const = default;
+};</pre>
+  <div class="body">
+    <p>A part of the window or of a target, as fractions of its size from the top-left corner: <code>{}</code> is all of it, <code>{.x = 0.5f, .width = 0.5f}</code> the right half. Fractions follow a resize. <a href="#getViewPixels"><code>getViewPixels</code></a> turns it into pixels.</p>
+  </div>
+</div>
+
+<div class="api" id="ViewToggle">
+  <pre class="sig">enum class ViewToggle : uint8_t
+{
+    DEFAULT,                                            // the EngineConfig value
+    OFF,
+    ON,
+};</pre>
+  <div class="body">
+    <p>A view's choice for a setting <code>EngineConfig</code> also has (<a href="#View"><code>View::bloom</code></a>). <code>View::antiAliasing</code> uses <code>AntiAliasing::DEFAULT</code> the same way; in <code>EngineConfig</code>, <code>DEFAULT</code> means <code>NONE</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="getViewPixels">
+  <pre class="sig">ViewPixels              getViewPixels(const ViewRect&amp; rect, uint32_t width, uint32_t height);</pre>
+  <div class="body">
+    <p>The pixels <code>rect</code> covers in an image of <code>width</code> × <code>height</code>, as a <code>ViewPixels</code> (<code>x</code>, <code>y</code>, <code>width</code>, <code>height</code>, all <code>uint32_t</code>). Each edge is rounded on its own, so rects that touch share their edge: no gap and no overlap. Edges are kept inside the image, and the result is at least 1 × 1 (0 × 0 for an empty image). The tone map uses it for its viewport and scissor, and <code>render</code> for each view's target size.</p>
+    <pre><code>const rasm::ViewPixels pip = rasm::getViewPixels({.x = 0.75f, .y = 0.0f, .width = 0.25f, .height = 0.25f}, 1280, 720);
+// pip is {960, 0, 320, 180}</code></pre>
+  </div>
+</div>
+
+<div class="api" id="getInputArea">
+  <pre class="sig">InputArea               getInputArea(const Window&amp; window, const ViewRect&amp; rect);</pre>
+  <div class="body">
+    <p>The view's rect in the window's points, as an <a href="camera.html#InputArea"><code>InputArea</code></a> for the view's own <a href="camera.html#CameraInputState"><code>CameraInputState</code></a>: a drag that starts in it moves only this view's camera.</p>
+    <pre><code>// From examples/20_views/main.cpp
+const rasm::InputArea area = rasm::getInputArea(engine.getMainWindow(), rect);
+const rasm::UiInputCapture capture = engine.getUiInputCapture();
+uint32_t count = 0;
+const rasm::InputEvent *events = engine.getInputEvents(count);
+for (uint32_t i = 0; i &lt; count; ++i)
+    rasm::addCameraInputEvent(view.input, events[i], area, capture);
+rasm::updateCameraRig(view.rig, rasm::takeCameraInput(view.input, capture, engine.getDeltaTime()));
+engine.setCameraTransform(view.camera, view.rig.transform);</code></pre>
   </div>
 </div>
 
@@ -375,7 +489,8 @@ engine.endPass();</code></pre>
 </div>
 
 <div class="api" id="addScenePasses">
-  <pre class="sig">bool addScenePasses(RenderGraph&amp; graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle&amp; renderTarget, const SceneShadow* shadows = nullptr, uint32_t shadowCount = 0);</pre>
+  <pre class="sig">bool addScenePasses(RenderGraph&amp; graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle&amp; renderTarget, const SceneShadow* shadows = nullptr, uint32_t shadowCount = 0,
+                    const RenderTargetHandle* sampled = nullptr, uint32_t sampledCount = 0);</pre>
   <div class="body">
     <p>Adds the passes that draw <code>scene</code> from <code>camera</code> to <code>graph</code>. They are ordinary graph passes: the graph sorts them with your passes, records their barriers from what they declare, and times each one under its name. <code>render</code> calls it for you; call it yourself when you build your own graph. The culling passes and <code>Hi-Z</code> are <a href="render-graph.html#addAsyncComputePass">async compute passes</a>: with <code>EngineConfig::asyncCompute</code> they run on the compute queue.</p>
     <dl>
@@ -384,6 +499,7 @@ engine.endPass();</code></pre>
       <dt>camera</dt><dd>The view. Its projection is fitted to the target's aspect ratio every frame; the camera itself does not change. Invalid: logs an error, adds nothing and returns <code>false</code>.</dd>
       <dt>renderTarget</dt><dd>Where the scene is drawn. A target needs one color in <a href="types.html#SCENE_COLOR_FORMAT"><code>SCENE_COLOR_FORMAT</code></a> and <code>D32_SFLOAT</code> depth, the formats of the scene's pipeline. The color is linear light with no upper limit: draw it to the window with <a href="#addToneMapPass"><code>addToneMapPass</code></a>. A second color of <code>MOTION_FORMAT</code> (one sample only) takes each pixel's motion, for <a href="#addTaaPass"><code>addTaaPass</code></a>. The target may have several samples per pixel (<a href="render-graph.html#RenderTargetDesc"><code>samples</code></a>, MSAA): the scene's pipelines are made for its count, cut-out materials use alpha-to-coverage, and the Hi-Z reads every depth sample; resolve it with <a href="#addMsaaResolvePass"><code>addMsaaResolvePass</code></a>. Invalid: logs an error, adds nothing and returns <code>false</code>. A target with <code>D32_SFLOAT</code> depth and no color is depth-only: the scene's depth is drawn and nothing else, in passes named <code>Shadow 1</code>, <code>Shadow 2</code>, … (a depth pre-pass, for example; shadows come from <a href="#addShadowPasses"><code>addShadowPasses</code></a>). Make it with <a href="render-graph.html#RenderGraph-createRenderTarget"><code>RenderGraph::createRenderTarget</code></a> before this call.</dd>
       <dt>shadows, shadowCount</dt><dd>Up to <code>MAX_VIEW_SHADOWS</code> (4) shadows (<a href="scene.html#SceneShadow"><code>SceneShadow</code></a>), of different lights, that <a href="#addShadowPasses"><code>addShadowPasses</code></a> returned for the same scene and camera in this graph. Each darkens its own light. The draw passes read every map's depth, so the graph runs them after the map passes. <code>nullptr</code> and 0 (the default): no shadow. More than 4, two of one light, a shadow that <code>addShadowPasses</code> did not make for this scene and camera in this graph, a shadow that another view in the graph already reads (cascades are fitted to one view's aspect ratio), or shadows on a depth-only view, log an error, add nothing and return <code>false</code>. A cube render target (<a href="render-graph.html#RenderTargetDesc"><code>RenderTargetDesc::cube</code></a>) is not a valid <code>renderTarget</code>.</dd>
+      <dt>sampled, sampledCount</dt><dd>View textures (color targets that other passes of the graph draw, see <a href="#ViewOutput"><code>ViewOutput</code></a>) that the scene's materials sample. The draw passes read them, so the graph runs them after those textures' writers and the materials see this frame's picture. Without it a material sees this frame's or the last frame's, whichever the graph's order gives; it is never read while it is drawn. The view's own target, an invalid target or one without a color logs an error, adds nothing and returns <code>false</code>.</dd>
       <dt>returns</dt><dd><code>true</code> when the passes were added. On <code>false</code> nothing was added.</dd>
     </dl>
   </div>
@@ -481,7 +597,7 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
   </div>
 </div>
 
-<p><b>Shadows.</b> Call <code>addShadowPasses</code> for each light, then <code>addScenePasses</code> with the shadows it returned. The order of the passes does not matter: the graph sorts them by the depth reads. Each cascade, spot map and cube face is one scene view: a sun with 4 cascades, a spot light, a point light and the shaded view take 12 of the <code>MAX_SCENE_VIEWS</code> (16).</p>
+<p><b>Shadows.</b> Call <code>addShadowPasses</code> for each light, then <code>addScenePasses</code> with the shadows it returned. The order of the passes does not matter: the graph sorts them by the depth reads. Each cascade, spot map and cube face is one scene view: a sun with 4 cascades, a spot light, a point light and the shaded view take 12 of the <code>MAX_SCENE_VIEWS</code> (32).</p>
 
 <div class="legend">
   <span><i class="gpu"></i>engine passes</span>
@@ -541,7 +657,7 @@ if (!engine.addScenePasses(graph, scene, camera, sceneTarget, shadows, 3))
 <div class="table-wrap">
 <table>
   <tr><th>Rule</th><th>What happens otherwise</th></tr>
-  <tr><td>At most <code>MAX_SCENE_VIEWS</code> (16) scene views held by graphs at once</td><td>An error (<i>"At most 16 views (scene, camera, target) can be held by render graphs at once."</i>), nothing added, <code>false</code></td></tr>
+  <tr><td>At most <code>MAX_SCENE_VIEWS</code> (32) scene views held by graphs at once</td><td>An error (<i>"All 32 scene views (MAX_SCENE_VIEWS) are held by render graphs ...; this view is not drawn."</i>), nothing added, <code>false</code></td></tr>
   <tr><td>One graph adds each scene view once</td><td>An error, nothing added, <code>false</code></td></tr>
   <tr><td>A valid render target with a <code>SCENE_COLOR_FORMAT</code> color (and a <code>MOTION_FORMAT</code> second color only with one sample) and <code>D32_SFLOAT</code> depth, or <code>D32_SFLOAT</code> depth only</td><td>An error, nothing added, <code>false</code></td></tr>
   <tr><td>The scene shader <code>passes/rasm.slang</code> must compile</td><td>An error is logged; the engine tries again next frame, so a fixed shader file is picked up while the program runs</td></tr>
@@ -611,14 +727,15 @@ if ((bloom &amp;&amp; !bloomTarget.isValid()) || !engine.addToneMapPass(graph, r
 </div>
 
 <div class="api" id="addToneMapPass">
-  <pre class="sig">bool addToneMapPass(RenderGraph&amp; graph, const RenderTargetHandle&amp; source, CameraHandle camera, const RenderTargetHandle&amp; bloom = {});</pre>
+  <pre class="sig">bool addToneMapPass(RenderGraph&amp; graph, const RenderTargetHandle&amp; source, CameraHandle camera, const RenderTargetHandle&amp; bloom = {}, const ViewOutput&amp; output = {});</pre>
   <div class="body">
-    <p>Adds a graphics pass named <code>Tone Map</code> that draws <code>source</code> into the window. It mixes in the bloom, multiplies the color by the camera's exposure and maps it to the range the screen shows with AgX; the sRGB swapchain then encodes it. <code>render</code> calls it after the scene passes; call it yourself as the last pass of your own graph that draws the scene. How it works: <a href="../guides/tone-mapping.html">Tone mapping</a>.</p>
+    <p>Adds a graphics pass named <code>Tone Map</code> that draws <code>source</code> into the window, or into a rect of it or of a view texture. It mixes in the bloom, multiplies the color by the camera's exposure and maps it to the range the screen shows with AgX; the sRGB swapchain then encodes it. <code>render</code> calls it after the scene passes; call it yourself as the last pass of your own graph that draws the scene. How it works: <a href="../guides/tone-mapping.html">Tone mapping</a>.</p>
     <dl>
       <dt>graph</dt><dd>The graph to add to, before its <code>compile</code>. The pass reads <code>source</code> and <code>bloom</code>, so the graph runs it after the passes that draw them.</dd>
       <dt>source</dt><dd>Color 0 is read, as linear light. Usually a <a href="types.html#SCENE_COLOR_FORMAT"><code>SCENE_COLOR_FORMAT</code></a> target that <a href="#addScenePasses"><code>addScenePasses</code></a> or your post passes drew. Invalid, a depth-only target, or a multisampled one (resolve it first with <a href="#addMsaaResolvePass"><code>addMsaaResolvePass</code></a>): logs an error, adds nothing and returns <code>false</code>.</dd>
       <dt>camera</dt><dd>Its <a href="camera.html#setCameraExposure">exposure</a> and <a href="camera.html#setCameraBloomStrength">bloom strength</a> are read each time the pass runs, so changing them needs no new graph. Invalid: logs an error, adds nothing and returns <code>false</code>.</dd>
       <dt>bloom</dt><dd>What <a href="#addBloomPasses"><code>addBloomPasses</code></a> returned, or invalid (the default) for no bloom. The pass draws <code>lerp(source, bloom, strength)</code>. A depth-only target: logs an error, adds nothing and returns <code>false</code>.</dd>
+      <dt>output</dt><dd>Where it draws (<a href="#ViewOutput"><code>ViewOutput</code></a>): by default the whole window. <code>rect</code> is fitted to the window's or the target's size when the pass runs (<a href="#getViewPixels"><code>getViewPixels</code></a>) and sets the viewport and the scissor. Passes that draw one output run in the order they were added: the first clears all of it, a later one loads it and draws over its rect. With <code>target</code> set it draws into that target: one color, no depth, one sample, not storage, and not <code>source</code> or <code>bloom</code>; otherwise it logs an error, adds nothing and returns <code>false</code>. One pipeline is kept per output format, at most <code>MAX_TONE_MAP_FORMATS</code> (4) formats.</dd>
       <dt>returns</dt><dd><code>true</code> when the pass was added. The pipeline is made the first time the pass runs. If <code>passes/toneMap.slang</code> does not compile, the pass logs an error, draws nothing (the window shows the clear color) and tries again next frame, so a fixed shader file is picked up while the program runs.</dd>
     </dl>
     <pre><code>// From examples/06_shadows/main.cpp: post_rt holds the vignetted HDR image
@@ -842,11 +959,12 @@ engine.setUiCallback(
 </div>
 
 <div class="api" id="addUiPass">
-  <pre class="sig">bool addUiPass(RenderGraph&amp; graph);</pre>
+  <pre class="sig">bool addUiPass(RenderGraph&amp; graph, const RenderTargetHandle* shown = nullptr, uint32_t shownCount = 0);</pre>
   <div class="body">
     <p>Adds a graphics pass named <code>UI</code> that draws the frame's ImGui windows into the swapchain, over what the passes before it drew. It keeps the image and has no depth. <a href="#render"><code>render</code></a> adds it after the tone map; in your own graph, add it after <a href="#addToneMapPass"><code>addToneMapPass</code></a> (or after your last pass on the swapchain).</p>
     <dl>
       <dt>graph</dt><dd>The graph to add to, before its <code>compile</code>.</dd>
+      <dt>shown, shownCount</dt><dd>View textures the UI shows with <code>ImGui::Image</code> (<a href="#getUiTexture"><code>getUiTexture</code></a>). The pass reads them, so it runs after the passes that draw them and shows this frame's picture. <code>render(views, count)</code> passes every view texture of its list.</dd>
       <dt>returns</dt><dd><code>true</code> when the pass was added; <code>false</code>, with nothing added, when the UI is off.</dd>
     </dl>
     <p>A frame whose graph has no UI pass still shows the UI: <a href="#endFrame"><code>endFrame</code></a> draws it in a render pass of its own, so <kbd>F1</kbd> works in every program. That costs one more load and store of the swapchain image, only on frames that have something to draw; the first time, a debug-level log line says so. <code>addUiPass</code> draws in a pass the graph already orders, so it is the cheaper way.</p>
@@ -1194,10 +1312,21 @@ engine.destroyTexture(tile.texture);</code></pre>
   </div>
 </div>
 
+<div class="api" id="resizeRenderTarget">
+  <pre class="sig">bool resizeRenderTarget(const RenderTargetHandle&amp; renderTarget, uint32_t width, uint32_t height);</pre>
+  <div class="body">
+    <p>Gives a fixed-size target (no <code>swapchainScale</code>, not a cube) a new size: a view texture that follows a UI panel, or the HDR target of a view whose rect changed. Its texture handles and bindless slots stay, so a material or a UI image that shows it keeps working; its contents do not (a TAA history starts over). A graph's transient target is placed again with its group.</p>
+    <p>The same size costs nothing. A new size waits once for the frames in flight (the values both queues signaled last), since they may still read the slots, the same short wait a window resize has; the old textures go once the GPU is done with them. Call it between frames: during a frame (between <code>beginFrame</code> and <code>endFrame</code>) it logs an error and returns <code>false</code>, as for an invalid target, a <code>swapchainScale</code> or cube target, or a size of 0.</p>
+    <pre><code>// From examples/20_views/main.cpp: the TV's texture at 1.5 times its size, between two frames.
+if (!engine.resizeRenderTarget(tv, TV_WIDTH * 3 / 2, TV_HEIGHT * 3 / 2))
+    return 1;</code></pre>
+  </div>
+</div>
+
 <div class="api" id="destroyRenderTarget">
   <pre class="sig">void destroyRenderTarget(const RenderTargetHandle&amp; renderTarget);</pre>
   <div class="body">
-    <p>Destroys a render target from <a href="render-graph.html#createRenderTarget"><code>createRenderTarget</code></a>: the handle at once, its textures and bindless slots once the GPU is done with them. A render graph destroys the targets it made itself. Calls <a href="low-level.html#destroyRenderTargets"><code>RenderContext::destroyRenderTarget</code></a>.</p>
+    <p>Destroys a render target from <a href="render-graph.html#createRenderTarget"><code>createRenderTarget</code></a>: the handle at once, its textures and bindless slots once the GPU is done with them. Materials that sample its colors (a view texture) lose them, as with <a href="#destroyTexture"><code>destroyTexture</code></a>; a view of <a href="#render-views"><code>render(views, count)</code></a> that still names it as its output is left out. A render graph destroys the targets it made itself. Calls <a href="low-level.html#destroyRenderTargets"><code>RenderContext::destroyRenderTarget</code></a>.</p>
   </div>
 </div>
 

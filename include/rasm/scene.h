@@ -13,9 +13,9 @@ namespace rasm
 {
 
     constexpr uint32_t  MAX_ENTITIES_PER_SCENE      = MAX_ENTITIES;
-    constexpr uint32_t  MAX_CAMERAS_PER_SCENE       = 8;
+    constexpr uint32_t  MAX_CAMERAS_PER_SCENE       = 32;
     constexpr uint32_t  MAX_SCENES                  = 16;
-    constexpr uint32_t  MAX_SCENE_VIEWS             = 16;
+    constexpr uint32_t  MAX_SCENE_VIEWS             = 32;
     constexpr uint32_t  MAX_SHADOW_CASCADES         = 4;
     constexpr uint32_t  MAX_VIEW_SHADOWS            = 4;
 

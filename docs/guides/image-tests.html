@@ -308,7 +308,7 @@
     <text x="423" y="96" class="mid small">helmet, sponza, alpha modes, msaa4, taa,</text>
     <text x="423" y="114" class="mid small">bloom, many lights, local shadows, ktx2,</text>
     <text x="423" y="132" class="mid small">debug normals, determinism, skinning,</text>
-    <text x="423" y="150" class="mid small">morph, node animation, materials, meshlets</text>
+    <text x="423" y="150" class="mid small">morph, node animation, materials, views, meshlets</text>
     <text x="423" y="180" class="mid small t-faint">tests with the same build share its scene</text>
     <rect x="586" y="54" width="140" height="150" rx="6" class="paper"/>
     <text x="656" y="74" class="mid small title">each test</text>
@@ -335,6 +335,7 @@
   <tr><td><samp>skinning</samp>, <samp>morph</samp>, <samp>node_anim</samp></td><td>CesiumMan and two foxes at 1.25 s; MorphStressTest at fixed weights; AnimatedCube at 0.3 s</td></tr>
   <tr><td><samp>many_lights</samp>, <samp>local_shadows</samp></td><td>1024 point lights in clusters; a spot light's shadow map and a point light's cube</td></tr>
   <tr><td><samp>ktx2</samp>, <samp>materials</samp></td><td>FlightHelmet's Basis textures; texture transforms, vertex colors, a quantized mesh</td></tr>
+  <tr><td><samp>views</samp></td><td><code>Engine::render</code> with four views: split screen, a map in the corner without bloom, and a security camera drawn into a view texture first, which a screen in the scene shows (<a href="multiple-views.html">Many views of one scene</a>); its steady frames, like every test's, make no heap allocation</td></tr>
   <tr><td><samp>debug_normals</samp></td><td>the normals debug view</td></tr>
   <tr><td><samp>determinism</samp></td><td>the helmet again in the same process: it must equal <samp>helmet_ibl</samp> exactly (T = 0, F = 0)</td></tr>
   <tr><td><samp>meshlets</samp>, <samp>meshlet_sponza</samp></td><td>the helmet and Sponza drawn by <a href="meshlets.html">meshlets</a> on the vertex-pulling path: they must equal <samp>helmet_ibl</samp> and <samp>sponza</samp> exactly (T = 0, F = 0)</td></tr>

@@ -601,7 +601,7 @@ display = saturate(v) ^ 2.2     linear, for an sRGB target</code></pre>
 
 <h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
 
-<p>RASM draws the scene into a 16-bit float target and maps it to the swapchain in one pass, <code>Tone Map</code>, with AgX in its minimal form. The default frame of <code>Engine::render</code> builds it as a <a href="render-graphs.html">render graph</a>:</p>
+<p>RASM draws the scene into a 16-bit float target and maps it to the swapchain in one pass, <code>Tone Map</code>, with AgX in its minimal form. The default frame of <code>Engine::render</code> builds it as a <a href="render-graphs.html">render graph</a>. With several views (<a href="multiple-views.html">Many views of one scene</a>) each view has its own target and its own <code>Tone Map</code>, into its rect of the window or into a view texture:</p>
 
 <div class="legend">
   <span><i class="gpu"></i>graph passes</span>
@@ -611,7 +611,7 @@ display = saturate(v) ^ 2.2     linear, for an sRGB target</code></pre>
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 330" role="img" aria-label="Renderer::render creates the graph target scene_hdr: R16G16B16A16_SFLOAT color with D32_SFLOAT depth, cleared to 0.018 gray. The scene passes Cull 1, Scene 1, Hi-Z, Cull 2 and Scene 2 draw into it. With MSAA a resolve pass, with TAA the TAA pass, comes next. The Tone Map pass reads the color, mixes in the bloom when the graph has one, multiplies by the camera's exposure, applies AgX and a 2.2 power, and writes the swapchain, B8G8R8A8_SRGB, which encodes to sRGB. With EngineConfig::ui the UI pass draws over it. After the graph, endFrame draws the stats overlay onto the swapchain without tone mapping when the UI is off, then presents. setCameraExposure changes the factor the pass reads.">
+  <svg viewBox="0 0 760 330" role="img" aria-label="Renderer::render creates the view's target scene_hdr: R16G16B16A16_SFLOAT color with D32_SFLOAT depth, cleared to 0.018 gray. The scene passes Cull 1, Scene 1, Hi-Z, Cull 2 and Scene 2 draw into it. With MSAA a resolve pass, with TAA the TAA pass, comes next. The Tone Map pass reads the color, mixes in the bloom when the graph has one, multiplies by the camera's exposure, applies AgX and a 2.2 power, and writes the view's rect of the swapchain, B8G8R8A8_SRGB, which encodes to sRGB, or of a view texture. With EngineConfig::ui the UI pass draws over it. After the graph, endFrame draws the stats overlay onto the swapchain without tone mapping when the UI is off, then presents. setCameraExposure changes the factor the pass reads.">
     <text x="20" y="22" class="title t-gpu">the graph of Engine::render, every frame</text>
     <rect x="20" y="34" width="170" height="64" rx="6" class="gpu"/>
     <text x="105" y="56" class="mid title">scene passes</text>
@@ -632,7 +632,7 @@ display = saturate(v) ^ 2.2     linear, for an sRGB target</code></pre>
     <rect x="512" y="30" width="136" height="72" rx="8" class="hot"/>
     <text x="580" y="56" class="mid mono">Tone Map</text>
     <text x="580" y="74" class="mid small">reads color 0,</text>
-    <text x="580" y="90" class="mid small">writes swapchain</text>
+    <text x="580" y="90" class="mid small">writes its rect</text>
     <line x1="648" y1="66" x2="662" y2="66" class="arrow gpu" marker-end="url(#ah-gpu)"/>
     <rect x="664" y="34" width="76" height="64" rx="6" class="gpu"/>
     <text x="702" y="56" class="mid mono">UI</text>
@@ -719,14 +719,14 @@ engine.setCameraExposure(camera, 2.0f);</code></pre>
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>The curve</td><td><code>agx</code>, <code>agxContrast</code> and the constants in <code>shaders/passes/toneMap.slang</code>; <code>fragMain</code> multiplies by <code>exposure</code> first</td></tr>
-  <tr><td>The pass</td><td><code>Engine::addToneMapPass</code> in <code>src/renderer/toneMap.cpp</code>: checks the camera, the source and the bloom target and adds <code>Tone Map</code> with <code>read</code> of the source (and the bloom) and <code>writeSwapchain</code>. The pass creates <code>toneMapPipeline</code> the first time it runs; on a shader error it draws nothing and tries again next frame. While a <a href="debug-views.html">debug view</a> is shown (<code>getDrawnDebugView</code>), it binds <code>debugDisplayPipeline</code> (<code>fragDebug</code>: the values as they are) or <code>debugHeatPipeline</code> (<code>fragDebugHeat</code>: a count as a heat color) instead, with no exposure, bloom or curve.</td></tr>
+  <tr><td>The pass</td><td><code>Engine::addToneMapPass</code> in <code>src/renderer/toneMap.cpp</code>: checks the camera, the source, the bloom target and the output, and adds <code>Tone Map</code> with <code>read</code> of the source (and the bloom) and <code>writeSwapchain</code>, or <code>write</code> of the output's target (a view texture: one color, no depth). When it runs it sets the viewport and the scissor to the output's rect (<code>getViewPixels</code>) and takes its pipeline from <code>getToneMapPipeline</code>, made the first time an output format needs it (<code>Engine::ToneMapPipelines</code>, at most <code>MAX_TONE_MAP_FORMATS</code>); on a shader error it draws nothing and tries again next frame. While a <a href="debug-views.html">debug view</a> is shown (<code>getDrawnDebugView</code>), it binds that format's debug pipeline instead (<code>fragDebug</code>: the values as they are; <code>fragDebugHeat</code>: a count as a heat color), with no exposure, bloom or curve.</td></tr>
   <tr><td>Push constants</td><td><code>gfx::ToneMapPushConstants</code> in <code>src/renderer/uberMaterialTypes.h</code> and <code>ToneMapPushConstants</code> in <code>shaders/passes/toneMap.slang</code>: <code>source</code> (bindless index), <code>exposure</code>, <code>bloom</code> (bindless index, <code>INVALID_TEXTURE_INDEX</code> without one) and <code>bloomStrength</code>: 16 bytes, all of <code>PUSH_CONSTANTS_SIZE</code>. <code>validateRasmStructs</code> in <code>src/renderer/shaderCompiler.cpp</code> compares them.</td></tr>
-  <tr><td>The default frame</td><td><code>Renderer::render</code> in <code>src/renderer/renderer.cpp</code>: the <samp>scene_hdr</samp> target, cleared to <code>BACKGROUND_COLOR</code> (<code>src/renderer/renderer.h</code>), and with <code>EngineConfig::bloom</code> the bloom passes</td></tr>
+  <tr><td>The default frame</td><td><code>Renderer::render</code> and <code>Renderer::addView</code> in <code>src/renderer/renderer.cpp</code>: each view's target (<samp>scene_hdr</samp>, then <samp>scene_hdr_1</samp>, ...), cleared to <code>BACKGROUND_COLOR</code> (<code>src/renderer/renderer.h</code>), and with bloom (<code>EngineConfig::bloom</code>, <code>View::bloom</code>) the bloom passes</td></tr>
   <tr><td>The HDR format</td><td><code>SCENE_COLOR_FORMAT</code> in <code>include/rasm/engine.h</code>; checked in <code>Engine::addScenePasses</code>, <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Exposure</td><td><code>Camera::exposure</code> in <code>include/rasm/camera.h</code>; <code>Engine::setCameraExposure</code>, <code>Engine::getCameraExposure</code> in <code>src/scene/camera.cpp</code></td></tr>
   <tr><td>Material output</td><td><code>shadePBR</code> in <code>shaders/lib/pbr.slang</code> and <code>shadeUnlit</code> in <code>shaders/lib/unlit.slang</code>: linear, no curve</td></tr>
   <tr><td>After the tone map</td><td><code>Engine::addUiPass</code> in <code>src/renderer/ui.cpp</code>, added by <code>Renderer::render</code>; without the UI, <code>drawStatsOverlay</code> in <code>src/renderer/statsOverlay.cpp</code>, from <code>Engine::endFrame</code> in <code>src/engine.cpp</code></td></tr>
-  <tr><td>Examples</td><td><code>examples/06_shadows/main.cpp</code> (scene → Post → tone map → Inset); <code>examples/01_render_graph/main.cpp</code> (HDR target, no tone map)</td></tr>
+  <tr><td>Examples</td><td><code>examples/06_shadows/main.cpp</code> (scene → Post → tone map → Inset); <code>examples/01_render_graph/main.cpp</code> (HDR target, no tone map); <code>examples/20_views/main.cpp</code> (a tone map per view, into rects of the window and into a view texture)</td></tr>
 </table>
 </div>
 

@@ -447,7 +447,7 @@ if (shadow.mapCount == 0 || !engine.addScenePasses(graph, scene, camera, sceneTa
     <rect x="580" y="296" width="160" height="60" rx="30" class="shader"/>
     <text x="660" y="320" class="mid small">lit 0..1 → shadePBR</text>
     <text x="660" y="338" class="mid small">× that light (shadows[i])</text>
-    <text x="20" y="384" class="small">Four cascades and the shaded view use 5 of the 16 scene views (MAX_SCENE_VIEWS).</text>
+    <text x="20" y="384" class="small">Four cascades and the shaded view use 5 of the 32 scene views (MAX_SCENE_VIEWS).</text>
   </svg>
   <figcaption>Each cascade is an ordinary scene view of the application's camera, culled on the GPU with the cascade's own matrices. Its passes are named <samp>Cascade 0 Cull 1</samp>, <samp>Cascade 0 1</samp> and so on in the GPU timers and the graph dump. A cascade takes each caster's LOD from the camera and from the shaded view's target size, so a surface is shadowed by the same triangles it is drawn with (<a href="lod-selection.html">LOD selection</a>).</figcaption>
 </figure>
