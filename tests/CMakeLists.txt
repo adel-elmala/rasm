@@ -1,12 +1,14 @@
 include(RasmRuntimeDlls)
 
 find_package(doctest CONFIG REQUIRED)
+find_package(glm CONFIG REQUIRED)
 find_package(Ktx CONFIG REQUIRED)
 
 add_executable(rasm_tests
             "main.cpp"
             "animationTests.cpp"
             "blendSortTests.cpp"
+            "cApiHandleTests.cpp"
             "bloomTests.cpp"
             "cacheFileTests.cpp"
             "cameraTests.cpp"
@@ -54,6 +56,28 @@ target_compile_definitions(rasm_tests PRIVATE RASM_TEST_EXECUTABLE_DIR="$<TARGET
 rasm_copy_runtime_dlls(rasm_tests)
 
 add_test(NAME rasm_tests COMMAND rasm_tests)
+
+# The C API as a binding uses it: rasm_c_tests links only the rasm_c shared library (the C++ headers give the defaults to
+# compare with), and the header checks are C programs, built as strict C99 and C11 against rasm_c_renderer.
+if (RASM_C_API)
+    add_executable(rasm_c_tests "main.cpp" "cApiTests.cpp")
+    target_link_libraries(rasm_c_tests PRIVATE rasm::c doctest::doctest glm::glm)
+    target_include_directories(rasm_c_tests PRIVATE "${PROJECT_SOURCE_DIR}/include")
+    target_compile_definitions(rasm_c_tests PRIVATE RASM_TEST_GOLDEN_DIR="${PROJECT_SOURCE_DIR}/tests/golden/lavapipe"
+                                                    RASM_TEST_C_LIBRARY_NAME="$<TARGET_FILE_NAME:rasm_c>")
+    rasm_copy_runtime_dlls(rasm_c_tests)
+    add_test(NAME rasm_c_tests COMMAND rasm_c_tests)
+
+    foreach (rasm_c_standard 99 11)
+        set(rasm_target rasm_c_header_c${rasm_c_standard})
+        add_executable(${rasm_target} "cApiHeaderCheck.c")
+        target_link_libraries(${rasm_target} PRIVATE rasm::c_renderer)
+        set_target_properties(${rasm_target} PROPERTIES C_STANDARD ${rasm_c_standard} C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+        target_compile_options(${rasm_target} PRIVATE -Wall -Wextra -pedantic -Werror)
+        rasm_copy_runtime_dlls(${rasm_target})
+        add_test(NAME ${rasm_target} COMMAND ${rasm_target})
+    endforeach()
+endif()
 
 # Golden-image tests: render scenes headless and compare them with tests/golden/lavapipe. The goldens are lavapipe's,
 # so tools/image_tests.py runs them on that driver; the presets' ctest leaves out the label "image".

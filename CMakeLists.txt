@@ -6,7 +6,8 @@ if (RASM_IMGUI)
     list(APPEND VCPKG_MANIFEST_FEATURES "imgui")
 endif()
 
-project(rasm VERSION 0.1.0 LANGUAGES CXX)
+# C for the C API's example and its header checks, which compile as C.
+project(rasm VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -19,6 +20,7 @@ option(RASM_ENABLE_AVX2 "Build the engine for AVX2-capable x86 CPUs" OFF)
 option(RASM_BUILD_EXAMPLES "Build the example applications" ${PROJECT_IS_TOP_LEVEL})
 option(RASM_BUILD_TESTS "Build the unit tests" ${PROJECT_IS_TOP_LEVEL})
 option(RASM_INSTALL "Generate the install and export rules" ${PROJECT_IS_TOP_LEVEL})
+option(RASM_C_API "Build the C API's shared libraries, rasm_c and rasm_c_renderer (include/rasm/rasm_c.h)" ON)
 set(RASM_SHADER_DIR "shaders" CACHE STRING "Default shader directory, resolved against the executable's directory if relative")
 # The value ends up in a C string literal, where a Windows backslash would start an escape sequence.
 cmake_path(CONVERT "${RASM_SHADER_DIR}" TO_CMAKE_PATH_LIST RASM_SHADER_DIR)
