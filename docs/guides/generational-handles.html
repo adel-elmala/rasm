@@ -755,7 +755,7 @@ void bindTexture(TextureHandle texture);</code></pre>
   <tr><td rowspan="6"><code>Engine</code> registry</td><td><code>Entity</code></td><td><code>MAX_ENTITIES</code> = 262,144 (2<sup>18</sup>) (262,143 alive at once)</td><td><code>include/rasm/entity.h</code></td></tr>
   <tr><td><code>Mesh</code></td><td>no count limit; its sub-meshes take rows of the geometry table (<code>EngineConfig::geometryPoolSubMeshes</code> = 16384) and ranges of the geometry pool</td><td><code>include/rasm/types.h</code></td></tr>
   <tr><td><code>Material</code></td><td><code>EngineConfig::maxMaterials</code> = 4096 alive at once</td><td><code>include/rasm/types.h</code></td></tr>
-  <tr><td><code>Camera</code></td><td><code>MAX_CAMERAS</code> = 8 (7 alive at once)</td><td><code>include/rasm/engine.h</code></td></tr>
+  <tr><td><code>Camera</code></td><td><code>MAX_CAMERAS</code> = 32 (31 alive at once)</td><td><code>include/rasm/engine.h</code></td></tr>
   <tr><td><code>Light</code></td><td><code>EngineConfig::maxLights</code> = 16384</td><td><code>include/rasm/types.h</code></td></tr>
   <tr><td><code>Scene</code></td><td><code>MAX_SCENES</code> = 16 (15 alive at once)</td><td><code>include/rasm/scene.h</code></td></tr>
   <tr><td><code>Engine</code> readbacks</td><td><code>PendingReadback</code></td><td>no count limit; <code>takeReadback</code> releases its handle</td><td><code>src/renderer/readback.h</code></td></tr>
@@ -763,7 +763,7 @@ void bindTexture(TextureHandle texture);</code></pre>
 </table>
 </div>
 
-<p>Indices start at 1, so slot 0 is never used. That is why a pool with a cap holds one less than its limit: 7 cameras fit in 8. The cap counts live objects, since a released index comes back.</p>
+<p>Indices start at 1, so slot 0 is never used. That is why a pool with a cap holds one less than its limit: 31 cameras fit in 32. The cap counts live objects, since a released index comes back.</p>
 
 <p>Meshes have no count cap. A mesh is refused only when its sub-meshes do not fit the geometry pool: one row of the geometry table per sub-mesh, and ranges of the vertex and index pools. The whole mesh is checked before anything is created.</p>
 

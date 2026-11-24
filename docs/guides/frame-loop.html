@@ -46,7 +46,7 @@
 <div class="tldr">
   <h3>In short</h3>
   <ul>
-    <li><code>Engine::render</code> runs a render graph (<code>Renderer::render</code>): <code>beginFrame</code>, the scene passes from <code>addScenePasses</code> into a 16-bit float target, the <code>Tone Map</code> pass from <code>addToneMapPass</code> into the swapchain, with <code>EngineConfig::ui</code> the <code>UI</code> pass from <code>addUiPass</code> over it, <code>endFrame</code>.</li>
+    <li><code>Engine::render</code> runs a render graph (<code>Renderer::render</code>): <code>beginFrame</code>, the scene passes from <code>addScenePasses</code> into a 16-bit float target, the <code>Tone Map</code> pass from <code>addToneMapPass</code> into the swapchain, with <code>EngineConfig::ui</code> the <code>UI</code> pass from <code>addUiPass</code> over it, <code>endFrame</code>. With a list of views, each view has its own target and tone map (<a href="multiple-views.html">Many views of one scene</a>).</li>
     <li>The scene passes are <code>Cull 1</code>, <code>Scene 1</code>, <code>Hi-Z</code>, <code>Cull 2</code>, <code>Scene 2</code> (only <code>Cull</code> and <code>Scene</code> without occlusion culling), then <code>Transparent</code>, which draws the see-through materials back to front. The graph puts the barriers between them.</li>
     <li><code>frameCount</code> is the <b>slot</b> (0 or 1), not a frame counter. <code>MAX_FRAMES_IN_FLIGHT</code> = 2.</li>
     <li>Each graphics submit signals the next value of <code>frameFence</code>, and each compute submit the next value of <code>computeFence</code>. Before a slot is reused, <code>beginFrame</code> waits for the values its last submits signaled.</li>
@@ -69,7 +69,7 @@
 
     <rect x="24" y="44" width="208" height="26" rx="4" class="cpu"/><text x="128" y="61" class="mid mono">Renderer::render</text>
     <rect x="24" y="76" width="208" height="58" rx="4" class="ghost"/>
-    <text x="128" y="98" class="mid small">first frame, or new scene or camera:</text>
+    <text x="128" y="98" class="mid small">first frame, or new views or sizes:</text>
     <text x="128" y="114" class="mid small">a new graph + addScenePasses</text>
     <text x="128" y="128" class="mid small">+ addToneMapPass</text>
     <rect x="24" y="148" width="208" height="26" rx="4" class="cpu"/><text x="128" y="165" class="mid mono">graph.execute(camera)</text>
@@ -87,7 +87,7 @@
     <text x="632" y="114" class="mid small">your own draws, endPass</text>
     <rect x="528" y="148" width="208" height="26" rx="4" class="cpu"/><text x="632" y="165" class="mid mono">endFrame()</text>
   </svg>
-  <figcaption>All three use the same frame functions. <code>render</code> keeps one graph and builds it again only when the scene or the camera changes. The stepper below walks that frame. Only graph passes draw the scene: an app with its own graph calls <code>addScenePasses</code> and <code>addToneMapPass</code> itself (<a href="render-graphs.html#in-rasm">render graphs</a>).</figcaption>
+  <figcaption>All three use the same frame functions. <code>render</code> keeps one graph and builds it again only when a view (scene, camera, output, settings) or a view's size in pixels changes; before that it polls the events and recreates a resized swapchain, so the views take the new size in the same frame. The stepper below walks that frame. Only graph passes draw the scene: an app with its own graph calls <code>addScenePasses</code> and <code>addToneMapPass</code> itself (<a href="render-graphs.html#in-rasm">render graphs</a>).</figcaption>
 </figure>
 
 <h2 id="steps"><span class="n">2</span>One frame, step by step</h2>

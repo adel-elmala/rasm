@@ -122,7 +122,7 @@
 <div class="api" id="addCameraToScene">
   <pre class="sig">void addCameraToScene(SceneHandle scene, CameraHandle camera);</pre>
   <div class="body">
-    <p>Records the camera in the scene's camera list (at most <code>MAX_CAMERAS_PER_SCENE</code>, 8). Drawing does not read this list today: <code>render</code> and <code>addScenePasses</code> take the camera as an argument, and any camera can draw any scene. Cameras are on <a href="camera.html#createCamera">camera.html</a>.</p>
+    <p>Records the camera in the scene's camera list (at most <code>MAX_CAMERAS_PER_SCENE</code>, 32; past it an error is logged). Drawing does not read this list today: <code>render</code>, its <code>View</code>s and <code>addScenePasses</code> take the camera as an argument, and any camera can draw any scene. Cameras are on <a href="camera.html#createCamera">camera.html</a>.</p>
   </div>
 </div>
 
@@ -1123,8 +1123,8 @@ engine.setSceneEnvironment(scene, {});</code></pre>
   <tr><td><code>MAX_ENTITIES_PER_SCENE</code></td><td>262,144</td><td>262,144</td><td>entity entries in one scene</td></tr>
   <tr><td><code>EngineConfig::maxLights</code></td><td>16,384</td><td>all</td><td>lights in total; a scene holds any of them</td></tr>
   <tr><td><code>MAX_CLUSTER_LIGHTS</code></td><td>256</td><td>256</td><td>lights that reach one cluster of a view</td></tr>
-  <tr><td><code>MAX_CAMERAS_PER_SCENE</code></td><td>8</td><td>8</td><td>camera entries in one scene</td></tr>
-  <tr><td><code>MAX_SCENE_VIEWS</code></td><td>16</td><td>16</td><td>scene views: (scene, camera, target) sets given to <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> and held by render graphs at once; each shadow cascade, spot light map and cube face is one</td></tr>
+  <tr><td><code>MAX_CAMERAS_PER_SCENE</code></td><td>32</td><td>32</td><td>camera entries in one scene</td></tr>
+  <tr><td><code>MAX_SCENE_VIEWS</code></td><td>32</td><td>32</td><td>scene views: (scene, camera, target) sets given to <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> and held by render graphs at once; each shadow cascade, spot light map and cube face is one</td></tr>
   <tr><td><code>MAX_VIEW_SHADOWS</code></td><td>4</td><td>4</td><td>shadows one view reads (<a href="engine.html#addScenePasses"><code>addScenePasses</code></a>'s <code>shadowCount</code>)</td></tr>
   <tr><td><code>MAX_SHADOW_CASCADES</code></td><td>4</td><td>4</td><td>cascades of one shadow (<a href="#ShadowDesc"><code>ShadowDesc::cascadeCount</code></a>)</td></tr>
   <tr><td><code>MAX_VERTEX_UV_SETS</code></td><td>3</td><td>3</td><td>UV sets per vertex</td></tr>

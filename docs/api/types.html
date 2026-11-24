@@ -33,7 +33,7 @@
 <h2><span class="n">1</span>Handles</h2>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 230" role="img" aria-label="A CameraHandle with index 3 and generation 1 points at slot 3 of the engine's camera list. Slot 0 is never used. Indices count up from 1, so with MAX_CAMERAS of 8 the ninth slot, index 8, is refused and 7 cameras are alive at most.">
+  <svg viewBox="0 0 760 230" role="img" aria-label="A CameraHandle with index 3 and generation 1 points at slot 3 of the engine's camera list. Slot 0 is never used. Indices count up from 1, so with MAX_CAMERAS of 32 index 32 is refused and 31 cameras are alive at most.">
     <rect x="250" y="10" width="260" height="50" rx="6" class="cpu"/>
     <text x="380" y="32" class="mid mono">CameraHandle</text>
     <text x="380" y="50" class="mid small">index = 3 · generation = 1</text>
@@ -47,17 +47,17 @@
     <rect x="254" y="110" width="70" height="44" rx="4" class="cpu"/><text x="289" y="137" class="mid small">camera</text>
     <rect x="332" y="110" width="70" height="44" rx="4" class="box"/><text x="367" y="137" class="mid small">camera</text>
     <rect x="410" y="110" width="70" height="44" rx="4" class="box"/><text x="445" y="137" class="mid small">camera</text>
-    <rect x="488" y="110" width="70" height="44" rx="4" class="box"/><text x="523" y="137" class="mid small">camera</text>
+    <rect x="488" y="110" width="70" height="44" rx="4" class="ghost"/><text x="523" y="137" class="mid small t-faint">…</text>
     <rect x="566" y="110" width="70" height="44" rx="4" class="box"/><text x="601" y="137" class="mid small">camera</text>
     <rect x="660" y="110" width="80" height="44" rx="4" class="hot"/><text x="700" y="137" class="mid small t-hot">refused</text>
 
     <text x="55"  y="172" class="mid mono">0</text><text x="133" y="172" class="mid mono">1</text><text x="211" y="172" class="mid mono">2</text>
     <text x="289" y="172" class="mid mono">3</text><text x="367" y="172" class="mid mono">4</text><text x="445" y="172" class="mid mono">5</text>
-    <text x="523" y="172" class="mid mono">6</text><text x="601" y="172" class="mid mono">7</text><text x="700" y="172" class="mid mono t-hot">8</text>
+    <text x="523" y="172" class="mid mono">…</text><text x="601" y="172" class="mid mono">31</text><text x="700" y="172" class="mid mono t-hot">32</text>
     <text x="700" y="190" class="mid small t-hot">≥ MAX_CAMERAS</text>
 
     <text x="20" y="206" class="small">Each type counts its indices from 1, so slot 0 stays empty and {0, 0} means "no object".</text>
-    <text x="20" y="222" class="small">A limit of 8 holds 7 live objects. A destroyed object's index comes back, with a new generation.</text>
+    <text x="20" y="222" class="small">A limit of 32 holds 31 live objects. A destroyed object's index comes back, with a new generation.</text>
   </svg>
   <figcaption>A handle is an index into one of the engine's lists. It holds no pointer, so it is cheap to copy and to store.</figcaption>
 </figure>
@@ -397,9 +397,10 @@ public:
     MSAA_4X,
     MSAA_8X,
     TAA,
+    DEFAULT,    // View::antiAliasing: the EngineConfig value; in EngineConfig, NONE
 };</pre>
   <div class="body">
-    <p>How <code>Engine::render</code> smooths edges (<code>EngineConfig::antiAliasing</code>). <code>MSAA_nX</code> draws the scene with n samples per pixel and resolves them in a pass of the graph (<a href="engine.html#addMsaaResolvePass"><code>addMsaaResolvePass</code></a>); a count the device does not have falls back to the most it has, with a warning. <code>TAA</code> jitters the view and blends the frames (<a href="engine.html#addTaaPass"><code>addTaaPass</code></a>, <a href="../guides/taa.html">Temporal anti-aliasing</a>). See <a href="../guides/msaa.html">MSAA and alpha-to-coverage</a>.</p>
+    <p>How <code>Engine::render</code> smooths edges (<code>EngineConfig::antiAliasing</code>, or per view <a href="engine.html#View"><code>View::antiAliasing</code></a>, where <code>DEFAULT</code> takes the engine's value). <code>MSAA_nX</code> draws the scene with n samples per pixel and resolves them in a pass of the graph (<a href="engine.html#addMsaaResolvePass"><code>addMsaaResolvePass</code></a>); a count the device does not have falls back to the most it has, with a warning. <code>TAA</code> jitters the view and blends the frames (<a href="engine.html#addTaaPass"><code>addTaaPass</code></a>, <a href="../guides/taa.html">Temporal anti-aliasing</a>). See <a href="../guides/msaa.html">MSAA and alpha-to-coverage</a>.</p>
   </div>
 </div>
 
@@ -524,10 +525,11 @@ struct RenderTarget
     glm::vec4               clearColor;
     bool                    history;
     uint32_t                samples = 1;
+    uint32_t                version = 0;
     uint32_t                storageSlots[rasm::MAX_FRAMES_IN_FLIGHT][rasm::MAX_COLOR_ATTACHMENTS] = {};
 };</pre>
   <div class="body">
-    <p>A render target as <a href="low-level.html#getRenderTarget">RenderContext::getRenderTarget</a> returns it: the values of its <a href="render-graph.html#RenderTargetDesc">RenderTargetDesc</a>, plus one <code>RenderTargetAttachments</code> entry (its colors, its depth) per frame slot. Only the first <code>colorCount</code> colors are used. Without <code>history</code> every entry holds the same textures; with it each slot has its own. <code>getRenderTargetTexture(rt, i)</code> picks <code>attachments[slot].color[i]</code> for the current slot, and <code>getPreviousRenderTargetTexture</code> the previous slot's. <code>samples</code> is the desc's samples per pixel; <code>storageSlots</code> holds a storage target's slot per frame slot and color (<code>UINT32_MAX</code> for any other target; both frame slots share one without history), which <code>getRenderTargetStorageIndex</code> returns.</p>
+    <p>A render target as <a href="low-level.html#getRenderTarget">RenderContext::getRenderTarget</a> returns it: the values of its <a href="render-graph.html#RenderTargetDesc">RenderTargetDesc</a>, plus one <code>RenderTargetAttachments</code> entry (its colors, its depth) per frame slot. Only the first <code>colorCount</code> colors are used. Without <code>history</code> every entry holds the same textures; with it each slot has its own. <code>getRenderTargetTexture(rt, i)</code> picks <code>attachments[slot].color[i]</code> for the current slot, and <code>getPreviousRenderTargetTexture</code> the previous slot's. <code>samples</code> is the desc's samples per pixel; <code>version</code> counts the times its textures were made (a resize, a new placement): they keep their handles but not their contents, so a reader of its history starts over when it changes. <code>storageSlots</code> holds a storage target's slot per frame slot and color (<code>UINT32_MAX</code> for any other target; both frame slots share one without history), which <code>getRenderTargetStorageIndex</code> returns.</p>
   </div>
 </div>
 
@@ -829,7 +831,8 @@ engine.addInputEvent({.type = rasm::InputEventType::TEXT, .codepoint = 0x00E9});
   <tr id="PUSH_CONSTANTS_SIZE"><td><code>PUSH_CONSTANTS_SIZE</code><br><code>rasm/types.h</code></td><td>16</td><td>Push constant bytes of every pipeline.</td></tr>
   <tr id="INVALID_TEXTURE_INDEX"><td><code>INVALID_TEXTURE_INDEX</code><br><code>rasm/types.h</code></td><td><code>0xFFFFFFFF</code></td><td>Not a limit: the bindless index written for a material slot with no texture. Shaders must not sample it.</td></tr>
   <tr id="maxMaterials"><td><code>EngineConfig::maxMaterials</code><br><code>rasm/types.h</code></td><td>4096</td><td>Materials alive at once, the engine's default material included. A field, not a constant.</td></tr>
-  <tr id="MAX_CAMERAS"><td><code>MAX_CAMERAS</code><br><code>rasm/engine.h</code></td><td>8</td><td>Cameras: 7 fit.</td></tr>
+  <tr id="MAX_CAMERAS"><td><code>MAX_CAMERAS</code><br><code>rasm/engine.h</code></td><td>32</td><td>Cameras: 31 fit.</td></tr>
+  <tr id="MAX_TONE_MAP_FORMATS"><td><code>MAX_TONE_MAP_FORMATS</code><br><code>rasm/engine.h</code></td><td>4</td><td>Output formats the tone-map pass keeps pipelines for: the swapchain's and its view textures' (<a href="engine.html#addToneMapPass"><code>addToneMapPass</code></a>). A fifth format logs an error and draws nothing.</td></tr>
   <tr id="MAX_GPU_TIMERS"><td><code>MAX_GPU_TIMERS</code><br><code>rasm/engine.h</code></td><td>64</td><td>GPU timers per frame: the frame, and 63 for passes and <code>beginGpuTimer</code>. <code>FrameStats::gpuTimers</code> has 63 entries.</td></tr>
   <tr id="SCENE_COLOR_FORMAT"><td><code>SCENE_COLOR_FORMAT</code><br><code>rasm/engine.h</code></td><td><code>Format::R16G16B16A16_SFLOAT</code></td><td>Not a limit: the color format of a target that <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> draws into, linear light with no upper limit. <a href="engine.html#addToneMapPass"><code>addToneMapPass</code></a> brings it to the window.</td></tr>
   <tr id="MOTION_FORMAT"><td><code>MOTION_FORMAT</code><br><code>rasm/engine.h</code></td><td><code>Format::R16G16_SFLOAT</code></td><td>Not a limit: the format of a scene target's second color, each pixel's motion since the last frame in texture coordinates, which <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> writes and <a href="engine.html#addTaaPass"><code>addTaaPass</code></a> reads.</td></tr>
@@ -841,9 +844,9 @@ engine.addInputEvent({.type = rasm::InputEventType::TEXT, .codepoint = 0x00E9});
   <tr id="MAX_MORPH_TARGETS"><td><code>MAX_MORPH_TARGETS</code><br><code>rasm/mesh.h</code></td><td>256</td><td>Morph targets per glTF primitive; the rest are dropped with a warning (<a href="scene.html#MorphDelta">MorphDelta</a>). Mirrored in <code>shaders/lib/geometryTypes.slang</code>.</td></tr>
   <tr id="MAX_MESH_LODS"><td><code>MAX_MESH_LODS</code><br><code>rasm/mesh.h</code></td><td>8</td><td>LODs per sub-mesh, LOD 0 included, so <code>ObjRaw::lods</code> holds at most 7 (<a href="scene.html#MeshLod">MeshLod</a>). Mirrored in <code>shaders/lib/core.slang</code>.</td></tr>
   <tr id="MAX_ENTITIES_PER_SCENE"><td><code>MAX_ENTITIES_PER_SCENE</code><br><code>rasm/scene.h</code></td><td>= <code>MAX_ENTITIES</code></td><td><code>addEntityToScene</code> per scene.</td></tr>
-  <tr id="MAX_CAMERAS_PER_SCENE"><td><code>MAX_CAMERAS_PER_SCENE</code><br><code>rasm/scene.h</code></td><td>8</td><td><code>addCameraToScene</code> per scene (the global camera limit is lower).</td></tr>
+  <tr id="MAX_CAMERAS_PER_SCENE"><td><code>MAX_CAMERAS_PER_SCENE</code><br><code>rasm/scene.h</code></td><td>32</td><td><code>addCameraToScene</code> per scene (31 cameras exist at most, <code>MAX_CAMERAS</code>).</td></tr>
   <tr id="MAX_SCENES"><td><code>MAX_SCENES</code><br><code>rasm/scene.h</code></td><td>16</td><td>Scenes: 15 fit.</td></tr>
-  <tr id="MAX_SCENE_VIEWS"><td><code>MAX_SCENE_VIEWS</code><br><code>rasm/scene.h</code></td><td>16</td><td>Scene views: the (scene, camera, target) sets given to <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> and held by render graphs at once. A graph lets go of its views when it is destroyed or replaced. One more logs an error, and <code>addScenePasses</code> adds nothing and returns <code>false</code>.</td></tr>
+  <tr id="MAX_SCENE_VIEWS"><td><code>MAX_SCENE_VIEWS</code><br><code>rasm/scene.h</code></td><td>32</td><td>Scene views: the (scene, camera, target) sets given to <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> and held by render graphs at once. A graph lets go of its views when it is destroyed or replaced. One more logs an error, and <code>addScenePasses</code> adds nothing and returns <code>false</code>; <code>render(views, count)</code> leaves that view out.</td></tr>
   <tr id="MAX_SHADOW_CASCADES"><td><code>MAX_SHADOW_CASCADES</code><br><code>rasm/scene.h</code></td><td>4</td><td>Cascades of one shadow (<a href="scene.html#ShadowDesc"><code>ShadowDesc::cascadeCount</code></a>). Each cascade is one scene view.</td></tr>
   <tr id="MAX_VIEW_SHADOWS"><td><code>MAX_VIEW_SHADOWS</code><br><code>rasm/scene.h</code></td><td>4</td><td>Shadows one scene view reads (<a href="engine.html#addScenePasses"><code>addScenePasses</code></a>), each of a different light.</td></tr>
 </table>

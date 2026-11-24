@@ -949,7 +949,7 @@ while (engine.running())
   <tr><td>Long frames</td><td>cap <var>dt</var></td><td>Capped at 0.1 s in <code>pollEvents</code>.</td></tr>
   <tr><td>Switching controllers</td><td>make the new one from the pose</td><td><code>createCameraRig</code> starts at the given pose; <code>setCameraController</code> passes the rendered one. For free-fly it computes <code class="lang-text">pitch = asin(forward.y)</code> and <code class="lang-text">yaw = atan2(-forward.x, -forward.z)</code>, so the view does not jump; a roll is dropped.</td></tr>
   <tr><td>Who runs the controller</td><td>the renderer or the application</td><td>Either, per camera. <code>beginFrame</code> runs the rig of the camera passed to it; a camera whose controller is <code>NONE</code> keeps the pose the application sets. The SDL platform reads its window's events, or the application sends its own with <code>addInputEvent</code>; <code>getInputEvents</code> gives them back after <code>pollEvents</code>.</td></tr>
-  <tr><td>Views</td><td>one input per view</td><td>One <code>CameraInputState</code> and one <code>InputArea</code> per view, kept by the application. The engine has one, for the whole main window.</td></tr>
+  <tr><td>Views</td><td>one input per view</td><td>One <code>CameraInputState</code> per view, kept by the application, with the view's <code>InputArea</code> from <code>getInputArea(window, rect)</code> (<a href="multiple-views.html#input">Many views of one scene</a>; <code>examples/20_views</code>). The engine has one, for the whole main window, which moves the first view's camera.</td></tr>
 </table>
 </div>
 
@@ -984,7 +984,7 @@ while (engine.running())
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>Views are not first-class yet: the engine draws one window, and its own input covers all of it. An application with several views keeps one <code>CameraInputState</code> per view (development plan, phase 5: multiple views and windows). There is no turntable or walk mode, and a fly camera has no keys for up, down or a faster speed.</p>
+  <p>The engine's own input covers the whole main window; an application with several views (<code>Engine::render</code> with a list of <code>View</code>s) keeps one <code>CameraInputState</code> per view. More than one window is the next step of the development plan (phase 5). There is no turntable or walk mode, and a fly camera has no keys for up, down or a faster speed.</p>
 </div>
 
 <h3>Further reading</h3>

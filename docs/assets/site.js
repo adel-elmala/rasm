@@ -102,6 +102,7 @@ const SECTIONS = [
             { path: "guides/load-store-ops.html",        title: "Load and store ops",                  blurb: "What a pass does with its targets at start and end." },
             { path: "guides/multiple-render-targets.html", title: "Multiple render targets",           blurb: "One pass, several output images." },
             { path: "guides/temporal-history.html",      title: "History buffers: last frame's image", blurb: "Reading what the last frame drew." },
+            { path: "guides/multiple-views.html",        title: "Many views of one scene",             blurb: "Split screen, a map in the corner and render to texture: viewports, a target per view, and history kept by the view." },
             { path: "guides/gpu-timing.html",            title: "GPU timing and frame statistics",     blurb: "Measuring where a frame's time goes." },
             { path: "guides/bitmap-text.html",           title: "Text from a bitmap font",             blurb: "Debug text from bits packed into integers." },
             { path: "guides/immediate-mode-ui.html",     title: "Immediate-mode UI",                   blurb: "Windows and sliders as code each frame: draw lists, clip rectangles and an atlas." },

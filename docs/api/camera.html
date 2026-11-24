@@ -127,7 +127,7 @@
       <dt>transform</dt><dd>The start pose. Only <code>position</code> and <code>rotation</code> matter for the view. Both the rendered and the target transform start here.</dd>
     </dl>
     <p>The camera starts with a <code>TRACK_BALL</code> controller: <code>radius</code> 1, <code>center</code> 1 unit in front of the camera, <code>orbitSensitivity</code> 1, <code>easingSpeed</code> 12. So the first drag does not move the camera away from its pose.</p>
-    <p><span class="tag">errors</span> An invalid projection logs an error and returns an invalid handle. Past <code>MAX_CAMERAS</code> it logs <code>Exceeded maximum number of cameras.</code> and returns an invalid handle. Handle indices start at 1, so 7 cameras fit, and a refused call still uses up an index (B13).</p>
+    <p><span class="tag">errors</span> An invalid projection logs an error and returns an invalid handle. Past <code>MAX_CAMERAS</code> it logs an error and returns an invalid handle. Handle indices start at 1, so 31 cameras fit, and a refused call still uses up an index (B13).</p>
   </div>
 </div>
 
@@ -624,7 +624,7 @@ engine.render(scene, camera);</code></pre>
     float       height          = 0.0f;
 };</pre>
   <div class="body">
-    <p>The rectangle a camera's input belongs to, in window points like <code>InputEvent</code> mouse positions, from the top-left corner: the whole window (<code>{0, 0, width, height}</code> of <a href="engine.html#getMainWindow"><code>getMainWindow</code></a>), or the part one view covers.</p>
+    <p>The rectangle a camera's input belongs to, in window points like <code>InputEvent</code> mouse positions, from the top-left corner: the whole window (<code>{0, 0, width, height}</code> of <a href="engine.html#getMainWindow"><code>getMainWindow</code></a>), or the part one view covers: <a href="engine.html#getInputArea"><code>getInputArea(window, rect)</code></a> gives it from a view's <a href="engine.html#ViewRect"><code>ViewRect</code></a>.</p>
   </div>
 </div>
 
@@ -694,9 +694,9 @@ engine.render(scene, camera);</code></pre>
 <div class="table-wrap">
 <table>
   <tr><th>Constant</th><th>Value</th><th>What it limits</th></tr>
-  <tr><td><code>MAX_CAMERAS</code></td><td>8 (7 usable)</td><td>cameras in the whole engine, <code>rasm/engine.h</code></td></tr>
-  <tr><td><code>MAX_CAMERAS_PER_SCENE</code></td><td>8</td><td><code>addCameraToScene</code> per scene, <code>rasm/scene.h</code></td></tr>
-  <tr><td><code>MAX_SCENE_VIEWS</code></td><td>16</td><td>scene views (scene, camera, target) held by render graphs at once (<a href="engine.html#addScenePasses"><code>addScenePasses</code></a>), so at most 16 camera views at a time, shadow maps included, <code>rasm/scene.h</code></td></tr>
+  <tr><td><code>MAX_CAMERAS</code></td><td>32 (31 usable)</td><td>cameras in the whole engine, <code>rasm/engine.h</code></td></tr>
+  <tr><td><code>MAX_CAMERAS_PER_SCENE</code></td><td>32</td><td><code>addCameraToScene</code> per scene, <code>rasm/scene.h</code></td></tr>
+  <tr><td><code>MAX_SCENE_VIEWS</code></td><td>32</td><td>scene views (scene, camera, target) held by render graphs at once (<a href="engine.html#addScenePasses"><code>addScenePasses</code></a>, <a href="engine.html#render-views"><code>render(views, count)</code></a>), so at most 32 camera views at a time, shadow maps included, <code>rasm/scene.h</code></td></tr>
 </table>
 </div>
 
