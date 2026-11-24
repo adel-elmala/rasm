@@ -984,7 +984,7 @@ while (engine.running())
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>The engine's own input covers the whole main window; an application with several views (<code>Engine::render</code> with a list of <code>View</code>s) keeps one <code>CameraInputState</code> per view. More than one window is the next step of the development plan (phase 5). There is no turntable or walk mode, and a fly camera has no keys for up, down or a faster speed.</p>
+  <p>The engine's own input covers the whole main window; an application with several views (<code>Engine::render</code> with a list of <code>View</code>s) keeps one <code>CameraInputState</code> per view. A view in another window (<code>ViewOutput::window</code>) reads that window's events: each <code>InputEvent</code> names its window. There is no turntable or walk mode, and a fly camera has no keys for up, down or a faster speed.</p>
 </div>
 
 <h3>Further reading</h3>

@@ -533,7 +533,7 @@
 
 <h2 id="in-rasm"><span class="n">7</span>In RASM</h2>
 
-<p><code>VulkanSwapchain</code> builds the swapchain with vk-bootstrap and owns all of its sync objects. No semaphore crosses the RHI: a submit only names the swapchain, to wait for its image (<code>SubmitDesc::acquireSwapchain</code>) or to present it (<code>SubmitDesc::presentSwapchain</code>), and the swapchain fills in the waits and signals. A frame is one submit, or with <a href="async-compute.html">async compute</a> a few (<a href="frame-loop.html">the frame loop</a>): the first graphics submit waits for the image, and the last one presents it. The engine's frame loop handles skipped frames and resize.</p>
+<p><code>VulkanSwapchain</code> builds the swapchain with vk-bootstrap and owns all of its sync objects. No semaphore crosses the RHI: a submit only names the swapchains, to wait for their images (<code>SubmitDesc::acquireSwapchains</code>) or to present them (<code>SubmitDesc::presentSwapchains</code>), and each swapchain fills in its waits and signals. Each window has its own swapchain (<code>Engine::addWindow</code>): the main window's uses the surface the device was chosen for, another makes a surface of its own, and the device checks that its graphics queue can present to it (<code>vkGetPhysicalDeviceSurfaceSupportKHR</code>). A frame is one submit, or with <a href="async-compute.html">async compute</a> a few (<a href="frame-loop.html">the frame loop</a>): the first graphics submit waits for every window's image, and the last one presents them all; each window is then presented with its own <code>vkQueuePresentKHR</code>. The engine's frame loop handles skipped frames and resize.</p>
 
 <div class="callout">
   <strong>No window, no swapchain</strong>
@@ -687,7 +687,7 @@
     <text x="670" y="270" class="mid small">if that submit worked</text>
     <text x="740" y="312" class="end small"><tspan class="mono">SUBOPTIMAL</tspan> or <tspan class="mono">OUT_OF_DATE</tspan>: set the flag, rebuild next frame</text>
   </svg>
-  <figcaption><code>swapchainOutOfDate</code> carries the news to the next <code>beginFrame</code>. The window sets <code>resized</code> on SDL's pixel-size event, or when a <code>NATIVE</code> application calls <code>setWindowSize</code>, so the swapchain follows the size in pixels (<b>B17</b>).</figcaption>
+  <figcaption>The window's <code>WindowFrame::outOfDate</code> carries the news to the next <code>beginFrame</code>, for that window only. The window sets <code>resized</code> on SDL's pixel-size event, or when a <code>NATIVE</code> application calls <code>setWindowSize</code>, so the swapchain follows the size in pixels (<b>B17</b>).</figcaption>
 </figure>
 
 <h3>Resize, step by step</h3>
@@ -712,7 +712,7 @@
   <tr><td>Wait stage</td><td>color output</td><td>Color attachment output. The barrier that moves the image out of <code>UNKNOWN</code> waits at the same stage, so the layout change comes after the acquire.</td></tr>
   <tr><td>Layout</td><td>discard at acquire, "present" before present</td><td><code>RenderContext::acquireNextImage</code> sets the image's state to <code>UNKNOWN</code>; <code>beginPass</code> moves it to <code>COLOR_ATTACHMENT</code>, discarding; <code>endFrame</code> moves it to <code>PRESENT_SRC</code>.</td></tr>
   <tr><td>Every acquired image is presented</td><td>yes</td><td>Yes. A frame that only drew into render targets gets a "Clear" pass in <code>endFrame</code>. A failed submit keeps the image acquired for the next frame.</td></tr>
-  <tr><td>Suboptimal</td><td>finish the frame, rebuild</td><td>The same, through <code>swapchainOutOfDate</code>.</td></tr>
+  <tr><td>Suboptimal</td><td>finish the frame, rebuild</td><td>The same, through the window's <code>WindowFrame::outOfDate</code>.</td></tr>
   <tr><td>Minimized window</td><td>skip frames, sleep</td><td>The same: <code>beginFrame</code> skips, and with SDL <code>pollEvents</code> waits up to 100 ms for an event while minimized. A <code>NATIVE</code> application reports a size of 0 with <code>setWindowSize</code> and sleeps in its own loop.</td></tr>
   <tr><td>Rebuild</td><td>wait idle, old swapchain, release signals</td><td>All three.</td></tr>
   <tr><td>Present queue</td><td>any queue that can present</td><td>The graphics queue. Compute queue submits never wait for the image or present it.</td></tr>

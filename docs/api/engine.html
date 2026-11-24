@@ -67,7 +67,7 @@
   <tr><td><a href="#getMainWindow"><code>getMainWindow</code></a></td><td>window size and state</td><td>this page</td></tr>
   <tr><td><a href="#addInputEvent"><code>addInputEvent</code></a></td><td>send the input of a window you own</td><td>this page</td></tr>
   <tr><td><a href="#setWindowSize"><code>setWindowSize</code></a> / <a href="#setWindowContentScale"><code>setWindowContentScale</code></a></td><td>the size and scale of a window you own</td><td>this page</td></tr>
-  <tr><td><a href="#createWindow"><code>createWindow</code></a> / <a href="#destroyWindow"><code>destroyWindow</code></a></td><td>used by the engine itself</td><td>this page</td></tr>
+  <tr><td><a href="#addWindow"><code>addWindow</code></a> / <a href="#removeWindow"><code>removeWindow</code></a> / <a href="#getWindow"><code>getWindow</code></a></td><td>more windows, each with its own swapchain</td><td>this page</td></tr>
   <tr><td><a href="#createBuffer"><code>createBuffer</code></a> / <a href="#createTexture"><code>createTexture</code></a></td><td>raw GPU resources</td><td>this page</td></tr>
   <tr><td><a href="scene.html#createScene"><code>createScene</code></a></td><td>new scene</td><td>scene.html</td></tr>
   <tr><td><a href="scene.html#addEntityToScene"><code>addEntityToScene</code></a>, <a href="scene.html#addCameraToScene"><code>addCameraToScene</code></a>, <a href="scene.html#addLightToScene"><code>addLightToScene</code></a></td><td>put objects in a scene</td><td>scene.html</td></tr>
@@ -355,11 +355,12 @@ engine.render(views.data(), static_cast&lt;uint32_t&gt;(views.size()));</code></
 {
     ViewRect            rect            = {};
     RenderTargetHandle  target;                         // valid: into this target, one color and no depth (R8G8B8A8_SRGB for a picture)
+    WindowHandle        window;                         // without a target: this window (Engine::addWindow); invalid: the main window
 
     bool                operator==(const ViewOutput&amp;) const = default;
 };</pre>
   <div class="body">
-    <p>Where the tone map draws a view: <code>rect</code> of the window, or with <code>target</code> set, <code>rect</code> of that target. A view texture is a target you make with <a href="render-graph.html#createRenderTarget"><code>createRenderTarget</code></a>: one color, no depth, one sample. Make it <code>R8G8B8A8_SRGB</code>, the format of a color texture: the tone map writes linear light, and the sRGB format encodes it. It starts cleared to its <code>clearColor</code>, so it can be sampled before its first frame. Its texture (<a href="render-graph.html#getRenderTargetTexture"><code>getRenderTargetTexture</code></a>) is one handle for both frame slots, kept across <a href="#resizeRenderTarget"><code>resizeRenderTarget</code></a>: give it to a material's <code>textures</code> (the emissive slot for a screen) or to <a href="#getUiTexture"><code>getUiTexture</code></a>.</p>
+    <p>Where the tone map draws a view: <code>rect</code> of the main window or of <code>window</code> (<a href="#addWindow"><code>addWindow</code></a>), or with <code>target</code> set, <code>rect</code> of that target. A view whose window was removed draws nothing. A view texture is a target you make with <a href="render-graph.html#createRenderTarget"><code>createRenderTarget</code></a>: one color, no depth, one sample. Make it <code>R8G8B8A8_SRGB</code>, the format of a color texture: the tone map writes linear light, and the sRGB format encodes it. It starts cleared to its <code>clearColor</code>, so it can be sampled before its first frame. Its texture (<a href="render-graph.html#getRenderTargetTexture"><code>getRenderTargetTexture</code></a>) is one handle for both frame slots, kept across <a href="#resizeRenderTarget"><code>resizeRenderTarget</code></a>: give it to a material's <code>textures</code> (the emissive slot for a screen) or to <a href="#getUiTexture"><code>getUiTexture</code></a>.</p>
     <pre><code>// From examples/20_views/main.cpp
 const rasm::RenderTargetHandle tv = engine.createRenderTarget({.name = "tv",
                                                                .width = TV_WIDTH,
@@ -1111,7 +1112,7 @@ engine.setInspection(inspection);</code></pre>
   </div>
 </div>
 
-<p>Three platforms (<a href="types.html#PlatformType"><code>EngineConfig::platform</code></a>): <code>SDL</code> opens a window and reads its events for you; <code>NATIVE</code> draws into your window, and your program runs the event loop and sends the input; <code>HEADLESS</code> has no window. In all three, the input goes through the same <a href="types.html#InputEvent"><code>InputEvent</code></a>s, to the camera, Dear ImGui and the keys above, and <a href="camera.html#getInputEvents"><code>getInputEvents</code></a> gives them back after <code>pollEvents</code>. How it works: <a href="../guides/platform-layer.html">The platform layer</a>.</p>
+<p>Three platforms (<a href="types.html#PlatformType"><code>EngineConfig::platform</code></a>), each with more windows if you ask (<a href="#windows">below</a>): <code>SDL</code> opens a window and reads its events for you; <code>NATIVE</code> draws into your window, and your program runs the event loop and sends the input; <code>HEADLESS</code> has no window. In all three, the input goes through the same <a href="types.html#InputEvent"><code>InputEvent</code></a>s, to the camera, Dear ImGui and the keys above, and <a href="camera.html#getInputEvents"><code>getInputEvents</code></a> gives them back after <code>pollEvents</code>. How it works: <a href="../guides/platform-layer.html">The platform layer</a>.</p>
 
 <h3 id="native">Your own window</h3>
 
@@ -1141,14 +1142,16 @@ while (editorRunning)
 </div>
 
 <div class="api" id="setWindowSize">
-  <pre class="sig">void setWindowSize(uint32_t width, uint32_t height, uint32_t pixelWidth, uint32_t pixelHeight);</pre>
+  <pre class="sig">void setWindowSize(uint32_t width, uint32_t height, uint32_t pixelWidth, uint32_t pixelHeight);
+void setWindowSize(WindowHandle window, uint32_t width, uint32_t height, uint32_t pixelWidth, uint32_t pixelHeight);</pre>
   <div class="body">
-    <p>The main window's new size, in points and in pixels, for <code>NATIVE</code> and <code>HEADLESS</code>. A new pixel size rebuilds the swapchain and everything sized from it in the next <code>beginFrame</code>; the points place the mouse and the UI. A pixel size of 0 skips frames, as for a minimized window: send it while your window is minimized. Headless, it changes the size of the offscreen images. With SDL it logs a warning and does nothing, since the SDL platform reads its window's size itself.</p>
+    <p>A window's new size (the main window's, or <code>window</code>'s), in points and in pixels, for <code>NATIVE</code> and <code>HEADLESS</code>. A new pixel size rebuilds the swapchain and everything sized from it in the next <code>beginFrame</code>; the points place the mouse and the UI. A pixel size of 0 leaves that window out of the frames, as for a minimized window: send it while your window is minimized. A frame is skipped only when no window can show. Headless, it changes the size of the offscreen images. With SDL it logs a warning and does nothing, since the SDL platform reads its window's size itself.</p>
   </div>
 </div>
 
 <div class="api" id="setWindowContentScale">
-  <pre class="sig">void setWindowContentScale(float scale);</pre>
+  <pre class="sig">void setWindowContentScale(float scale);
+void setWindowContentScale(WindowHandle window, float scale);</pre>
   <div class="body">
     <p>The display's scale setting (1.5 at 150 % in Windows' settings), without the pixel density, for <code>NATIVE</code> and <code>HEADLESS</code>. The UI's sizes and fonts follow it from the next UI frame. Call it when your window moves to a display of another scale. A scale of 0 or less is refused with an error; with SDL it logs a warning and does nothing.</p>
   </div>
@@ -1169,7 +1172,7 @@ rasm::Engine engine(config);</code></pre>
 <div class="api" id="getMainWindow">
   <pre class="sig">const Window&amp; getMainWindow() const;</pre>
   <div class="body">
-    <p>The window the engine renders to, with its current sizes, content scale and state (<code>minimized</code>, <code>resized</code>). It updates in <code>beginFrame</code>. Use the pixel size for viewports, like <code>examples/01_render_graph/main.cpp</code> does. Fields are in <a href="types.html#Window">types.html</a>.</p>
+    <p>The main window, with its handle, current sizes, content scale and state (<code>minimized</code>, <code>resized</code>); <a href="#getWindow"><code>getWindow</code></a> gives the others. It updates in <code>beginFrame</code>. Use the pixel size for viewports, like <code>examples/01_render_graph/main.cpp</code> does. Fields are in <a href="types.html#Window">types.html</a>.</p>
     <pre><code>const auto &amp;window = engine.getMainWindow();
 const float width = static_cast&lt;float&gt;(window.pixelWidth);
 const float height = static_cast&lt;float&gt;(window.pixelHeight);
@@ -1177,17 +1180,62 @@ const float aspect = width / height;</code></pre>
   </div>
 </div>
 
-<div class="api" id="createWindow">
-  <pre class="sig">Window createWindow(uint32_t width, uint32_t height);</pre>
+<h3 id="windows">More windows</h3>
+
+<p>An engine draws into up to <code>MAX_WINDOWS</code> − 1 (7) windows, the main one included. Each has a swapchain of its own; one submit waits for every window's image and presents them all. Put a view into a window with <a href="#ViewOutput"><code>ViewOutput::window</code></a>, or a pass with <a href="render-graph.html#writeSwapchain"><code>writeSwapchain(window)</code></a>. The UI, the stats overlay, the built-in keys and the engine's own camera input stay in the main window. How it works: <a href="../guides/multiple-views.html#windows">Many views of one scene</a>.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Platform</th><th><code>addWindow</code> gives</th><th>Its events</th></tr>
+  <tr><td><code>SDL</code></td><td>an SDL window of <code>width</code> × <code>height</code> points, with <code>title</code> (<code>hidden</code> for a script)</td><td>the SDL platform tags them with the window (<code>InputEvent::window</code>); closing it is a <code>WINDOW_CLOSE</code> event, closing the main window quits</td></tr>
+  <tr><td><code>NATIVE</code></td><td>a surface on your window (<code>WindowDesc::native</code>), which must outlive it</td><td>you send them with <code>addInputEvent</code>, tagged with the window; and its size with <code>setWindowSize(window, ...)</code></td></tr>
+  <tr><td><code>HEADLESS</code></td><td>an offscreen image of <code>width</code> × <code>height</code> pixels</td><td>none, unless you send some</td></tr>
+</table>
+</div>
+
+<div class="api" id="addWindow">
+  <pre class="sig">WindowHandle addWindow(const WindowDesc&amp; desc);</pre>
   <div class="body">
-    <p>Asks the platform for a window. With SDL it starts SDL and opens a resizable window titled "RASM Engine"; with <code>NATIVE</code> it returns your window from <code>EngineConfig::nativeWindow</code>; headless it returns a <code>Window</code> with no handle and a pixel size of <code>width</code> × <code>height</code>. The constructor calls it for the main window. A program has no use for it: a second window gets no rendering. With SDL it returns a <code>Window</code> with an invalid handle on failure (logged).</p>
+    <p>Opens or wraps another window and makes its swapchain: on <code>NATIVE</code> a surface of its own, which the GPU's graphics queue must be able to present to. Returns an invalid handle, with an error, when the platform and <code>desc.native</code> disagree (only <code>NATIVE</code> takes a native window), a size is 0 where it is needed, <code>MAX_WINDOWS</code> are open, a frame is being recorded, or the window or its swapchain cannot be made.</p>
+    <pre><code>// From examples/20_views/main.cpp: an SDL window, or an offscreen image under --headless.
+const rasm::WindowDesc secondDesc = {.title = "RASM: a second window", .width = SECOND_WIDTH, .height = SECOND_HEIGHT};
+rasm::WindowHandle second = engine.addWindow(secondDesc);
+// ...
+views.push_back({.scene = scene, .camera = orbit.camera, .output = {.window = second}});</code></pre>
   </div>
 </div>
 
-<div class="api" id="destroyWindow">
-  <pre class="sig">void destroyWindow(const Window&amp; window);</pre>
+<div class="api" id="WindowDesc">
+  <pre class="sig">struct WindowDesc
+{
+    const char*     title           = "RASM";       // SDL
+    uint32_t        width           = 0;            // points; HEADLESS: pixels; NATIVE: used when native has no pixel size
+    uint32_t        height          = 0;
+    NativeWindow    native          = {};           // NATIVE only
+    bool            hidden          = false;        // SDL: opened hidden, as a script or a test does
+};</pre>
   <div class="body">
-    <p>Closes the window and shuts SDL down (nothing when headless). The destructor calls it for the main window; do not call it on the main window yourself. <code>docs/code_review.md</code> lists both window functions among the calls that should leave the public API for a platform layer (<code>D2</code>, <code>D7</code>).</p>
+    <p>What <a href="#addWindow"><code>addWindow</code></a> opens or wraps, in <code>rasm/window.h</code>. <code>native</code> is a <a href="types.html#NativeWindow"><code>NativeWindow</code></a>, as for <code>EngineConfig::nativeWindow</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="removeWindow">
+  <pre class="sig">void removeWindow(WindowHandle window);</pre>
+  <div class="body">
+    <p>Waits for the device to be idle, destroys the window's swapchain (and its surface), and closes the SDL window. The handle dies. A view or a pass that still names it draws nothing: <a href="#render-views"><code>render(views, count)</code></a> leaves such a view out (logged once, at info level), and the graph skips such a pass. A readback of it that is not done fails. The main window, an invalid handle, or a call while a frame is being recorded logs an error and does nothing. On <code>NATIVE</code>, destroy your window after this call.</p>
+    <pre><code>// From examples/20_views/main.cpp: the user closed the second window.
+if (event.type == rasm::InputEventType::WINDOW_CLOSE &amp;&amp; event.window == second)
+{
+    engine.removeWindow(second);
+    second = {};
+}</code></pre>
+  </div>
+</div>
+
+<div class="api" id="getWindow">
+  <pre class="sig">const Window&amp; getWindow(WindowHandle window) const;</pre>
+  <div class="body">
+    <p>A window's state (<a href="types.html#Window"><code>Window</code></a>): its sizes, scale and <code>minimized</code>. An invalid handle gives the main window, a removed one an empty <code>Window</code>. Use its points for a view's <a href="#getInputArea"><code>getInputArea</code></a>.</p>
   </div>
 </div>
 
@@ -1213,9 +1261,10 @@ const float aspect = width / height;</code></pre>
 </figure>
 
 <div class="api" id="readFrame">
-  <pre class="sig">ReadbackHandle readFrame(ReadbackFormat format = ReadbackFormat::RGBA8_SRGB);</pre>
+  <pre class="sig">ReadbackHandle readFrame(ReadbackFormat format = ReadbackFormat::RGBA8_SRGB);
+ReadbackHandle readFrame(WindowHandle window, ReadbackFormat format = ReadbackFormat::RGBA8_SRGB);</pre>
   <div class="body">
-    <p>Asks for a copy of the image the frame shows, with the UI and the overlay: the offscreen image of a headless engine, or the window's swapchain image. Call it before <code>render</code> or <code>graph.execute</code> (or inside the frame, from the UI callback): the copy goes into the next <code>endFrame</code>. Returns an invalid handle when the window's surface does not allow copies from its images (logged); a headless engine can always be read.</p>
+    <p>Asks for a copy of the image the frame shows in the main window (with the UI and the overlay), or in <code>window</code>: the offscreen image of a headless engine, or the window's swapchain image. A window with no image in that frame (minimized) is copied in the next frame that has one; one removed before the copy fails. Call it before <code>render</code> or <code>graph.execute</code> (or inside the frame, from the UI callback): the copy goes into the next <code>endFrame</code>. Returns an invalid handle when the window's surface does not allow copies from its images (logged); a headless engine can always be read.</p>
     <pre><code>const rasm::ReadbackHandle shot = engine.readFrame();
 engine.render(scene, camera);</code></pre>
   </div>
