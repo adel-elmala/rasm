@@ -12,6 +12,33 @@ install(DIRECTORY "${PROJECT_SOURCE_DIR}/shaders/lib" "${PROJECT_SOURCE_DIR}/sha
 install(EXPORT rasmRendererTargets NAMESPACE rasm:: DESTINATION "${RASM_INSTALL_CONFIG_DIR}")
 install(EXPORT rasmTargets NAMESPACE rasm:: DESTINATION "${RASM_INSTALL_CONFIG_DIR}")
 
+# The C API's shared libraries (find_package(rasm COMPONENTS c)), with what they need at run time beside them: the
+# shaders, which a relative shaderDir finds next to the library under any host program (python.exe), and on Windows the
+# dependencies' DLLs. A C program needs nothing else, not even vcpkg.
+if (RASM_C_API)
+    if (WIN32)
+        # The vcpkg DLLs they load, and the ones those load (zstd for libktx), from the build's configuration. The Debug
+        # TracyClient.dll is in debug/bin/Debug (see RasmRuntimeDlls.cmake).
+        set(rasm_vcpkg_bin "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
+        if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+            set(rasm_vcpkg_bin "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/debug/bin" "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/debug/bin/Debug")
+        endif()
+        install(TARGETS rasm_c_renderer rasm_c EXPORT rasmCTargets
+                RUNTIME_DEPENDENCIES
+                    PRE_EXCLUDE_REGEXES "^api-ms-" "^ext-ms-"
+                    POST_EXCLUDE_REGEXES "[Ss]ystem32"
+                    DIRECTORIES ${rasm_vcpkg_bin}
+                FILE_SET HEADERS)
+        set(rasm_c_library_dir "${CMAKE_INSTALL_BINDIR}")
+    else()
+        install(TARGETS rasm_c_renderer rasm_c EXPORT rasmCTargets FILE_SET HEADERS)
+        set(rasm_c_library_dir "${CMAKE_INSTALL_LIBDIR}")
+    endif()
+    install(EXPORT rasmCTargets NAMESPACE rasm:: DESTINATION "${RASM_INSTALL_CONFIG_DIR}")
+    install(DIRECTORY "${PROJECT_SOURCE_DIR}/shaders/lib" "${PROJECT_SOURCE_DIR}/shaders/passes"
+            DESTINATION "${rasm_c_library_dir}/${RASM_SHADER_DIR}")
+endif()
+
 # The install prefix and the build tree each get a config, because their shaders are in different places.
 set(RASM_PACKAGE_SHADER_DIR "${RASM_INSTALL_SHADER_DIR}")
 configure_package_config_file("${PROJECT_SOURCE_DIR}/cmake/rasmConfig.cmake.in" "${PROJECT_BINARY_DIR}/install/rasmConfig.cmake"
@@ -29,3 +56,6 @@ configure_package_config_file("${PROJECT_SOURCE_DIR}/cmake/rasmConfig.cmake.in" 
                               PATH_VARS RASM_PACKAGE_SHADER_DIR)
 export(EXPORT rasmRendererTargets NAMESPACE rasm:: FILE "${PROJECT_BINARY_DIR}/rasmRendererTargets.cmake")
 export(EXPORT rasmTargets NAMESPACE rasm:: FILE "${PROJECT_BINARY_DIR}/rasmTargets.cmake")
+if (RASM_C_API)
+    export(EXPORT rasmCTargets NAMESPACE rasm:: FILE "${PROJECT_BINARY_DIR}/rasmCTargets.cmake")
+endif()
