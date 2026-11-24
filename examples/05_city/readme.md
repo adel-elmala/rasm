@@ -7,7 +7,7 @@ A procedural night city, about 146k instances, drawn by the GPU-driven path in o
 4. Updates: about 5000 cars move every frame and rewrite only their own rows. The monument turns, and every aviation light blinks through one material row.
 5. Materials: the facade textures (windows, glass, lit rooms) are generated in code and uploaded with `fillTexture`. The monument is the DamagedHelmet glTF.
 
-The camera flies a two-minute tour. Drag the mouse or press WASD to take over.
+The camera flies a two-minute tour. Drag the mouse or press WASD to take over. The example drives the camera itself (`Engine::pollEvents`, `getCameraInput`, then `updateCameraRig` on a free-fly `CameraRig` of its own): the engine camera has the `NONE` controller and only gets the pose.
 
 Animation follows the wall clock. Run with `--fixed-step` to advance 1/60 s per frame instead, so a given frame looks the same on every run (verify-change does this).
 

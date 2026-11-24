@@ -298,6 +298,78 @@ TEST_CASE("easing moves part of the way and converges")
     CHECK(engine.getCameraTransform(camera).position.z == doctest::Approx(-0.1f));
 }
 
+TEST_CASE("a rig the application keeps moves like an engine camera with the same controller")
+{
+    rasm::Engine engine(headlessConfig());
+    rasm::Transform start;
+    start.position = glm::vec3(1.0f, 0.5f, 3.0f);
+    start.rotate(glm::vec3(0.0f, 1.0f, 0.0f), 0.4f);
+    auto camera = engine.createCamera(perspective(), start);
+    auto controller = freeFly(3.0f);
+    controller.easingSpeed = 6.0f;
+    engine.setCameraController(camera, controller);
+    rasm::CameraRig rig = rasm::createCameraRig(controller, start);
+
+    const rasm::CameraInput inputs[] = {
+        {.mouseStart = glm::vec2(0.0f), .mouseEnd = glm::vec2(0.2f, -0.1f), .deltaTime = 1.0f / 60.0f},
+        {.deltaTime = 1.0f / 60.0f, .forward = true, .left = true},
+        {.deltaTime = 1.0f / 60.0f},
+    };
+    for (const rasm::CameraInput &input : inputs)
+    {
+        engine.updateCamera(camera, input);
+        rasm::updateCameraRig(rig, input);
+    }
+
+    const rasm::Transform engineTransform = engine.getCameraTransform(camera);
+    CHECK(engineTransform.position == rig.transform.position);
+    CHECK(engineTransform.rotation == rig.transform.rotation);
+    CHECK(engine.getCameraController(camera).freeFly.yaw == rig.controller.freeFly.yaw);
+}
+
+TEST_CASE("createCameraRig starts at rest, with a free-fly's angles taken from the pose")
+{
+    rasm::Transform pose;
+    pose.position = glm::vec3(0.0f, 2.0f, 0.0f);
+    pose.rotation = glm::angleAxis(0.6f, glm::vec3(0.0f, 1.0f, 0.0f)) * glm::angleAxis(-0.3f, glm::vec3(1.0f, 0.0f, 0.0f));
+
+    const rasm::CameraRig rig = rasm::createCameraRig(freeFly(1.0f), pose);
+    CHECK(rig.controller.freeFly.yaw == doctest::Approx(0.6f));
+    CHECK(rig.controller.freeFly.pitch == doctest::Approx(-0.3f));
+    CHECK(isNear(rig.transform.position, pose.position));
+    CHECK(isNear(rig.targetTransform.position, pose.position));
+
+    // No input: the rebuilt rotation is the pose's.
+    rasm::CameraRig moved = rig;
+    rasm::updateCameraRig(moved, rasm::CameraInput{.deltaTime = 0.016f});
+    CHECK(isNear(moved.transform.rotation * glm::vec3(0.0f, 0.0f, -1.0f), pose.rotation * glm::vec3(0.0f, 0.0f, -1.0f)));
+}
+
+TEST_CASE("a NONE rig ignores input and only eases toward the target the application sets")
+{
+    rasm::CameraRig rig = rasm::createCameraRig(rasm::CameraController{.type = rasm::CameraController::Type::NONE, .easingSpeed = 10.0f}, rasm::Transform{});
+    rasm::updateCameraRig(rig, rasm::CameraInput{.mouseStart = glm::vec2(0.0f), .mouseEnd = glm::vec2(0.5f), .wheelDelta = 3.0f, .deltaTime = 0.1f, .forward = true});
+    CHECK(isNear(rig.transform.position, glm::vec3(0.0f)));
+    CHECK(isNear(rig.targetTransform.position, glm::vec3(0.0f)));
+
+    rig.targetTransform.position = glm::vec3(1.0f, 0.0f, 0.0f);
+    rasm::updateCameraRig(rig, rasm::CameraInput{.deltaTime = 0.1f});
+    CHECK(rig.transform.position.x == doctest::Approx(1.0f - std::exp(-1.0f)));
+}
+
+TEST_CASE("an engine camera with a NONE controller keeps the pose the application sets")
+{
+    rasm::Engine engine(headlessConfig());
+    auto camera = engine.createCamera(perspective(), rasm::Transform{});
+    engine.setCameraController(camera, rasm::CameraController{.type = rasm::CameraController::Type::NONE});
+    rasm::Transform pose;
+    pose.position = glm::vec3(4.0f, 5.0f, 6.0f);
+    engine.setCameraTransform(camera, pose);
+
+    engine.updateCamera(camera, rasm::CameraInput{.mouseStart = glm::vec2(0.0f), .mouseEnd = glm::vec2(0.5f), .deltaTime = 0.1f, .forward = true});
+    CHECK(isNear(engine.getCameraTransform(camera).position, pose.position));
+}
+
 TEST_CASE("an invalid camera handle is rejected")
 {
     rasm::Engine engine(headlessConfig());

@@ -1,24 +1,11 @@
 // clang-format off
 #pragma once
 
+#include "rasm/cameraController.h"
 #include "rasm/transform.h"
 
 namespace rasm
 {
-
-    struct CameraInput
-    {
-        glm::vec2   mouseStart = glm::vec2(0.0f);  // NDC coordinates [-1, 1]
-        glm::vec2   mouseEnd   = glm::vec2(0.0f);  // NDC coordinates [-1, 1]
-        float       wheelDelta = 0.0f;             // scroll wheel delta
-        float       deltaTime  = 0.0f;             // the frame's step in seconds: EngineConfig::fixedDeltaTime, else the frame time
-
-        bool        forward  = false;
-        bool        backward = false;
-        bool        left     = false;
-        bool        right    = false;
-    };
-
 
     struct CameraProjection
     {
@@ -50,43 +37,10 @@ namespace rasm
         };
     };
 
-    struct CameraController
-    {
-        enum class Type { TRACK_BALL, FREE_FLY };
-
-        struct TrackBall
-        {
-            float       radius;            // target orbit radius, wheel zoom eases toward it
-            glm::vec3   center;
-            float       orbitSensitivity; // multiplier for drag rotation
-        };
-
-        struct FreeFly
-        {
-            float yaw;
-            float pitch;
-            float speed;            // units per second
-            float lookSensitivity;  // radians per NDC unit
-        };
-
-        Type type;
-        union
-        {
-            TrackBall   trackBall;
-            FreeFly     freeFly;
-        };
-
-        // Exponential smoothing speed for the rendered transform. Higher values
-        // are snappier; <= 0 disables easing and snaps to the target directly.
-        float easingSpeed = 12.0f;
-    };
-
     struct Camera
     {
         CameraProjection    projection;
-        CameraController    controller;
-        Transform           transform;       // current (rendered) camera transform
-        Transform           targetTransform; // desired transform, eased toward each frame
+        CameraRig           rig;                        // the controller, the rendered transform and the target it eases toward
         float               exposure        = 1.0f;
         float               bloomStrength   = 0.04f;    // the share of bloom in the tone-mapped image (addBloomPasses)
         uint32_t            historyResets   = 0;        // resetCameraHistory counts up; a TAA pass that sees it change starts over

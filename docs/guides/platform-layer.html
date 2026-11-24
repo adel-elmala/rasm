@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Platform Layer · RASM</title>
 <meta name="description" content="How a renderer lives in a window it does not own: who runs the event loop, native window handles and surfaces, points and pixels, input as a stream of events, keys by meaning and by position, which input the UI takes, and how RASM does it.">
-<meta name="rasm-sources" content="include/rasm/input.h include/rasm/types.h include/rasm/window.h include/rasm/engine.h src/platform/platform.h src/platform/input.h src/platform/input.cpp src/platform/sdlPlatform.cpp src/platform/nativePlatform.cpp src/platform/headlessPlatform.cpp src/platform/uiPlatform.h src/platform/uiPlatform.cpp src/renderer/ui.cpp src/engine.cpp src/rhi/device.h src/rhi/renderContext.cpp src/rhi/vulkan/vulkanSurface.h src/rhi/vulkan/vulkanSurface.cpp src/rhi/vulkan/vulkanDevice.cpp examples/19_embedding/main.cpp examples/CMakeLists.txt tests/inputTests.cpp vcpkg.json">
+<meta name="rasm-sources" content="include/rasm/input.h include/rasm/types.h include/rasm/window.h include/rasm/engine.h src/platform/platform.h src/platform/input.h src/platform/input.cpp src/platform/sdlPlatform.cpp src/platform/nativePlatform.cpp src/platform/headlessPlatform.cpp src/platform/uiPlatform.h src/platform/uiPlatform.cpp src/renderer/ui.cpp src/engine.cpp src/rhi/device.h src/rhi/renderContext.cpp src/rhi/vulkan/vulkanSurface.h src/rhi/vulkan/vulkanSurface.cpp src/rhi/vulkan/vulkanDevice.cpp examples/19_embedding/main.cpp examples/CMakeLists.txt tests/inputTests.cpp vcpkg.json include/rasm/cameraInput.h src/platform/cameraInput.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -272,7 +272,7 @@
 <p><code>EngineConfig::platform</code> picks the platform. <code>SDL</code> opens a window and reads its events. <code>NATIVE</code> draws into the application's window (<code>EngineConfig::nativeWindow</code>), and the application runs the loop and sends the input with <code>Engine::addInputEvent</code>, <code>setWindowSize</code> and <code>setWindowContentScale</code>. <code>HEADLESS</code> has no window (<a href="headless-readback.html">Headless rendering</a>). After the platform, all three look the same: one list of <code>InputEvent</code>s, and one <code>NativeWindow</code> for the device.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 330" role="img" aria-label="Three sources of InputEvents: the SdlPlatform turns SDL events into them, the application calls addInputEvent, a headless script does the same. They go into Engine::inputEvents. In beginFrame, pollEvents applies each event to Dear ImGui through processUiEvent, while the UI builds frames, and to InputState through applyInputEvent, with the last UI frame's capture. endInputFrame gives the CameraInput for updateCamera, and the F-key counts. Below: SdlPlatform reads SDL's window properties into a NativeWindow, or the application gives EngineConfig::nativeWindow; DeviceDesc::window carries it to createVulkanSurface.">
+  <svg viewBox="0 0 760 330" role="img" aria-label="Three sources of InputEvents: the SdlPlatform turns SDL events into them, the application calls addInputEvent, a headless script does the same. They are queued, and pollEvents, once per frame, makes them the frame's inputEvents, which getInputEvents gives back to the application. It applies each event to Dear ImGui through processUiEvent, while the UI builds frames, and to InputState through applyInputEvent, with the last UI frame's capture: the F-key counts and the camera's CameraInputState. takeCameraInput gives the frame's CameraInput. Below: SdlPlatform reads SDL's window properties into a NativeWindow, or the application gives EngineConfig::nativeWindow; DeviceDesc::window carries it to createVulkanSurface.">
     <text x="10" y="20" class="title t-cpu">sources</text>
     <rect x="10" y="30" width="150" height="40" rx="6" class="cpu"/><text x="85" y="49" class="mid small mono">SdlPlatform</text><text x="85" y="63" class="mid small">SDL events → InputEvents</text>
     <rect x="10" y="78" width="150" height="40" rx="6" class="cpu"/><text x="85" y="97" class="mid small">the application</text><text x="85" y="111" class="mid small mono">addInputEvent</text>
@@ -280,14 +280,15 @@
     <path d="M160,50 H190 V96 M160,98 H190 M160,146 H190 V100" class="arrow cpu"/>
     <line x1="190" y1="98" x2="218" y2="98" class="arrow cpu" marker-end="url(#ah-cpu)"/>
     <rect x="220" y="74" width="140" height="48" rx="6" class="mem"/><text x="290" y="94" class="mid small mono">inputEvents</text><text x="290" y="110" class="mid small">keeps its capacity</text>
+    <text x="290" y="138" class="mid small mono t-faint">getInputEvents</text>
     <line x1="360" y1="98" x2="388" y2="98" class="arrow" marker-end="url(#ah)"/>
-    <rect x="390" y="60" width="150" height="76" rx="6" class="box"/><text x="465" y="82" class="mid mono">pollEvents</text><text x="465" y="100" class="mid small">in beginFrame, in order,</text><text x="465" y="116" class="mid small">capture of the last UI frame</text>
+    <rect x="390" y="60" width="150" height="76" rx="6" class="box"/><text x="465" y="82" class="mid mono">pollEvents</text><text x="465" y="100" class="mid small">once per frame, in order,</text><text x="465" y="116" class="mid small">capture of the last UI frame</text>
     <line x1="540" y1="78" x2="588" y2="50" class="arrow shader" marker-end="url(#ah)"/>
     <line x1="540" y1="118" x2="588" y2="146" class="arrow gpu" marker-end="url(#ah-gpu)"/>
     <rect x="590" y="26" width="160" height="48" rx="6" class="shader"/><text x="670" y="46" class="mid small mono">processUiEvent</text><text x="670" y="62" class="mid small">ImGuiIO, while it builds</text>
-    <rect x="590" y="122" width="160" height="48" rx="6" class="gpu"/><text x="670" y="142" class="mid small mono">applyInputEvent</text><text x="670" y="158" class="mid small">InputState: keys, drag</text>
+    <rect x="590" y="122" width="160" height="48" rx="6" class="gpu"/><text x="670" y="142" class="mid small mono">applyInputEvent</text><text x="670" y="158" class="mid small">F keys, CameraInputState</text>
     <line x1="670" y1="170" x2="670" y2="194" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <rect x="590" y="196" width="160" height="40" rx="6" class="gpu"/><text x="670" y="214" class="mid small mono">endInputFrame</text><text x="670" y="229" class="mid small">CameraInput, F1–F3</text>
+    <rect x="590" y="196" width="160" height="40" rx="6" class="gpu"/><text x="670" y="214" class="mid small mono">takeCameraInput</text><text x="670" y="229" class="mid small">the frame's CameraInput</text>
 
     <line x1="10" y1="252" x2="560" y2="252" class="grid"/>
     <rect x="10" y="266" width="150" height="48" rx="6" class="cpu"/><text x="85" y="286" class="mid small">SDL's window properties</text><text x="85" y="302" class="mid small">or nativeWindow</text>
@@ -307,13 +308,14 @@
   <tr><td>The surface from the handle</td><td><code>createVulkanSurface</code> in <code>src/rhi/vulkan/vulkanSurface.cpp</code>, the only file with a window system's types, through volk's <code>vkGetInstanceProcAddr</code>. The instance enables every surface extension the loader has.</td></tr>
   <tr><td>Three numbers per window</td><td><code>Window::width</code>/<code>height</code> (points), <code>pixelWidth</code>/<code>pixelHeight</code>, <code>contentScale</code>. SDL reports all three, also on a move to another display; a <code>NATIVE</code> application calls <code>setWindowSize</code> and <code>setWindowContentScale</code>. A pixel size of 0 skips frames.</td></tr>
   <tr><td>One event set</td><td><code>InputEvent</code> in <code>rasm/input.h</code>: a type and plain fields, ready for a C API. Mouse positions in points.</td></tr>
-  <tr><td>Events applied at the start of a frame</td><td><code>Engine::inputEvents</code>, a vector that keeps its capacity (no allocation in a steady frame, <code>P27</code>). <code>pollEvents</code> appends the platform's events after the application's and applies them in order.</td></tr>
+  <tr><td>Events applied once per frame</td><td><code>addInputEvent</code> queues into <code>Engine::pendingInputEvents</code>. The first <code>pollEvents</code> of a frame (the application's, else the one in <code>beginFrame</code>) swaps it with <code>Engine::inputEvents</code>, appends the platform's events and applies them in order. Later calls in the frame leave its input as it is: they queue the window's new events for the next frame and stop <code>running()</code> on a close, so a loop with no frames can end. An event added after the poll waits for the next frame. Both vectors keep their capacity (no allocation in a steady frame, <code>P27</code>). <code>getInputEvents</code> returns the frame's list until the next poll.</td></tr>
   <tr><td>Meaning and position</td><td><code>InputEvent::key</code> and <code>physicalKey</code>, one <code>Key</code> enum for both. ImGui and F1–F3 read <code>key</code>; W/A/S/D read <code>physicalKey</code>, which <code>Key::NONE</code> makes the same as <code>key</code>.</td></tr>
-  <tr><td>The UI's capture</td><td><code>getUiInputCapture</code> after the last UI frame: <code>WantCaptureMouse</code> keeps presses and the wheel from the camera, <code>WantCaptureKeyboard</code> W/A/S/D, <code>WantTextInput</code> Escape and F1–F3.</td></tr>
-  <tr><td>Focus lost: every key up</td><td><code>applyInputEvent</code> clears <code>InputState::keysDown</code> and ends the drag on a lost <code>FOCUS</code>; ImGui gets <code>AddFocusEvent</code>.</td></tr>
+  <tr><td>The UI's capture</td><td><code>UiInputCapture</code> from the last UI frame (<code>readUiInputCapture</code>, public as <code>Engine::getUiInputCapture</code>): <code>WantCaptureMouse</code> keeps presses and the wheel from the camera, <code>WantCaptureKeyboard</code> W/A/S/D, <code>WantTextInput</code> Escape and F1–F3.</td></tr>
+  <tr><td>Focus lost: every key up</td><td><code>addCameraInputEvent</code> clears <code>CameraInputState::keysDown</code> and ends the drag on a lost <code>FOCUS</code>; ImGui gets <code>AddFocusEvent</code>.</td></tr>
+  <tr><td>The input after the platform</td><td>The engine moves the camera given to <code>beginFrame</code> with its own <code>CameraInputState</code>, unless the camera's controller is <code>NONE</code>. An application can move its cameras itself: <code>getInputEvents</code> into its own <code>CameraInputState</code> per view, or <code>getCameraInput</code> (<a href="camera-controllers.html#in-rasm">Camera controllers</a>).</td></tr>
   <tr><td>Ask for text input</td><td><code>updateUiPlatform</code> calls <code>Platform::setTextInput</code> when <code>WantTextInput</code> changes; SDL starts and stops its text events. Cursor shapes and the clipboard go the same way. The SDL platform also captures the mouse while a button is held.</td></tr>
   <tr><td>Scale the UI</td><td><code>setUiScale</code> scales the current style by the ratio of the new <code>Window::contentScale</code> to the old, so the application's colors and sizes stay; ImGui's framebuffer scale is pixels per point.</td></tr>
-  <tr><td>A hidden window as a test</td><td><code>19_embedding --headless</code> opens a hidden SDL window, makes a <code>NATIVE</code> engine on it, plays a scripted drag, click and typing, and writes frame N. <code>verify-change</code> runs it like every example.</td></tr>
+  <tr><td>A hidden window as a test</td><td><code>19_embedding --headless</code> opens a hidden SDL window, makes a <code>NATIVE</code> engine on it, plays a scripted drag, click and typing, and writes frame N. The drag moves the example's own camera rig, through <code>getInputEvents</code>. <code>verify-change</code> runs it like every example.</td></tr>
 </table>
 </div>
 
@@ -323,12 +325,12 @@
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>Public types</td><td><code>InputEvent</code>, <code>Key</code>, <code>MouseButton</code> in <code>include/rasm/input.h</code>; <code>PlatformType</code>, <code>NativeWindow</code> in <code>include/rasm/types.h</code>; <code>Window</code> in <code>include/rasm/window.h</code></td></tr>
   <tr><td>The platforms</td><td><code>Platform</code> in <code>src/platform/platform.h</code>; <code>src/platform/sdlPlatform.cpp</code>, <code>src/platform/nativePlatform.cpp</code>, <code>src/platform/headlessPlatform.cpp</code></td></tr>
-  <tr><td>Input state, camera input</td><td><code>InputState</code>, <code>applyInputEvent</code>, <code>endInputFrame</code>, <code>toInputNdc</code> in <code>src/platform/input.cpp</code></td></tr>
-  <tr><td>The engine's side</td><td><code>Engine::pollEvents</code>, <code>addInputEvent</code>, <code>setWindowSize</code>, <code>setWindowContentScale</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Input state, camera input</td><td><code>InputState</code> (the engine's keys) and <code>applyInputEvent</code> in <code>src/platform/input.cpp</code>; <code>CameraInputState</code>, <code>addCameraInputEvent</code>, <code>takeCameraInput</code>, <code>toInputNdc</code> in <code>src/platform/cameraInput.cpp</code>, public in <code>include/rasm/cameraInput.h</code></td></tr>
+  <tr><td>The engine's side</td><td><code>Engine::pollEvents</code>, <code>addInputEvent</code>, <code>getInputEvents</code>, <code>getUiInputCapture</code>, <code>setWindowSize</code>, <code>setWindowContentScale</code> in <code>src/engine.cpp</code></td></tr>
   <tr><td>Dear ImGui's input</td><td><code>processUiEvent</code>, <code>updateUiPlatform</code>, <code>setUiScale</code> in <code>src/platform/uiPlatform.cpp</code>; called from <code>src/renderer/ui.cpp</code></td></tr>
   <tr><td>The surface</td><td><code>createVulkanSurface</code> in <code>src/rhi/vulkan/vulkanSurface.cpp</code>, called by <code>VulkanDevice::initialize</code></td></tr>
-  <tr><td>Example</td><td><code>examples/19_embedding/main.cpp</code>: an SDL3 window of the application's own, with <code>--headless</code> and <code>--no-window</code></td></tr>
-  <tr><td>Tests</td><td><code>tests/inputTests.cpp</code>: NDC, drags across frames, the UI's capture, keys by position, focus loss, the F keys</td></tr>
+  <tr><td>Example</td><td><code>examples/19_embedding/main.cpp</code>: an SDL3 window of the application's own and a camera it drives, with <code>--headless</code> and <code>--no-window</code></td></tr>
+  <tr><td>Tests</td><td><code>tests/inputTests.cpp</code>: NDC, areas, drags across frames, the wheel, the UI's capture, keys by position, focus loss, the F keys, <code>pollEvents</code> once per frame</td></tr>
 </table>
 </div>
 
@@ -341,7 +343,7 @@
   </ul>
 </div>
 
-<p>Still open in <code>D7</code>: camera controllers that the application drives as helpers (today the engine runs the controller of the camera given to <code>beginFrame</code>), and more than one window.</p>
+<p>Still open in <code>D7</code>: more than one window. Also open: the IME window's position (<code>D38</code>), and SDL video drivers without a native handle (<code>D39</code>).</p>
 
 <h3>Further reading</h3>
 <ul>

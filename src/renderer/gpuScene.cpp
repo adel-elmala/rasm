@@ -1336,7 +1336,7 @@ namespace rasm
             gfx::SceneData sceneData{};
             sceneData.projection = getProjectionMatrix(view.camera, static_cast<float>(target.width) / static_cast<float>(target.height));
             sceneData.view = getViewMatrix(view.camera);
-            sceneData.cameraWorldPosition = registry.cameras[view.camera.index].transform.position;
+            sceneData.cameraWorldPosition = registry.cameras[view.camera.index].rig.transform.position;
             writeViewMotion(view, sceneData, target.width, target.height);
             view.sky = writeSceneEnvironment(*environments, registry.scenes[view.scene.index].environment, sceneData) &&
                        ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), viewIndex * sizeof(gfx::SceneData));
@@ -1669,7 +1669,7 @@ namespace rasm
             writeViewMotion(view, sceneData, width, height);
         getFrustumPlanes(sceneData.projection * sceneData.view, sceneData.frustumPlanes);
         sceneData.cullViewPoint = getCullViewPoint(sceneData.projection, sceneData.view);
-        sceneData.cameraWorldPosition = cameraRef.transform.position;
+        sceneData.cameraWorldPosition = cameraRef.rig.transform.position;
         sceneData.nearZ = getNearZ(cameraRef);
         sceneData.vertsPtr = ctx.getBufferDeviceAddress(geometryPool->vertexBuffer());
         sceneData.drawInfoPtr = ctx.getBufferDeviceAddress(culled ? view.visibleDraws[frame] : drawList.buffers[frame]);

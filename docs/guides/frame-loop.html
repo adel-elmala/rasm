@@ -97,7 +97,7 @@
 <div class="stepper">
   <div class="step">
     <h4>1. Input and finished loads</h4>
-    <svg viewBox="0 0 730 268" role="img" aria-label="pollEvents applies the frame's input events, from the platform and the application, and updates the camera. finishLoads publishes the loads whose copies the GPU has, then fills finished background loads until 4 ms are spent, sending their copies to the transfer queue at once; the load that crosses 4 ms still finishes its step, the next waits for the next frame.">
+    <svg viewBox="0 0 730 268" role="img" aria-label="pollEvents, once per frame, applies the frame's input events, from the application and the platform, and the camera given to beginFrame is moved with them unless its controller is NONE. finishLoads publishes the loads whose copies the GPU has, then fills finished background loads until 4 ms are spent, sending their copies to the transfer queue at once; the load that crosses 4 ms still finishes its step, the next waits for the next frame.">
       <!--strip 0-->
       <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><rect x="8" y="6" width="102" height="32" rx="7" class="hot"/><text x="59" y="26" class="mid small title">input · loads</text>
       <rect x="112" y="8" width="98" height="28" rx="5" class="ghost"/><text x="161" y="26" class="mid small t-faint">skip checks</text>
@@ -108,11 +108,11 @@
       <rect x="622" y="8" width="98" height="28" rx="5" class="ghost"/><text x="671" y="26" class="mid small t-faint">submit · present</text>
       <!--/strip-->
       <rect x="10" y="56" width="340" height="112" rx="6" class="cpu"/>
-      <text x="24" y="78" class="title mono">pollEvents(camera)</text>
+      <text x="24" y="78" class="title mono">pollEvents (once per frame)</text>
       <text x="24" y="100" class="small">deltaTime = fixedDeltaTime, or time since last frame (≤ 0.1 s)</text>
-      <text x="24" y="118" class="small">InputEvents: platform's + addInputEvent's</text>
+      <text x="24" y="118" class="small">InputEvents: addInputEvent's + platform's</text>
       <text x="24" y="136" class="small">W A S D, mouse drag and wheel → CameraInput</text>
-      <text x="24" y="154" class="small">updateCamera(camera, input)</text>
+      <text x="24" y="154" class="small">then updateCamera(camera, input), unless NONE</text>
       <line x1="350" y1="112" x2="378" y2="112" class="arrow cpu" marker-end="url(#ah-cpu)"/>
       <rect x="380" y="56" width="340" height="112" rx="6" class="cpu"/>
       <text x="394" y="78" class="title mono">finishLoads(false)</text>
@@ -887,7 +887,7 @@
 
 <div class="callout warn">
   <strong>Known issues</strong>
-  <p><b>D7</b>: the engine owns the event loop: <code>pollEvents</code> runs inside <code>beginFrame</code>, and there is no offscreen-only frame.</p>
+  <p><b>D7</b>: one window: the engine draws one main window, and its own camera input covers all of it.</p>
   <p><b>B21</b>: the swapchain always uses <code>VK_PRESENT_MODE_FIFO_KHR</code>, so the frame rate is capped at the display refresh rate.</p>
   <p><b>P11</b>: async compute does not pay off for the scene passes yet, so it is off by default.</p>
 </div>
@@ -904,7 +904,7 @@
   <tr><td>Frame slot state</td><td><code>FrameResources</code> in <code>include/rasm/types.h</code>; <code>frameFence</code>, <code>frameFenceValue</code>, <code>computeFence</code>, <code>computeFenceValue</code>, <code>frameCount</code> in <code>include/rasm/engine.h</code></td></tr>
   <tr><td>Batches</td><td><code>Engine::useQueue</code>, <code>Engine::waitForQueue</code>, <code>Engine::waitForQueueWork</code>, <code>Engine::closeBatch</code>, <code>Engine::submitBatches</code> in <code>src/engine.cpp</code></td></tr>
   <tr><td>Resize</td><td><code>Engine::recreateSwapchain</code>, <code>Engine::createSwapchainResources</code> in <code>src/engine.cpp</code>; <code>RenderContext::recreateSwapchain</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
-  <tr><td>Events and minimize</td><td><code>Engine::pollEvents</code>, <code>addInputEvent</code>, <code>setWindowSize</code> in <code>src/engine.cpp</code>, the input state in <code>src/platform/input.cpp</code>, the SDL events in <code>src/platform/sdlPlatform.cpp</code></td></tr>
+  <tr><td>Events and minimize</td><td><code>Engine::pollEvents</code>, <code>addInputEvent</code>, <code>setWindowSize</code> in <code>src/engine.cpp</code>, the input state in <code>src/platform/input.cpp</code> and <code>src/platform/cameraInput.cpp</code>, the SDL events in <code>src/platform/sdlPlatform.cpp</code></td></tr>
   <tr><td>Scene sync, scene passes</td><td><code>Engine::syncGpuScene</code>, <code>Engine::addScenePasses</code>, <code>Engine::prepareSceneView</code>, <code>Engine::recordSceneCulling</code>, <code>Engine::recordHiz</code>, <code>Engine::drawSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Stats</td><td><code>Engine::updateFrameStats</code> in <code>src/renderer/frameStats.cpp</code></td></tr>
   <tr><td>Acquire, submit, present</td><td><code>VulkanSwapchain</code> in <code>src/rhi/vulkan/vulkanSwapchain.cpp</code>, <code>VulkanQueue::submit</code> in <code>src/rhi/vulkan/vulkanQueue.cpp</code></td></tr>

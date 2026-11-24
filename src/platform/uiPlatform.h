@@ -22,7 +22,7 @@ namespace rasm
     void            updateUiPlatform(Platform& platform, const Window& window, UiPlatformState& state);
     void            suspendUiPlatform(Platform& platform, const Window& window, UiPlatformState& state);
     void            setUiScale(float from, float to);
-    UiInputCapture  getUiInputCapture();
+    UiInputCapture  readUiInputCapture();
 
 }
 // clang-format on

@@ -63,6 +63,7 @@ namespace rasm
         // Room for a burst of events, so a steady frame does not grow the queue (P27).
         inputState = std::make_unique<InputState>();
         inputEvents.reserve(256);
+        pendingInputEvents.reserve(256);
         // Before anything can fail, so a load on an engine that did not start still has workers. One hardware thread is
         // left for the main thread.
         const uint32_t hardwareThreads = std::thread::hardware_concurrency();
@@ -251,36 +252,50 @@ namespace rasm
             platform->destroyWindow(window);
     }
 
-    void Engine::pollEvents(CameraHandle camera)
+    void Engine::pollEvents()
     {
+        // A second call in the same frame leaves this frame's input as it is: the window's new events wait for the
+        // next frame, but a close request stops the engine at once, so a loop that renders no frames can still end.
+        if (inputPolled)
+        {
+            bool closed = false;
+            if (platform)
+                platform->pollEvents(mainWindow, pendingInputEvents, closed);
+            if (closed)
+                isRunning = false;
+            return;
+        }
+        inputPolled = true;
+
         // The first frame has no previous one, and a long stall (a debugger, a window drag) is capped so the camera does not jump.
         const auto now = std::chrono::steady_clock::now();
         frameTime = lastFrameTime == std::chrono::steady_clock::time_point{} ? 0.0f : std::min(std::chrono::duration<float>(now - lastFrameTime).count(), 0.1f);
         deltaTime = config.fixedDeltaTime > 0.0f ? config.fixedDeltaTime : frameTime;
         lastFrameTime = now;
 
-        // The platform's events go after the application's, which it queued since the last frame. Both go to the UI
-        // only while it builds frames, and what the last UI frame took does not reach the camera or the engine's keys.
+        // The application's events, queued since the last poll, then the platform's. The last frame's stay readable
+        // (getInputEvents) until here; both vectors keep their capacity. All go to the UI only while it builds frames,
+        // and what the last UI frame took does not reach the camera or the engine's keys.
+        inputEvents.swap(pendingInputEvents);
+        pendingInputEvents.clear();
         bool closed = false;
         if (platform)
             platform->pollEvents(mainWindow, inputEvents, closed);
         bool uiActive = false;
-        UiInputCapture capture = {};
+        const UiInputCapture capture = getUiInputCapture();
 #if defined(RASM_IMGUI)
         uiActive = ui && ui->active;
-        if (uiActive)
-            capture = getUiInputCapture();
 #endif
         beginInputFrame(*inputState);
+        const InputArea area = {.width = static_cast<float>(mainWindow.width), .height = static_cast<float>(mainWindow.height)};
         for (const InputEvent &event : inputEvents)
         {
 #if defined(RASM_IMGUI)
             if (uiActive)
                 processUiEvent(event);
 #endif
-            applyInputEvent(*inputState, event, mainWindow, capture);
+            applyInputEvent(*inputState, event, area, capture);
         }
-        inputEvents.clear();
         (void)uiActive;
 
         // Escape closes only a window RASM opened: an application that owns its window decides when to stop.
@@ -298,12 +313,37 @@ namespace rasm
         if (inputState->dumpGraph)
             graphDumpRequested = true;
 
-        updateCamera(camera, endInputFrame(*inputState, capture, deltaTime));
+        cameraInput = takeCameraInput(inputState->camera, capture, deltaTime);
     }
 
     void Engine::addInputEvent(const InputEvent &event)
     {
-        inputEvents.push_back(event);
+        pendingInputEvents.push_back(event);
+    }
+
+    const InputEvent *Engine::getInputEvents(uint32_t &count) const
+    {
+        count = static_cast<uint32_t>(inputEvents.size());
+        return inputEvents.data();
+    }
+
+    CameraInput Engine::getCameraInput() const
+    {
+        return cameraInput;
+    }
+
+    UiInputCapture Engine::getUiInputCapture() const
+    {
+#if defined(RASM_IMGUI)
+        if (ui && ui->active)
+            return readUiInputCapture();
+#endif
+        return {};
+    }
+
+    float Engine::getDeltaTime() const
+    {
+        return deltaTime;
     }
 
     void Engine::setWindowSize(uint32_t width, uint32_t height, uint32_t pixelWidth, uint32_t pixelHeight)
@@ -714,7 +754,11 @@ namespace rasm
     {
         ZoneScoped;
 
-        pollEvents(camera);
+        pollEvents();
+        inputPolled = false;
+        // An invalid handle is a frame with no camera to move; a dead one is an error.
+        if (camera.isValid() && (!isLive(camera) || registry.cameras[camera.index].rig.controller.type != CameraController::Type::NONE))
+            updateCamera(camera, cameraInput);
         finishLoads(false);
         // No frame is being recorded, so what was destroyed since the last frame waits only for work already submitted.
         // Here, and not after the fence wait only, so frees go on while frames are skipped (a minimized window).

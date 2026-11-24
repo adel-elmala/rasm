@@ -11,151 +11,6 @@ namespace rasm
 {
     namespace
     {
-        glm::vec3 projectOnSphere(const glm::vec2 &ndcPoint)
-        {
-            float x = ndcPoint.x;
-            float y = ndcPoint.y;
-            float z = 0.0f;
-
-            float lengthSquared = x * x + y * y;
-            if (lengthSquared <= 1.0f)
-            {
-                // Point is inside the sphere
-                z = std::sqrt(1.0f - lengthSquared);
-            }
-            else
-            {
-                // Point is outside the sphere, project onto the sphere
-                float length = std::sqrt(lengthSquared);
-                x /= length;
-                y /= length;
-            }
-            return glm::vec3(x, y, z);
-        }
-
-        void updateFreeFlyCamera(Camera &cam, const CameraInput &input)
-        {
-            auto &freeFly = cam.controller.freeFly;
-            auto &transform = cam.targetTransform;
-
-            // Look: yaw around world up, pitch around the camera's local right axis.
-            // Rebuilding the rotation from yaw/pitch keeps the horizon level.
-            const float deltaX = input.mouseEnd.x - input.mouseStart.x;
-            const float deltaY = input.mouseEnd.y - input.mouseStart.y;
-
-            freeFly.yaw -= deltaX * freeFly.lookSensitivity;
-            freeFly.pitch += deltaY * freeFly.lookSensitivity;
-
-            const float maxPitch = glm::radians(89.0f);
-            freeFly.pitch = glm::clamp(freeFly.pitch, -maxPitch, maxPitch);
-
-            transform.rotation = glm::normalize(glm::angleAxis(freeFly.yaw, glm::vec3(0.0f, 1.0f, 0.0f)) *
-                                                glm::angleAxis(freeFly.pitch, glm::vec3(1.0f, 0.0f, 0.0f)));
-
-            // Movement: held keys, frame-time based.
-            const glm::vec3 forward = transform.rotation * glm::vec3(0.0f, 0.0f, -1.0f);
-            const glm::vec3 right = transform.rotation * glm::vec3(1.0f, 0.0f, 0.0f);
-
-            glm::vec3 move(0.0f);
-            if (input.forward)
-            {
-                move += forward;
-            }
-            if (input.backward)
-            {
-                move -= forward;
-            }
-            if (input.right)
-            {
-                move += right;
-            }
-            if (input.left)
-            {
-                move -= right;
-            }
-
-            if (glm::dot(move, move) > 1e-6f)
-            {
-                transform.position += glm::normalize(move) * freeFly.speed * input.deltaTime;
-            }
-        }
-
-        void updateTrackballCamera(Camera &cam, const CameraInput &input)
-        {
-            auto &transform = cam.targetTransform;
-
-            // No drag delta means there is nothing to orbit.
-            if (input.mouseStart == input.mouseEnd && input.wheelDelta == 0.0f)
-            {
-                return;
-            }
-
-            auto p0 = projectOnSphere(input.mouseStart);
-            auto p1 = projectOnSphere(input.mouseEnd);
-
-            // The sphere points are in camera space, so the axis is a camera-local axis.
-            auto axis = glm::cross(p0, p1);
-            auto angle = std::acos(glm::clamp(glm::dot(p0, p1), -1.0f, 1.0f));
-
-            angle *= cam.controller.trackBall.orbitSensitivity;
-
-            if (glm::dot(axis, axis) > 1e-12f)
-            {
-                axis = glm::normalize(axis);
-
-                // Compose on the right to rotate in the camera's local frame.
-                // The inverse rotation (-angle) makes the scene follow the cursor, as in a grab-style trackball.
-                transform.rotation = glm::normalize(transform.rotation * glm::angleAxis(-angle, axis));
-            }
-
-            // Apply zoom based on the scroll wheel delta.
-            if (input.wheelDelta != 0.0f)
-            {
-                auto radius = cam.controller.trackBall.radius - input.wheelDelta;
-                cam.controller.trackBall.radius = glm::max(radius, 0.0f);
-            }
-
-            transform.position = cam.controller.trackBall.center +
-                                 cam.controller.trackBall.radius * (transform.rotation * glm::vec3(0.0f, 0.0f, 1.0f));
-        }
-
-        void easeCamera(Camera &cam, float deltaTime)
-        {
-            const float easingSpeed = cam.controller.easingSpeed;
-            // Easing between (nearly) equal values still rounds by an amount that depends on deltaTime, so a
-            // camera at rest would move by float noise every frame. Close enough, it snaps to the target (B24).
-            const glm::quat remaining = glm::conjugate(cam.transform.rotation) * cam.targetTransform.rotation;
-            const bool settled = glm::length(cam.targetTransform.position - cam.transform.position) <= 1e-6f * glm::max(1.0f, glm::length(cam.targetTransform.position)) &&
-                                 glm::length(glm::vec3(remaining.x, remaining.y, remaining.z)) <= 1e-6f &&
-                                 glm::length(cam.targetTransform.scale - cam.transform.scale) <= 1e-6f;
-            if (easingSpeed <= 0.0f || deltaTime <= 0.0f || settled)
-            {
-                cam.transform = cam.targetTransform;
-                return;
-            }
-
-            // Exponential smoothing is frame-rate independent.
-            const float t = 1.0f - std::exp(-easingSpeed * deltaTime);
-            cam.transform.rotation = glm::normalize(glm::slerp(cam.transform.rotation, cam.targetTransform.rotation, t));
-            cam.transform.scale = glm::mix(cam.transform.scale, cam.targetTransform.scale, t);
-
-            if (cam.controller.type == CameraController::Type::TRACK_BALL)
-            {
-                // Keep the camera on the orbit sphere while its rotation eases.
-                // Linearly interpolating the position would cut across the arc and
-                // make the camera drift closer to the orbit center.
-                const auto &trackBall = cam.controller.trackBall;
-                const float currentRadius = glm::length(cam.transform.position - trackBall.center);
-                const float radius = glm::mix(currentRadius, trackBall.radius, t);
-                cam.transform.position = trackBall.center +
-                                         radius * (cam.transform.rotation * glm::vec3(0.0f, 0.0f, 1.0f));
-            }
-            else
-            {
-                cam.transform.position = glm::mix(cam.transform.position, cam.targetTransform.position, t);
-            }
-        }
-
         void setProjectionAspect(CameraProjection &projection, float aspect)
         {
             if (projection.type == CameraProjection::Type::PERSPECTIVE)
@@ -258,14 +113,13 @@ namespace rasm
         registry.cameras.resize(registry.cameraHandles.size());
         registry.cameras[handle.index] = Camera{
             .projection = projection,
-            .controller = CameraController{.type = CameraController::Type::TRACK_BALL,
-                                           .trackBall = {
-                                               .radius = radius,
-                                               .center = transform.position + forward * radius,
-                                               .orbitSensitivity = 1.0f,
-                                           }},
-            .transform = transform,
-            .targetTransform = transform,
+            .rig = createCameraRig(CameraController{.type = CameraController::Type::TRACK_BALL,
+                                                    .trackBall = {
+                                                        .radius = radius,
+                                                        .center = transform.position + forward * radius,
+                                                        .orbitSensitivity = 1.0f,
+                                                    }},
+                                   transform),
         };
 
         return handle;
@@ -296,9 +150,9 @@ namespace rasm
             return;
         }
 
-        auto &cam = registry.cameras[camera.index];
-        cam.transform = transform;
-        cam.targetTransform = transform;
+        auto &rig = registry.cameras[camera.index].rig;
+        rig.transform = transform;
+        rig.targetTransform = transform;
     }
 
     void Engine::setCameraProjection(CameraHandle camera, CameraProjection projection)
@@ -322,21 +176,9 @@ namespace rasm
             return;
         }
 
-        auto &cam = registry.cameras[camera.index];
-
-        // Start the new controller from the current rendered pose.
-        cam.targetTransform = cam.transform;
-
-        if (controller.type == CameraController::Type::FREE_FLY)
-        {
-            // Seed the free-fly angles from the current orientation so switching
-            // controllers does not snap the view. Roll is intentionally discarded.
-            const glm::vec3 forward = cam.transform.rotation * glm::vec3(0.0f, 0.0f, -1.0f);
-            controller.freeFly.pitch = std::asin(glm::clamp(forward.y, -1.0f, 1.0f));
-            controller.freeFly.yaw = std::atan2(-forward.x, -forward.z);
-        }
-
-        cam.controller = controller;
+        // The new controller starts from the rendered pose.
+        auto &rig = registry.cameras[camera.index].rig;
+        rig = createCameraRig(controller, rig.transform);
     }
 
     void Engine::setCameraExposure(CameraHandle camera, float exposure)
@@ -412,7 +254,7 @@ namespace rasm
             return CameraController{};
         }
 
-        return registry.cameras[camera.index].controller;
+        return registry.cameras[camera.index].rig.controller;
     }
 
     Transform Engine::getCameraTransform(CameraHandle camera)
@@ -423,7 +265,7 @@ namespace rasm
             return Transform{};
         }
 
-        return registry.cameras[camera.index].transform;
+        return registry.cameras[camera.index].rig.transform;
     }
 
     CameraProjection Engine::getCameraProjection(CameraHandle camera)
@@ -477,7 +319,7 @@ namespace rasm
             return glm::mat4(1.0f);
         }
 
-        auto &transform = registry.cameras[camera.index].transform;
+        const auto &transform = registry.cameras[camera.index].rig.transform;
 
         // Compute the view matrix from the camera's world transform.
         // The view matrix is the inverse of the camera's world transform.
@@ -496,18 +338,7 @@ namespace rasm
             return;
         }
 
-        auto &cam = registry.cameras[camera.index];
-
-        if (cam.controller.type == CameraController::Type::FREE_FLY)
-        {
-            updateFreeFlyCamera(cam, input);
-        }
-        else
-        {
-            updateTrackballCamera(cam, input);
-        }
-
-        easeCamera(cam, input.deltaTime);
+        updateCameraRig(registry.cameras[camera.index].rig, input);
     }
 
 }
