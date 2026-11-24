@@ -42,6 +42,7 @@ if (RASM_C_API)
                 PRE_EXCLUDE_REGEXES "^api-ms-" "^ext-ms-"
                 POST_EXCLUDE_REGEXES ${rasm_system_libraries}
                 DIRECTORIES ${rasm_vcpkg_libraries}
+            FRAMEWORK DESTINATION "${CMAKE_INSTALL_LIBDIR}"
             FILE_SET HEADERS)
     install(EXPORT rasmCTargets NAMESPACE rasm:: DESTINATION "${RASM_INSTALL_CONFIG_DIR}")
     # An absolute RASM_SHADER_DIR is where the libraries look, wherever they are: nothing goes beside them then.
