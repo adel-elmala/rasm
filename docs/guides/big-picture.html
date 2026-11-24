@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Big Picture · RASM</title>
 <meta name="description" content="The first stop of the engine tour: the layers of RASM from the application down to Vulkan, the source folders, public and private headers, who owns which object, creation dedup, how scenes, entities, meshes and materials relate, and which example shows what.">
-<meta name="rasm-sources" content="include/rasm/rasm.h include/rasm/renderer.h include/rasm/engine.h src/engine.cpp include/rasm/handle.h include/rasm/types.h include/rasm/entity.h include/rasm/scene.h include/rasm/mesh.h include/rasm/material.h include/rasm/light.h include/rasm/camera.h include/rasm/transform.h include/rasm/window.h include/rasm/render/renderContext.h include/rasm/render/renderGraph.h include/rasm/render/resource.h src/renderer/renderer.cpp src/core/handle.cpp src/rhi/renderContext.cpp src/rhi/resource.cpp src/rhi/textureStates.h src/rhi/textureStates.cpp src/rhi/device.h src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.h src/rhi/vulkan/vulkanTypes.h src/scene/scene.cpp src/scene/entity.cpp src/scene/camera.cpp src/scene/light.cpp src/assets/mesh.cpp src/assets/meshLod.cpp src/assets/material.cpp src/assets/texture.cpp src/renderer/gpuScene.h src/renderer/viewGraph.h src/renderer/viewGraph.cpp src/renderer/renderGraph.cpp src/CMakeLists.txt examples/CMakeLists.txt examples/00_hello_scene/main.cpp examples/01_render_graph/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp examples/04_compute/main.cpp examples/05_city/main.cpp examples/06_shadows/main.cpp examples/21_renderer/main.cpp include/rasm/assetLoader.h src/renderer/loadHooks.h src/thirdparty_loaders_impl.cpp cmake/rasmConfig.cmake.in cmake/RasmExample.cmake">
+<meta name="rasm-sources" content="include/rasm/rasm_c.h examples/22_c_api/main.c include/rasm/rasm.h include/rasm/renderer.h include/rasm/engine.h src/engine.cpp include/rasm/handle.h include/rasm/types.h include/rasm/entity.h include/rasm/scene.h include/rasm/mesh.h include/rasm/material.h include/rasm/light.h include/rasm/camera.h include/rasm/transform.h include/rasm/window.h include/rasm/render/renderContext.h include/rasm/render/renderGraph.h include/rasm/render/resource.h src/renderer/renderer.cpp src/core/handle.cpp src/rhi/renderContext.cpp src/rhi/resource.cpp src/rhi/textureStates.h src/rhi/textureStates.cpp src/rhi/device.h src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.h src/rhi/vulkan/vulkanTypes.h src/scene/scene.cpp src/scene/entity.cpp src/scene/camera.cpp src/scene/light.cpp src/assets/mesh.cpp src/assets/meshLod.cpp src/assets/material.cpp src/assets/texture.cpp src/renderer/gpuScene.h src/renderer/viewGraph.h src/renderer/viewGraph.cpp src/renderer/renderGraph.cpp src/CMakeLists.txt examples/CMakeLists.txt examples/00_hello_scene/main.cpp examples/01_render_graph/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp examples/04_compute/main.cpp examples/05_city/main.cpp examples/06_shadows/main.cpp examples/21_renderer/main.cpp include/rasm/assetLoader.h src/renderer/loadHooks.h src/thirdparty_loaders_impl.cpp cmake/rasmConfig.cmake.in cmake/RasmExample.cmake">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -64,7 +64,7 @@
 <p>Each layer only talks to the one under it. The arrows show what crosses each boundary: handles at the top, <code>rhi::</code> pointers in the middle, native Vulkan calls at the bottom.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 460" role="img" aria-label="Application calls Renderer (or Engine) with handles, or runs its own RenderGraph. Renderer and RenderGraph call RenderContext. RenderContext calls rhi::Device through rhi pointers. VulkanDevice implements rhi::Device and calls Vulkan, which runs on the GPU.">
+  <svg viewBox="0 0 760 460" role="img" aria-label="Application calls Renderer (or Engine) with handles, or runs its own RenderGraph. A C, Python, C# or Rust program calls the C API instead, which calls the Renderer. Renderer and RenderGraph call RenderContext. RenderContext calls rhi::Device through rhi pointers. VulkanDevice implements rhi::Device and calls Vulkan, which runs on the GPU.">
     <rect x="150" y="16" width="250" height="48" rx="6" class="box"/>
     <text x="275" y="36" class="mid title">Application</text>
     <text x="275" y="54" class="mid mono">examples/NN_name/main.cpp</text>
@@ -108,6 +108,10 @@
 
     <text x="430" y="36" class="small">Creates objects and gets handles back.</text>
     <text x="430" y="52" class="small">Calls render(), or runs its own render graph.</text>
+
+    <rect x="430" y="64" width="310" height="28" rx="6" class="shader"/>
+    <text x="585" y="82" class="mid small">C API (rasm/rasm_c.h, src/c/): C, Python, C#, Rust</text>
+    <line x1="430" y1="80" x2="404" y2="98" class="arrow" marker-end="url(#ah)"/>
     <text x="430" y="114" class="small">CPU objects in its registry, the frame loop,</text>
     <text x="430" y="130" class="small">asset loads, the GPU scene tables, scene passes.</text>
     <text x="430" y="192" class="small">Handle → rhi object tables, dedup caches, the</text>
@@ -200,6 +204,7 @@
   <tr><td>a window, input and file loading made for you</td><td><code>Engine</code> with <code>PlatformType::SDL</code> (link <code>rasm::rasm</code>)</td><td><code>examples/00_hello_scene</code></td></tr>
   <tr><td>to draw into your own window, with your event loop, and load files</td><td><code>Renderer</code> with <code>RendererConfig::nativeWindow</code>, and an <code>AssetLoader</code> (link <code>rasm::rasm</code>)</td><td><code>examples/19_embedding</code></td></tr>
   <tr><td>images only, from your own data (a server, thumbnails, tests)</td><td><code>Renderer</code> with no <code>nativeWindow</code> (link only <code>rasm::renderer</code>: no SDL3, no file libraries)</td><td><code>examples/21_renderer</code></td></tr>
+  <tr><td>RASM from C, or from Python, C#, Rust or Zig</td><td>the C API, <code>rasm/rasm_c.h</code>: the shared library <code>rasm_c</code> (<code>rasm::c</code>), or <code>rasm_c_renderer</code> for the renderer alone (<a href="../api/c-api.html">C API</a>, <a href="stable-c-abi.html">A stable C ABI</a>)</td><td><code>examples/22_c_api</code></td></tr>
 </table>
 </div>
 
@@ -210,7 +215,7 @@
 <p>The map shows the four groups of folders. The table under it lists the main files of each.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 346" role="img" aria-label="A map of the repository. Public: include/rasm and include/rasm/render, the headers applications include. Private: the src folders core, platform, assets, scene, renderer, rhi and rhi/vulkan. Shaders: shaders/lib and shaders/passes, compiled at run time. Programs: examples and tests. The programs include the public headers; the tests also have src on their include path.">
+  <svg viewBox="0 0 760 372" role="img" aria-label="A map of the repository. Public: include/rasm and include/rasm/render, the headers applications include. Private: the src folders core, platform, assets, scene, renderer, rhi, rhi/vulkan and c. Shaders: shaders/lib and shaders/passes, compiled at run time. Programs: examples and tests. The programs include the public headers; the tests also have src on their include path.">
     <rect x="20" y="14" width="330" height="92" rx="8" class="zone"/>
     <text x="36" y="36" class="title">public · what applications include</text>
     <rect x="36" y="46" width="150" height="22" rx="4" class="cpu"/><text x="44" y="62" class="mono">include/rasm/</text>
@@ -218,7 +223,7 @@
     <rect x="36" y="74" width="150" height="22" rx="4" class="cpu"/><text x="44" y="90" class="mono">include/rasm/render/</text>
     <text x="194" y="89" class="small">the low-level API</text>
 
-    <rect x="20" y="116" width="330" height="216" rx="8" class="zone"/>
+    <rect x="20" y="116" width="330" height="242" rx="8" class="zone"/>
     <text x="36" y="138" class="title">private · src/</text>
     <rect x="36" y="148" width="120" height="22" rx="4" class="box"/><text x="44" y="164" class="mono">src/core/</text>
     <text x="164" y="163" class="small">handle manager, file reading</text>
@@ -234,6 +239,8 @@
     <text x="164" y="293" class="small">RenderContext, rhi::Device</text>
     <rect x="36" y="304" width="120" height="22" rx="4" class="box"/><text x="44" y="320" class="mono">src/rhi/vulkan/</text>
     <text x="164" y="319" class="small">the Vulkan backend</text>
+    <rect x="36" y="330" width="120" height="22" rx="4" class="box"/><text x="44" y="346" class="mono">src/c/</text>
+    <text x="164" y="345" class="small">the C API's shared libraries</text>
 
     <rect x="410" y="14" width="330" height="92" rx="8" class="zone"/>
     <text x="426" y="36" class="title">shaders · compiled at run time</text>
@@ -271,9 +278,10 @@
   <tr><td><code>src/renderer/</code></td><td>GPU scene tables, the scene passes, the tone-map pass, the graph behind <code>render</code>, frame stats, overlay, render graph, shader compiler, GPU structs</td><td><code>gpuScene.cpp</code>, <code>viewGraph.cpp</code>, <code>gpuTable.cpp</code>, <code>geometryPool.cpp</code>, <code>shaderCompiler.cpp</code></td></tr>
   <tr><td><code>src/rhi/</code></td><td><code>RenderContext</code>, the <code>rhi::Device</code> interface, uploads, texture layouts</td><td><code>renderContext.cpp</code>, <code>device.h</code>, <code>uploadManager.cpp</code>, <code>textureStates.cpp</code></td></tr>
   <tr><td><code>src/rhi/vulkan/</code></td><td>the Vulkan backend</td><td><code>vulkanDevice.cpp</code>, <code>vulkanCommandBuffer.cpp</code>, <code>vulkanSwapchain.cpp</code>, <code>vulkanQueue.cpp</code></td></tr>
+  <tr><td><code>src/c/</code></td><td>the C API (<code>include/rasm/rasm_c.h</code>): thin functions over <code>Renderer</code>, <code>Engine</code> and <code>AssetLoader</code>, built into the shared libraries <code>rasm_c</code> and <code>rasm_c_renderer</code></td><td><code>cApi.cpp</code>, <code>cRenderer.cpp</code>, <code>cScene.cpp</code>, <code>cLoader.cpp</code></td></tr>
   <tr><td><code>shaders/lib/</code>, <code>shaders/passes/</code></td><td>Slang modules and pass entry points, compiled at run time</td><td><code>core.slang</code>, <code>rasm.slang</code>, <code>cull.slang</code>, <code>hiz.slang</code></td></tr>
   <tr><td><code>examples/</code></td><td>one program per feature (<a href="#examples">section 7</a>)</td><td><code>examples/05_city/main.cpp</code>, <code>examples/CMakeLists.txt</code></td></tr>
-  <tr><td><code>tests/</code></td><td><code>rasm_tests</code>: doctest unit tests of CPU code, no GPU</td><td><code>handleTests.cpp</code>, <code>renderGraphTests.cpp</code>, <code>textureStatesTests.cpp</code></td></tr>
+  <tr><td><code>tests/</code></td><td><code>rasm_tests</code>: doctest unit tests of CPU code, no GPU; <code>rasm_c_tests</code> and the C header checks, which use the C API's shared libraries</td><td><code>handleTests.cpp</code>, <code>renderGraphTests.cpp</code>, <code>textureStatesTests.cpp</code></td></tr>
 </table>
 </div>
 

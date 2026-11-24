@@ -37,7 +37,7 @@ ctest --preset x64-debug                               # unit tests
 cmake --install build\x64-debug                        # into install/, for find_package(rasm)
 ```
 
-- Requires `VCPKG_ROOT`; presets use Ninja + `clang++`. Options: `-DRASM_ENABLE_AVX2=ON` (x86 only), `-DRASM_IMGUI=OFF` (no Dear ImGui), `-DRASM_BUILD_EXAMPLES=OFF`, `-DRASM_BUILD_TESTS=OFF`, `-DRASM_INSTALL=OFF`, `-DRASM_SHADER_DIR=<path>`.
+- Requires `VCPKG_ROOT`; presets use Ninja + `clang` / `clang++`. Options: `-DRASM_ENABLE_AVX2=ON` (x86 only), `-DRASM_IMGUI=OFF` (no Dear ImGui), `-DRASM_C_API=OFF` (no C API libraries), `-DRASM_BUILD_EXAMPLES=OFF`, `-DRASM_BUILD_TESTS=OFF`, `-DRASM_INSTALL=OFF`, `-DRASM_SHADER_DIR=<path>`.
 - A new dependency linked to `rasm_renderer` or `rasm`, PUBLIC or PRIVATE, also needs a `find_dependency` line in `cmake/rasmConfig.cmake.in`, in that target's part (the `renderer` component, or `rasm`): both are static, so consumers link it too. `rasm_renderer` never links SDL3, tinygltf, tinyobjloader or libktx (`examples/21_renderer` links only it).
 - Run `clang-format -i <file>` on `.cpp` files you change. It keeps line breaks (no column limit) and skips `// clang-format off` regions. Every header is wrapped in those guards and hand-aligned in columns, so new headers need them too (see `docs/coding_style.md` section 4).
 - `rasm_tests` (doctest, no GPU) covers CPU-side code only. Verify rendering changes by running the examples with `EngineConfig::enableValidation = true` — a change that adds validation messages is not done. Run them headless (`--headless --frames N --out <png>`, which `verify-change` does), so no window opens.
@@ -59,7 +59,7 @@ Then run `clang-format -i` on the new `.cpp` files and build. CMake reconfigures
 ## Layout
 
 - `include/rasm/` is the public API, with the low-level API in `include/rasm/render/`.
-- `src/` is private: `core/`, `platform/`, `assets/`, `scene/`, `renderer/`, `rhi/` (+ `rhi/vulkan/`). `src/thirdparty_impl.cpp` (the renderer's) and `src/thirdparty_loaders_impl.cpp` (the loaders') are the only files that define `*_IMPLEMENTATION` macros.
+- `src/` is private: `core/`, `platform/`, `assets/`, `scene/`, `renderer/`, `rhi/` (+ `rhi/vulkan/`), and `c/`, the C API (`include/rasm/rasm_c.h`) built into the shared libraries `rasm_c` and `rasm_c_renderer`. `src/thirdparty_impl.cpp` (the renderer's) and `src/thirdparty_loaders_impl.cpp` (the loaders') are the only files that define `*_IMPLEMENTATION` macros.
 - `tests/` links `rasm::rasm` like any application. It also has `src/` on its include path, only to test private classes against a fake `rhi::Device` (see `tests/uploadManagerTests.cpp`).
 - Private headers are included relative to `src/` (e.g. `"rhi/vulkan/vulkanDevice.h"`). `src/` is a PRIVATE include directory, so public headers can't include private ones; forward-declare, or use a private `Impl` like `RenderContext` does.
 
@@ -79,3 +79,4 @@ Then run `clang-format -i` on the new `.cpp` files and build. CMake reconfigures
 - GPU scene tables (instances, materials, draw lists) have one buffer per frame slot and are only written in `syncGpuScene`, after that slot's fence wait. Change rows through `GpuTable::setRow` (or mark a draw list for rebuild); never write a slot's buffer from anywhere else.
 - Color/emissive textures use an sRGB format and normal/metallic-roughness/AO a UNORM one: `R8G8B8A8_SRGB` / `R8G8B8A8_UNORM` for images; for KTX2 the slot picks the sRGB or UNORM block format. Shaders output linear color.
 - Library config macros (`GLM_FORCE_*`, `VMA_*`) belong in CMake, not in a `.cpp` after headers were included.
+- `include/rasm/rasm_c.h` is a stable ABI: within a major version only add at the end (functions, enum constants, fields of a struct that starts with `size`), and bump `RASM_C_API_VERSION_MINOR`. A C++ enum value or config field that C shows changes its C constant (and `static_assert` in `src/c/cApi.cpp`), its `toC`/`toCpp` conversion and `tests/c_api/ctypes_smoke.py` together. Every C entry point is a function try block ending in `RASM_C_CATCH`.

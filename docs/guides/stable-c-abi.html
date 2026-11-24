@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A Stable C ABI · RASM</title>
+<meta name="description" content="Why a C++ library has no stable binary interface, and how a C facade gives one: extern C, opaque pointers, handles as integers, fixed-size types, structs with a size field, error codes instead of exceptions, clear memory ownership, exported symbols, version rules, and how RASM does it.">
+<meta name="rasm-sources" content="include/rasm/rasm_c.h src/c/cApi.h src/c/cApi.cpp src/c/cRenderer.cpp src/c/cScene.cpp src/c/cLoader.cpp include/rasm/handle.h src/core/handle.cpp src/platform/paths.cpp src/CMakeLists.txt cmake/RasmInstall.cmake examples/22_c_api/main.c tests/cApiTests.cpp tests/cApiHandleTests.cpp tests/c_api/ctypes_smoke.py tools/check_install.py">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/stable-c-abi.js"></script>
+</head>
+<body data-root="../" data-page="guides/stable-c-abi.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Foundations</p>
+<h1>A stable C ABI</h1>
+<p class="lead">A program compiled today should keep working with the library built next year, and a Python script should call a library written in C++. Both need a <b>stable ABI</b>: a binary interface whose rules do not change. C++ does not give one; C does. This page explains why, and the small set of rules a C facade over a C++ library follows. The <a href="#in-rasm">last part</a> shows RASM's.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>The <b>API</b> is what the source code sees; the <b>ABI</b> is what the machine code sees: symbol names, the layout of every struct, how arguments travel, who frees what.</li>
+    <li>C++ types (<code>std::string</code>, classes, exceptions, templates) have layouts and names that differ between compilers and versions. C has one plain layout per platform, which every language can call.</li>
+    <li>A C facade hides objects behind <b>opaque pointers</b> and names them by <b>integer handles</b>; it uses only <b>fixed-size</b> types.</li>
+    <li>A struct that may grow starts with its <b>size</b>, so an old program and a new library agree on what each one knows.</li>
+    <li>No exception crosses the line: errors become <b>codes</b> and a per-thread <b>last error</b>.</li>
+    <li>Memory stays with whoever made it: inputs are borrowed for the call, outputs go into the caller's buffers.</li>
+    <li>A version number and the rule "only add at the end" keep old binaries working.</li>
+  </ul>
+</div>
+
+<h2 id="problem"><span class="n">1</span>The problem: C++ has no stable ABI</h2>
+
+<p>A C++ library compiled into a shared library exposes its machine-level interface. Four parts of it change from one compiler, standard library or library version to the next.</p>
+
+<div class="vgrid two">
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The same function gets a different symbol name from two compilers: one Itanium style, one MSVC style.">
+      <text x="120" y="22" class="mid mono">void load(std::string)</text>
+      <line x1="120" y1="30" x2="60" y2="62" class="arrow" marker-end="url(#ah)"/>
+      <line x1="120" y1="30" x2="180" y2="62" class="arrow" marker-end="url(#ah)"/>
+      <rect x="6" y="66" width="108" height="30" rx="4" class="bad"/><text x="60" y="86" class="mid mono small">_Z4loadNSt7...</text>
+      <rect x="126" y="66" width="108" height="30" rx="4" class="bad"/><text x="180" y="86" class="mid mono small">?load@@YAXV...</text>
+      <text x="120" y="118" class="mid small">clang/gcc vs MSVC</text>
+    </svg>
+    <h4>Mangled names</h4>
+    <p>C++ encodes the parameter types into the symbol name, and each compiler family encodes them its own way. A C function is just its name.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="std::string is 32 bytes in one standard library and 24 in another, with fields in a different order.">
+      <text x="10" y="22" class="small">std::string, MSVC STL: 32 B</text>
+      <rect x="10" y="30" width="110" height="24" class="mem"/><text x="65" y="46" class="mid small">buffer / ptr</text>
+      <rect x="120" y="30" width="55" height="24" class="mem o-50"/><text x="147" y="46" class="mid small">size</text>
+      <rect x="175" y="30" width="55" height="24" class="mem o-50"/><text x="202" y="46" class="mid small">cap</text>
+      <text x="10" y="78" class="small">libc++: 24 B, another order</text>
+      <rect x="10" y="86" width="55" height="24" class="mem o-50"/><text x="37" y="102" class="mid small">cap</text>
+      <rect x="65" y="86" width="55" height="24" class="mem o-50"/><text x="92" y="102" class="mid small">size</text>
+      <rect x="120" y="86" width="55" height="24" class="mem"/><text x="147" y="102" class="mid small">ptr</text>
+    </svg>
+    <h4>Standard library layouts</h4>
+    <p>A <code>std::string</code> or <code>std::vector</code> passed across the line must have the same layout on both sides. It does not between MSVC's STL, libc++ and libstdc++, or between debug and release.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An exception thrown in the library unwinds into the caller's frames; a Python or C caller cannot catch it and the process ends.">
+      <rect x="20" y="14" width="200" height="28" rx="4" class="cpu"/><text x="120" y="33" class="mid">library: throw</text>
+      <line x1="120" y1="42" x2="120" y2="72" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <rect x="20" y="76" width="200" height="28" rx="4" class="bad"/><text x="120" y="95" class="mid">Python / C frame</text>
+      <text x="120" y="122" class="mid small t-bad">no handler: the process ends</text>
+    </svg>
+    <h4>Exceptions</h4>
+    <p>An exception unwinds through the caller's stack frames. A C, Python or Rust caller has no handler for it, and unwinding through foreign frames is undefined.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A class gains a member in version 2; an old program that allocated the class with the version 1 size writes past the end.">
+      <text x="10" y="22" class="small">v1 class, as the program knows it</text>
+      <rect x="10" y="30" width="140" height="24" class="mem"/><text x="80" y="46" class="mid small">a, b</text>
+      <text x="10" y="78" class="small">v2 class, as the library uses it</text>
+      <rect x="10" y="86" width="140" height="24" class="mem"/><text x="80" y="102" class="mid small">a, b</text>
+      <rect x="150" y="86" width="86" height="24" class="bad"/><text x="193" y="102" class="mid small">c: past the end</text>
+    </svg>
+    <h4>Class layouts and vtables</h4>
+    <p>A new member, a new virtual function or an inline method changes sizes and offsets that the caller compiled in. The program and the library then disagree about memory.</p>
+  </div>
+</div>
+
+<p>Rebuilding everything with one compiler hides these problems for a C++ program that links a static library. It does not help a Python script, a C# game or a program shipped last year.</p>
+
+<h2 id="c"><span class="n">2</span>C as the common language</h2>
+
+<p>Every platform has one C calling convention and one C struct layout, written down in its ABI document. Every language can call it: Python's <samp>ctypes</samp>, C#'s P/Invoke, Rust's <code>extern "C"</code>, Zig, Go, Java's FFM. So the library keeps its C++ inside, and offers a <b>facade</b>: a header of plain C functions and structs, compiled with <code>extern "C"</code>, so each function's symbol is just its name.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="Callers in C, Python, C# and Rust call a thin C layer, which checks and converts the arguments, catches exceptions, and calls the C++ engine. Only plain C crosses the line between them.">
+    <rect x="20"  y="20" width="150" height="36" rx="6" class="cpu"/><text x="95"  y="43" class="mid">C</text>
+    <rect x="20"  y="64" width="150" height="36" rx="6" class="cpu"/><text x="95"  y="87" class="mid">Python ctypes</text>
+    <rect x="20"  y="108" width="150" height="36" rx="6" class="cpu"/><text x="95"  y="131" class="mid">C# P/Invoke</text>
+    <rect x="20"  y="152" width="150" height="36" rx="6" class="cpu"/><text x="95"  y="175" class="mid">Rust, Zig</text>
+    <line x1="170" y1="38"  x2="296" y2="96"  class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="170" y1="82"  x2="296" y2="100" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="170" y1="126" x2="296" y2="104" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="170" y1="170" x2="296" y2="108" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="290" y1="10" x2="290" y2="194" class="arrow hot dashed"/>
+    <text x="294" y="190" class="small t-hot">the ABI line: plain C only</text>
+    <rect x="300" y="64" width="200" height="80" rx="6" class="shader"/>
+    <text x="400" y="88" class="mid title">C layer</text>
+    <text x="400" y="106" class="mid small">check, convert, catch</text>
+    <text x="400" y="122" class="mid small">handles ⇄ objects</text>
+    <line x1="500" y1="104" x2="556" y2="104" class="arrow" marker-end="url(#ah)"/>
+    <rect x="560" y="44" width="180" height="120" rx="6" class="gpu"/>
+    <text x="650" y="96" class="mid title">C++ engine</text>
+    <text x="650" y="114" class="mid small">classes, std::, templates</text>
+  </svg>
+  <figcaption>Only C types cross the dashed line. The C++ engine behind it can change as it likes, as long as the C layer keeps the line the same.</figcaption>
+</figure>
+
+<p>The facade is thin: each C function checks its arguments, converts them to C++ types, calls one C++ function and converts the result back. It adds no engine features, so it stays easy to keep in step with the C++ API.</p>
+
+<h2 id="objects"><span class="n">3</span>Objects: opaque pointers and integer handles</h2>
+
+<p>The caller must hold the library's objects without knowing their layout. There are two ways, and a facade often uses both.</p>
+
+<div class="split">
+  <div>
+    <h4>Opaque pointer</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="The header declares struct engine without a body; the caller holds a pointer to it, and only the library knows what is inside.">
+      <rect x="10" y="20" width="130" height="34" rx="4" class="cpu"/><text x="75" y="42" class="mid mono small">engine* e</text>
+      <line x1="140" y1="37" x2="186" y2="37" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <rect x="190" y="12" width="120" height="110" rx="6" class="zone"/>
+      <text x="250" y="32" class="mid small">library only</text>
+      <rect x="200" y="42" width="100" height="22" class="mem o-50"/><rect x="200" y="66" width="100" height="22" class="mem o-50"/><rect x="200" y="90" width="100" height="22" class="mem o-50"/>
+      <text x="75" y="84" class="mid mono small">struct engine;</text>
+      <text x="75" y="102" class="mid small">declared, never defined</text>
+    </svg>
+    <p>For a few big, long-lived objects with create and destroy calls. The layout can change freely.</p>
+  </div>
+  <div>
+    <h4>Integer handle</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="A 64-bit handle id: the generation in the high 32 bits, the slot index in the low 32 bits.">
+      <rect x="10"  y="30" width="150" height="34" class="gpu"/><text x="85"  y="52" class="mid">generation</text>
+      <rect x="160" y="30" width="150" height="34" class="cpu"/><text x="235" y="52" class="mid">index</text>
+      <text x="10" y="22" class="small mono">63</text><text x="160" y="22" class="small mono">31</text><text x="310" y="22" class="end small mono">0</text>
+      <text x="160" y="92" class="mid mono small">id = generation &lt;&lt; 32 | index</text>
+      <text x="160" y="112" class="mid small">0: no object (generations start at 1)</text>
+    </svg>
+    <p>For the many small objects: meshes, lights, entities. A plain 64-bit number, so any language can store, compare and hash it.</p>
+  </div>
+</div>
+
+<p>A handle is a <a href="generational-handles.html">generational handle</a> packed into one integer. The generation must fit in its bits, so the table must stop reusing a slot before its generation passes 32 bits: <b>retiring</b> the slot costs one slot in four billion reuses. Wrapped in a one-field struct per object type, <code>{ uint64_t id; }</code>, the handle is still 8 bytes in a register, but C stops you from passing a light where a mesh is wanted.</p>
+
+<h2 id="types"><span class="n">4</span>Only fixed-size types</h2>
+
+<div class="vgrid">
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An enum as a typedef of uint32_t with constants: always 4 bytes.">
+      <text x="120" y="30" class="mid mono small">typedef uint32_t format;</text>
+      <text x="120" y="52" class="mid mono small">enum { FORMAT_RGBA8 = 1 };</text>
+      <rect x="70" y="72" width="100" height="30" class="mem"/><text x="120" y="92" class="mid">4 bytes</text>
+    </svg>
+    <h4>Enums</h4>
+    <p>A C <code>enum</code> may be 1, 2 or 4 bytes. A <code>uint32_t</code> with constants has one size, and each constant a fixed value.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A boolean as a uint32_t: 4 bytes in every language, where C99 bool is 1 byte and C# marshals bool as 4.">
+      <rect x="20" y="30" width="40" height="30" class="bad"/><text x="40" y="50" class="mid">1</text><text x="40" y="78" class="mid small">C bool</text>
+      <rect x="90" y="30" width="130" height="30" class="mem"/><text x="155" y="50" class="mid">4 bytes</text><text x="155" y="78" class="mid small">uint32_t bool</text>
+      <text x="120" y="112" class="mid small">like VkBool32</text>
+    </svg>
+    <h4>Booleans</h4>
+    <p>C99 <code>bool</code> is one byte, but C# marshals a <code>bool</code> as four. A <code>uint32_t</code> is the same everywhere.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A string as a pointer to UTF-8 bytes ending in zero; an array as a pointer and a count.">
+      <rect x="10" y="24" width="30" height="26" class="cpu"/><text x="25" y="42" class="mid small">p</text>
+      <line x1="40" y1="37" x2="66" y2="37" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <rect x="70" y="24" width="150" height="26" class="mem"/><text x="145" y="42" class="mid mono small">h e l l o \0</text>
+      <rect x="10" y="74" width="30" height="26" class="cpu"/><text x="25" y="92" class="mid small">p</text>
+      <rect x="44" y="74" width="30" height="26" class="cpu"/><text x="59" y="92" class="mid small">n</text>
+      <line x1="74" y1="87" x2="96" y2="87" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <rect x="100" y="74" width="120" height="26" class="mem"/><text x="160" y="92" class="mid small">n items</text>
+    </svg>
+    <h4>Strings and arrays</h4>
+    <p>A UTF-8 <code>const char*</code> instead of a string class; a pointer and a count instead of a vector.</p>
+  </div>
+</div>
+
+<p>Structs hold only fixed-size fields and pointers, so their layout is the platform's C layout. A binding copies the fields in order (Python's <code>ctypes.Structure</code>, C#'s <code>[StructLayout(Sequential)]</code>, Rust's <code>#[repr(C)]</code>) and gets the same bytes. The calling convention is fixed too: on 32-bit Windows a macro spells out <code>__cdecl</code>; everywhere else there is only one C convention.</p>
+
+<h2 id="growth"><span class="n">5</span>Structs that grow</h2>
+
+<p>A config struct gets new fields over the years. If the library simply used its new, bigger struct, an old program's smaller one would be read past its end. The fix, used by Win32 (<samp>cbSize</samp>) and Vulkan (<code>sType</code>), is a <b>size field</b>: the caller sets it to <code>sizeof</code> the struct its header knows.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="Version 1.0 of a struct has size, a and b. Version 1.1 adds c at the end. An old program passes size 12; a new library reads a and b from it and gives c its default. A new program passes size 16 to an old library, which knows only a and b.">
+    <text x="20" y="22" class="title">old program (1.0) → new library (1.1)</text>
+    <rect x="20"  y="32" width="90" height="30" class="mem"/><text x="65"  y="52" class="mid mono">size=12</text>
+    <rect x="110" y="32" width="90" height="30" class="mem"/><text x="155" y="52" class="mid mono">a</text>
+    <rect x="200" y="32" width="90" height="30" class="mem"/><text x="245" y="52" class="mid mono">b</text>
+    <line x1="245" y1="62" x2="245" y2="84" class="arrow ok" marker-end="url(#ah-ok)"/>
+    <line x1="155" y1="62" x2="155" y2="84" class="arrow ok" marker-end="url(#ah-ok)"/>
+    <rect x="20"  y="88" width="90" height="30" class="cpu"/><text x="65"  y="108" class="mid mono">size</text>
+    <rect x="110" y="88" width="90" height="30" class="cpu"/><text x="155" y="108" class="mid mono">a</text>
+    <rect x="200" y="88" width="90" height="30" class="cpu"/><text x="245" y="108" class="mid mono">b</text>
+    <rect x="290" y="88" width="90" height="30" class="gpu"/><text x="335" y="108" class="mid mono">c = default</text>
+    <text x="200" y="140" class="mid small">the library reads 12 bytes; c was not in 1.0</text>
+
+    <text x="420" y="22" class="title">new program (1.1) → old library (1.0)</text>
+    <rect x="420" y="32" width="70" height="30" class="mem"/><text x="455" y="52" class="mid mono">16</text>
+    <rect x="490" y="32" width="70" height="30" class="mem"/><text x="525" y="52" class="mid mono">a</text>
+    <rect x="560" y="32" width="70" height="30" class="mem"/><text x="595" y="52" class="mid mono">b</text>
+    <rect x="630" y="32" width="70" height="30" class="bad"/><text x="665" y="52" class="mid mono">c</text>
+    <line x1="665" y1="62" x2="665" y2="84" class="arrow bad" marker-end="url(#ah-bad)"/>
+    <rect x="560" y="88" width="180" height="30" rx="4" class="bad"/><text x="650" y="108" class="mid small">the library has no c</text>
+    <text x="580" y="140" class="mid small">so creation refuses: a newer minor version</text>
+    <text x="380" y="186" class="mid small">A get call writes only the caller's size; an update keeps the fields past it.</text>
+  </svg>
+  <figcaption>An old program with a new library works: what it does not know takes the default. A new program with an old library would set options the library ignores, so the library refuses it at the version check (section 8).</figcaption>
+</figure>
+
+<p>Three kinds of call read the size differently:</p>
+<ul>
+  <li><b>Create</b>: fields past the caller's size take their defaults.</li>
+  <li><b>Update</b>: fields past it keep the object's current values, so an old program does not reset a new setting it never saw.</li>
+  <li><b>Get</b>: the library writes only up to the caller's size.</li>
+</ul>
+<p>An init function fills a struct with the library's defaults and sets the size: one call, and a binding gets the same defaults as C. In an array of sized structs, every element must have the first one's size, because the library steps through the array by it. Small value structs (a vector, a matrix) never grow: changing one would mean a new struct and new functions.</p>
+
+<figure class="lab" data-lab="struct-versions" data-title="Old programs, new libraries">
+  <figcaption>Pick the header the program was built with, the library it runs with, and the kind of call. Find the pair the library must refuse.</figcaption>
+</figure>
+
+<h2 id="errors"><span class="n">6</span>Errors without exceptions</h2>
+
+<ol class="flow">
+  <li class="cpu"><b>Check</b> every pointer, size and enum value at the line: a bad argument is a code, never a crash.</li>
+  <li class="shader"><b>Call</b> the C++ code inside <code>try</code>.</li>
+  <li class="gpu"><b>Catch</b> every exception: out of memory becomes its own code, anything else an internal error.</li>
+  <li class="mem"><b>Record</b> the message as the thread's last error, and return the code.</li>
+</ol>
+
+<p>A function returns an integer code (0 for success, negative for an error), or a 0 handle when it creates something. The message goes into a <b>last error</b> string kept per thread, like <samp>errno</samp>: two threads never overwrite each other's message. A logging callback lets a binding route the library's log into its own; it may run on any thread the library logs from, so it must be thread-safe.</p>
+
+<h2 id="memory"><span class="n">7</span>Who owns which memory</h2>
+
+<p>Two sides with two allocators must never free each other's memory: a C runtime's <code>free</code> on memory from another runtime's <code>malloc</code> corrupts both heaps. So each side frees only what it allocated.</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Input: the caller's buffer is read during the call and stays the caller's.">
+      <rect x="20" y="40" width="80" height="44" rx="4" class="cpu"/><text x="60" y="66" class="mid">caller</text>
+      <rect x="140" y="40" width="80" height="44" rx="4" class="shader"/><text x="180" y="66" class="mid">library</text>
+      <line x1="100" y1="62" x2="137" y2="62" class="arrow" marker-end="url(#ah)"/>
+      <text x="120" y="112" class="mid small">read during the call</text>
+    </svg>
+    <h4>In: borrowed</h4>
+    <p>Strings, arrays and structs are read during the call only. The library copies what it keeps.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Output: the library writes into a buffer the caller made, up to its capacity.">
+      <rect x="20" y="40" width="80" height="44" rx="4" class="cpu"/><text x="60" y="58" class="mid">caller's</text><text x="60" y="74" class="mid">buffer</text>
+      <rect x="140" y="40" width="80" height="44" rx="4" class="shader"/><text x="180" y="66" class="mid">library</text>
+      <line x1="137" y1="62" x2="100" y2="62" class="arrow" marker-end="url(#ah)"/>
+      <text x="120" y="112" class="mid small">writes up to capacity</text>
+    </svg>
+    <h4>Out: the caller's buffer</h4>
+    <p>The <code>snprintf</code> rule: write what fits, return the full length. Call once with no buffer to learn the size.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A library object: made by a create call, freed by its destroy call, and the caller only borrows pointers into it.">
+      <rect x="70" y="20" width="100" height="40" rx="4" class="shader"/><text x="120" y="44" class="mid">object</text>
+      <text x="40" y="90" class="mid small">create</text><text x="200" y="90" class="mid small">destroy</text>
+      <line x1="50" y1="78" x2="76" y2="60" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <line x1="164" y1="60" x2="190" y2="78" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <text x="120" y="118" class="mid small">pointers into it: until refilled</text>
+    </svg>
+    <h4>Library objects</h4>
+    <p>Big results (an image) live in an object with create and destroy calls. It can be refilled, so a per-frame result allocates nothing.</p>
+  </div>
+</div>
+
+<h2 id="symbols"><span class="n">8</span>One library, one set of names</h2>
+
+<p>A shared library for bindings is usually built from static libraries, so it holds the whole C++ engine and every dependency. Only the C functions should leave it: everything else is hidden. Windows exports only what is marked <code>__declspec(dllexport)</code>; on macOS a linker list (<code>-exported_symbol,_mylib_*</code>) and on Linux <code>--exclude-libs,ALL</code> with hidden visibility do the same. Hidden symbols cannot clash with another copy of the same third-party library in the host process.</p>
+
+<p>The library must also find its own files. A relative path resolved against the <i>executable</i> points beside <samp>python.exe</samp> under Python. So the library resolves relative paths against <b>its own folder</b> (the module that holds the code: <code>GetModuleHandleExW</code> with an address on Windows, <code>dladdr</code> on POSIX), and its data, such as shaders, is installed beside it.</p>
+
+<h2 id="versions"><span class="n">9</span>Versions</h2>
+
+<div class="callout rule">
+  <strong>Within one major version, only add at the end</strong>
+  <ul>
+    <li>New functions: yes. Changing a function's parameters: no, add a new function.</li>
+    <li>New enum constants: yes, with new values. Renumbering: no.</li>
+    <li>New struct fields: only after the last one, in a struct with a size field.</li>
+    <li>Removing or reordering anything: only in a new major version.</li>
+  </ul>
+</div>
+
+<p>The header carries its version as <code>major &lt;&lt; 16 | minor</code>, and the library reports its own. The creation call takes the caller's version and refuses a different major version, or a newer minor one: that program may call functions or set fields this library does not have. An old minor version is fine; that is what the size fields are for.</p>
+
+<h2 id="pitfalls"><span class="n">10</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>A binding crashes in a call that works from C</dt><dd>Its struct does not match the header: a missing field, a 1-byte <code>bool</code>, a wrong order. Copy every field in order, and test the binding in CI.</dd></div>
+  <div><dt>An old program resets a new setting to zero</dt><dd>An update wrote the whole new struct from the old program's smaller one. Read only the caller's size, and keep the rest.</dd></div>
+  <div><dt>The process aborts with "terminate called"</dt><dd>An exception left a C function. Wrap every entry point in a <code>try</code> that catches everything.</dd></div>
+  <div><dt>A heap corruption on free</dt><dd>One side freed the other side's memory. Pair every create with the library's destroy.</dd></div>
+  <div><dt>The library finds no data files under Python</dt><dd>Relative paths resolved against the executable. Resolve them against the library's own folder.</dd></div>
+  <div><dt>Two copies of a library in one process mix their functions</dt><dd>Both export the same names. Link one, and export only your own prefix.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">11</span>In RASM</h2>
+
+<p>RASM's facade is <code>include/rasm/rasm_c.h</code>, one header over two shared libraries: <code>rasm_c</code> (the renderer, the <code>Engine</code> and the <code>AssetLoader</code>) and <code>rasm_c_renderer</code> (the renderer alone). The C layer is <code>src/c/</code>; the reference is <a href="../api/c-api.html">the C API page</a>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="rasm_create_light in C: the C layer reads the caller's rasm_light_desc up to its size over the defaults, checks the type, calls Renderer::createLight inside try, and returns the C++ LightHandle packed into a rasm_light id. An error RASM logs during the call goes to the thread's last error.">
+    <rect x="20" y="20" width="200" height="44" rx="6" class="cpu"/>
+    <text x="120" y="40" class="mid mono small">rasm_create_light(r, &amp;desc)</text>
+    <text x="120" y="56" class="mid small">your program</text>
+    <line x1="220" y1="42" x2="266" y2="42" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="270" y="14" width="250" height="180" rx="8" class="zone"/>
+    <text x="284" y="34" class="title">src/c/cScene.cpp</text>
+    <rect x="284" y="44" width="222" height="26" rx="4" class="shader"/><text x="395" y="62" class="mid small">readSized: desc, up to desc->size</text>
+    <rect x="284" y="76" width="222" height="26" rx="4" class="shader"/><text x="395" y="94" class="mid small">checkEnum: desc->type</text>
+    <rect x="284" y="108" width="222" height="26" rx="4" class="shader"/><text x="395" y="126" class="mid small">try { createLight(...) }</text>
+    <rect x="284" y="140" width="222" height="26" rx="4" class="shader"/><text x="395" y="158" class="mid small">toC: LightHandle → id</text>
+    <text x="395" y="184" class="mid small t-faint">catch (...) → RASM_ERROR_*</text>
+    <line x1="520" y1="121" x2="566" y2="121" class="arrow" marker-end="url(#ah)"/>
+    <rect x="570" y="96" width="170" height="50" rx="6" class="gpu"/>
+    <text x="655" y="118" class="mid">Renderer::createLight</text>
+    <text x="655" y="134" class="mid small">the C++ API</text>
+    <rect x="570" y="166" width="170" height="44" rx="6" class="mem"/>
+    <text x="655" y="186" class="mid small">spdlog sink: errors →</text>
+    <text x="655" y="201" class="mid small">thread's last error</text>
+    <line x1="655" y1="146" x2="655" y2="163" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="270" y1="160" x2="222" y2="160" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="20" y="138" width="200" height="44" rx="6" class="cpu"/>
+    <text x="120" y="158" class="mid mono small">rasm_light { id }</text>
+    <text x="120" y="174" class="mid small">0 on failure</text>
+    <text x="380" y="236" class="mid small">Every entry point is a function try block, so no exception crosses into your program.</text>
+  </svg>
+  <figcaption>Every C function has this shape: check, convert, call one C++ function inside <code>try</code>, convert back. RASM's own error lines reach <code>rasm_get_last_error</code> through a log sink, so a call whose C++ function returns nothing still reports a refusal as <code>RASM_ERROR_FAILED</code>.</figcaption>
+</figure>
+
+<h3>Where RASM follows the page, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Big objects</td><td>opaque pointers</td><td><code>rasm_renderer</code>, <code>rasm_engine</code>, <code>rasm_asset_loader</code>, <code>rasm_image</code>. An engine's renderer and loader belong to it.</td></tr>
+  <tr><td>Small objects</td><td>integer handles</td><td><code>{ uint64_t id; }</code> per type, <code>generation &lt;&lt; 32 | index</code> of the C++ <code>Handle</code>. <code>HandlePool</code> retires a slot at <code>MAX_HANDLE_GENERATION</code> (2<sup>32</sup> − 1), so every handle packs with no loss, and a valid one is never 0.</td></tr>
+  <tr><td>Enums and booleans</td><td><code>uint32_t</code></td><td>The same. A <code>static_assert</code> in <code>src/c/cApi.cpp</code> ties every C constant to its C++ enum value, so a reordered C++ enum fails the build.</td></tr>
+  <tr><td>Growing structs</td><td>a size field and init functions</td><td>The same: <code>rasm_renderer_config</code>, <code>rasm_engine_config</code>, <code>rasm_asset_loader_config</code>, <code>rasm_light_desc</code>, <code>rasm_material_desc</code>, <code>rasm_texture_desc</code>, <code>rasm_scene_environment</code>. The 1.0 sizes are the smallest a caller may pass.</td></tr>
+  <tr><td>Errors</td><td>codes and a per-thread last error</td><td><code>rasm_result</code>, <code>rasm_get_last_error</code>, and <code>rasm_set_log_callback</code>. RASM's <code>spdlog::error</code> lines feed the last error too.</td></tr>
+  <tr><td>Versions</td><td>refuse another major, or a newer minor</td><td>The same, in <code>rasm_renderer_create</code> and <code>rasm_engine_create</code>: <code>RASM_ERROR_VERSION</code>.</td></tr>
+  <tr><td>Exports</td><td>only the C names</td><td>Only <code>rasm_*</code>; <code>tools/check_install.py</code> checks the export tables in CI.</td></tr>
+  <tr><td>Data files</td><td>beside the library</td><td>Relative paths resolve against the folder of the binary that holds RASM: the executable for a static C++ program, the shared library for the C API (<code>setBaseModule</code> in <code>src/platform/paths.cpp</code>). The install puts <samp>shaders/</samp> beside the libraries.</td></tr>
+</table>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The header</td><td><code>include/rasm/rasm_c.h</code></td></tr>
+  <tr><td>Checks, conversions, the log sink, the version check</td><td><code>src/c/cApi.h</code>, <code>src/c/cApi.cpp</code></td></tr>
+  <tr><td>Renderer, frame, readback, images</td><td><code>src/c/cRenderer.cpp</code></td></tr>
+  <tr><td>Scenes, entities, meshes, materials, textures, lights, cameras</td><td><code>src/c/cScene.cpp</code></td></tr>
+  <tr><td>Engine and asset loader (<code>rasm_c</code> only)</td><td><code>src/c/cLoader.cpp</code></td></tr>
+  <tr><td>The two shared libraries, their exports</td><td><code>src/CMakeLists.txt</code>; install in <code>cmake/RasmInstall.cmake</code></td></tr>
+  <tr><td>Tests</td><td><code>tests/cApiTests.cpp</code> (links only <code>rasm_c</code>), <code>tests/cApiHandleTests.cpp</code>, <code>tests/cApiHeaderCheck.c</code> (C99 and C11), <code>tests/c_api/ctypes_smoke.py</code>, <code>tools/check_install.py</code></td></tr>
+  <tr><td>The example</td><td><code>examples/22_c_api/main.c</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>Change <code>rasm_c.h</code> only by adding at the end, and bump <code>RASM_C_API_VERSION_MINOR</code> when you do.</li>
+    <li>A new field of a C++ config or desc that C shows goes at the end of its C struct, into the <code>toC</code> and <code>toCpp</code> conversions in <code>src/c/cApi.cpp</code>, and into <code>tests/c_api/ctypes_smoke.py</code>'s copy of the struct.</li>
+    <li>Every entry point is a function try block that ends with <code>RASM_C_CATCH</code>, and uses only types from <code>rasm_c.h</code> in its signature.</li>
+    <li>A new value of a C++ enum that C shows gets a C constant and its <code>static_assert</code>.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>The System V AMD64 ABI and Microsoft's x64 calling convention: how C arguments and structs travel in registers.</li>
+  <li>The Vulkan specification, "Valid Usage for Structure Types": <code>sType</code> and <code>pNext</code>, another way to grow structs.</li>
+  <li>Microsoft, "Using the cbSize member": the size-field pattern in Win32.</li>
+  <li>Ulrich Drepper, <i>How To Write Shared Libraries</i> (2011): symbol visibility and export control.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

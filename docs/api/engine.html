@@ -1170,7 +1170,7 @@ engine.setInspection(inspection);</code></pre>
   <tr><td>any</td><td><samp>D:/other/a.obj</samp> (absolute)</td><td><samp>D:/other/a.obj</samp>: an absolute path is kept</td></tr>
 </table>
 </div>
-<p><code>shaderDir</code> follows the same rule against the executable's folder, with the build-time default when empty. So does a relative <code>cacheDir</code>, which falls back to the user's cache folder when it cannot be written (see the table above). Paths are UTF-8, so folders with non-Latin names work.</p>
+<p><code>shaderDir</code> follows the same rule against the executable's folder, with the build-time default when empty. (The folder is that of the binary that holds RASM: the executable for a C++ program, the shared library for the <a href="c-api.html#link">C API</a>.) So does a relative <code>cacheDir</code>, which falls back to the user's cache folder when it cannot be written (see the table above). Paths are UTF-8, so folders with non-Latin names work.</p>
 
 <div class="api" id="resolveAssetPath">
   <pre class="sig">std::string resolveAssetPath(const std::string&amp; path) const;</pre>
