@@ -145,3 +145,29 @@ TEST_CASE("handles differing only in generation are distinct")
 
     CHECK_FALSE(first == second);
 }
+
+TEST_CASE("a generation never passes MAX_HANDLE_GENERATION, which fits in 32 bits")
+{
+    CHECK(rasm::MAX_HANDLE_GENERATION == UINT32_MAX);
+}
+
+TEST_CASE("a slot that reaches the pool's highest generation is retired, never reused")
+{
+    rasm::HandlePool pool(UINT32_MAX, 3);
+    rasm::HandleSlot slot = pool.allocate();
+    CHECK(slot.generation == 1);
+    for (uint64_t generation = 2; generation <= 3; ++generation)
+    {
+        CHECK(pool.release(slot.index, slot.generation));
+        slot = pool.allocate();
+        CHECK(slot.index == 1);
+        CHECK(slot.generation == generation);
+    }
+    // At generation 3 the release frees the handle but keeps the index off the free list.
+    CHECK(pool.release(slot.index, slot.generation));
+    CHECK_FALSE(pool.isAlive(slot.index, slot.generation));
+    const rasm::HandleSlot next = pool.allocate();
+    CHECK(next.index == 2);
+    CHECK(next.generation == 1);
+    CHECK(pool.liveCount() == 1);
+}

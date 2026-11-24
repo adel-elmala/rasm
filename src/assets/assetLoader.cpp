@@ -27,7 +27,7 @@ namespace rasm
     AssetLoader::Impl::Impl(Renderer &owner, const AssetLoaderConfig &loaderConfig) : renderer(&owner), config(loaderConfig)
     {
         if (!config.assetRoot.empty())
-            config.assetRoot = resolveFromExecutableDir(config.assetRoot);
+            config.assetRoot = resolveFromBaseDir(config.assetRoot);
         if (renderer->loads != nullptr)
         {
             spdlog::error("AssetLoader: the renderer has an AssetLoader already; this one refuses every call.");

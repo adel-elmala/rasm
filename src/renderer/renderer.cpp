@@ -67,7 +67,7 @@ namespace rasm
         spdlog::info("Starting the renderer: appName={}, windowWidth={}, windowHeight={}, enableValidation={}",
                      config.appName, config.windowWidth, config.windowHeight, config.enableValidation);
 
-        this->config.shaderDir = resolveFromExecutableDir(config.shaderDir.empty() ? RASM_SHADER_DIR : config.shaderDir);
+        this->config.shaderDir = resolveFromBaseDir(config.shaderDir.empty() ? RASM_SHADER_DIR : config.shaderDir);
 
         if (config.windowWidth <= 0 || config.windowHeight <= 0)
         {
