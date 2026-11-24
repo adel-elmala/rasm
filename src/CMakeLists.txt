@@ -142,6 +142,8 @@ target_link_libraries(rasm_renderer PRIVATE slang::slang)
 target_link_libraries(rasm_renderer PRIVATE meshoptimizer::meshoptimizer)
 
 target_link_libraries(rasm PUBLIC rasm_renderer)
+# ktxImage.cpp names Vulkan formats (vulkan_core.h); rasm_renderer's PRIVATE Vulkan::Headers does not reach rasm.
+target_link_libraries(rasm PRIVATE Vulkan::Headers)
 target_link_libraries(rasm PRIVATE tinyobjloader::tinyobjloader)
 target_link_libraries(rasm PRIVATE SDL3::SDL3)
 target_link_libraries(rasm PRIVATE KTX::ktx)

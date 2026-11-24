@@ -37,7 +37,7 @@ Naming conventions for specific kinds of function:
 
 Deliberate exceptions:
 - The BRDF terms in `brdf.slang` keep their names from the literature (`D_GGX`, `F_Schlick`, `V_SmithGGXCorrelated`, `Fd_Lambert`), so the shader can be checked against the references.
-- `src/thirdparty_impl.cpp` keeps its name, which matches the `*_IMPLEMENTATION` macros it defines.
+- `src/thirdparty_impl.cpp` and `src/thirdparty_loaders_impl.cpp` keep their names, which match the `*_IMPLEMENTATION` macros they define.
 - vk-bootstrap's API is snake_case, such as `.physical_device`. Only names RASM declares follow this table.
 
 ## 3. Files and headers
@@ -71,7 +71,7 @@ Deliberate exceptions:
   | Pass and entry shaders | `shaders/passes/` |
   | A new example | `examples/NN_name/main.cpp`, plus one `rasm_add_example(NN_name)` line in `examples/CMakeLists.txt` |
   | Unit tests | `tests/<subject>Tests.cpp`, added to `rasm_tests` in `tests/CMakeLists.txt` |
-- Single-header library implementations (`STB_IMAGE_IMPLEMENTATION`, `TINYGLTF_IMPLEMENTATION`, `VMA_IMPLEMENTATION`, …) are defined only in `src/thirdparty_impl.cpp`. Mind the include order documented there.
+- Single-header library implementations are defined only in `src/thirdparty_impl.cpp`, the renderer's (`STB_IMAGE_IMPLEMENTATION`, `STB_IMAGE_WRITE_IMPLEMENTATION`, `STB_IMAGE_RESIZE_IMPLEMENTATION`, `VMA_IMPLEMENTATION`), and `src/thirdparty_loaders_impl.cpp`, the loaders' in the `rasm` library (`TINYGLTF_IMPLEMENTATION`, `TINYOBJLOADER_IMPLEMENTATION`). `rasm::renderer` must not hold tinygltf or tinyobjloader. Mind the notes there.
 - Library configuration macros that change behaviour (`GLM_FORCE_DEPTH_ZERO_TO_ONE`, `VMA_VULKAN_VERSION`) are set **once, in CMake**, with `target_compile_definitions`. Never set them in a `.cpp` file: a define placed after a header has already been included has no effect (see `B2`).
 
 ## 4. Formatting

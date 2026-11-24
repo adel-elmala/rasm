@@ -22,13 +22,10 @@ namespace rasm
         constexpr uint64_t TEXTURE_FILL_PART = 4ull << 20;
     }
 
-    // The workers start before anything can fail, so a load on a renderer that did not start still has them. One
-    // hardware thread is left for the main thread.
+    // The workers start before anything else can fail, so a load on a renderer that did not start still has them. One
+    // hardware thread is left for the main thread. A refused loader (the renderer has one) starts none.
     AssetLoader::Impl::Impl(Renderer &owner, const AssetLoaderConfig &loaderConfig) : renderer(&owner), config(loaderConfig)
     {
-        const uint32_t hardwareThreads = std::thread::hardware_concurrency();
-        const uint32_t loadThreads = config.loadThreads > 0 ? config.loadThreads : std::max(2u, hardwareThreads) - 1;
-        workers = std::make_unique<WorkerPool>(loadThreads, config.loadMemoryBudget, "RASM loader");
         if (!config.assetRoot.empty())
             config.assetRoot = resolveFromExecutableDir(config.assetRoot);
         if (renderer->loads != nullptr)
@@ -37,20 +34,60 @@ namespace rasm
             renderer = nullptr;
             return;
         }
+        const uint32_t hardwareThreads = std::thread::hardware_concurrency();
+        const uint32_t loadThreads = config.loadThreads > 0 ? config.loadThreads : std::max(2u, hardwareThreads) - 1;
+        workers = std::make_unique<WorkerPool>(loadThreads, config.loadMemoryBudget, "RASM loader");
         renderer->loads = this;
     }
 
+    // The renderer lives on, so what this loader leaves unfinished must not stay loading for good: what is on its way to
+    // the GPU is waited for and published, then the meshes and environments still loading fail and the textures still
+    // loading are destroyed (their materials lose them), as when a decode fails.
     AssetLoader::Impl::~Impl()
     {
+        if (renderer == nullptr || renderer->loads != this)
+        {
+            dropAll();
+            return;
+        }
+        if (renderer->running() && (renderer->ctx.isLoadUploadDone(loadUploadValue) || renderer->ctx.waitForLoadUploads(loadUploadValue)))
+            publishUploadedLoads();
+        std::vector<MeshHandle> meshes;
+        std::vector<EnvironmentHandle> environments;
+        std::vector<TextureHandle> textures;
+        for (const PendingMeshLoad &load : pendingMeshes)
+            meshes.push_back(load.handle);
+        for (const auto &[mesh, value] : uploadingMeshes)
+            meshes.push_back(mesh);
+        for (const PendingEnvironmentLoad &load : pendingEnvironments)
+            environments.push_back(load.handle);
+        for (const auto &[texture, load] : pendingTextures)
+            textures.push_back(texture);
         dropAll();
-        if (renderer != nullptr && renderer->loads == this)
-            renderer->loads = nullptr;
+        renderer->loads = nullptr;
+        for (MeshHandle mesh : meshes)
+        {
+            if (renderer->isLive(mesh) && renderer->registry.meshes[mesh.index].state == MeshState::LOADING)
+                renderer->registry.meshes[mesh.index].state = MeshState::FAILED;
+        }
+        for (EnvironmentHandle environment : environments)
+        {
+            if (renderer->isLive(environment) && renderer->environments->environments[environment.index].state == BakeState::LOADING)
+                renderer->environments->environments[environment.index].state = BakeState::FAILED;
+        }
+        for (TextureHandle texture : textures)
+        {
+            if (renderer->ctx.isAlive(texture))
+                renderer->destroyTexture(texture);
+        }
     }
 
     // Loads that still run stop at their next step, queued ones are dropped, and the workers end. Jobs never touch the
     // renderer: they write their job structs, which they hold.
     void AssetLoader::Impl::dropAll()
     {
+        if (!workers)
+            return;
         for (PendingMeshLoad &load : pendingMeshes)
             workers->releaseBytes(workers->dropLoad(load.job->ticket));
         for (auto &[handle, load] : pendingTextures)
@@ -126,9 +163,12 @@ namespace rasm
                 freeOnWorker(std::move(it->second.levels), it->second.bytes);
             pendingTextures.erase(it);
         }
+        // The key may name a newer texture of the same file, when this slot's earlier one was destroyed elsewhere.
         if (texture.index < textureCacheKeys.size() && !textureCacheKeys[texture.index].empty())
         {
-            loadedTextures.erase(textureCacheKeys[texture.index]);
+            auto it = loadedTextures.find(textureCacheKeys[texture.index]);
+            if (it != loadedTextures.end() && it->second == texture)
+                loadedTextures.erase(it);
             textureCacheKeys[texture.index].clear();
         }
     }
@@ -162,6 +202,8 @@ namespace rasm
 
     LoadStats AssetLoader::Impl::getLoadStats() const
     {
+        if (!workers)
+            return {};
         const WorkerPoolStats pool = workers->stats();
         return {.workers = pool.workers, .queued = pool.queued, .running = pool.running, .decodedBytes = pool.bytes, .peakDecodedBytes = pool.peakBytes};
     }

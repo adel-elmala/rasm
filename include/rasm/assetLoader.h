@@ -17,7 +17,8 @@ namespace rasm
     // and KTX2 textures, HDR environments. A load returns a handle at once; the renderer finishes the ready loads at the
     // start of each frame, within a budget, and Renderer::isLoaded says when one is in. The renderer must outlive its
     // loader: destroy the loader first (an Engine does). A renderer destroyed first logs an error and drops the loads,
-    // and the loader refuses every call after that. One loader per renderer.
+    // and the loader refuses every call after that. A loader destroyed while its renderer lives fails the meshes and
+    // environments still loading and destroys the textures still loading. One loader per renderer at a time.
     class AssetLoader
     {
     public:

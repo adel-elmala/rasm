@@ -2,6 +2,9 @@
 
 #include "rasm/engine.h"
 
+#include <filesystem>
+#include <fstream>
+
 // Every field of an EngineConfig must reach the Renderer or the AssetLoader, and come back: a field added to the structs
 // but not to a conversion keeps its default here, and its check fails.
 TEST_CASE("The config conversions copy every field")
@@ -150,10 +153,28 @@ TEST_CASE("An AssetLoader outlived by nothing, or by its renderer")
     loader->waitForLoads();
     delete loader;
 
+    // A loader destroyed with a load in flight leaves the renderer with no loader: the next one attaches.
+    {
+        rasm::Renderer alive(rasm::RendererConfig{.cacheDir = ""});
+        const std::filesystem::path obj = std::filesystem::temp_directory_path() / "rasm_loader_lifetime.obj";
+        std::ofstream(obj) << "v 0 0 0" << std::endl
+                           << "v 1 0 0" << std::endl
+                           << "v 0 1 0" << std::endl
+                           << "f 1 2 3" << std::endl;
+        {
+            rasm::AssetLoader first(alive, {.loadThreads = 1});
+            CHECK(first.loadMesh(obj.string()).isValid());
+        }
+        rasm::AssetLoader next(alive, {.loadThreads = 1});
+        CHECK(alive.getLoadStats().workers == 1);
+        std::filesystem::remove(obj);
+    }
+
     // A second loader on one renderer is refused, and the first keeps working.
     rasm::Renderer shared(rasm::RendererConfig{.cacheDir = ""});
     rasm::AssetLoader first(shared, {.loadThreads = 1});
     rasm::AssetLoader second(shared, {.loadThreads = 1});
     CHECK(shared.getLoadStats().workers == 1);
+    CHECK(second.getLoadStats().workers == 0);
     CHECK_FALSE(second.loadMesh("no such file.gltf").isValid());
 }
