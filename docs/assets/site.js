@@ -30,6 +30,7 @@ const SECTIONS = [
             { path: "guides/frames-in-flight.html",      title: "Frames in flight",                    blurb: "The CPU and the GPU work on different frames at once." },
             { path: "guides/swapchain.html",             title: "The swapchain and presenting",        blurb: "The ring of images that reaches the screen." },
             { path: "guides/headless-readback.html",     title: "Headless rendering and readback",     blurb: "Render with no window, and copy the pixels back to the CPU without a stall." },
+            { path: "guides/platform-layer.html",        title: "The platform layer",                  blurb: "Draw into a window the application owns: native handles, points and pixels, input as events, and what the UI takes." },
             { path: "guides/gpu-sync.html",              title: "GPU synchronization: barriers, stages, layouts", blurb: "Why GPU work needs barriers, and what they say." },
             { path: "guides/generational-handles.html",  title: "Generational handles",                blurb: "Safe references: an index plus a generation." },
             { path: "guides/resource-lifetime.html",     title: "Deferred destruction",                blurb: "Destroy what the GPU may still read: the handle now, the memory later." },

@@ -36,10 +36,10 @@
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 290" role="img" aria-label="SDL events become a CameraInput in pollEvents, which beginFrame calls. updateCamera moves the target transform with the controller, then eases the rendered transform toward it. Every frame, the scene's cull pass builds the view matrix from the rendered transform and the projection fitted to the target, and writes both into the scene view's SceneData.">
+  <svg viewBox="0 0 760 290" role="img" aria-label="Input events, from SDL or from addInputEvent, become a CameraInput in pollEvents, which beginFrame calls. updateCamera moves the target transform with the controller, then eases the rendered transform toward it. Every frame, the scene's cull pass builds the view matrix from the rendered transform and the projection fitted to the target, and writes both into the scene view's SceneData.">
     <rect x="10"  y="20" width="130" height="56" rx="6" class="box"/>
-    <text x="75"  y="43" class="mid title">SDL events</text>
-    <text x="75"  y="62" class="mid small">mouse, wheel, keys</text>
+    <text x="75"  y="43" class="mid title">InputEvents</text>
+    <text x="75"  y="62" class="mid small">SDL or addInputEvent</text>
     <line x1="140" y1="48" x2="160" y2="48" class="arrow" marker-end="url(#ah)"/>
 
     <rect x="162" y="20" width="130" height="56" rx="6" class="cpu"/>
@@ -459,11 +459,11 @@ engine.resetCameraHistory(camera);</code></pre>
 <div class="api" id="pollEvents">
   <pre class="sig">void pollEvents(CameraHandle camera);</pre>
   <div class="body">
-    <p>Reads all window events, updates the window state (size, minimized, quit), builds a <a href="#CameraInput">CameraInput</a> and calls <code>updateCamera(camera, input)</code>. <code>beginFrame</code> calls it first thing, so <code>render</code>, <code>beginFrame</code> and <code>RenderGraph::execute</code> already do this. Do not call it yourself in a normal frame loop, or the camera moves twice.</p>
+    <p>Takes the platform's window events (SDL; none for <code>NATIVE</code> and headless) after the ones queued with <a href="engine.html#addInputEvent"><code>addInputEvent</code></a>, applies them all to the UI, the built-in keys and the window state (size, minimized, quit), builds a <a href="#CameraInput">CameraInput</a> and calls <code>updateCamera(camera, input)</code>. <code>beginFrame</code> calls it first thing, so <code>render</code>, <code>beginFrame</code> and <code>RenderGraph::execute</code> already do this. Do not call it yourself in a normal frame loop, or the camera moves twice.</p>
     <dl>
       <dt>camera</dt><dd>The camera that gets the input. It must be valid, or <code>updateCamera</code> logs an error every frame. Pass any valid camera if your frame does not use one (<code>examples/04_compute</code> does this).</dd>
     </dl>
-    <p><span class="tag main-thread">main thread</span> The frame time it measures is capped at 0.1 s, and the first frame has 0. While the window is minimized it waits up to 100 ms for an event.</p>
+    <p><span class="tag main-thread">main thread</span> The frame time it measures is capped at 0.1 s, and the first frame has 0. While an SDL window is minimized it waits up to 100 ms for an event.</p>
   </div>
 </div>
 

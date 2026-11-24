@@ -9,11 +9,6 @@
 #include <memory>
 #include <string>
 
-namespace rasm
-{
-    struct Window;
-}
-
 namespace rasm::rhi
 {
     enum class Filter
@@ -47,15 +42,15 @@ namespace rasm::rhi
 
     struct DeviceDesc
     {
-        std::string     appName;
-        const Window*   window                  = nullptr;
-        bool            enableValidation        = false;
-        bool            enableSyncValidation    = false;
-        bool            enableGpuValidation     = false;
-        bool            asyncCompute            = false;
-        bool            transferQueue           = false;    // a queue of a family that only copies, for the load uploads
-        bool            hostImageCopy           = true;     // false: every texture goes through the staging ring
-        std::string     cacheDir;                           // the pipeline cache's folder; empty: none
+        std::string             appName;
+        const NativeWindow*     window                  = nullptr;  // the surface's window; nullptr: headless, no surface
+        bool                    enableValidation        = false;
+        bool                    enableSyncValidation    = false;
+        bool                    enableGpuValidation     = false;
+        bool                    asyncCompute            = false;
+        bool                    transferQueue           = false;    // a queue of a family that only copies, for the load uploads
+        bool                    hostImageCopy           = true;     // false: every texture goes through the staging ring
+        std::string             cacheDir;                           // the pipeline cache's folder; empty: none
     };
 
     struct Buffer

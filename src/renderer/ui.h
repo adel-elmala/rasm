@@ -4,6 +4,7 @@
 #include "rasm/engine.h"
 #include "rasm/handle.h"
 #include "rasm/types.h"
+#include "platform/uiPlatform.h"
 
 #include <cstdint>
 #include <functional>
@@ -44,7 +45,8 @@ namespace rasm
     struct Ui
     {
         ImGuiContext*                                   context                         = nullptr;
-        bool                                            platform                        = false;    // the SDL3 backend runs
+        UiPlatformState                                 platformState;                              // the cursor and text input the platform was given
+        float                                           scale                           = 1.0f;     // the window's content scale the style was made for
         bool                                            encoded                         = false;    // draws through the swapchain's UNORM view
         PipelineHandle                                  pipeline;
         UiSlot                                          slots[MAX_FRAMES_IN_FLIGHT];

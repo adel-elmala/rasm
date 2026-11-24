@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Engine · RASM</title>
 <meta name="description" content="The Engine class: EngineConfig, construction and shutdown, the frame functions, loading, frame stats, paths and the window, plus an index of every Engine method.">
-<meta name="rasm-sources" content="include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h src/engine.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/platform/headlessPlatform.cpp src/renderer/readback.cpp include/rasm/readback.h src/platform/paths.cpp src/renderer/frameStats.cpp src/renderer/gpuScene.cpp src/renderer/renderGraph.cpp src/renderer/renderer.cpp src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/msaaResolve.cpp src/renderer/taa.cpp src/renderer/engineUi.cpp src/renderer/debugViews.cpp src/renderer/inspector.cpp src/rhi/renderContext.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.cpp src/assets/mesh.cpp src/assets/texture.cpp src/renderer/geometryPool.cpp src/renderer/gpuTable.cpp CMakeLists.txt shaders/lib/shadow.slang shaders/passes/shadow.slang examples/06_shadows/main.cpp">
+<meta name="rasm-sources" content="include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h src/engine.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/platform/headlessPlatform.cpp src/platform/nativePlatform.cpp include/rasm/input.h examples/19_embedding/main.cpp src/renderer/readback.cpp include/rasm/readback.h src/platform/paths.cpp src/renderer/frameStats.cpp src/renderer/gpuScene.cpp src/renderer/renderGraph.cpp src/renderer/renderer.cpp src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/msaaResolve.cpp src/renderer/taa.cpp src/renderer/engineUi.cpp src/renderer/debugViews.cpp src/renderer/inspector.cpp src/rhi/renderContext.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.cpp src/assets/mesh.cpp src/assets/texture.cpp src/renderer/geometryPool.cpp src/renderer/gpuTable.cpp CMakeLists.txt shaders/lib/shadow.slang shaders/passes/shadow.slang examples/06_shadows/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -64,6 +64,8 @@
   <tr><td><a href="#beginGpuTimer"><code>beginGpuTimer</code></a> / <a href="#endGpuTimer"><code>endGpuTimer</code></a></td><td>time your own GPU work</td><td>this page</td></tr>
   <tr><td><a href="#queryMemoryStats"><code>queryMemoryStats</code></a></td><td>GPU memory budget and use</td><td>this page</td></tr>
   <tr><td><a href="#getMainWindow"><code>getMainWindow</code></a></td><td>window size and state</td><td>this page</td></tr>
+  <tr><td><a href="#addInputEvent"><code>addInputEvent</code></a></td><td>send the input of a window you own</td><td>this page</td></tr>
+  <tr><td><a href="#setWindowSize"><code>setWindowSize</code></a> / <a href="#setWindowContentScale"><code>setWindowContentScale</code></a></td><td>the size and scale of a window you own</td><td>this page</td></tr>
   <tr><td><a href="#createWindow"><code>createWindow</code></a> / <a href="#destroyWindow"><code>destroyWindow</code></a></td><td>used by the engine itself</td><td>this page</td></tr>
   <tr><td><a href="#createBuffer"><code>createBuffer</code></a> / <a href="#createTexture"><code>createTexture</code></a></td><td>raw GPU resources</td><td>this page</td></tr>
   <tr><td><a href="scene.html#createScene"><code>createScene</code></a></td><td>new scene</td><td>scene.html</td></tr>
@@ -178,7 +180,7 @@ if (!engine.running())
 <div class="api" id="running">
   <pre class="sig">bool running() const;</pre>
   <div class="body">
-    <p>True while the engine works. It becomes false when the window is closed or <kbd>Esc</kbd> is pressed (both handled in <code>pollEvents</code>, inside <code>beginFrame</code>), and it is false from the start when the constructor failed. Use it as the main loop condition.</p>
+    <p>True while the engine works. With the SDL platform it becomes false when the window is closed or <kbd>Esc</kbd> is pressed (both handled in <code>pollEvents</code>, inside <code>beginFrame</code>); with <code>NATIVE</code> or <code>HEADLESS</code> the application decides when to stop, and it stays true. It is false from the start when the constructor failed. Use it as the main loop condition.</p>
   </div>
 </div>
 
@@ -193,8 +195,9 @@ if (!engine.running())
 <table>
   <tr><th>Field</th><th>Default</th><th>Meaning</th></tr>
   <tr><td><code>appName</code></td><td>empty</td><td>Vulkan application name (<code>rasm_app</code> when empty). The window title is always "RASM Engine".</td></tr>
-  <tr><td><code>platform</code></td><td><code>SDL</code></td><td>Who owns the window and the input (<a href="types.html#PlatformType"><code>PlatformType</code></a>). <code>HEADLESS</code>: no window and no events; frames go to an offscreen swapchain (<a href="#headless">headless</a>).</td></tr>
-  <tr><td><code>windowWidth</code>, <code>windowHeight</code></td><td>0, 0</td><td>Window size in logical units (screen points), or the offscreen swapchain's size in pixels when headless. Must be greater than 0.</td></tr>
+  <tr><td><code>platform</code></td><td><code>SDL</code></td><td>Who owns the window and the input (<a href="types.html#PlatformType"><code>PlatformType</code></a>). <code>NATIVE</code>: your window and your event loop (<a href="#native">your own window</a>). <code>HEADLESS</code>: no window; frames go to an offscreen swapchain (<a href="#headless">headless</a>).</td></tr>
+  <tr><td><code>windowWidth</code>, <code>windowHeight</code></td><td>0, 0</td><td>Window size in logical units (screen points), the unit of mouse positions, or the offscreen swapchain's size in pixels when headless. Must be greater than 0.</td></tr>
+  <tr><td><code>nativeWindow</code></td><td>empty</td><td>With <code>NATIVE</code>: your window's handles, its size in pixels and its display's scale (<a href="types.html#NativeWindow"><code>NativeWindow</code></a>). Ignored otherwise.</td></tr>
   <tr><td><code>enableValidation</code></td><td><code>false</code></td><td>Turns on the Vulkan validation layers, if they are installed. Keep it on while you develop.</td></tr>
   <tr><td><code>enableSyncValidation</code></td><td><code>false</code></td><td>With <code>enableValidation</code>: also reports missing or wrong barriers and read/write hazards between passes. Slow. Without <code>enableValidation</code> it is ignored, with a warning in the log. <code>VK_LAYER_VALIDATE_SYNC=1</code> does the same without a rebuild.</td></tr>
   <tr><td><code>enableGpuValidation</code></td><td><code>false</code></td><td>With <code>enableValidation</code>: GPU-assisted validation checks shader accesses while they run, such as an out-of-bounds bindless index, bad indirect draw arguments or a bad buffer device address. Slow. Without <code>enableValidation</code> it is ignored, with a warning in the log. <code>VK_LAYER_GPUAV_ENABLE=1</code> does the same without a rebuild.</td></tr>
@@ -211,6 +214,7 @@ if (!engine.running())
   <tr><td><code>geometryPoolMeshlets</code></td><td>2<sup>17</sup> = 131,072</td><td>Meshlets of all meshes together, every LOD included, 48 bytes each (6 MiB). Every sub-mesh of 1024 triangles or more that is not skinned or morphed gets about one per 124 triangles of each LOD as it loads. A sub-mesh whose meshlets do not fit loads without them and is drawn whole, with one warning that names this setting. See <a href="../guides/meshlets.html">meshlets</a>.</td></tr>
   <tr><td><code>maxInstances</code></td><td>2<sup>16</sup> = 65,536</td><td>Instance rows: one per sub-mesh of every entity. 164 bytes each, two copies (one per frame slot). Each scene view with occlusion culling also keeps this many words of meshlet visibility bits (4 bytes each).</td></tr>
   <tr><td><code>maxLights</code></td><td>2<sup>14</sup> = 16,384</td><td>Lights in total (<a href="scene.html#createLight"><code>createLight</code></a>). 56 bytes each, two copies (about 1.8 MiB). 0, or a table larger than the GPU allows, logs an error and the engine does not start.</td></tr>
+  <tr><td><code>maxMaterials</code></td><td>2<sup>12</sup> = 4,096</td><td>Materials alive at once (<a href="materials.html#createMaterial"><code>createMaterial</code></a>, and each glTF material), one material table row each: 220 bytes, two copies. A material past it is refused with an error that names this setting. 0 logs an error and the engine does not start.</td></tr>
   <tr><td><code>maxAnimatedEntities</code></td><td>2<sup>14</sup> = 16,384</td><td>Entities that have played a clip (<a href="scene.html#playAnimation"><code>playAnimation</code></a>), and entities of a skinned or morphed mesh, which are posed at rest; each keeps its row. 120 bytes each, two copies. A play past it is refused with an error. 0, or more than 65,535 (one Animate group per row), logs an error and the engine does not start.</td></tr>
   <tr><td><code>animationPoolBytes</code></td><td>16 MiB</td><td>The kept nodes, samplers, channel tables and keys of every loaded mesh with clips, uploaded once per mesh. A mesh that does not fit fails to load with an error that names this setting.</td></tr>
   <tr><td><code>loadThreads</code></td><td>0</td><td>Threads of the load worker pool, which reads and decodes every <code>loadMesh</code>, <code>loadTexture</code> and <code>loadEnvironment</code>. 0 takes the hardware threads minus one, for the main thread (at least 1). A game with threads of its own (physics, audio, its own jobs) sets fewer, so the loads do not take the cores those need. See <a href="../guides/job-system.html">Job systems</a>.</td></tr>
@@ -814,7 +818,7 @@ engine.endGpuTimer(commandBuffer, timer);</code></pre>
 
 <div class="callout rule">
   <strong>One ImGui for the whole program</strong>
-  <p>rasm links Dear ImGui PUBLIC, as a static library (vcpkg's <code>imgui</code> port, with its <code>sdl3-binding</code> feature), and owns the context. <code>find_package(rasm)</code> finds it for you and links it into your program, so your code includes <samp>imgui.h</samp> and calls <code>ImGui::</code> functions on that same library. Do not build or link a second copy of ImGui (another version, or its source files in your project): that gives two contexts, or two definitions of the same functions.</p>
+  <p>rasm links Dear ImGui PUBLIC, as a static library (vcpkg's plain <code>imgui</code> port, with no backend: RASM feeds it input and draws it), and owns the context. <code>find_package(rasm)</code> finds it for you and links it into your program, so your code includes <samp>imgui.h</samp> and calls <code>ImGui::</code> functions on that same library. Do not build or link a second copy of ImGui (another version, or its source files in your project): that gives two contexts, or two definitions of the same functions.</p>
 </div>
 
 <div class="api" id="setUiCallback">
@@ -980,7 +984,7 @@ engine.setInspection(inspection);</code></pre>
 <div class="split">
   <div>
     <h4>Built-in keys</h4>
-    <p><kbd>Esc</kbd> or closing the window: <code>running()</code> becomes false.<br><kbd>F1</kbd>: shows or hides the stats: the RASM window with <code>EngineConfig::ui</code>, else the overlay.<br><kbd>F2</kbd>: cycles <code>forcedLod</code>: by distance, LOD 0, 1, … 7, by distance.<br><kbd>F3</kbd>: logs the dump of the next render graph that runs (<a href="render-graph.html#dump"><code>RenderGraph::dump</code></a>), and shows it in the RASM window.<br>While a UI window is under the mouse or has the keyboard, the camera gets none of it, and while a text field takes typing these keys do nothing.<br>Mouse and <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>: move the camera passed to <code>beginFrame</code> (see <a href="camera.html#pollEvents">camera.html</a>).</p>
+    <p><kbd>Esc</kbd> or closing the window, SDL platform only: <code>running()</code> becomes false.<br><kbd>F1</kbd>: shows or hides the stats: the RASM window with <code>EngineConfig::ui</code>, else the overlay.<br><kbd>F2</kbd>: cycles <code>forcedLod</code>: by distance, LOD 0, 1, … 7, by distance.<br><kbd>F3</kbd>: logs the dump of the next render graph that runs (<a href="render-graph.html#dump"><code>RenderGraph::dump</code></a>), and shows it in the RASM window.<br>While a UI window is under the mouse or has the keyboard, the camera gets none of it, and while a text field takes typing these keys do nothing.<br>Mouse and <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> (by position, also on AZERTY): move the camera passed to <code>beginFrame</code> (see <a href="camera.html#pollEvents">camera.html</a>).<br>The keys work the same from the SDL window and from <a href="#addInputEvent"><code>addInputEvent</code></a>.</p>
   </div>
   <div>
     <h4>Two sizes</h4>
@@ -988,14 +992,52 @@ engine.setInspection(inspection);</code></pre>
   </div>
 </div>
 
-<div class="callout warn">
-  <strong>The engine owns the window and the input</strong>
-  <p>Events are read inside <code>beginFrame</code>, and your program does not see them. You cannot render into a window you made yourself yet (<code>D7</code>). You can run without a window: see <a href="#headless">headless</a> below.</p>
+<p>Three platforms (<a href="types.html#PlatformType"><code>EngineConfig::platform</code></a>): <code>SDL</code> opens a window and reads its events for you; <code>NATIVE</code> draws into your window, and your program runs the event loop and sends the input; <code>HEADLESS</code> has no window. In all three, the input goes through the same <a href="types.html#InputEvent"><code>InputEvent</code></a>s, to the camera, Dear ImGui and the keys above. How it works: <a href="../guides/platform-layer.html">The platform layer</a>.</p>
+
+<h3 id="native">Your own window</h3>
+
+<p>Give the engine your window's native handles, its size in points and pixels, and the display's scale. Each frame, send it your window's events and size changes before <code>render</code> (or <code>beginFrame</code>). Your window must live longer than the engine. <code>examples/19_embedding</code> does this with an SDL3 window of its own; its <code>--headless</code> run opens the window hidden and plays a scripted input.</p>
+
+<pre><code>rasm::EngineConfig config = {
+    .appName = "editor",
+    .platform = rasm::PlatformType::NATIVE,
+    .windowWidth = 1280,
+    .windowHeight = 720,
+    .nativeWindow = {.type = rasm::NativeWindowType::WINDOWS, .window = hwnd, .pixelWidth = 1920, .pixelHeight = 1080, .contentScale = 1.5f},
+    .ui = true};
+rasm::Engine engine(config);
+while (editorRunning)
+{
+    // Your loop: turn each of your window's events into an InputEvent.
+    engine.addInputEvent({.type = rasm::InputEventType::MOUSE_MOVE, .x = 640.0f, .y = 360.0f});
+    engine.render(scene, camera);
+}</code></pre>
+
+<div class="api" id="addInputEvent">
+  <pre class="sig">void addInputEvent(const InputEvent&amp; event);</pre>
+  <div class="body">
+    <p>Queues one input event (<a href="types.html#InputEvent"><code>InputEvent</code></a>). The next <code>beginFrame</code> applies the queue in order, after the platform's own events: to Dear ImGui while it builds frames, to the built-in keys, and to the camera passed to <code>beginFrame</code>, without what the last UI frame took. Use it with <code>NATIVE</code>, or to script the input of a headless engine. The queue keeps its capacity, so a steady frame makes no heap allocation.</p>
+    <p><span class="tag main-thread">main thread</span> Mouse positions are in window points from the top-left corner, like <code>windowWidth</code>. Escape does not stop a <code>NATIVE</code> or headless engine.</p>
+  </div>
+</div>
+
+<div class="api" id="setWindowSize">
+  <pre class="sig">void setWindowSize(uint32_t width, uint32_t height, uint32_t pixelWidth, uint32_t pixelHeight);</pre>
+  <div class="body">
+    <p>The main window's new size, in points and in pixels, for <code>NATIVE</code> and <code>HEADLESS</code>. A new pixel size rebuilds the swapchain and everything sized from it in the next <code>beginFrame</code>; the points place the mouse and the UI. A pixel size of 0 skips frames, as for a minimized window: send it while your window is minimized. Headless, it changes the size of the offscreen images. With SDL it logs a warning and does nothing, since the SDL platform reads its window's size itself.</p>
+  </div>
+</div>
+
+<div class="api" id="setWindowContentScale">
+  <pre class="sig">void setWindowContentScale(float scale);</pre>
+  <div class="body">
+    <p>The display's scale setting (1.5 at 150 % in Windows' settings), without the pixel density, for <code>NATIVE</code> and <code>HEADLESS</code>. The UI's sizes and fonts follow it from the next UI frame. Call it when your window moves to a display of another scale. A scale of 0 or less is refused with an error; with SDL it logs a warning and does nothing.</p>
+  </div>
 </div>
 
 <h3 id="headless">Headless: no window</h3>
 
-<p>With <code>EngineConfig::platform = PlatformType::HEADLESS</code> the engine opens no window, starts no SDL and reads no events. The device has no surface. Each frame renders into one of two offscreen images of <code>windowWidth</code> × <code>windowHeight</code> pixels, which take the place of the swapchain: the tone map and every pass that writes "the swapchain" write there, and <a href="#readFrame"><code>readFrame</code></a> copies one back. With <code>EngineConfig::ui</code> the UI runs with no input: the RASM window and the windows of <a href="#setUiCallback"><code>setUiCallback</code></a> are drawn as with a window, and <code>readFrame</code> copies them. <code>running()</code> stays true until the engine is destroyed, so the program decides how many frames to render. <code>examples/16_headless</code> renders a scene and writes a PNG, and every example takes <code>--headless --frames N --out <samp>file.png</samp></code> (<code>examples/exampleArgs.h</code>): it renders N frames with no window, writes frame N and exits.</p>
+<p>With <code>EngineConfig::platform = PlatformType::HEADLESS</code> the engine opens no window, starts no SDL and reads no events of its own. The device has no surface. Each frame renders into one of two offscreen images of <code>windowWidth</code> × <code>windowHeight</code> pixels, which take the place of the swapchain: the tone map and every pass that writes "the swapchain" write there, and <a href="#readFrame"><code>readFrame</code></a> copies one back. With <code>EngineConfig::ui</code> the UI runs with no input unless you send some with <a href="#addInputEvent"><code>addInputEvent</code></a>: the RASM window and the windows of <a href="#setUiCallback"><code>setUiCallback</code></a> are drawn as with a window, and <code>readFrame</code> copies them. <code>running()</code> stays true until the engine is destroyed, so the program decides how many frames to render. <code>examples/16_headless</code> renders a scene and writes a PNG, and every example takes <code>--headless --frames N --out <samp>file.png</samp></code> (<code>examples/exampleArgs.h</code>): it renders N frames with no window, writes frame N and exits.</p>
 
 <pre><code>rasm::EngineConfig config = {
     .appName = "thumbnails",
@@ -1008,7 +1050,7 @@ rasm::Engine engine(config);</code></pre>
 <div class="api" id="getMainWindow">
   <pre class="sig">const Window&amp; getMainWindow() const;</pre>
   <div class="body">
-    <p>The window the engine renders to, with its current sizes and state (<code>minimized</code>, <code>resized</code>, mouse drag). It updates in <code>beginFrame</code>. Use the pixel size for viewports, like <code>examples/01_render_graph/main.cpp</code> does. Fields are in <a href="types.html#Window">types.html</a>.</p>
+    <p>The window the engine renders to, with its current sizes, content scale and state (<code>minimized</code>, <code>resized</code>). It updates in <code>beginFrame</code>. Use the pixel size for viewports, like <code>examples/01_render_graph/main.cpp</code> does. Fields are in <a href="types.html#Window">types.html</a>.</p>
     <pre><code>const auto &amp;window = engine.getMainWindow();
 const float width = static_cast&lt;float&gt;(window.pixelWidth);
 const float height = static_cast&lt;float&gt;(window.pixelHeight);
@@ -1019,7 +1061,7 @@ const float aspect = width / height;</code></pre>
 <div class="api" id="createWindow">
   <pre class="sig">Window createWindow(uint32_t width, uint32_t height);</pre>
   <div class="body">
-    <p>Asks the platform for a window. With SDL it starts SDL and opens a resizable Vulkan window titled "RASM Engine"; headless it returns a <code>Window</code> with no handle and a pixel size of <code>width</code> × <code>height</code>. The constructor calls it for the main window. A program has no use for it: a second window gets no rendering. With SDL it returns a <code>Window</code> with an invalid handle on failure (logged).</p>
+    <p>Asks the platform for a window. With SDL it starts SDL and opens a resizable window titled "RASM Engine"; with <code>NATIVE</code> it returns your window from <code>EngineConfig::nativeWindow</code>; headless it returns a <code>Window</code> with no handle and a pixel size of <code>width</code> × <code>height</code>. The constructor calls it for the main window. A program has no use for it: a second window gets no rendering. With SDL it returns a <code>Window</code> with an invalid handle on failure (logged).</p>
   </div>
 </div>
 
