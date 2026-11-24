@@ -69,6 +69,7 @@ namespace rasm
         uint32_t         pixelWidth          = 0;        // the drawable's size in pixels; 0: the config's windowWidth x windowHeight
         uint32_t         pixelHeight         = 0;
         float            contentScale        = 1.0f;     // the display's scale setting (1.5 at 150 %), which sizes the UI
+        bool             operator==(const NativeWindow&) const = default;
     };
 
     enum class Format
@@ -207,8 +208,17 @@ namespace rasm
         EntityHandle entity                  = {};       // the GPU tables' rows of this entity
     };
 
+    // What an AssetLoader is made with: the EngineConfig fields of loading.
+    struct AssetLoaderConfig
+    {
+        std::string  assetRoot               = {};       // relative load paths resolve against it; a relative one against the executable's folder
+        uint32_t     loadThreads             = 0;        // workers that read and decode loads; 0: the hardware's threads minus one for the main thread (at least 1)
+        uint64_t     loadMemoryBudget        = 512ull << 20; // decoded loads in memory at once (in jobs, or waiting for upload); a load that would pass it waits in the queue
+    };
+
     // What a Renderer is made with: EngineConfig without the platform, which a Renderer does not choose (its windows are
-    // the application's, or offscreen images). A field added here goes into EngineConfig too, and into toRendererConfig.
+    // the application's, or offscreen images), and without the AssetLoaderConfig fields. A field added here goes into
+    // EngineConfig too, and into toRendererConfig, toEngineConfig and tests/rendererConfigTests.cpp.
     struct RendererConfig
     {
         std::string  appName                 = {};
@@ -219,7 +229,6 @@ namespace rasm
         bool         enableSyncValidation    = false;
         bool         enableGpuValidation     = false;
         Backend      preferredBackend        = Backend::VULKAN;
-        std::string  assetRoot               = {};
         std::string  shaderDir               = {};
         std::string  cacheDir                = "cache";  // compiled shaders and the pipeline cache, beside the executable (an absolute path as is); "": no disk caches
         uint32_t     geometryPoolVertices    = 1u << 21; // 64 B each: 128 MiB
@@ -236,8 +245,6 @@ namespace rasm
         uint32_t     maxAnimatedEntities     = 1u << 14; // entities that play a clip, 120 B each, twice
         uint32_t     animationPoolBytes      = 16u << 20; // the nodes, key times and values of every loaded animation
         uint32_t     maxMorphWeights         = 1u << 16; // the morph weights of every posed entity, 4 B each, four times
-        uint32_t     loadThreads             = 0;        // workers that read and decode loads; 0: the hardware's threads minus one for the main thread (at least 1). A game with threads of its own sets fewer
-        uint64_t     loadMemoryBudget        = 512ull << 20; // decoded loads in memory at once (in jobs, or waiting for upload); a load that would pass it waits in the queue
         bool         showStats               = false;
         float        fixedDeltaTime          = 0.0f;     // seconds per frame for the cameras, the UI and the stats' refresh; 0: the measured frame time
         bool         occlusionCulling        = true;     // two-pass Hi-Z culling in the scene passes; false keeps frustum culling only
@@ -255,8 +262,8 @@ namespace rasm
         AntiAliasing antiAliasing            = AntiAliasing::NONE; // Renderer::render's scene target: MSAA draws it with several samples per pixel
     };
 
-    // What an Engine is made with: the RendererConfig fields, flat (designated initializers), and the platform. A
-    // renderer field added here goes into RendererConfig too, and into toRendererConfig.
+    // What an Engine is made with: the RendererConfig and AssetLoaderConfig fields, flat (designated initializers), and
+    // the platform. A field added here goes into its part's struct too, and into the conversions below.
     struct EngineConfig
     {
         std::string  appName                 = {};
@@ -302,6 +309,7 @@ namespace rasm
         bool         bloom                   = false;    // Renderer::render adds the bloom passes (Camera::bloomStrength)
         bool         ui                      = false;    // Dear ImGui (CMake RASM_IMGUI): the RASM window on F1 and Renderer::setUiCallback
         AntiAliasing antiAliasing            = AntiAliasing::NONE; // Renderer::render's scene target: MSAA draws it with several samples per pixel
+        bool         operator==(const EngineConfig&) const = default;
     };
 
     // The renderer's part of an EngineConfig. tests/rendererConfigTests.cpp checks that every field arrives.
@@ -316,7 +324,6 @@ namespace rasm
             .enableSyncValidation    = config.enableSyncValidation,
             .enableGpuValidation     = config.enableGpuValidation,
             .preferredBackend        = config.preferredBackend,
-            .assetRoot               = config.assetRoot,
             .shaderDir               = config.shaderDir,
             .cacheDir                = config.cacheDir,
             .geometryPoolVertices    = config.geometryPoolVertices,
@@ -333,8 +340,6 @@ namespace rasm
             .maxAnimatedEntities     = config.maxAnimatedEntities,
             .animationPoolBytes      = config.animationPoolBytes,
             .maxMorphWeights         = config.maxMorphWeights,
-            .loadThreads             = config.loadThreads,
-            .loadMemoryBudget        = config.loadMemoryBudget,
             .showStats               = config.showStats,
             .fixedDeltaTime          = config.fixedDeltaTime,
             .occlusionCulling        = config.occlusionCulling,
@@ -351,6 +356,62 @@ namespace rasm
             .ui                      = config.ui,
             .antiAliasing            = config.antiAliasing,
         };
+    }
+
+    // An Engine's config from its parts: its renderer's, its platform and its AssetLoader's (Engine::getConfig).
+    inline EngineConfig toEngineConfig(const RendererConfig& config, PlatformType platform, const AssetLoaderConfig& loader)
+    {
+        return {
+            .appName                 = config.appName,
+            .platform                = platform,
+            .windowWidth             = config.windowWidth,
+            .windowHeight            = config.windowHeight,
+            .nativeWindow            = config.nativeWindow,
+            .enableValidation        = config.enableValidation,
+            .enableSyncValidation    = config.enableSyncValidation,
+            .enableGpuValidation     = config.enableGpuValidation,
+            .preferredBackend        = config.preferredBackend,
+            .assetRoot               = loader.assetRoot,
+            .shaderDir               = config.shaderDir,
+            .cacheDir                = config.cacheDir,
+            .geometryPoolVertices    = config.geometryPoolVertices,
+            .geometryPoolColors      = config.geometryPoolColors,
+            .geometryPoolSkins       = config.geometryPoolSkins,
+            .geometryPoolMorphs      = config.geometryPoolMorphs,
+            .geometryPoolIndices     = config.geometryPoolIndices,
+            .geometryPoolSubMeshes   = config.geometryPoolSubMeshes,
+            .geometryPoolMeshlets    = config.geometryPoolMeshlets,
+            .geometryPoolMeshletData = config.geometryPoolMeshletData,
+            .maxInstances            = config.maxInstances,
+            .maxLights               = config.maxLights,
+            .maxMaterials            = config.maxMaterials,
+            .maxAnimatedEntities     = config.maxAnimatedEntities,
+            .animationPoolBytes      = config.animationPoolBytes,
+            .maxMorphWeights         = config.maxMorphWeights,
+            .loadThreads             = loader.loadThreads,
+            .loadMemoryBudget        = loader.loadMemoryBudget,
+            .showStats               = config.showStats,
+            .fixedDeltaTime          = config.fixedDeltaTime,
+            .occlusionCulling        = config.occlusionCulling,
+            .meshLods                = config.meshLods,
+            .lodErrorPixels          = config.lodErrorPixels,
+            .forcedLod               = config.forcedLod,
+            .meshletPath             = config.meshletPath,
+            .maxViewMeshlets         = config.maxViewMeshlets,
+            .asyncCompute            = config.asyncCompute,
+            .transferQueue           = config.transferQueue,
+            .clusteredLighting       = config.clusteredLighting,
+            .hostImageCopy           = config.hostImageCopy,
+            .bloom                   = config.bloom,
+            .ui                      = config.ui,
+            .antiAliasing            = config.antiAliasing,
+        };
+    }
+
+    // The AssetLoader's part of an EngineConfig.
+    inline AssetLoaderConfig toAssetLoaderConfig(const EngineConfig& config)
+    {
+        return {.assetRoot = config.assetRoot, .loadThreads = config.loadThreads, .loadMemoryBudget = config.loadMemoryBudget};
     }
 
     // What the engine-wide pools hold now: live objects, and the used part of each pool. A destroyed object's share comes

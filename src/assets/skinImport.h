@@ -2,7 +2,7 @@
 #pragma once
 
 #include "rasm/animation.h"
-#include "rasm/mesh.h"
+#include "assets/meshData.h"
 
 #include <cstddef>
 #include <cstdint>

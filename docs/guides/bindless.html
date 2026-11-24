@@ -749,7 +749,7 @@ free(slot):
   <tr><td><code>createMaterial</code></td><td>each valid texture it gets that has no slot yet</td><td><code>LINEAR_REPEAT</code></td></tr>
   <tr><td><code>updateMaterial</code></td><td>each valid texture of the new values that has no slot yet</td><td><code>LINEAR_REPEAT</code></td></tr>
   <tr><td><code>loadMaterial</code> (glTF)</td><td>each uploaded image, once per image, sampler and color space</td><td>from the glTF sampler (<code>toSamplerType</code>)</td></tr>
-  <tr><td><code>Renderer::finishEnvironmentLoad</code></td><td>an environment's image (<code>LINEAR_REPEAT</code>, since it wraps around) and its three cubes</td><td><code>LINEAR_CLAMP</code></td></tr>
+  <tr><td><code>Renderer::setEnvironmentImage</code></td><td>an environment's image (<code>LINEAR_REPEAT</code>, since it wraps around) and its three cubes</td><td><code>LINEAR_CLAMP</code></td></tr>
   <tr><td><code>Renderer::createEnvironments</code></td><td>the BRDF LUT, once</td><td><code>LINEAR_CLAMP</code></td></tr>
   <tr><td><code>Renderer::getUiTexture</code></td><td>a loaded texture that has no slot yet, for <code>ImGui::Image</code></td><td><code>LINEAR_REPEAT</code></td></tr>
   <tr><td>The UI (<code>buildUi</code>)</td><td>Dear ImGui's own textures</td><td><code>LINEAR_CLAMP</code></td></tr>
@@ -864,7 +864,7 @@ free(slot):
   <tr><td>Layout flags and features</td><td><code>VulkanDevice::createBindlessDescriptorSetLayout</code>, <code>VulkanDevice::createDescriptorPool</code>, the device feature list in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
   <tr><td>The six samplers</td><td><code>samplerDesc</code>, <code>RenderContext::initialize</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
   <tr><td>Slot numbers into the row</td><td><code>convertToGfxMaterial</code>, <code>Renderer::writeMaterialRow</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>Materials that take slots</td><td><code>Renderer::createMaterial</code>, <code>Renderer::updateMaterial</code>, <code>Renderer::loadMaterial</code> in <code>src/assets/material.cpp</code></td></tr>
+  <tr><td>Materials that take slots</td><td><code>Renderer::createMaterial</code>, <code>Renderer::updateMaterial</code>, <code>AssetLoader::Impl::loadMaterial</code> in <code>src/assets/material.cpp</code></td></tr>
   <tr><td>Waiting for textures</td><td><code>texturesLoaded</code>, <code>Renderer::refreshEntitiesAfterMaterialChange</code>, <code>Renderer::syncGpuScene</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Shader side</td><td><code>gTextures</code> in <code>shaders/passes/rasm.slang</code> and <code>shaders/passes/hiz.slang</code>; <code>hasTexture</code>, <code>sampleBaseColor</code> in <code>shaders/lib/core.slang</code></td></tr>
 </table>

@@ -171,7 +171,7 @@ def run_tests(preset):
 
 def example_names():
     text = open(os.path.join(REPO, "examples", "CMakeLists.txt")).read()
-    return re.findall(r"rasm_add_example\(\s*([A-Za-z0-9_]+)\s*\)", text)
+    return re.findall(r"rasm_add_example\(\s*([A-Za-z0-9_]+)[^)]*\)", text)
 
 
 def parse_messages(log):

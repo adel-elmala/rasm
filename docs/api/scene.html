@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Scenes and Meshes · RASM</title>
 <meta name="description" content="Scenes, entities, Transform, meshes (createMesh, loadMesh, loadGLTF, Vertex, SubMesh, MeshLod), animation and morph targets, lights, adding objects to scenes, when changes reach the GPU, and the limits.">
-<meta name="rasm-sources" content="include/rasm/scene.h include/rasm/animation.h src/renderer/animation.cpp src/assets/morphImport.cpp src/assets/environment.cpp src/renderer/environmentBake.cpp include/rasm/entity.h include/rasm/mesh.h include/rasm/light.h include/rasm/transform.h include/rasm/renderer.h include/rasm/types.h src/scene/scene.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/transform.cpp src/assets/mesh.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/material.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/gpuTable.cpp src/renderer/geometryPool.cpp src/core/handle.cpp shaders/lib/pbr.slang shaders/lib/core.slang examples/00_hello_scene/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp examples/05_city/main.cpp examples/14_morph_targets/main.cpp">
+<meta name="rasm-sources" content="include/rasm/scene.h include/rasm/animation.h src/renderer/animation.cpp src/assets/morphImport.cpp src/assets/environment.cpp src/renderer/environmentBake.cpp include/rasm/entity.h include/rasm/mesh.h include/rasm/light.h include/rasm/transform.h include/rasm/renderer.h include/rasm/types.h src/scene/scene.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/transform.cpp src/assets/mesh.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/material.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/gpuTable.cpp src/renderer/geometryPool.cpp src/core/handle.cpp shaders/lib/pbr.slang shaders/lib/core.slang examples/00_hello_scene/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp examples/05_city/main.cpp examples/14_morph_targets/main.cpp src/assets/meshData.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -359,7 +359,7 @@ engine.destroyTexture(tile.texture);</code></pre>
 <div class="api" id="loadMesh">
   <pre class="sig">MeshHandle loadMesh(const std::string&amp; path);</pre>
   <div class="body">
-    <p>Starts loading a <code>.obj</code>, <code>.gltf</code> or <code>.glb</code> file and returns its handle at once. The engine's load workers read and decode the file, each of its images on a worker of its own, and build its <a href="#MeshLod">LODs</a> when <code>EngineConfig::meshLods</code> is on (<a href="../guides/job-system.html">job systems</a>). A later <code>beginFrame</code> uploads it to the geometry pool, then <code>isLoaded</code> becomes true and the entities that use it are drawn.</p>
+    <p>Starts loading a <code>.obj</code>, <code>.gltf</code> or <code>.glb</code> file and returns its handle at once. An <a href="engine.html#AssetLoader"><code>AssetLoader</code></a> call; an <code>Engine</code> has it too, for its own loader. The loader's workers read and decode the file, each of its images on a worker of its own, and build its <a href="../guides/mesh-simplification.html">LODs</a> when <code>EngineConfig::meshLods</code> is on (<a href="../guides/job-system.html">job systems</a>). A later <code>beginFrame</code> uploads it to the geometry pool, then <code>isLoaded</code> becomes true and the entities that use it are drawn.</p>
     <dl>
       <dt>path</dt><dd>Relative to <code>EngineConfig::assetRoot</code> (see <a href="engine.html#resolveAssetPath"><code>resolveAssetPath</code></a>), or absolute. UTF-8. The extension is checked in lower case only.</dd>
     </dl>
@@ -411,7 +411,7 @@ rasm::EntityHandle entity = engine.createEntity("room", room, {}, transform); //
 <div class="api" id="createMesh">
   <pre class="sig">MeshHandle createMesh(std::vector&lt;Vertex&gt; vertices, std::vector&lt;uint32_t&gt; indices, std::vector&lt;uint32_t&gt; colors = {});</pre>
   <div class="body">
-    <p>Makes a mesh from your data, builds its <a href="#MeshLod">LODs</a> when <code>EngineConfig::meshLods</code> is on, and uploads it now (the copy reaches the GPU with the next frame). The mesh has one sub-mesh with no material, so its entities use their own material.</p>
+    <p>Makes a mesh from your data, builds its <a href="../guides/mesh-simplification.html">LODs</a> when <code>EngineConfig::meshLods</code> is on, and uploads it now (the copy reaches the GPU with the next frame). The mesh has one sub-mesh with no material, so its entities use their own material.</p>
     <dl>
       <dt>vertices</dt><dd>See <a href="#Vertex"><code>Vertex</code></a>. Set <code>tangent</code> to zero when you have none.</dd>
       <dt>indices</dt><dd>A triangle list, 3 per triangle, counting from 0 in <code>vertices</code>. Front faces are counter-clockwise seen from outside.</dd>
@@ -579,125 +579,13 @@ constexpr uint32_t MAX_MORPH_TARGETS = 256;</pre>
       <dt>firstColor, colorCount</dt><dd>The sub-mesh's vertex colors in the color pool; <code>colorCount</code> is 0 without colors.</dd>
       <dt>firstSkin, skinCount</dt><dd>The sub-mesh's <a href="#SkinVertex"><code>SkinVertex</code></a>es in the skin stream; <code>skinCount</code> is 0 when it is not skinned.</dd>
       <dt>firstMorph, morphCount, morphTargetCount</dt><dd>The sub-mesh's <a href="#MorphDelta"><code>MorphDelta</code></a>s in the morph stream: <code>morphCount</code> = <code>vertexCount</code> · <code>morphTargetCount</code>, target by target. Both are 0 without morph targets.</dd>
-      <dt>firstMeshlet, meshletCount, maxLodMeshlets</dt><dd>The sub-mesh's <a href="#Meshlet">meshlets</a> in the meshlet stream, of every LOD, and the most of one LOD (each instance keeps a visibility bit per meshlet of that LOD). 0 for a sub-mesh without meshlets.</dd>
+      <dt>firstMeshlet, meshletCount, maxLodMeshlets</dt><dd>The sub-mesh's <a href="../guides/meshlets.html">meshlets</a> in the meshlet stream, of every LOD, and the most of one LOD (each instance keeps a visibility bit per meshlet of that LOD). 0 for a sub-mesh without meshlets.</dd>
       <dt>firstMeshletData, meshletDataCount</dt><dd>Its <code>ObjRaw::meshletData</code> words in the meshlet data stream, which the mesh shaders read. Taken only where the device has mesh shaders (<a href="low-level.html#hasMeshShaders"><code>RenderContext::hasMeshShaders</code></a>), else 0; a sub-mesh whose data does not fit (<code>EngineConfig::geometryPoolMeshletData</code>) has no meshlets.</dd>
     </dl>
   </div>
 </div>
 
-<div class="api" id="ObjRaw">
-  <pre class="sig">struct ObjRaw
-{
-    std::vector&lt;Vertex&gt;   vertices;
-    std::vector&lt;uint32_t&gt; indices;
-    std::vector&lt;MeshLod&gt;  lods;
-    std::vector&lt;Meshlet&gt;  meshlets;
-    std::vector&lt;uint32_t&gt; lodMeshletCounts;
-    std::vector&lt;uint32_t&gt; meshletData;
-    std::vector&lt;uint32_t&gt; colors;
-    std::vector&lt;SkinVertex&gt; skin;
-    std::vector&lt;MorphDelta&gt; morphs;
-    uint32_t                morphTargetCount = 0;
-};</pre>
-  <div class="body">
-    <p>Decoded vertices and indices of one sub-mesh, before upload (also used for glTF).</p>
-    <dl>
-      <dt>indices</dt><dd>LOD 0, the full detail.</dd>
-      <dt>lods</dt><dd>LOD 1 and coarser, from fine to coarse; at most <code>MAX_MESH_LODS</code> − 1. Empty until the engine builds them, and for a sub-mesh under 1024 triangles.</dd>
-      <dt>meshlets, lodMeshletCounts</dt><dd>The <a href="#Meshlet"><code>Meshlet</code></a>s of LOD 0, then of each coarser LOD, and how many each LOD has. Built after the LODs, for a sub-mesh of 1024 triangles or more that is not skinned or morphed; building them writes each LOD's indices again in meshlet order (the same triangles). Empty otherwise.</dd>
-      <dt>meshletData</dt><dd>What a mesh shader reads, per meshlet: its vertices (the sub-mesh's, as its indices name them), then one word per triangle with three local vertex numbers, a byte each. Built with the meshlets.</dd>
-      <dt>colors</dt><dd>One packed vertex color per vertex (glTF <code>COLOR_0</code>), or empty.</dd>
-      <dt>skin</dt><dd>One <a href="#SkinVertex"><code>SkinVertex</code></a> per vertex (glTF <code>JOINTS_0</code> / <code>WEIGHTS_0</code>) for a skinned primitive, or empty.</dd>
-      <dt>morphs, morphTargetCount</dt><dd>The deltas of each morph target, target-major: target <var>t</var>'s delta of vertex <var>v</var> is at <code class="lang-text">t · vertices.size() + v</code>. Empty, and a count of 0, for a primitive without targets, or whose targets move nothing.</dd>
-    </dl>
-  </div>
-</div>
-
-<div class="api" id="MeshLod">
-  <pre class="sig">struct MeshLod
-{
-    std::vector&lt;uint32_t&gt; indices;
-    float                 error = 0.0f;
-};</pre>
-  <div class="body">
-    <p>One coarser level of detail of a sub-mesh, with about half the triangles of the one before. The engine builds them as a mesh loads (<code>EngineConfig::meshLods</code>); culling picks one per draw (<code>EngineConfig::lodErrorPixels</code>).</p>
-    <dl>
-      <dt>indices</dt><dd>A triangle list into the same vertices as LOD 0. So a LOD costs only indices.</dd>
-      <dt>error</dt><dd>How far this LOD's surface may be from LOD 0, in the mesh's own units. It never gets smaller from one LOD to the next.</dd>
-    </dl>
-  </div>
-</div>
-
-<div class="api" id="Meshlet">
-  <pre class="sig">struct Meshlet
-{
-    glm::vec3               center;
-    float                   radius;
-    glm::vec3               coneAxis;
-    float                   coneCutoff;
-    uint32_t                firstIndex;
-    uint32_t                indexCount;
-    uint32_t                firstData;
-    uint32_t                vertexCount;
-};</pre>
-  <div class="body">
-    <p>A piece of one LOD of a sub-mesh: at most 64 vertices and 124 triangles that lie close together, with its own bounds in object space. The engine builds them as a mesh loads; with a <a href="engine.html#setMeshletPath"><code>MeshletPath</code></a> other than <code>OFF</code> the scene passes cull and draw each one (<a href="../guides/meshlets.html">Meshlets and cluster culling</a>).</p>
-    <dl>
-      <dt>center, radius</dt><dd>A sphere around its triangles, for the frustum and Hi-Z tests.</dd>
-      <dt>coneAxis, coneCutoff</dt><dd>Its normal cone: every triangle's normal is within the cone around <code>coneAxis</code>. <code>coneCutoff</code> is the sine of the cone's half angle; 1 for a cone that cannot be culled.</dd>
-      <dt>firstIndex, indexCount</dt><dd>Its triangles: a range of its LOD's indices.</dd>
-      <dt>firstData, vertexCount</dt><dd>Where its vertices start in <code>ObjRaw::meshletData</code>, and how many (at most 64); its <code>indexCount</code> / 3 packed triangles follow them.</dd>
-    </dl>
-  </div>
-</div>
-
-<div class="api" id="SubGLTFRaw">
-  <pre class="sig">struct SubGLTFRaw
-{
-    ObjRaw    objRaw;
-    glm::mat4 transform;
-    int       materialIndex;
-    int       node         = -1;
-    int       animatedNode = -1;
-    int       skin         = -1;
-    uint32_t  firstJoint   = 0;
-    uint32_t  jointCount   = 0;
-    std::vector&lt;glm::vec4&gt; jointSpheres;
-    int32_t   firstWeight  = -1;
-};</pre>
-  <div class="body">
-    <p>One decoded sub-mesh with its node matrix, its glTF material index (−1 for none), its glTF node, and its node in <code>AnimationRaw::nodes</code> (−1 when no clip moves it).</p>
-    <dl>
-      <dt>skin</dt><dd>The glTF skin of a skinned primitive, −1 otherwise. A skinned primitive's <code>transform</code> is the identity: glTF ignores the node's matrix, the joints place it.</dd>
-      <dt>firstJoint, jointCount</dt><dd>Its skin's joints in <code>AnimationRaw::joints</code>. <code>jointCount</code> is 0 when it is not skinned, also when its skin does not import; it then draws its bind pose.</dd>
-      <dt>jointSpheres</dt><dd>Per joint of its skin, the sphere (center, radius) around the bind-pose vertices the joint moves; radius −1 for a joint that moves none. The GPU moves them to bound the posed mesh (<a href="../guides/skinning.html">Skinning</a>).</dd>
-      <dt>firstWeight</dt><dd>Its node's first weight in <code>AnimationRaw::morphWeights</code>; −1 without morph targets.</dd>
-    </dl>
-  </div>
-</div>
-
-<div class="api" id="GLTFRaw">
-  <pre class="sig">struct GLTFRaw
-{
-    std::vector&lt;SubGLTFRaw&gt;          subGltfRaws;
-    std::shared_ptr&lt;tinygltf::Model&gt; model;
-    AnimationRaw                     animation;
-    bool                             loaded = false;
-};</pre>
-  <div class="body"><p>What the worker thread hands back for one file: the sub-meshes, the parsed glTF model (for its materials and images; empty for OBJ), its animations and whether the file loaded. It is freed once the mesh is uploaded.</p></div>
-</div>
-
-<div class="api" id="GltfImportCache">
-  <pre class="sig">struct GltfImportCache
-{
-    std::unordered_map&lt;int, MaterialHandle&gt;      materials;
-    std::unordered_map&lt;uint64_t, TextureHandle&gt; imageTextures;
-    const GLTFRaw*                               raw         = nullptr;
-    std::unordered_set&lt;const TextureRaw*&gt;      countedLevels;
-    uint64_t                                     movedBytes  = 0;
-};</pre>
-  <div class="body"><p>Used while one glTF file is imported, so primitives that share a material, and materials that share an image, create it only once. <code>raw</code> is the import's result; <code>countedLevels</code> and <code>movedBytes</code> count the decoded levels whose share of <code>EngineConfig::loadMemoryBudget</code> moved from the mesh's load to its textures (<a href="../guides/job-system.html#in-rasm">job systems</a>).</p></div>
-</div>
+<p>A mesh's data on its way in, before the geometry pool (<code>ObjRaw</code> with its <code>MeshLod</code>s and <code>Meshlet</code>s) and what a glTF import hands back (<code>SubGLTFRaw</code>, <code>GLTFRaw</code>, <code>GltfImportCache</code>), are private, in <code>src/assets/meshData.h</code>: an application passes plain arrays to <a href="#createMesh"><code>createMesh</code></a>, or a path to an <a href="engine.html#AssetLoader"><code>AssetLoader</code></a>. How the LODs and meshlets are built is in <a href="../guides/mesh-simplification.html">Mesh simplification</a> and <a href="../guides/meshlets.html">Meshlets</a>.</p>
 
 <h2 id="animation"><span class="n">5</span>Animation</h2>
 
@@ -1052,7 +940,7 @@ engine.setSceneEnvironment(scene, {});</code></pre>
 <div class="api" id="loadEnvironment">
   <pre class="sig">EnvironmentHandle loadEnvironment(const std::string& path);</pre>
   <div class="body">
-    <p>Loads an equirectangular (2:1 panorama) Radiance <samp>.hdr</samp> image, in the background like <a href="#loadMesh"><code>loadMesh</code></a>. A relative path starts from <code>EngineConfig::assetRoot</code>. The header is read at once; a missing file, another extension or an image that is not HDR logs an error and returns an invalid handle. A worker decodes the pixels. The next <a href="engine.html#beginFrame"><code>beginFrame</code></a> after that creates the textures, and the frame after (or the same one) prepares the light on the GPU, before any pass: about 1 ms for a 2048 × 1024 image. Until then a scene that uses it looks as if it had none.</p>
+    <p>Loads an equirectangular (2:1 panorama) Radiance <samp>.hdr</samp> image, in the background like <a href="#loadMesh"><code>loadMesh</code></a>. An <a href="engine.html#AssetLoader"><code>AssetLoader</code></a> call; an <code>Engine</code> has it too, for its own loader. A relative path starts from <code>AssetLoaderConfig::assetRoot</code>. The header is read at once; a missing file, another extension or an image that is not HDR logs an error and returns an invalid handle. A worker decodes the pixels. The next <a href="engine.html#beginFrame"><code>beginFrame</code></a> after that creates the textures, and the frame after (or the same one) prepares the light on the GPU, before any pass: about 1 ms for a 2048 × 1024 image. Until then a scene that uses it looks as if it had none.</p>
     <p>Each call loads the file again (no cache). <a href="#destroyEnvironment"><code>destroyEnvironment</code></a> frees one you no longer need, for example to change the sky with the time of day.</p>
   </div>
 </div>

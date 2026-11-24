@@ -2,7 +2,7 @@
 #pragma once
 
 #include "rasm/handle.h"
-#include "rasm/mesh.h"
+#include "assets/meshData.h"
 #include "rasm/types.h"
 #include "core/rangeAllocator.h"
 

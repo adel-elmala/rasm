@@ -821,7 +821,7 @@ target = u for a half-edge collapse, the best new point for a full one</code></p
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>Building the chain</td><td><code>buildMeshLods</code>, <code>weldVertices</code>, <code>MIN_LOD_TRIANGLES</code>, <code>MIN_LAST_LOD_TRIANGLES</code> in <code>src/assets/meshLod.cpp</code></td></tr>
-  <tr><td>Where it is called</td><td><code>Renderer::loadMesh</code> (worker) and <code>Renderer::createMesh</code> in <code>src/assets/mesh.cpp</code></td></tr>
+  <tr><td>Where it is called</td><td><code>AssetLoader::loadMesh</code> (worker) and <code>Renderer::createMesh</code> in <code>src/assets/mesh.cpp</code></td></tr>
   <tr><td>CPU result</td><td><code>MeshLod</code>, <code>ObjRaw</code>, <code>MAX_MESH_LODS</code> in <code>include/rasm/mesh.h</code></td></tr>
   <tr><td>The switch</td><td><code>EngineConfig::meshLods</code> in <code>include/rasm/types.h</code></td></tr>
   <tr><td>Pool layout and table row</td><td><code>GeometryPool::upload</code> in <code>src/renderer/geometryPool.cpp</code></td></tr>

@@ -411,7 +411,7 @@ engine.setSceneEnvironment(scene, rasm::SceneEnvironment{.environment = sunset, 
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>Input</td><td>an equirectangular panorama or a cube</td><td>A Radiance <samp>.hdr</samp> panorama only (<code>Renderer::loadEnvironment</code>), decoded with <code>stbi_loadf</code>, clamped to 65504 and packed to half floats on a worker.</td></tr>
+  <tr><td>Input</td><td>an equirectangular panorama or a cube</td><td>A Radiance <samp>.hdr</samp> panorama only (<code>AssetLoader::loadEnvironment</code>), decoded with <code>stbi_loadf</code>, clamped to 65504 and packed to half floats on a worker.</td></tr>
   <tr><td>Cube size</td><td>a quarter of the width</td><td><code>getEnvironmentCubeSize</code>: a quarter of the width as a power of two, 64 to 1024 (<code>ENVIRONMENT_MIN_CUBE_SIZE</code>, <code>ENVIRONMENT_MAX_CUBE_SIZE</code>). 4 reads of the image per texel, v kept half a texel inside it (the sampler repeats, for u), then a 2x2 box per mip.</td></tr>
   <tr><td>Irradiance</td><td>a small cube or 9 SH numbers</td><td>A cube of <code>IRRADIANCE_CUBE_SIZE</code> (32), 512 cosine samples per texel, filtered importance sampling.</td></tr>
   <tr><td>Specular</td><td>one roughness per mip</td><td><code>SPECULAR_CUBE_SIZE</code> (256) with <code>SPECULAR_MIPS</code> (6): mip m is roughness m / 5, 256 GGX samples per texel, mip 0 a copy. The shader reads <code>roughness × 5</code>, with perceptual roughness.</td></tr>
@@ -428,8 +428,8 @@ engine.setSceneEnvironment(scene, rasm::SceneEnvironment{.environment = sunset, 
 <div class="table-wrap">
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
-  <tr><td>API</td><td><code>Renderer::loadEnvironment</code>, <code>Renderer::isLoaded</code>, <code>Renderer::setSceneEnvironment</code>, <code>SceneEnvironment</code> in <code>include/rasm/scene.h</code></td></tr>
-  <tr><td>Loading</td><td><code>decodeEnvironment</code> and <code>Renderer::finishEnvironmentLoad</code> in <code>src/assets/environment.cpp</code></td></tr>
+  <tr><td>API</td><td><code>AssetLoader::loadEnvironment</code>, <code>Renderer::isLoaded</code>, <code>Renderer::setSceneEnvironment</code>, <code>SceneEnvironment</code> in <code>include/rasm/scene.h</code></td></tr>
+  <tr><td>Loading</td><td><code>decodeEnvironment</code> and <code>Renderer::setEnvironmentImage</code> in <code>src/assets/environment.cpp</code></td></tr>
   <tr><td>The bake</td><td><code>Renderer::recordEnvironmentBakes</code> and <code>Renderer::finishEnvironmentBakes</code> in <code>src/renderer/environmentBake.cpp</code>; state in <code>Environments</code>, sizes and storage slots in <code>src/renderer/environmentBake.h</code></td></tr>
   <tr><td>Bake shaders</td><td><code>cubeMain</code>, <code>downsampleMain</code>, <code>specularMain</code>, <code>irradianceMain</code>, <code>brdfMain</code> in <code>shaders/passes/environment.slang</code></td></tr>
   <tr><td>Shading</td><td><code>getEnvironmentLight</code>, <code>getSampleMip</code>, <code>sampleGgx</code>, <code>getEquirectUV</code>, <code>toEnvironment</code> in <code>shaders/lib/environment.slang</code>; called from <code>shadePBR</code> in <code>shaders/lib/pbr.slang</code></td></tr>

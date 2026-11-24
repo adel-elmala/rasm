@@ -2,9 +2,12 @@
 
 #include "rasm/engine.h"
 
-// Every renderer field of an EngineConfig must reach the Renderer: a field added to both structs but not to
-// toRendererConfig keeps its default here, and its check fails.
-TEST_CASE("toRendererConfig copies every renderer field")
+#include <filesystem>
+#include <fstream>
+
+// Every field of an EngineConfig must reach the Renderer or the AssetLoader, and come back: a field added to the structs
+// but not to a conversion keeps its default here, and its check fails.
+TEST_CASE("The config conversions copy every field")
 {
     int display = 0;
     int window = 0;
@@ -69,7 +72,6 @@ TEST_CASE("toRendererConfig copies every renderer field")
     CHECK(renderer.enableSyncValidation != defaults.enableSyncValidation);
     CHECK(renderer.enableGpuValidation != defaults.enableGpuValidation);
     CHECK(renderer.preferredBackend == rasm::Backend::METAL);
-    CHECK(renderer.assetRoot == "assets here");
     CHECK(renderer.shaderDir == "shaders here");
     CHECK(renderer.cacheDir == "cache here");
     CHECK(renderer.geometryPoolVertices == 11);
@@ -86,8 +88,6 @@ TEST_CASE("toRendererConfig copies every renderer field")
     CHECK(renderer.maxAnimatedEntities == 22);
     CHECK(renderer.animationPoolBytes == 23);
     CHECK(renderer.maxMorphWeights == 24);
-    CHECK(renderer.loadThreads == 25);
-    CHECK(renderer.loadMemoryBudget == 26);
     CHECK(renderer.showStats != defaults.showStats);
     CHECK(renderer.fixedDeltaTime == 0.25f);
     CHECK(renderer.occlusionCulling != defaults.occlusionCulling);
@@ -103,6 +103,14 @@ TEST_CASE("toRendererConfig copies every renderer field")
     CHECK(renderer.bloom != defaults.bloom);
     CHECK(renderer.ui != defaults.ui);
     CHECK(renderer.antiAliasing == rasm::AntiAliasing::TAA);
+
+    const rasm::AssetLoaderConfig loader = rasm::toAssetLoaderConfig(engine);
+    CHECK(loader.assetRoot == "assets here");
+    CHECK(loader.loadThreads == 25);
+    CHECK(loader.loadMemoryBudget == 26);
+
+    // And back, as Engine::getConfig builds it: every field arrives in both directions.
+    CHECK(rasm::toEngineConfig(renderer, engine.platform, loader) == engine);
 }
 
 // A Renderer that can't start (no window size) runs nothing and stays safe to call, without SDL or a GPU.
@@ -115,4 +123,58 @@ TEST_CASE("A Renderer that did not start is safe")
     rasm::Renderer *base = new rasm::Engine(rasm::EngineConfig{.platform = rasm::PlatformType::HEADLESS, .cacheDir = ""});
     CHECK_FALSE(base->running());
     delete base;
+}
+
+// An Engine's getConfig is an EngineConfig again, the platform included.
+TEST_CASE("Engine::getConfig gives the EngineConfig")
+{
+    const rasm::Engine engine(rasm::EngineConfig{.platform = rasm::PlatformType::HEADLESS, .cacheDir = "", .loadThreads = 1, .forcedLod = 2});
+    const rasm::EngineConfig config = engine.getConfig();
+    CHECK(config.platform == rasm::PlatformType::HEADLESS);
+    CHECK(config.loadThreads == 1);
+    CHECK(config.forcedLod == 2);
+}
+
+// The renderer must outlive its loader. The other order is an error, not a crash: the loader drops its loads and refuses
+// every call after that.
+TEST_CASE("An AssetLoader outlived by nothing, or by its renderer")
+{
+    {
+        rasm::Renderer renderer(rasm::RendererConfig{.cacheDir = ""});
+        rasm::AssetLoader loader(renderer, {.loadThreads = 1});
+        CHECK(renderer.getLoadStats().workers == 1);
+        CHECK_FALSE(loader.loadMesh("no such file.gltf").isValid());
+        renderer.waitForLoads();
+    }
+    auto *renderer = new rasm::Renderer(rasm::RendererConfig{.cacheDir = ""});
+    auto *loader = new rasm::AssetLoader(*renderer, {.loadThreads = 1});
+    delete renderer;
+    CHECK_FALSE(loader->loadTexture("anything.png").isValid());
+    loader->waitForLoads();
+    delete loader;
+
+    // A loader destroyed with a load in flight leaves the renderer with no loader: the next one attaches.
+    {
+        rasm::Renderer alive(rasm::RendererConfig{.cacheDir = ""});
+        const std::filesystem::path obj = std::filesystem::temp_directory_path() / "rasm_loader_lifetime.obj";
+        std::ofstream(obj) << "v 0 0 0" << std::endl
+                           << "v 1 0 0" << std::endl
+                           << "v 0 1 0" << std::endl
+                           << "f 1 2 3" << std::endl;
+        {
+            rasm::AssetLoader first(alive, {.loadThreads = 1});
+            CHECK(first.loadMesh(obj.string()).isValid());
+        }
+        rasm::AssetLoader next(alive, {.loadThreads = 1});
+        CHECK(alive.getLoadStats().workers == 1);
+        std::filesystem::remove(obj);
+    }
+
+    // A second loader on one renderer is refused, and the first keeps working.
+    rasm::Renderer shared(rasm::RendererConfig{.cacheDir = ""});
+    rasm::AssetLoader first(shared, {.loadThreads = 1});
+    rasm::AssetLoader second(shared, {.loadThreads = 1});
+    CHECK(shared.getLoadStats().workers == 1);
+    CHECK(second.getLoadStats().workers == 0);
+    CHECK_FALSE(second.loadMesh("no such file.gltf").isValid());
 }

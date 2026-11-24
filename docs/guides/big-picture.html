@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Big Picture · RASM</title>
 <meta name="description" content="The first stop of the engine tour: the layers of RASM from the application down to Vulkan, the source folders, public and private headers, who owns which object, creation dedup, how scenes, entities, meshes and materials relate, and which example shows what.">
-<meta name="rasm-sources" content="include/rasm/rasm.h include/rasm/renderer.h include/rasm/engine.h src/engine.cpp include/rasm/handle.h include/rasm/types.h include/rasm/entity.h include/rasm/scene.h include/rasm/mesh.h include/rasm/material.h include/rasm/light.h include/rasm/camera.h include/rasm/transform.h include/rasm/window.h include/rasm/render/renderContext.h include/rasm/render/renderGraph.h include/rasm/render/resource.h src/renderer/renderer.cpp src/core/handle.cpp src/rhi/renderContext.cpp src/rhi/resource.cpp src/rhi/textureStates.h src/rhi/textureStates.cpp src/rhi/device.h src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.h src/rhi/vulkan/vulkanTypes.h src/scene/scene.cpp src/scene/entity.cpp src/scene/camera.cpp src/scene/light.cpp src/assets/mesh.cpp src/assets/meshLod.cpp src/assets/material.cpp src/assets/texture.cpp src/renderer/gpuScene.h src/renderer/viewGraph.h src/renderer/viewGraph.cpp src/renderer/renderGraph.cpp src/CMakeLists.txt examples/CMakeLists.txt examples/00_hello_scene/main.cpp examples/01_render_graph/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp examples/04_compute/main.cpp examples/05_city/main.cpp examples/06_shadows/main.cpp examples/21_renderer/main.cpp">
+<meta name="rasm-sources" content="include/rasm/rasm.h include/rasm/renderer.h include/rasm/engine.h src/engine.cpp include/rasm/handle.h include/rasm/types.h include/rasm/entity.h include/rasm/scene.h include/rasm/mesh.h include/rasm/material.h include/rasm/light.h include/rasm/camera.h include/rasm/transform.h include/rasm/window.h include/rasm/render/renderContext.h include/rasm/render/renderGraph.h include/rasm/render/resource.h src/renderer/renderer.cpp src/core/handle.cpp src/rhi/renderContext.cpp src/rhi/resource.cpp src/rhi/textureStates.h src/rhi/textureStates.cpp src/rhi/device.h src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.h src/rhi/vulkan/vulkanTypes.h src/scene/scene.cpp src/scene/entity.cpp src/scene/camera.cpp src/scene/light.cpp src/assets/mesh.cpp src/assets/meshLod.cpp src/assets/material.cpp src/assets/texture.cpp src/renderer/gpuScene.h src/renderer/viewGraph.h src/renderer/viewGraph.cpp src/renderer/renderGraph.cpp src/CMakeLists.txt examples/CMakeLists.txt examples/00_hello_scene/main.cpp examples/01_render_graph/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp examples/04_compute/main.cpp examples/05_city/main.cpp examples/06_shadows/main.cpp examples/21_renderer/main.cpp include/rasm/assetLoader.h src/renderer/loadHooks.h src/thirdparty_loaders_impl.cpp cmake/rasmConfig.cmake.in cmake/RasmExample.cmake">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -149,21 +149,31 @@
 <p>An application that owns its window, its event loop or its data (an editor, a map viewer, a server that renders images) creates a <code>Renderer</code>. An application that wants everything made for it creates an <code>Engine</code>. The arrows go one way: nothing points back up.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 300" role="img" aria-label="Engine is a Renderer plus the platform it picks. The Renderer holds its Platform and its RenderContext. The Platform is SDL from Engine, or native or headless from a Renderer alone. RenderContext holds rhi::Device. No arrow points up.">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Engine is a Renderer that owns an AssetLoader and picks the platform. Your program can create a Renderer alone, and an AssetLoader for it. The AssetLoader loads into the Renderer. The Renderer holds its Platform and its RenderContext, which holds rhi::Device. No arrow points up.">
     <rect x="20" y="16" width="220" height="56" rx="6" class="box"/>
     <text x="130" y="38" class="mid title">Engine</text>
     <text x="130" y="58" class="mid small">final: picks the platform, overrides nothing</text>
-    <rect x="300" y="16" width="220" height="56" rx="6" class="box"/>
-    <text x="410" y="38" class="mid title">your program</text>
-    <text x="410" y="58" class="mid small">its window, its loop, its meshes</text>
+    <rect x="520" y="16" width="220" height="56" rx="6" class="box"/>
+    <text x="630" y="38" class="mid title">your program</text>
+    <text x="630" y="58" class="mid small">its window, its loop, its meshes</text>
 
-    <rect x="160" y="110" width="300" height="56" rx="6" class="cpu"/>
-    <text x="310" y="132" class="mid title">Renderer</text>
-    <text x="310" y="152" class="mid small">scene objects, GPU scene, frame, UI, swapchains</text>
-    <line x1="130" y1="72" x2="230" y2="108" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <text x="118" y="96" class="small">is a</text>
-    <line x1="410" y1="72" x2="380" y2="108" class="arrow" marker-end="url(#ah)"/>
-    <text x="404" y="96" class="small">creates one</text>
+    <rect x="20" y="110" width="220" height="56" rx="6" class="cpu"/>
+    <text x="130" y="132" class="mid title">AssetLoader</text>
+    <text x="130" y="152" class="mid small">files on workers: glTF, OBJ, KTX2, HDR</text>
+    <rect x="290" y="110" width="300" height="56" rx="6" class="cpu"/>
+    <text x="440" y="132" class="mid title">Renderer</text>
+    <text x="440" y="152" class="mid small">scene objects, GPU scene, frame, UI, swapchains</text>
+
+    <line x1="130" y1="72" x2="130" y2="108" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="138" y="94" class="small">owns</text>
+    <line x1="200" y1="72" x2="350" y2="108" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="276" y="86" class="small">is a</text>
+    <line x1="630" y1="72" x2="540" y2="108" class="arrow" marker-end="url(#ah)"/>
+    <text x="598" y="96" class="small">creates one</text>
+    <path d="M520,64 C420,80 300,96 236,108" class="arrow dashed" marker-end="url(#ah)"/>
+    <text x="276" y="52" class="small">and a loader, if it reads files</text>
+    <line x1="240" y1="138" x2="288" y2="138" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="246" y="130" class="small">loads</text>
 
     <rect x="20" y="206" width="250" height="56" rx="6" class="cpu"/>
     <text x="145" y="228" class="mid title">Platform</text>
@@ -174,28 +184,26 @@
     <rect x="580" y="206" width="160" height="56" rx="6" class="cpu"/>
     <text x="660" y="228" class="mid title">rhi::Device</text>
     <text x="660" y="248" class="mid small">Vulkan today</text>
-    <line x1="250" y1="166" x2="170" y2="204" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <text x="214" y="194" class="small">windows, events</text>
-    <line x1="370" y1="166" x2="430" y2="204" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <text x="442" y="186" class="small">GPU objects</text>
+    <line x1="350" y1="166" x2="200" y2="204" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="150" y="186" class="small">windows, events</text>
+    <line x1="460" y1="166" x2="450" y2="204" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="462" y="190" class="small">GPU objects</text>
     <line x1="540" y1="234" x2="578" y2="234" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <line x1="88" y1="72" x2="88" y2="204" class="arrow dashed" marker-end="url(#ah)"/>
-    <text x="40" y="150" class="small">SDL</text>
-    <text x="380" y="288" class="mid small">The arrows go down only: RenderContext knows no Renderer, Renderer knows no Engine.</text>
+    <text x="380" y="288" class="mid small">The arrows go down only: the Renderer knows no AssetLoader and no Engine, RenderContext no Renderer.</text>
   </svg>
-  <figcaption><code>Engine</code> is a <code>Renderer</code> that passes the SDL platform when <code>EngineConfig::platform</code> is <code>SDL</code>; with <code>NATIVE</code> or <code>HEADLESS</code> it does what a <code>Renderer</code> does. A <code>Renderer</code> alone takes the native platform (<code>RendererConfig::nativeWindow</code>) or the headless one. <code>Renderer</code> has no virtual function but its destructor, so a frame makes no virtual call for this split. The loaders are still the <code>Renderer</code>'s (<b>D3</b>).</figcaption>
+  <figcaption><code>Engine</code> is a <code>Renderer</code> that passes the SDL platform when <code>EngineConfig::platform</code> is <code>SDL</code> (with <code>NATIVE</code> or <code>HEADLESS</code> it does what a <code>Renderer</code> does) and owns an <code>AssetLoader</code>. A <code>Renderer</code> alone takes the native platform (<code>RendererConfig::nativeWindow</code>) or the headless one. The renderer finishes a loader's loads at the start of each frame through <code>LoadHooks</code>, an interface of its own, so it links no loader: <code>rasm::renderer</code> is one library, <code>rasm::rasm</code> (Engine, SDL, AssetLoader) another. The renderer must outlive its loader. <code>Renderer</code> has no virtual function but its destructor, so a frame makes no virtual call for this split. Scenes, entities and the other scene objects stay the <code>Renderer</code>'s: the GPU tables mirror them row by row.</figcaption>
 </figure>
 
 <div class="table-wrap">
 <table>
   <tr><th>You want</th><th>Create</th><th>Example</th></tr>
-  <tr><td>a window, input and file loading made for you</td><td><code>Engine</code> with <code>PlatformType::SDL</code></td><td><code>examples/00_hello_scene</code></td></tr>
-  <tr><td>to draw into your own window, with your event loop</td><td><code>Renderer</code> with <code>RendererConfig::nativeWindow</code></td><td><code>examples/19_embedding</code></td></tr>
-  <tr><td>images only, no window (a server, thumbnails, tests)</td><td><code>Renderer</code> with no <code>nativeWindow</code></td><td><code>examples/21_renderer</code></td></tr>
+  <tr><td>a window, input and file loading made for you</td><td><code>Engine</code> with <code>PlatformType::SDL</code> (link <code>rasm::rasm</code>)</td><td><code>examples/00_hello_scene</code></td></tr>
+  <tr><td>to draw into your own window, with your event loop, and load files</td><td><code>Renderer</code> with <code>RendererConfig::nativeWindow</code>, and an <code>AssetLoader</code> (link <code>rasm::rasm</code>)</td><td><code>examples/19_embedding</code></td></tr>
+  <tr><td>images only, from your own data (a server, thumbnails, tests)</td><td><code>Renderer</code> with no <code>nativeWindow</code> (link only <code>rasm::renderer</code>: no SDL3, no file libraries)</td><td><code>examples/21_renderer</code></td></tr>
 </table>
 </div>
 
-<p>The work is split over many <code>.cpp</code> files, all <code>Renderer</code> methods but <code>Engine</code>'s constructor (<code>src/engine.cpp</code>). The next section shows which folder holds which part.</p>
+<p>The renderer's work is split over many <code>.cpp</code> files of <code>Renderer</code> methods; the loader's is <code>AssetLoader::Impl</code> (<code>src/assets/assetLoader.cpp</code> and the <code>*Load.cpp</code> files), and <code>Engine</code>'s is <code>src/engine.cpp</code>. The next section shows which folder holds which part.</p>
 
 <h2 id="folders"><span class="n">2</span>The source folders</h2>
 

@@ -246,7 +246,14 @@ find_package(rasm 0.1 CONFIG REQUIRED)
 target_link_libraries(my_app PRIVATE rasm::rasm)
 ```
 
-- RASM is a static library, so the project also needs RASM's link dependencies: volk, the Vulkan headers, vk-bootstrap, VulkanMemoryAllocator, glm, SDL3, Tracy, spdlog, tinyobjloader, meshoptimizer, Slang, libktx and, with `RASM_IMGUI`, Dear ImGui. With vcpkg, add `volk`, `vulkan-headers`, `vk-bootstrap`, `vulkan-memory-allocator`, `glm`, `sdl3`, `tracy` with the `on-demand` feature, `spdlog`, `tinyobjloader`, `meshoptimizer`, `shader-slang` and `ktx` to its manifest (and `imgui` for a RASM built with `RASM_IMGUI`, the default; `find_package(rasm)` then finds it with `find_dependency`), and copy the `ktx` block of `cmake/triplets/` into its own triplets to leave out the ETC decoder.
+An application that uses only the renderer (`rasm::Renderer`, no `Engine`, no `AssetLoader`) asks for that component and links that library, and needs none of SDL3, tinyobjloader and libktx:
+
+```cmake
+find_package(rasm 0.1 CONFIG REQUIRED COMPONENTS renderer)
+target_link_libraries(my_app PRIVATE rasm::renderer)
+```
+
+- RASM is two static libraries, so the project also needs their link dependencies: for `rasm::renderer` volk, the Vulkan headers, vk-bootstrap, VulkanMemoryAllocator, glm, Tracy, spdlog, meshoptimizer, Slang and, with `RASM_IMGUI`, Dear ImGui; `rasm::rasm` adds SDL3, tinyobjloader and libktx. With vcpkg, add `volk`, `vulkan-headers`, `vk-bootstrap`, `vulkan-memory-allocator`, `glm`, `sdl3`, `tracy` with the `on-demand` feature, `spdlog`, `tinyobjloader`, `meshoptimizer`, `shader-slang` and `ktx` to its manifest (and `imgui` for a RASM built with `RASM_IMGUI`, the default; `find_package(rasm)` then finds it with `find_dependency`), and copy the `ktx` block of `cmake/triplets/` into its own triplets to leave out the ETC decoder.
 - Shaders are compiled at runtime, so the application needs them when it ships. By default the engine looks in a `shaders/` folder next to the executable. `find_package(rasm)` sets `rasm_SHADER_DIR` to the folder holding them, so a build step can copy them there:
 
   ```cmake

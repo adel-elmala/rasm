@@ -1,7 +1,5 @@
 #include "platform/paths.h"
 
-#include "SDL3/SDL_error.h"
-#include "SDL3/SDL_filesystem.h"
 #include "spdlog/spdlog.h"
 
 #include <cstdlib>
@@ -21,16 +19,23 @@ namespace rasm
 {
     namespace
     {
+        // The executable's folder, as SDL_GetBasePath gave it: in a macOS app bundle, Contents/Resources beside the
+        // executable's Contents/MacOS.
         std::filesystem::path getExecutableDir()
         {
-            const char *basePath = SDL_GetBasePath();
-            if (basePath == nullptr)
+            const std::string executable = getModulePath(nullptr);
+            if (executable.empty())
             {
                 // An empty result leaves callers relative to the working directory, which is the best guess left.
-                spdlog::error("Failed to find the executable's directory: {}", SDL_GetError());
+                spdlog::error("Failed to find the executable's directory.");
                 return {};
             }
-            return pathFromUtf8(basePath);
+            const std::filesystem::path folder = pathFromUtf8(executable).lexically_normal().parent_path();
+#if defined(__APPLE__)
+            if (folder.filename() == "MacOS" && folder.parent_path().filename() == "Contents")
+                return folder.parent_path() / "Resources";
+#endif
+            return folder;
         }
 
         std::string getExecutableName()

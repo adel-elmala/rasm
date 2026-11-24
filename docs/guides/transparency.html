@@ -365,7 +365,7 @@
 <div class="table-wrap">
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
-  <tr><td>The alpha mode and cutoff of a material</td><td><code>Material::alphaMode</code>, <code>alphaCutoff</code> in <code>include/rasm/material.h</code>; glTF import in <code>Renderer::loadMaterial</code> (<code>src/assets/material.cpp</code>)</td></tr>
+  <tr><td>The alpha mode and cutoff of a material</td><td><code>Material::alphaMode</code>, <code>alphaCutoff</code> in <code>include/rasm/material.h</code>; glTF import in <code>AssetLoader::Impl::loadMaterial</code> (<code>src/assets/material.cpp</code>)</td></tr>
   <tr><td>Runs by alpha mode and cull mode</td><td><code>Renderer::rebuildDrawList</code>, <code>getRunKey</code> in <code>src/renderer/gpuScene.cpp</code>; <code>DrawRun</code> in <code>src/renderer/gpuScene.h</code></td></tr>
   <tr><td>The pipelines</td><td><code>Renderer::prepareSceneView</code> in <code>src/renderer/gpuScene.cpp</code>; <code>fragMain</code> in <code>shaders/passes/rasm.slang</code>; <code>vertMask</code>, <code>fragMask</code> in <code>shaders/passes/shadow.slang</code></td></tr>
   <tr><td>The blend state</td><td><code>BlendMode</code> in <code>include/rasm/types.h</code>, <code>PipelineDesc</code> in <code>include/rasm/render/resource.h</code>, <code>VulkanDevice::createGraphicsPipeline</code></td></tr>

@@ -1,0 +1,229 @@
+#include "assets/assetLoaderImpl.h"
+#include "assets/ktxImage.h"
+#include "assets/meshImport.h"
+
+#include "spdlog/spdlog.h"
+
+#include "tiny_gltf.h"
+
+namespace rasm
+{
+    namespace
+    {
+        // Maps a glTF sampler onto the shared set. wrapS picks the address mode for both axes, and magFilter
+        // picks nearest or linear for every filter.
+        SamplerType toSamplerType(const tinygltf::Model &model, int samplerIndex)
+        {
+            if (samplerIndex < 0 || samplerIndex >= static_cast<int>(model.samplers.size()))
+                return SamplerType::LINEAR_REPEAT;
+
+            const auto &sampler = model.samplers[samplerIndex];
+            const bool nearest = sampler.magFilter == TINYGLTF_TEXTURE_FILTER_NEAREST;
+            switch (sampler.wrapS)
+            {
+            case TINYGLTF_TEXTURE_WRAP_CLAMP_TO_EDGE:
+                return nearest ? SamplerType::NEAREST_CLAMP : SamplerType::LINEAR_CLAMP;
+            case TINYGLTF_TEXTURE_WRAP_MIRRORED_REPEAT:
+                return nearest ? SamplerType::NEAREST_MIRRORED_REPEAT : SamplerType::LINEAR_MIRRORED_REPEAT;
+            default:
+                return nearest ? SamplerType::NEAREST_REPEAT : SamplerType::LINEAR_REPEAT;
+            }
+        }
+
+        float getNumber(const tinygltf::Value &object, const char *name, float fallback)
+        {
+            const tinygltf::Value &value = object.Get(name);
+            return value.IsNumber() ? static_cast<float>(value.GetNumberAsDouble()) : fallback;
+        }
+
+        glm::vec2 getVec2(const tinygltf::Value &object, const char *name, glm::vec2 fallback)
+        {
+            const tinygltf::Value &value = object.Get(name);
+            if (!value.IsArray() || value.ArrayLen() < 2 || !value.Get(0).IsNumber() || !value.Get(1).IsNumber())
+                return fallback;
+            return glm::vec2(static_cast<float>(value.Get(0).GetNumberAsDouble()), static_cast<float>(value.Get(1).GetNumberAsDouble()));
+        }
+
+        // KHR_texture_transform on a texture reference. Its texCoord, when present, replaces the reference's.
+        TextureTransform getTextureTransform(const tinygltf::ExtensionMap &extensions, int &texCoord)
+        {
+            auto it = extensions.find("KHR_texture_transform");
+            if (it == extensions.end() || !it->second.IsObject())
+                return {};
+            const tinygltf::Value &transform = it->second;
+            const tinygltf::Value &transformTexCoord = transform.Get("texCoord");
+            if (transformTexCoord.IsInt())
+                texCoord = transformTexCoord.GetNumberAsInt();
+            return {.offset = getVec2(transform, "offset", glm::vec2(0.0f)), .rotation = getNumber(transform, "rotation", 0.0f), .scale = getVec2(transform, "scale", glm::vec2(1.0f))};
+        }
+
+        AlphaMode toAlphaMode(const std::string &alphaMode)
+        {
+            if (alphaMode == "MASK")
+                return AlphaMode::MASK;
+            if (alphaMode == "BLEND")
+                return AlphaMode::BLEND;
+            return AlphaMode::NONE;
+        }
+    }
+
+    MaterialHandle AssetLoader::Impl::loadMaterial(const tinygltf::Model &model, int materialIndex, GltfImportCache &cache)
+    {
+        if (materialIndex < 0 || materialIndex >= static_cast<int>(model.materials.size()))
+            return {};
+
+        // Primitives share materials and materials share images; create each of them once per model.
+        if (auto it = cache.materials.find(materialIndex); it != cache.materials.end())
+            return it->second;
+
+        const HandleSlot slot = renderer->registry.materialHandles.allocate();
+        if (slot.index == 0)
+        {
+            spdlog::error("The material table is full: {} materials are alive. RendererConfig::maxMaterials ({}) sets its size.", renderer->registry.materialHandles.liveCount(), renderer->config.maxMaterials);
+            return {};
+        }
+        const MaterialHandle handle{slot.index, slot.generation};
+
+        auto mat = Material{.handle = handle, .type = MaterialType::PBR, .textures = {}};
+
+        const tinygltf::Material *material = &model.materials[materialIndex];
+
+        if (material->extensions.count("KHR_materials_unlit") != 0)
+            mat.type = MaterialType::UNLIT;
+        mat.doubleSided = material->doubleSided;
+        mat.alphaMode = toAlphaMode(material->alphaMode);
+        mat.alphaCutoff = static_cast<float>(material->alphaCutoff);
+
+        // glTF lets each texture pick its own TEXCOORD_n set. The vertex data carries
+        // MAX_VERTEX_UV_SETS sets; anything beyond that is out of our support for now.
+        auto resolveTexCoord = [&](int texCoord, const char *slotName) -> uint32_t
+        {
+            if (texCoord < 0 || texCoord >= static_cast<int>(MAX_VERTEX_UV_SETS))
+            {
+                spdlog::warn("Material '{}' references {} texCoord set {} but only {} sets are supported; falling back to TEXCOORD_0.",
+                             material->name, slotName, texCoord, MAX_VERTEX_UV_SETS);
+                return 0;
+            }
+            return static_cast<uint32_t>(texCoord);
+        };
+
+        // KHR_texture_transform may name another texCoord set, so the transform is read first.
+        auto readTexture = [&](PbrSlot slot, int texCoord, const tinygltf::ExtensionMap &extensions, const char *slotName)
+        {
+            const auto index = static_cast<uint32_t>(slot);
+            mat.textureTransforms[index] = getTextureTransform(extensions, texCoord);
+            mat.texCoords[index] = resolveTexCoord(texCoord, slotName);
+        };
+        readTexture(PbrSlot::ALBEDO, material->pbrMetallicRoughness.baseColorTexture.texCoord, material->pbrMetallicRoughness.baseColorTexture.extensions, "baseColor");
+        readTexture(PbrSlot::METALLIC, material->pbrMetallicRoughness.metallicRoughnessTexture.texCoord, material->pbrMetallicRoughness.metallicRoughnessTexture.extensions, "metallicRoughness");
+        mat.textureTransforms[static_cast<uint32_t>(PbrSlot::ROUGHNESS)] = mat.textureTransforms[static_cast<uint32_t>(PbrSlot::METALLIC)];
+        mat.texCoords[static_cast<uint32_t>(PbrSlot::ROUGHNESS)] = mat.texCoords[static_cast<uint32_t>(PbrSlot::METALLIC)];
+        readTexture(PbrSlot::NORMAL, material->normalTexture.texCoord, material->normalTexture.extensions, "normal");
+        readTexture(PbrSlot::OCCLUSION, material->occlusionTexture.texCoord, material->occlusionTexture.extensions, "occlusion");
+        readTexture(PbrSlot::EMISSIVE, material->emissiveTexture.texCoord, material->emissiveTexture.extensions, "emissive");
+
+        {
+            // glTF defaults: metallicFactor = 1.0, roughnessFactor = 1.0. tinygltf keeps those
+            // defaults even when no metallicRoughness texture exists, so always copy them over.
+            mat.params[static_cast<uint32_t>(PbrParam::METALLIC)] = static_cast<float>(material->pbrMetallicRoughness.metallicFactor);
+            mat.params[static_cast<uint32_t>(PbrParam::ROUGHNESS)] = static_cast<float>(material->pbrMetallicRoughness.roughnessFactor);
+
+            // Same for the base color factor: a material may tint with it without any texture.
+            mat.params[static_cast<uint32_t>(PbrParam::ALBEDO)] = static_cast<float>(material->pbrMetallicRoughness.baseColorFactor[0]);
+            mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 1] = static_cast<float>(material->pbrMetallicRoughness.baseColorFactor[1]);
+            mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 2] = static_cast<float>(material->pbrMetallicRoughness.baseColorFactor[2]);
+            mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 3] = static_cast<float>(material->pbrMetallicRoughness.baseColorFactor[3]);
+
+            // Color textures are sRGB; material data is linear (glTF 2.0). The worker made every level (a KTX2 transcode,
+            // or an image's mips), so a texture is created here and filled by finishLoads under its budget (P2).
+            auto uploadTexture = [&](int textureIndex, KtxSlot slot) -> TextureHandle
+            {
+                if (textureIndex < 0 || textureIndex >= static_cast<int>(model.textures.size()))
+                    return {};
+                const SamplerType sampler = toSamplerType(model, model.textures[textureIndex].sampler);
+                // KHR_texture_basisu first, transcoded on the worker for this kind of slot. Without it, or when its
+                // image failed, the texture's own source (a PNG or JPEG fallback) is used.
+                const int basisuSource = getBasisuSource(model, textureIndex);
+                std::shared_ptr<const TextureRaw> levels;
+                bool ktx = false;
+                int source = model.textures[textureIndex].source;
+                if (basisuSource >= 0 && cache.raw)
+                {
+                    const auto format = cache.raw->ktxFormats.find(getKtxSlotKey(basisuSource, slot));
+                    const auto image = format != cache.raw->ktxFormats.end() ? cache.raw->ktxImages.find(getKtxImageKey(basisuSource, format->second)) : cache.raw->ktxImages.end();
+                    if (image != cache.raw->ktxImages.end())
+                    {
+                        levels = image->second;
+                        source = basisuSource;
+                        ktx = true;
+                    }
+                }
+                if (source < 0 || source >= static_cast<int>(model.images.size()))
+                    return {};
+                // The worker logged why an image has no levels.
+                if (!levels && cache.raw)
+                {
+                    const auto image = cache.raw->imageLevels.find(getImageLevelsKey(source, slot));
+                    levels = image != cache.raw->imageLevels.end() ? image->second : nullptr;
+                }
+                if (!levels)
+                    return {};
+
+                // Upload each (image, levels, sampler) once per model. A texture handle has one bindless slot, so the
+                // rare image used with two samplers is uploaded twice; a normal map's renormalized levels are their own
+                // texture too.
+                const uint64_t cacheKey = (static_cast<uint64_t>(source) << 16) | (static_cast<uint64_t>(sampler) << 8) |
+                                          (static_cast<uint64_t>(!ktx && slot == KtxSlot::NORMAL) << 7) | static_cast<uint64_t>(levels->format);
+                if (auto it = cache.imageTextures.find(cacheKey); it != cache.imageTextures.end())
+                    return it->second;
+
+                const auto &image = model.images[source];
+                const std::string name = image.uri.empty() ? "glTF image " + std::to_string(source) : image.uri;
+                auto texture = renderer->createTexture({.name = name,
+                                                        .width = levels->width,
+                                                        .height = levels->height,
+                                                        .format = levels->format,
+                                                        .usage = TextureUsage::SAMPLED,
+                                                        .mipLevels = static_cast<uint32_t>(levels->levelSizes.size())});
+                if (!texture.isValid())
+                    return {};
+                // Its levels take their share of the load's budget bytes with them, until the texture is filled; levels
+                // two textures share are counted once.
+                const uint64_t bytes = cache.countedLevels.insert(levels.get()).second ? levels->levels.size() : 0;
+                cache.movedBytes += bytes;
+                pendingTextures.emplace(texture, PendingTextureLoad{.handle = texture, .path = name, .levels = std::move(levels), .bytes = bytes});
+                renderer->loadingTextures.insert(texture);
+                renderer->addBindlessTexture(renderer->bindlessDescriptorSet, texture, sampler);
+                cache.imageTextures[cacheKey] = texture;
+                return texture;
+            };
+
+            mat.textures[static_cast<uint32_t>(PbrSlot::ALBEDO)] =
+                uploadTexture(material->pbrMetallicRoughness.baseColorTexture.index, KtxSlot::COLOR);
+            // Unlit shading reads only the base color; the PBR textures are a fallback for viewers without the extension.
+            if (mat.type != MaterialType::UNLIT)
+            {
+                auto mr = uploadTexture(material->pbrMetallicRoughness.metallicRoughnessTexture.index, KtxSlot::DATA);
+                mat.textures[static_cast<uint32_t>(PbrSlot::METALLIC)] = mr;
+                mat.textures[static_cast<uint32_t>(PbrSlot::ROUGHNESS)] = mr;
+                mat.textures[static_cast<uint32_t>(PbrSlot::NORMAL)] = uploadTexture(material->normalTexture.index, KtxSlot::NORMAL);
+                mat.textures[static_cast<uint32_t>(PbrSlot::OCCLUSION)] = uploadTexture(material->occlusionTexture.index, KtxSlot::OCCLUSION);
+                mat.textures[static_cast<uint32_t>(PbrSlot::EMISSIVE)] = uploadTexture(material->emissiveTexture.index, KtxSlot::COLOR);
+            }
+            mat.params[static_cast<uint32_t>(PbrParam::NORMAL_SCALE)] = static_cast<float>(material->normalTexture.scale);
+            mat.params[static_cast<uint32_t>(PbrParam::OCCLUSION_STRENGTH)] = static_cast<float>(material->occlusionTexture.strength);
+            for (uint32_t i = 0; i < 3; ++i)
+                mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR) + i] = static_cast<float>(material->emissiveFactor[i]);
+            float emissiveStrength = 1.0f;
+            if (auto it = material->extensions.find("KHR_materials_emissive_strength"); it != material->extensions.end())
+                emissiveStrength = getNumber(it->second, "emissiveStrength", 1.0f);
+            mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_STRENGTH)] = emissiveStrength;
+        }
+
+        renderer->registry.materials.resize(renderer->registry.materialHandles.size());
+        renderer->registry.materials[handle.index] = mat;
+        renderer->writeMaterialRow(handle);
+        cache.materials[materialIndex] = handle;
+        return handle;
+    }
+}

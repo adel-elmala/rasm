@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-RASM is an early-stage C++20 GPU-driven rendering engine (static lib target `rasm`, alias `rasm::rasm`, + example executables). Vulkan 1.4 is the only backend today; Metal, D3D12 and WebGPU are planned. Shaders are written in Slang. Target users: indie games, visualization tools, map engines.
+RASM is an early-stage C++20 GPU-driven rendering engine (two static libs: `rasm::renderer`, the renderer alone, and `rasm::rasm`, which adds the Engine, the SDL platform and the AssetLoader; + example executables). Vulkan 1.4 is the only backend today; Metal, D3D12 and WebGPU are planned. Shaders are written in Slang. Target users: indie games, visualization tools, map engines.
 
 ## Docs — read the relevant one before changing code
 
@@ -38,7 +38,7 @@ cmake --install build\x64-debug                        # into install/, for find
 ```
 
 - Requires `VCPKG_ROOT`; presets use Ninja + `clang++`. Options: `-DRASM_ENABLE_AVX2=ON` (x86 only), `-DRASM_IMGUI=OFF` (no Dear ImGui), `-DRASM_BUILD_EXAMPLES=OFF`, `-DRASM_BUILD_TESTS=OFF`, `-DRASM_INSTALL=OFF`, `-DRASM_SHADER_DIR=<path>`.
-- A new dependency linked to `rasm`, PUBLIC or PRIVATE, also needs a `find_dependency` line in `cmake/rasmConfig.cmake.in`: `rasm` is static, so consumers link it too.
+- A new dependency linked to `rasm_renderer` or `rasm`, PUBLIC or PRIVATE, also needs a `find_dependency` line in `cmake/rasmConfig.cmake.in`, in that target's part (the `renderer` component, or `rasm`): both are static, so consumers link it too. `rasm_renderer` never links SDL3, tinygltf, tinyobjloader or libktx (`examples/21_renderer` links only it).
 - Run `clang-format -i <file>` on `.cpp` files you change. It keeps line breaks (no column limit) and skips `// clang-format off` regions. Every header is wrapped in those guards and hand-aligned in columns, so new headers need them too (see `docs/coding_style.md` section 4).
 - `rasm_tests` (doctest, no GPU) covers CPU-side code only. Verify rendering changes by running the examples with `EngineConfig::enableValidation = true` — a change that adds validation messages is not done. Run them headless (`--headless --frames N --out <png>`, which `verify-change` does), so no window opens.
 - Analysis (local only, see [docs/build_guide.md](docs/build_guide.md#static-and-dynamic-analysis)): every build has `RASM_WARNINGS` on and must stay warning-free. `cmake --build --preset x64-tidy` runs clang-tidy (`.clang-tidy`) and `x64-asan` builds with ASan + UBSan (`macOS-asan`, `macOS-tsan` on macOS). Turn a check off only with a reason in `.clang-tidy`, or `// NOLINT(<check>): <reason>` at the site.
@@ -48,7 +48,7 @@ cmake --install build\x64-debug                        # into install/, for find
 
 | Adding | Where | Also |
 |---|---|---|
-| A part (`.h` + `.cpp`) | camelCase names, in its layer's folder (`src/scene/`, `src/rhi/vulkan/`, ...). Public header in `include/rasm/` only if applications use it. | Add the `.cpp` to `target_sources(rasm PRIVATE ...)` in `src/CMakeLists.txt`, next to its folder's files. Public headers need no entry: every `.h` under `include/` is picked up and installed. |
+| A part (`.h` + `.cpp`) | camelCase names, in its layer's folder (`src/scene/`, `src/rhi/vulkan/`, ...). Public header in `include/rasm/` only if applications use it. | Add the `.cpp` to `target_sources(rasm_renderer PRIVATE ...)` in `src/CMakeLists.txt`, next to its folder's files, or to `target_sources(rasm PRIVATE ...)` for the Engine, the SDL platform and the file loaders. Public headers need no entry: every `.h` under `include/` is picked up and installed. |
 | Any header | — | Whole file inside `// clang-format off` ... `// clang-format on`, then `#pragma once`, with declarations hand-aligned in columns (`docs/coding_style.md` section 4). |
 | An example | `examples/NN_name/main.cpp` | `rasm_add_example(NN_name)` in `examples/CMakeLists.txt`. Set `enableValidation = true`, `assetRoot = RASM_EXAMPLE_ASSET_ROOT`, `shaderDir = RASM_EXAMPLE_SHADER_DIR` like `02_gltf`. Parse the run flags with `parseExampleArgs` (`examples/exampleArgs.h`), call `applyExampleArgs(args, config)` before creating the engine, `waitForLoads` before the loop under `--wait-for-loads`, loop on `exampleRunning(engine, args)` instead of `engine.running()`, and `return exampleExit(args);` from `main`, so `--headless --frames N --out <png>` works and fails with exit code 1 when the frame was not written. |
 | A test | `tests/<name>Tests.cpp` | Add it to the `rasm_tests` list in `tests/CMakeLists.txt`. |
@@ -59,7 +59,7 @@ Then run `clang-format -i` on the new `.cpp` files and build. CMake reconfigures
 ## Layout
 
 - `include/rasm/` is the public API, with the low-level API in `include/rasm/render/`.
-- `src/` is private: `core/`, `platform/`, `assets/`, `scene/`, `renderer/`, `rhi/` (+ `rhi/vulkan/`). `src/thirdparty_impl.cpp` is the only file that defines `*_IMPLEMENTATION` macros.
+- `src/` is private: `core/`, `platform/`, `assets/`, `scene/`, `renderer/`, `rhi/` (+ `rhi/vulkan/`). `src/thirdparty_impl.cpp` (the renderer's) and `src/thirdparty_loaders_impl.cpp` (the loaders') are the only files that define `*_IMPLEMENTATION` macros.
 - `tests/` links `rasm::rasm` like any application. It also has `src/` on its include path, only to test private classes against a fake `rhi::Device` (see `tests/uploadManagerTests.cpp`).
 - Private headers are included relative to `src/` (e.g. `"rhi/vulkan/vulkanDevice.h"`). `src/` is a PRIVATE include directory, so public headers can't include private ones; forward-declare, or use a private `Impl` like `RenderContext` does.
 

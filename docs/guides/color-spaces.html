@@ -892,8 +892,8 @@ encode (linear light L → sRGB code s):
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>Formats</td><td><code>Format</code> in <code>include/rasm/types.h</code></td></tr>
-  <tr><td>glTF color vs data</td><td><code>Renderer::loadMaterial</code> (its texture upload, with an sRGB flag per texture) in <code>src/assets/material.cpp</code></td></tr>
-  <tr><td>Loading a texture file</td><td><code>Renderer::loadTexture</code> in <code>src/assets/texture.cpp</code>; its default format in <code>include/rasm/engine.h</code></td></tr>
+  <tr><td>glTF color vs data</td><td><code>AssetLoader::Impl::loadMaterial</code> (its texture upload, with an sRGB flag per texture) in <code>src/assets/material.cpp</code></td></tr>
+  <tr><td>Loading a texture file</td><td><code>AssetLoader::loadTexture</code> in <code>src/assets/texture.cpp</code>; its default format in <code>include/rasm/renderer.h</code></td></tr>
   <tr><td>sRGB-correct mips</td><td><code>VulkanDevice::fillTexture</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
   <tr><td>Swapchain format</td><td><code>buildSwapchain</code> in <code>src/rhi/vulkan/vulkanSwapchain.cpp</code>; headless, <code>OffscreenSwapchain::FORMAT</code> in <code>src/rhi/offscreenSwapchain.h</code></td></tr>
   <tr><td>Lighting</td><td><code>shadePBR</code> in <code>shaders/lib/pbr.slang</code>; <code>shadeUnlit</code> in <code>shaders/lib/unlit.slang</code></td></tr>
