@@ -207,7 +207,18 @@ namespace rasm
 
     ReadbackHandle Engine::readFrame(ReadbackFormat format)
     {
+        return readFrame(WindowHandle{}, format);
+    }
+
+    ReadbackHandle Engine::readFrame(WindowHandle window, ReadbackFormat format)
+    {
+        if (window.isValid() && !isLive(window))
+        {
+            spdlog::error("readFrame: the window is invalid or was removed.");
+            return {};
+        }
         // Every image of a swapchain is made alike, so the first one tells.
+        const Swapchain &swapchain = frameOf(window).swapchain;
         const TextureDesc desc = swapchain.imageHandles.empty() ? TextureDesc{} : ctx.getTextureDesc(swapchain.imageHandles[0]);
         if (!desc.readable)
         {
@@ -216,7 +227,7 @@ namespace rasm
         }
         const HandleSlot slot = registry.readbackHandles.allocate();
         const ReadbackHandle handle{slot.index, slot.generation};
-        readbacks->pending.push_back({.handle = handle, .format = format});
+        readbacks->pending.push_back({.handle = handle, .window = window, .format = format});
         return handle;
     }
 
@@ -310,7 +321,17 @@ namespace rasm
         {
             if (pending.recorded || pending.failed)
                 continue;
-            const TextureHandle texture = pending.texture.isValid() ? pending.texture : swapchain.imageHandles[imageIdx];
+            // A window removed since fails; one with no image this frame (minimized) waits for a frame that has one.
+            if (!pending.texture.isValid() && pending.window.isValid() && !isLive(pending.window))
+            {
+                pending.failed = true;
+                spdlog::error("A readback of a removed window failed; takeReadback returns false for it.");
+                continue;
+            }
+            const WindowFrame &window = frameOf(pending.window);
+            if (!pending.texture.isValid() && !window.acquired)
+                continue;
+            const TextureHandle texture = pending.texture.isValid() ? pending.texture : window.swapchain.imageHandles[window.imageIdx];
             const TextureDesc &desc = ctx.getTextureDesc(texture);
             pending.sourceFormat = desc.format;
             pending.width = std::max(1u, desc.width >> pending.mip);

@@ -225,7 +225,7 @@ public:
     void               write(BufferHandle handle);
     void               write(RenderTargetHandle rt, uint32_t face = 0);
     void               write(const BufferHandle (&amp;perFrame)[MAX_FRAMES_IN_FLIGHT]);
-    void               writeSwapchain();
+    void               writeSwapchain(WindowHandle window = {});
 };</pre>
   <div class="body">
     <p>Given to your <code>setup</code> callback. It records what one pass uses. The graph makes it; you do not construct one.</p>
@@ -316,9 +316,9 @@ void write(const BufferHandle (&amp;perFrame)[MAX_FRAMES_IN_FLIGHT]);</pre>
 </div>
 
 <div class="api" id="writeSwapchain">
-  <pre class="sig">void writeSwapchain();</pre>
+  <pre class="sig">void writeSwapchain(WindowHandle window = {});</pre>
   <div class="body">
-    <p>This graphics pass draws into this frame's swapchain image: the window. Passes that draw into the swapchain run in the order they were added. A pass that declares neither <code>write(rt)</code> nor <code>writeSwapchain()</code>, or both, makes <code>compile</code> fail with <code>Pass '…' must write either one render target or the swapchain.</code></p>
+    <p>This graphics pass draws into this frame's swapchain image of <code>window</code>: the main window for an invalid handle, or one from <a href="engine.html#addWindow"><code>Engine::addWindow</code></a>. Each window's swapchain is a resource of its own: passes that draw into one window run in the order they were added, the first clears it and each later one loads it. A pass whose window has no image this frame (minimized, out of date, removed) is skipped, with its barriers. A pass that declares neither <code>write(rt)</code> nor <code>writeSwapchain()</code>, or both, makes <code>compile</code> fail with <code>Pass '…' must write either one render target or the swapchain.</code></p>
   </div>
 </div>
 

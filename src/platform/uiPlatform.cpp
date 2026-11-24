@@ -122,6 +122,7 @@ namespace rasm
         case InputEventType::FOCUS:
             io.AddFocusEvent(event.down);
             break;
+        case InputEventType::WINDOW_CLOSE:
         case InputEventType::NONE:
             break;
         }

@@ -189,17 +189,17 @@ namespace rasm
         if (!config.showStats || slot.rows == 0)
             return;
 
-        const uint32_t scale = std::max(1u, swapchain.height / 1080);
+        const uint32_t scale = std::max(1u, windowFrames[MAIN_WINDOW_INDEX].swapchain.height / 1080);
         const OverlayPushConstants pushConstants{.text = ctx.getBufferDeviceAddress(slot.text),
                                                  .grid = slot.columns | slot.rows << 8 | scale << 16,
-                                                 .screen = swapchain.width | swapchain.height << 16};
+                                                 .screen = windowFrames[MAIN_WINDOW_INDEX].swapchain.width | windowFrames[MAIN_WINDOW_INDEX].swapchain.height << 16};
         const auto commandBuffer = frameResources[frameCount].commandBuffer;
-        const TextureHandle image = swapchain.imageHandles[imageIdx];
+        const TextureHandle image = windowFrames[MAIN_WINDOW_INDEX].swapchain.imageHandles[windowFrames[MAIN_WINDOW_INDEX].imageIdx];
 
         ctx.transitionImageLayout(commandBuffer, image, TextureUsage::COLOR_ATTACHMENT);
         ctx.beginRendering(commandBuffer, &image, 1, {}, glm::vec4(0.0f), {.loadColor = true});
-        ctx.setViewport(commandBuffer, 0.0f, 0.0f, static_cast<float>(swapchain.width), static_cast<float>(swapchain.height));
-        ctx.setScissor(commandBuffer, 0, 0, swapchain.width, swapchain.height);
+        ctx.setViewport(commandBuffer, 0.0f, 0.0f, static_cast<float>(windowFrames[MAIN_WINDOW_INDEX].swapchain.width), static_cast<float>(windowFrames[MAIN_WINDOW_INDEX].swapchain.height));
+        ctx.setScissor(commandBuffer, 0, 0, windowFrames[MAIN_WINDOW_INDEX].swapchain.width, windowFrames[MAIN_WINDOW_INDEX].swapchain.height);
         ctx.setCullMode(commandBuffer, CullMode::NONE);
         ctx.bindPipeline(commandBuffer, statsOverlay->pipeline);
         ctx.pushConstants(commandBuffer, statsOverlay->pipeline, &pushConstants, sizeof(pushConstants), 0);

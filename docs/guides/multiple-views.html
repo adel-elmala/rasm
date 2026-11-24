@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Many Views of One Scene · RASM</title>
-<meta name="description" content="Split screen, picture-in-picture, editor viewports and render to texture: a view is a camera and an output, a viewport is a rect of the window, a view texture is an image other passes sample, and a view's history belongs to the view. How RASM draws a list of views in one frame.">
-<meta name="rasm-sources" content="include/rasm/view.h include/rasm/engine.h include/rasm/types.h include/rasm/scene.h include/rasm/render/renderContext.h src/renderer/view.cpp src/renderer/renderer.h src/renderer/renderer.cpp src/renderer/toneMap.cpp src/renderer/taa.h src/renderer/taa.cpp src/renderer/ui.cpp src/renderer/gpuScene.cpp src/rhi/renderContext.cpp src/engine.cpp examples/20_views/main.cpp tests/viewTests.cpp tests/image/imageTests.cpp">
+<meta name="description" content="Split screen, picture-in-picture, editor viewports, render to texture and more windows: a view is a camera and an output, a viewport is a rect of a window, a view texture is an image other passes sample, a view's history belongs to the view, and each window has a swapchain of its own. How RASM draws a list of views in one frame.">
+<meta name="rasm-sources" content="include/rasm/view.h include/rasm/engine.h include/rasm/types.h include/rasm/scene.h include/rasm/render/renderContext.h src/renderer/view.cpp src/renderer/renderer.h src/renderer/renderer.cpp src/renderer/toneMap.cpp src/renderer/taa.h src/renderer/taa.cpp src/renderer/ui.cpp src/renderer/gpuScene.cpp src/rhi/renderContext.cpp src/engine.cpp examples/20_views/main.cpp tests/viewTests.cpp tests/image/imageTests.cpp include/rasm/window.h include/rasm/input.h src/platform/platform.h src/platform/sdlPlatform.cpp src/platform/nativePlatform.cpp src/platform/headlessPlatform.cpp src/rhi/device.h src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanQueue.cpp src/rhi/vulkan/vulkanDevice.cpp src/renderer/renderGraph.cpp src/renderer/readback.cpp examples/19_embedding/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -44,6 +44,7 @@
     <li>A <b>view texture</b> is a normal image: a material or the UI samples it. A pass after its writer sees this frame's picture, a pass before it sees the last frame's. A camera that sees its own screen gets the last frame: no cycle.</li>
     <li>A view's <b>history</b> (last frame's depth and visibility, TAA) belongs to the view. Find it by what the view is (its camera and output), not by its place in the list.</li>
     <li>An extra view costs a <b>fixed part</b> (culling, depth pyramid, small passes) and a <b>part per pixel</b>. Split one window in two and the pixel part stays about the same.</li>
+    <li>A view can go to <b>another window</b>. Each window has a swapchain of its own; one submit waits for every window's image and presents them all. A minimized window sits the frame out.</li>
   </ul>
 </div>
 
@@ -259,7 +260,69 @@
 
 <p>Each view's camera listens to its own rect of the window. A press inside the rect starts a drag that belongs to that view until the release, even when the mouse leaves the rect. The wheel goes to the view under the pointer. The rect in window points is the viewport's fractions times the window's size in points. The <a href="camera-controllers.html#who-drives">camera controllers</a> guide draws it: two views, two inputs, one window.</p>
 
-<h2 id="pitfalls"><span class="n">9</span>Pitfalls</h2>
+<h2 id="windows"><span class="n">9</span>Views in other windows</h2>
+
+<p>An editor puts a viewport on a second monitor; a tool shows a preview in a window of its own. A window on screen needs a <a href="swapchain.html">swapchain</a>, its ring of images, made from the window's surface. So a second window is a second swapchain, and the frame now has two images to wait for and two to present.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="One frame with two windows. The CPU acquires an image from window 1 and from window 2. The frame's passes draw into both images. The one graphics submit waits for both acquire semaphores and signals both present semaphores. Then each window is presented. A third window is minimized: it gets no image and no passes, and the frame still runs.">
+    <text x="20" y="22" class="title">one frame, three windows</text>
+    <rect x="20" y="36" width="150" height="40" rx="6" class="cpu"/><text x="95" y="60" class="mid small">acquire window 1</text>
+    <rect x="20" y="86" width="150" height="40" rx="6" class="cpu"/><text x="95" y="110" class="mid small">acquire window 2</text>
+    <rect x="20" y="136" width="150" height="40" rx="6" class="ghost"/><text x="95" y="160" class="mid small t-faint">window 3: minimized</text>
+    <line x1="170" y1="56" x2="236" y2="90" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="170" y1="106" x2="236" y2="106" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="240" y="60" width="250" height="90" rx="6" class="gpu"/>
+    <text x="365" y="84" class="mid">one submit</text>
+    <text x="365" y="104" class="mid small">waits: image 1, image 2</text>
+    <text x="365" y="122" class="mid small">passes draw both windows</text>
+    <text x="365" y="140" class="mid small">signals: present 1, present 2</text>
+    <line x1="490" y1="90" x2="566" y2="56" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="490" y1="120" x2="566" y2="106" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="570" y="36" width="170" height="40" rx="6" class="cpu"/><text x="655" y="60" class="mid small">present window 1</text>
+    <rect x="570" y="86" width="170" height="40" rx="6" class="cpu"/><text x="655" y="110" class="mid small">present window 2</text>
+    <text x="20" y="206" class="small">Each window's passes are their own: the first clears its image, later ones load it.</text>
+    <text x="20" y="226" class="small">A window with no image this frame (minimized, being resized) is skipped with its passes.</text>
+    <text x="20" y="244" class="small">The frame is skipped only when no window has an image.</text>
+  </svg>
+  <figcaption>One submit for all windows keeps the frame's work in one place on the GPU timeline: the frame fence covers every window. Presenting a window does not wait for another window's display.</figcaption>
+</figure>
+
+<p>Three more things change with a second window. The <b>surface</b> of the new window must be one the GPU's queue can present to; a GPU checks that per surface. The <b>input</b> now comes from two windows, so every event carries the window it happened in, and a view's camera reads only its own window's events. And <b>closing</b> a window is no longer quitting: closing the main window ends the program, closing another one is an event the program answers by removing that window.</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two windows, each with its own ring of three images.">
+      <rect x="20" y="20" width="90" height="60" rx="4" class="paper"/><text x="65" y="54" class="mid small">window 1</text>
+      <rect x="130" y="20" width="90" height="60" rx="4" class="paper"/><text x="175" y="54" class="mid small">window 2</text>
+      <rect x="30" y="90" width="20" height="20" class="mem"/><rect x="55" y="90" width="20" height="20" class="mem"/><rect x="80" y="90" width="20" height="20" class="mem"/>
+      <rect x="140" y="90" width="20" height="20" class="mem"/><rect x="165" y="90" width="20" height="20" class="mem"/><rect x="190" y="90" width="20" height="20" class="mem"/>
+    </svg>
+    <h4>A swapchain each</h4>
+    <p>Its own surface, images, size and resize. A resize of one window rebuilds only its swapchain.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A mouse event tagged window 2 goes to window 2's camera only.">
+      <rect x="20" y="30" width="80" height="40" rx="4" class="cpu"/><text x="60" y="54" class="mid small">event: w2</text>
+      <line x1="100" y1="50" x2="146" y2="50" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <rect x="150" y="30" width="80" height="40" rx="4" class="gpu"/><text x="190" y="54" class="mid small">w2's camera</text>
+      <text x="120" y="100" class="mid small">the UI reads the main window's</text>
+    </svg>
+    <h4>Events carry their window</h4>
+    <p>Each camera takes its own window's events. The UI stays in the main window.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Closing the main window quits; closing window 2 is an event the program handles.">
+      <rect x="20" y="30" width="90" height="50" rx="4" class="paper"/><text x="65" y="60" class="mid small">main: quit</text>
+      <rect x="130" y="30" width="90" height="50" rx="4" class="paper"/><text x="175" y="60" class="mid small">w2: an event</text>
+      <text x="120" y="108" class="mid small">the program removes w2</text>
+    </svg>
+    <h4>Closing is not quitting</h4>
+    <p>Only the main window's close ends the program; the others become an event.</p>
+  </div>
+</div>
+
+<h2 id="pitfalls"><span class="n">10</span>Pitfalls</h2>
 
 <dl class="pitfalls">
   <div><dt>A line of the background color between two views</dt><dd>The viewports were rounded by width, not by edge. Round each edge, so touching views share it.</dd></div>
@@ -267,12 +330,14 @@
   <div><dt>Ghosts for one frame when a view is added</dt><dd>The histories are kept by list place. Key them by the view's camera and output.</dd></div>
   <div><dt>A stretched picture in a narrow view</dt><dd>The projection used the window's aspect ratio. Fit it to the view's target instead.</dd></div>
   <div><dt>The TV shows garbage, or a validation error about an image layout</dt><dd>The view texture was transient, or never cleared, so a reader found undefined data. Keep it across frames and clear it when it is made.</dd></div>
-  <div><dt>Dragging in one view turns another view's camera</dt><dd>Both cameras read the whole window's input. Give each camera the input of its own rect.</dd></div>
+  <div><dt>Dragging in one view turns another view's camera</dt><dd>Both cameras read the whole window's input. Give each camera the input of its own rect, and of its own window.</dd></div>
+  <div><dt>Closing a second window quits the program</dt><dd>The close of any window was treated as quit. Quit only on the main window's; remove the other one.</dd></div>
+  <div><dt>The whole program stops drawing when one window is minimized</dt><dd>A minimized window was allowed to skip the frame. Skip only that window, and the frame only when no window can show.</dd></div>
 </dl>
 
-<h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
+<h2 id="in-rasm"><span class="n">11</span>In RASM</h2>
 
-<p><code>Engine::render(views, count)</code> draws a list of <code>View</code>s in one frame: each is a scene, a camera and a <code>ViewOutput</code>, which is a <code>ViewRect</code> of the window or of a <code>target</code>. <code>Engine::render(scene, camera)</code> is the same with one view. <code>examples/20_views</code> shows split screen, a map, four views and a TV in the scene.</p>
+<p><code>Engine::render(views, count)</code> draws a list of <code>View</code>s in one frame: each is a scene, a camera and a <code>ViewOutput</code>, which is a <code>ViewRect</code> of the window or of a <code>target</code>. <code>Engine::render(scene, camera)</code> is the same with one view. <code>ViewOutput::window</code> puts a view into another window from <code>Engine::addWindow</code>. <code>examples/20_views</code> shows split screen, a map, four views, a TV in the scene and a second window; <code>examples/19_embedding</code> a second window of the application's own (<code>PlatformType::NATIVE</code>).</p>
 
 <div class="legend">
   <span><i class="cpu"></i>the application and the engine</span>
@@ -354,7 +419,7 @@ engine.render(views, 4);</code></pre>
   <tr><td>Resize</td><td>a short wait for the frames in flight</td><td><code>Engine::resizeRenderTarget</code> waits for the values both queues signaled last, only when the size in pixels changes, and keeps the texture handles and bindless slots (<code>RenderTarget::version</code> counts the new textures, so TAA starts over). A window resize waits for the device to be idle.</td></tr>
   <tr><td>Limits</td><td>—</td><td><code>MAX_SCENE_VIEWS</code> (32) scene views, shadow maps included; <code>MAX_CAMERAS</code> (32). A view past the limit is left out with an error.</td></tr>
   <tr><td>Input</td><td>one rect each</td><td><code>getInputArea(window, rect)</code> gives the <code>InputArea</code> for a view's <code>CameraInputState</code> (<a href="camera-controllers.html#who-drives">Camera controllers</a>). The built-in controller moves the camera of the first view in the window.</td></tr>
-  <tr><td>Windows</td><td>a view in another window</td><td>One window per engine today; more windows are the next step of the plan.</td></tr>
+  <tr><td>Windows</td><td>a swapchain each, one submit</td><td><code>Engine::addWindow(WindowDesc)</code>: an SDL window, the application's (<code>WindowDesc::native</code>, <code>NATIVE</code>) or an offscreen image (<code>HEADLESS</code>), at most <code>MAX_WINDOWS</code> − 1 (7). <code>RenderContext::createSwapchain</code> makes the main window's swapchain on the device's surface and another's on a surface of its own (<code>vkGetPhysicalDeviceSurfaceSupportKHR</code> on the graphics queue). <code>beginFrame</code> acquires each window that can show (<code>Engine::WindowFrame</code>); <code>SubmitInfo::waitsForSwapchainImage</code> and <code>presentsSwapchainImage</code> cover every acquired window, through <code>SubmitDesc::acquireSwapchains</code> and <code>presentSwapchains</code>; <code>endFrame</code> clears a window no pass drew and presents each. <code>PassBuilder::writeSwapchain(window)</code> makes each window's image a resource of its own; the graph skips a pass whose window has no image. <code>removeWindow</code> waits for the device to be idle; a view that still names the window is left out. <code>InputEvent::window</code> tags every event, and closing a window other than the main one is <code>InputEventType::WINDOW_CLOSE</code>. <code>readFrame(window)</code> copies a window's image.</td></tr>
 </table>
 </div>
 
@@ -369,8 +434,9 @@ engine.render(views, 4);</code></pre>
   <tr><td>Readers of view textures</td><td><code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code>; <code>Engine::addUiPass</code> in <code>src/renderer/ui.cpp</code></td></tr>
   <tr><td>Kept TAA history</td><td><code>TaaState</code>, <code>getTaaHistoryDesc</code> in <code>src/renderer/taa.h</code>; the private <code>Engine::addTaaPass</code> with a history in <code>src/renderer/taa.cpp</code></td></tr>
   <tr><td>Resize and clear</td><td><code>Engine::resizeRenderTarget</code> in <code>src/engine.cpp</code>; <code>RenderContext::resizeRenderTarget</code> and <code>createAttachments</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
-  <tr><td>Tests</td><td><code>tests/viewTests.cpp</code> (rects and input areas); the <samp>views</samp> image test in <code>tests/image/imageTests.cpp</code></td></tr>
-  <tr><td>Example</td><td><code>examples/20_views/main.cpp</code>: keys 1, 2, 3 for the layouts, <samp>--bench</samp> for the numbers above</td></tr>
+  <tr><td>Tests</td><td><code>tests/viewTests.cpp</code> (rects and input areas); the <samp>views</samp> and <samp>views_window2</samp> image tests in <code>tests/image/imageTests.cpp</code></td></tr>
+  <tr><td>Windows</td><td><code>Engine::addWindow</code>, <code>removeWindow</code>, <code>getWindow</code>, <code>updateSwapchain</code>, <code>beginFrame</code>, <code>endFrame</code> in <code>src/engine.cpp</code>; <code>RenderContext::createSwapchain</code>, <code>destroySwapchain</code>, <code>submit</code> in <code>src/rhi/renderContext.cpp</code>; <code>VulkanDevice::createSwapchain</code>, <code>VulkanSwapchain</code>, <code>VulkanQueue::submit</code> in <code>src/rhi/vulkan/</code>; <code>SdlPlatform::pollEvents</code> in <code>src/platform/sdlPlatform.cpp</code></td></tr>
+  <tr><td>Example</td><td><code>examples/20_views/main.cpp</code>: keys 1, 2, 3 for the layouts, N to open the second window again, <samp>--bench</samp> for the numbers above; <code>examples/19_embedding/main.cpp</code>: the application's second window</td></tr>
 </table>
 </div>
 

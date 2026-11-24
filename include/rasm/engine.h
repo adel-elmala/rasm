@@ -246,6 +246,9 @@ namespace rasm
         // before or during the frame you want: the copy goes into the next endFrame. Needs a headless engine or a
         // surface that allows copies; returns invalid otherwise.
         ReadbackHandle              readFrame(ReadbackFormat format = ReadbackFormat::RGBA8_SRGB);
+        // The same for another window. A window with no image in the frame that would copy it (minimized) is copied in a
+        // later frame.
+        ReadbackHandle              readFrame(WindowHandle window, ReadbackFormat format = ReadbackFormat::RGBA8_SRGB);
         // The same for one layer and mip of a readable texture (TextureDesc::readable), such as a readable render target's
         // color or depth for this frame slot (getRenderTargetTexture). A depth reads only as RGBA32_FLOAT.
         ReadbackHandle              readTexture(const TextureHandle& texture, ReadbackFormat format = ReadbackFormat::RGBA8_SRGB, uint32_t layer = 0, uint32_t mip = 0);
@@ -257,6 +260,7 @@ namespace rasm
         bool                        takeReadback(ReadbackHandle readback, ReadbackImage& image);
         bool                        running() const;
         bool                        recreateSwapchain();
+        bool                        recreateSwapchain(WindowHandle window);
         void                        setRenderTarget(const RenderTargetHandle& renderTarget, uint32_t face = 0);
         void                        resetRenderTarget();
         DescriptorSetHandle         getBindlessDescriptorSet();
@@ -284,8 +288,15 @@ namespace rasm
         uint32_t                    getRenderTargetStorageIndex(const RenderTargetHandle& renderTarget, uint32_t attachment = 0);
 
         // window related
-        Window                      createWindow(uint32_t width, uint32_t height);
-        void                        destroyWindow(const Window& window);
+        // Another window to draw into (a view's ViewOutput::window, or a pass's writeSwapchain(window)), with a swapchain
+        // of its own: an SDL window the SDL platform opens, the application's window (NATIVE, WindowDesc::native), or an
+        // offscreen image (HEADLESS). At most MAX_WINDOWS - 1 windows, the main one included. Returns invalid on failure.
+        WindowHandle                addWindow(const WindowDesc& desc);
+        // Waits for the device to be idle, then destroys the window's swapchain (and the SDL window). Views and passes
+        // that name it draw nothing. Not the main window, and not while a frame records.
+        void                        removeWindow(WindowHandle window);
+        // The window's state, or the main window's for an invalid handle; an empty Window for a removed one.
+        const Window&               getWindow(WindowHandle window) const;
         // The frame's input. Only the first call after a beginFrame works: call it before render to read this frame's.
         void                        pollEvents();
         // Input from an application that runs the event loop (PlatformType::NATIVE, or a script of a headless engine):
@@ -299,12 +310,27 @@ namespace rasm
         // The main window's size in points and in pixels, for NATIVE and HEADLESS; the SDL platform reads its own. A
         // size of 0 skips frames, as a minimized window does.
         void                        setWindowSize(uint32_t width, uint32_t height, uint32_t pixelWidth, uint32_t pixelHeight);
+        void                        setWindowSize(WindowHandle window, uint32_t width, uint32_t height, uint32_t pixelWidth, uint32_t pixelHeight);
         // The display's scale setting (1.5 at 150 %), which sizes the UI; for NATIVE when the window moves to another display.
         void                        setWindowContentScale(float scale);
+        void                        setWindowContentScale(WindowHandle window, float scale);
 
     protected:
-        bool                                                        createSwapchainResources();
+        // A window's swapchain in the frame being made.
+        struct WindowFrame
+        {
+            Swapchain                                               swapchain                               = {};
+            uint32_t                                                imageIdx                                = 0;
+            bool                                                    acquired                                = false; // the frame has an image of it
+            bool                                                    rendered                                = false; // a pass drew it this frame
+            bool                                                    outOfDate                               = false; // recreate it before the next acquire
+        };
+
+        bool                                                        createSwapchainResources(WindowHandle window);
         bool                                                        updateSwapchain();
+        bool                                                        isLive(const WindowHandle& window) const;
+        WindowFrame&                                                frameOf(const WindowHandle& window);
+        Window&                                                     windowOf(const WindowHandle& window);
         bool                                                        useQueue(QueueType queue);
         uint64_t                                                    openBatchValue(QueueType queue) const;
         void                                                        waitForQueue(QueueType waiter, QueueType queue, uint64_t value);
@@ -337,7 +363,6 @@ namespace rasm
         bool                                                        recordingFrame                          = false; // between a beginFrame that returned true and its endFrame
         bool                                                        asyncCompute                            = false;
         uint64_t                                                    readbackComputeWait                     = 0;  // graphics value of the last frame with readback copies, which compute batches wait for
-        Swapchain                                                   swapchain                               = {};
         std::unique_ptr<GeometryPool>                               geometryPool                            = {};
         std::unique_ptr<GpuScene>                                   gpuScene                                = {};
         std::unique_ptr<GpuLights>                                  gpuLights                               = {};
@@ -363,7 +388,10 @@ namespace rasm
         RenderContext                                               ctx;
         std::unique_ptr<ShaderCompiler>                             shaderCompiler                          = {};
         std::unique_ptr<Platform>                                   platform                                = {};
-        Window                                                      mainWindow                              = {};
+        Window                                                      windows[MAX_WINDOWS]                    = {}; // by handle index; MAIN_WINDOW_INDEX is the main window
+        WindowFrame                                                 windowFrames[MAX_WINDOWS]               = {};
+        HandlePool                                                  windowHandles                           = HandlePool(MAX_WINDOWS);
+        WindowHandle                                                currentWindow                           = {}; // the window a swapchain pass draws, set like currentRenderTarget
         std::unique_ptr<InputState>                                 inputState                              = {};
         std::vector<InputEvent>                                     inputEvents                             = {}; // the last pollEvents', until the next one; keeps its capacity
         std::vector<InputEvent>                                     pendingInputEvents                      = {}; // added since the last pollEvents; keeps its capacity
@@ -376,13 +404,10 @@ namespace rasm
         RenderTargetHandle                                          currentRenderTarget                     = {};
         uint32_t                                                    currentFace                             = 0;  // of a cube target
         uint64_t                                                    frameCount                              = 0;
-        uint32_t                                                    imageIdx                                = 0;
         float                                                       deltaTime                               = 0.0f; // the frame's step: EngineConfig::fixedDeltaTime, else frameTime
         float                                                       frameTime                               = 0.0f; // seconds since the previous frame
         std::chrono::steady_clock::time_point                       lastFrameTime                           = {};
         bool                                                        isRunning                               = false;
-        bool                                                        swapchainOutOfDate                      = false;
-        bool                                                        swapchainRendered                       = false; // a pass rendered to the swapchain this frame
         bool                                                        graphDumpRequested                      = false; // F3: the next graph that runs logs its dump
         std::string                                                 graphDump                               = {};    // the last one, for the RASM window
         DebugView                                                   debugView                               = DebugView::NONE;

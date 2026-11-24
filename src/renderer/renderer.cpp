@@ -41,6 +41,14 @@ namespace rasm
         {
             return view.bloom == ViewToggle::DEFAULT ? config.bloom : view.bloom == ViewToggle::ON;
         }
+
+        // An invalid handle and the main window's are one window.
+        bool isSameWindow(const WindowHandle &a, const WindowHandle &b)
+        {
+            const bool mainA = !a.isValid() || a.index == MAIN_WINDOW_INDEX;
+            const bool mainB = !b.isValid() || b.index == MAIN_WINDOW_INDEX;
+            return mainA ? mainB : a == b;
+        }
     }
 
     Renderer::Renderer(Engine &owner) : engine(owner), graph(&owner)
@@ -73,14 +81,15 @@ namespace rasm
         engine.pollEvents();
         engine.updateSwapchain();
         auto &ctx = engine.getRenderContext();
-        const glm::uvec2 extent = ctx.getSwapchainExtent();
         sizes.clear();
         for (uint32_t i = 0; i < viewCount; ++i)
         {
-            // A destroyed output target has no pixels, so the graph that draws into it is built again without it.
+            // A destroyed output target or a removed window has no pixels, so the graph that draws into it is built again
+            // without it.
             const RenderTargetHandle target = views[i].output.target;
-            const bool alive = !target.isValid() || ctx.isAlive(target);
-            const glm::uvec2 image = !alive ? glm::uvec2(0) : (target.isValid() ? glm::uvec2(ctx.getRenderTarget(target).width, ctx.getRenderTarget(target).height) : extent);
+            const WindowHandle window = views[i].output.window;
+            const bool alive = target.isValid() ? ctx.isAlive(target) : (!window.isValid() || engine.isLive(window));
+            const glm::uvec2 image = !alive ? glm::uvec2(0) : (target.isValid() ? glm::uvec2(ctx.getRenderTarget(target).width, ctx.getRenderTarget(target).height) : ctx.getSwapchainExtent(window));
             const ViewPixels pixels = getViewPixels(views[i].output.rect, image.x, image.y);
             sizes.emplace_back(pixels.width, pixels.height);
         }
@@ -88,11 +97,12 @@ namespace rasm
         const bool same = built && viewCount == graphViews.size() && std::equal(views, views + viewCount, graphViews.begin()) && sizes == graphSizes;
         if (!same)
             build(views, viewCount);
-        // The built-in controller moves the camera of the first view in the window: view textures come first in a list.
+        // The built-in controller moves the camera of the first view in the main window: view textures come first in a list.
         CameraHandle controlled = viewCount > 0 ? views[0].camera : CameraHandle{};
         for (uint32_t i = viewCount; i-- > 0;)
         {
-            if (!views[i].output.target.isValid())
+            const WindowHandle window = views[i].output.window;
+            if (!views[i].output.target.isValid() && (!window.isValid() || window.index == MAIN_WINDOW_INDEX))
                 controlled = views[i].camera;
         }
         graph.execute(controlled);
@@ -111,10 +121,16 @@ namespace rasm
             const View &view = views[i];
             bool repeated = false;
             for (uint32_t j = 0; j < i; ++j)
-                repeated = repeated || (views[j].camera == view.camera && views[j].output.target == view.output.target);
+                repeated = repeated || (views[j].camera == view.camera && views[j].output.target == view.output.target && isSameWindow(views[j].output.window, view.output.window));
             if (repeated)
             {
                 spdlog::error("render: view {} has the camera and output of an earlier view; it is left out.", i);
+                continue;
+            }
+            // A window closed or a texture destroyed between frames is a normal change: the view draws nothing.
+            if (sizes[i].x == 0 || sizes[i].y == 0)
+            {
+                spdlog::info("render: view {} (camera {}) has no pixels (a removed window, a destroyed target, or an empty rect); it is left out.", i, view.camera.index);
                 continue;
             }
             if (!addView(next, view, sizes[i]))
@@ -145,11 +161,6 @@ namespace rasm
             spdlog::error("render: a view needs a valid scene and camera.");
             return false;
         }
-        if (size.x == 0 || size.y == 0)
-        {
-            spdlog::error("render: a view's output has no pixels (a destroyed target, or an empty window).");
-            return false;
-        }
         // A view texture is one color, no depth, one sample, not storage: what the tone map draws into.
         auto &ctx = engine.getRenderContext();
         if (view.output.target.isValid())
@@ -163,7 +174,7 @@ namespace rasm
         }
         const AntiAliasing antiAliasing = getAntiAliasing(view, config);
         auto it = std::find_if(states.begin(), states.end(), [&view](const ViewState &state)
-                               { return state.camera == view.camera && state.output == view.output.target; });
+                               { return state.camera == view.camera && state.output == view.output.target && isSameWindow(state.window, view.output.window); });
         if (it != states.end() && (it->scene != view.scene || it->antiAliasing != antiAliasing))
         {
             destroyState(*it);
@@ -177,6 +188,7 @@ namespace rasm
         ViewState &state = *it;
         state.camera = view.camera;
         state.output = view.output.target;
+        state.window = view.output.window;
         state.scene = view.scene;
         state.antiAliasing = antiAliasing;
         state.used = true;

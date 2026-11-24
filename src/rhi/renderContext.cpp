@@ -17,6 +17,7 @@
 #include <deque>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace rasm
@@ -28,6 +29,15 @@ namespace rasm
             RenderTargetDesc desc;
             bool transient = false;
             bool alive = false; // the slot holds a target; destroyed and never used ones don't
+        };
+
+        // A window's swapchain and the handles of its images, by the window's handle index.
+        struct WindowSwapchain
+        {
+            rhi::Swapchain *swapchain = nullptr;
+            std::unique_ptr<rhi::OffscreenSwapchain> offscreen; // headless: swapchain points to it
+            std::vector<TextureHandle> images;                  // also in textures, but owned by the swapchain
+            bool acquired = false;                              // an image is acquired that no present took yet
         };
 
         // Transient render targets laid out together in heaps, from the passes that use each one.
@@ -307,8 +317,7 @@ namespace rasm
     struct RenderContext::Impl
     {
         std::unique_ptr<rhi::Device>                                                                                            device;
-        rhi::Swapchain*                                                                                                         swapchain       = nullptr;
-        std::unique_ptr<rhi::OffscreenSwapchain>                                                                                offscreen;          // headless: swapchain points to it
+        WindowSwapchain                                                                                                         windows[MAX_WINDOWS];
         rhi::Sampler*                                                                                                           samplers[static_cast<size_t>(SamplerType::COUNT)] = {};
         rhi::UploadManager                                                                                                      uploads;        // the frames': on the graphics queue, in order with them
         rhi::UploadManager                                                                                                      transferUploads;    // the loads', with a transfer queue (loadUploads)
@@ -316,7 +325,6 @@ namespace rasm
         uint64_t                                                                                                                loadDone        = 0;        // the load uploads' value the CPU saw done last (updateLoadUploadsDone)
         uint64_t                                                                                                                loadWaited[2]   = {};       // the last loadDone a graphics, a compute submit waited for
         rhi::TextureStates                                                                                                      textureStates;
-        std::vector<TextureHandle>                                                                                              swapchainImages;  // also in textures, but owned by the swapchain
 
         BufferTable                                                                                                             buffers;
         TextureTable                                                                                                            textures;
@@ -363,6 +371,7 @@ namespace rasm
         bool                                                                                                                    computeBound    = false; // a compute pipeline is bound, so dispatches are defined
         bool                                                                                                                    meshBound       = false; // the pass's pipeline is a mesh pipeline, for drawMeshTasksIndirect
         bool                                                                                                                    insidePass      = false; // between beginRendering and endRendering, where draws are allowed and dispatches and barriers are not
+        bool                                                                                                                    emptyPass       = false; // beginEmptyPass: the pass draws nothing
         Viewport                                                                                                                viewport;                // the last setViewport
 
         BufferHandle addBuffer(rhi::Buffer* buffer)
@@ -496,16 +505,16 @@ namespace rasm
             releases.release([this, heap]() { device->destroyHeap(heap); });
         }
 
-        void registerSwapchainImages()
+        void registerSwapchainImages(WindowSwapchain& window)
         {
-            for (uint32_t i = 0; i < swapchain->getImageCount(); ++i)
-                swapchainImages.push_back(addTexture(swapchain->getImage(i)));
+            for (uint32_t i = 0; i < window.swapchain->getImageCount(); ++i)
+                window.images.push_back(addTexture(window.swapchain->getImage(i)));
         }
 
         // The swapchain owns the images, so only their handles go.
-        void unregisterSwapchainImages()
+        void unregisterSwapchainImages(WindowSwapchain& window)
         {
-            for (const auto& handle : swapchainImages)
+            for (const auto& handle : window.images)
             {
                 if (textures.slots[handle.index] != UINT32_MAX)
                     releaseBindlessSlot(textures.slots[handle.index]);
@@ -513,7 +522,24 @@ namespace rasm
                 textures.objects[handle.index] = nullptr;
                 textures.handles.release(handle.index, handle.generation);
             }
-            swapchainImages.clear();
+            window.images.clear();
+        }
+
+        // An invalid handle names the main window, the first one an engine makes.
+        WindowSwapchain& windowOf(const WindowHandle& window)
+        {
+            const uint64_t index = window.isValid() ? window.index : MAIN_WINDOW_INDEX;
+            return windows[index < MAX_WINDOWS ? index : 0];
+        }
+
+        bool isSwapchainImage(const TextureHandle& texture) const
+        {
+            for (const WindowSwapchain& window : windows)
+            {
+                if (std::find(window.images.begin(), window.images.end(), texture) != window.images.end())
+                    return true;
+            }
+            return false;
         }
 
         // A slot per color of each copy, kept for the target's life: a resize or a new placement writes the new
@@ -601,23 +627,8 @@ namespace rasm
         if (impl->device->hasTransferQueue() && !impl->transferUploads.initialize(*impl->device, QueueType::TRANSFER))
             return false;
 
-        // Without a window the frames render into textures of the device, which present nothing.
-        if (headless)
-        {
-            impl->offscreen = std::make_unique<rhi::OffscreenSwapchain>(*impl->device);
-            if (impl->offscreen->initialize({.width = window.pixelWidth, .height = window.pixelHeight}))
-                impl->swapchain = impl->offscreen.get();
-        }
-        else
-        {
-            impl->swapchain = impl->device->createSwapchain({.width = window.pixelWidth, .height = window.pixelHeight});
-        }
-        if (!impl->swapchain)
-        {
-            spdlog::error("Failed to create the swapchain.");
+        if (!createSwapchain(window.handle))
             return false;
-        }
-        impl->registerSwapchainImages();
 
         // A small fixed set shared by every bindless texture, instead of one sampler per texture (P2).
         for (size_t i = 0; i < static_cast<size_t>(SamplerType::COUNT); ++i)
@@ -660,7 +671,8 @@ namespace rasm
         for (auto *buffer : impl->buffers.objects)
             if (buffer)
                 device.destroyBuffer(buffer);
-        impl->unregisterSwapchainImages();
+        for (WindowSwapchain &window : impl->windows)
+            impl->unregisterSwapchainImages(window);
         impl->releases.releaseAll();
         for (auto *texture : impl->textures.objects)
             if (texture)
@@ -681,10 +693,14 @@ namespace rasm
         for (auto *sampler : impl->samplers)
             if (sampler)
                 device.destroySampler(sampler);
-        if (impl->offscreen)
-            impl->offscreen.reset();
-        else if (impl->swapchain)
-            device.destroySwapchain(impl->swapchain);
+        for (WindowSwapchain &window : impl->windows)
+        {
+            if (window.offscreen)
+                window.offscreen.reset();
+            else if (window.swapchain)
+                device.destroySwapchain(window.swapchain);
+            window.swapchain = nullptr;
+        }
 
         impl = std::make_unique<Impl>();
     }
@@ -1392,7 +1408,7 @@ namespace rasm
 
     void RenderContext::destroyTexture(const TextureHandle &texture)
     {
-        if (std::find(impl->swapchainImages.begin(), impl->swapchainImages.end(), texture) != impl->swapchainImages.end())
+        if (impl->isSwapchainImage(texture))
         {
             spdlog::error("Swapchain images belong to the swapchain and can't be destroyed.");
             return;
@@ -1434,24 +1450,75 @@ namespace rasm
         return true;
     }
 
-    std::vector<TextureHandle> RenderContext::getSwapchainImages()
+    // A window of the engine gets a swapchain: the device's own surface for the main window, a surface of its own for
+    // another; a headless engine gets an offscreen one of the window's size.
+    bool RenderContext::createSwapchain(const WindowHandle &window)
     {
-        return impl->swapchainImages;
+        WindowSwapchain &target = impl->windowOf(window);
+        if (!checkArgument(target.swapchain == nullptr, __func__, "the window has a swapchain."))
+            return false;
+        const Window &data = engine->getWindow(window);
+        const bool main = !window.isValid() || window.index == MAIN_WINDOW_INDEX;
+        // Without a window the frames render into textures of the device, which present nothing.
+        if (engine->config.platform == PlatformType::HEADLESS)
+        {
+            target.offscreen = std::make_unique<rhi::OffscreenSwapchain>(*impl->device);
+            if (target.offscreen->initialize({.width = data.pixelWidth, .height = data.pixelHeight}))
+                target.swapchain = target.offscreen.get();
+            else
+                target.offscreen.reset();
+        }
+        else
+        {
+            target.swapchain = impl->device->createSwapchain({.width = data.pixelWidth, .height = data.pixelHeight, .window = main ? nullptr : &data.native});
+        }
+        if (!target.swapchain)
+        {
+            spdlog::error("Failed to create the swapchain.");
+            return false;
+        }
+        impl->registerSwapchainImages(target);
+        target.acquired = false;
+        return true;
     }
 
-    Format RenderContext::getSwapchainImageFormat()
+    // Its images may be in use by the frames in flight, and the surface outlives no swapchain, so this waits for the device.
+    void RenderContext::destroySwapchain(const WindowHandle &window)
     {
-        return impl->swapchain->getFormat();
+        WindowSwapchain &target = impl->windowOf(window);
+        if (!target.swapchain)
+            return;
+        impl->device->waitIdle();
+        impl->unregisterSwapchainImages(target);
+        if (target.offscreen)
+            target.offscreen.reset();
+        else
+            impl->device->destroySwapchain(target.swapchain);
+        target.swapchain = nullptr;
+        target.acquired = false;
     }
 
-    Format RenderContext::getSwapchainEncodedFormat()
+    std::vector<TextureHandle> RenderContext::getSwapchainImages(const WindowHandle &window)
     {
-        return impl->swapchain->getEncodedFormat();
+        return impl->windowOf(window).images;
     }
 
-    glm::uvec2 RenderContext::getSwapchainExtent()
+    Format RenderContext::getSwapchainImageFormat(const WindowHandle &window)
     {
-        return impl->swapchain->getExtent();
+        const WindowSwapchain &target = impl->windowOf(window);
+        return target.swapchain ? target.swapchain->getFormat() : Format::UNKNOWN;
+    }
+
+    Format RenderContext::getSwapchainEncodedFormat(const WindowHandle &window)
+    {
+        const WindowSwapchain &target = impl->windowOf(window);
+        return target.swapchain ? target.swapchain->getEncodedFormat() : Format::UNKNOWN;
+    }
+
+    glm::uvec2 RenderContext::getSwapchainExtent(const WindowHandle &window)
+    {
+        const WindowSwapchain &target = impl->windowOf(window);
+        return target.swapchain ? target.swapchain->getExtent() : glm::uvec2(0);
     }
 
     bool RenderContext::fillBuffer(const BufferHandle &buffer, const void *data, size_t size, size_t offset)
@@ -1855,19 +1922,31 @@ namespace rasm
         return impl->device->waitForFence(rhiFence, value, timeout);
     }
 
-    SwapchainStatus RenderContext::acquireNextImage(uint32_t &imageIndex)
+    // A new frame names no window yet: a window that kept an image from a frame that never went out (a failed submit)
+    // takes part again only once it is acquired again, which hands that image out again.
+    void RenderContext::beginSwapchainFrame()
+    {
+        for (WindowSwapchain &window : impl->windows)
+            window.acquired = false;
+    }
+
+    SwapchainStatus RenderContext::acquireNextImage(uint32_t &imageIndex, const WindowHandle &window)
     {
         ZoneScoped;
 
-        const SwapchainStatus status = impl->swapchain->acquireNextImage(imageIndex);
+        WindowSwapchain &target = impl->windowOf(window);
+        if (!target.swapchain)
+            return SwapchainStatus::FAILURE;
+        const SwapchainStatus status = target.swapchain->acquireNextImage(imageIndex);
         if (status != SwapchainStatus::OK && status != SwapchainStatus::SUBOPTIMAL)
             return status;
 
         // An acquired image holds nothing worth keeping, and the transition out of UNKNOWN waits for the acquire.
-        auto *image = imageIndex < impl->swapchainImages.size() ? lookup(impl->textures, impl->swapchainImages[imageIndex], __func__) : nullptr;
+        auto *image = imageIndex < target.images.size() ? lookup(impl->textures, target.images[imageIndex], __func__) : nullptr;
         if (!image)
             return SwapchainStatus::FAILURE;
         image->state = TextureUsage::UNKNOWN;
+        target.acquired = true;
         return status;
     }
 
@@ -1958,9 +2037,14 @@ namespace rasm
             impl->passColorFormats[i] = i < colorCount ? colors[i]->desc.format : Format::UNKNOWN;
         // A swapchain image or a texture with TextureDesc::encodedView drawn through its UNORM view takes pipelines made
         // for that view's format.
-        const bool swapchainColor = colorCount > 0 && std::find(impl->swapchainImages.begin(), impl->swapchainImages.end(), colorAttachments[0]) != impl->swapchainImages.end();
-        if (ops.encodedColor && swapchainColor && impl->swapchain->getEncodedFormat() != Format::UNKNOWN)
-            impl->passColorFormats[0] = impl->swapchain->getEncodedFormat();
+        const WindowSwapchain *swapchainWindow = nullptr;
+        for (const WindowSwapchain &window : impl->windows)
+        {
+            if (colorCount > 0 && std::find(window.images.begin(), window.images.end(), colorAttachments[0]) != window.images.end())
+                swapchainWindow = &window;
+        }
+        if (ops.encodedColor && swapchainWindow && swapchainWindow->swapchain->getEncodedFormat() != Format::UNKNOWN)
+            impl->passColorFormats[0] = swapchainWindow->swapchain->getEncodedFormat();
         else if (ops.encodedColor && colorCount > 0 && colors[0]->desc.encodedView && colors[0]->desc.format == Format::R8G8B8A8_SRGB && !colors[0]->desc.cube)
             impl->passColorFormats[0] = Format::R8G8B8A8_UNORM;
         impl->passDepthFormat = depth ? depth->desc.format : Format::UNKNOWN;
@@ -1970,11 +2054,21 @@ namespace rasm
         return true;
     }
 
+    // A pass with nothing to draw into, as for a window with no image this frame: its draws record nothing, and
+    // endRendering ends it without a rendering scope.
+    void RenderContext::beginEmptyPass()
+    {
+        impl->insidePass = true;
+        impl->emptyPass = true;
+    }
+
     bool RenderContext::endRendering(const CommandBufferHandle &commandBuffer)
     {
         impl->insidePass = false;
         std::fill(std::begin(impl->passColorFormats), std::end(impl->passColorFormats), Format::UNKNOWN);
         impl->passDepthFormat = Format::UNKNOWN;
+        if (std::exchange(impl->emptyPass, false))
+            return true;
 
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
         if (!rhiCommandBuffer)
@@ -2092,13 +2186,24 @@ namespace rasm
             ++commandBufferCount;
         }
 
+        // Every window with an acquired image: the submit waits for the images (each once, in the first submit that
+        // names it) and presents them all.
+        rhi::Swapchain *swapchains[MAX_WINDOWS] = {};
+        uint32_t swapchainCount = 0;
+        for (const WindowSwapchain &window : impl->windows)
+        {
+            if (window.acquired && !window.offscreen)
+                swapchains[swapchainCount++] = window.swapchain;
+        }
         rhi::SubmitDesc submitDesc = {
             .commandBuffers = rhiCommandBuffers,
             .commandBufferCount = commandBufferCount,
             .waits = waits,
             .waitCount = waitCount,
-            .acquireSwapchain = info.waitsForSwapchainImage && !impl->offscreen ? impl->swapchain : nullptr,
-            .presentSwapchain = info.presentsSwapchainImage && !impl->offscreen ? impl->swapchain : nullptr,
+            .acquireSwapchains = swapchains,
+            .acquireCount = info.waitsForSwapchainImage ? swapchainCount : 0,
+            .presentSwapchains = swapchains,
+            .presentCount = info.presentsSwapchainImage ? swapchainCount : 0,
             .signalFence = signalFence,
             .signalValue = info.signal.value,
         };
@@ -2109,8 +2214,11 @@ namespace rasm
         if (acquires)
             impl->transferUploads.acquiresSubmitted(signalFence, info.signal.value);
         // The present submit is the image's last use this frame, on the one timeline of the graphics queue.
-        if (impl->offscreen && info.presentsSwapchainImage && signalFence != nullptr)
-            impl->offscreen->submitted(signalFence, info.signal.value);
+        for (WindowSwapchain &window : impl->windows)
+        {
+            if (window.offscreen && window.acquired && info.presentsSwapchainImage && signalFence != nullptr)
+                window.offscreen->submitted(signalFence, info.signal.value);
+        }
         if (computeQueue && signalFence != nullptr)
         {
             const rhi::FenceWait computeSubmit = {.fence = signalFence, .value = info.signal.value};
@@ -2143,26 +2251,34 @@ namespace rasm
         impl->recordedClears.clear();
     }
 
-    SwapchainStatus RenderContext::present()
+    SwapchainStatus RenderContext::present(const WindowHandle &window)
     {
         ZoneScoped;
 
-        return impl->swapchain->present();
+        WindowSwapchain &target = impl->windowOf(window);
+        if (!target.swapchain)
+            return SwapchainStatus::FAILURE;
+        target.acquired = false;
+        return target.swapchain->present();
     }
 
-    SwapchainStatus RenderContext::recreateSwapchain()
+    SwapchainStatus RenderContext::recreateSwapchain(const WindowHandle &window)
     {
-        const auto &window = engine->getMainWindow();
-        auto status = impl->swapchain->resize(window.pixelWidth, window.pixelHeight);
+        WindowSwapchain &target = impl->windowOf(window);
+        if (!target.swapchain)
+            return SwapchainStatus::FAILURE;
+        const Window &data = engine->getWindow(window);
+        auto status = target.swapchain->resize(data.pixelWidth, data.pixelHeight);
         if (status == SwapchainStatus::FAILURE)
             spdlog::error("Failed to recreate the swapchain.");
 
         // Only a success replaces the images. A failure either kept the old swapchain or left none,
         // and in the latter case its handles must go too (B5).
-        if (status == SwapchainStatus::OK || impl->swapchain->getImageCount() == 0)
+        if (status == SwapchainStatus::OK || target.swapchain->getImageCount() == 0)
         {
-            impl->unregisterSwapchainImages();
-            impl->registerSwapchainImages();
+            impl->unregisterSwapchainImages(target);
+            impl->registerSwapchainImages(target);
+            target.acquired = false;
         }
         return status;
     }
@@ -2242,7 +2358,7 @@ namespace rasm
             return;
 
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
-        if (!impl->skipDraws && rhiCommandBuffer)
+        if (!impl->skipDraws && !impl->emptyPass && rhiCommandBuffer)
             rhiCommandBuffer->draw(vertexCount, instanceCount);
     }
 
@@ -2252,7 +2368,7 @@ namespace rasm
             return;
 
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
-        if (!impl->skipDraws && rhiCommandBuffer)
+        if (!impl->skipDraws && !impl->emptyPass && rhiCommandBuffer)
             rhiCommandBuffer->drawIndexed(indexCount, instanceCount, vertexOffset, firstIndex, firstInstance);
     }
 
@@ -2263,7 +2379,7 @@ namespace rasm
 
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
         auto *rhiBuffer = lookup(impl->buffers, drawInfoBuffer, __func__);
-        if (!impl->skipDraws && rhiCommandBuffer && rhiBuffer)
+        if (!impl->skipDraws && !impl->emptyPass && rhiCommandBuffer && rhiBuffer)
             rhiCommandBuffer->drawIndexedIndirect(rhiBuffer, offset, drawCount, stride);
     }
 
@@ -2275,7 +2391,7 @@ namespace rasm
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
         auto *rhiBuffer = lookup(impl->buffers, drawInfoBuffer, __func__);
         auto *rhiCountBuffer = lookup(impl->buffers, countBuffer, __func__);
-        if (!impl->skipDraws && rhiCommandBuffer && rhiBuffer && rhiCountBuffer)
+        if (!impl->skipDraws && !impl->emptyPass && rhiCommandBuffer && rhiBuffer && rhiCountBuffer)
             rhiCommandBuffer->drawIndexedIndirectCount(rhiBuffer, offset, rhiCountBuffer, countOffset, maxDrawCount, stride);
     }
 
@@ -2292,7 +2408,7 @@ namespace rasm
 
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
         auto *rhiBuffer = lookup(impl->buffers, buffer, __func__);
-        if (!impl->skipDraws && rhiCommandBuffer && rhiBuffer && drawCount > 0 &&
+        if (!impl->skipDraws && !impl->emptyPass && rhiCommandBuffer && rhiBuffer && drawCount > 0 &&
             checkArgument(rhiBuffer->desc.usage == BufferUsage::INDIRECT, __func__, "the buffer is not an INDIRECT buffer.") &&
             checkArgument(offset + static_cast<uint64_t>(drawCount - 1) * stride + 3 * sizeof(uint32_t) <= rhiBuffer->desc.size, __func__, "the commands reach past the buffer."))
             rhiCommandBuffer->drawMeshTasksIndirect(rhiBuffer, offset, drawCount, stride);

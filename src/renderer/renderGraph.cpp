@@ -83,7 +83,8 @@ namespace rasm
         // Every resource the pass uses, reads before writes. Both the ordering and the dump walk this one list.
         std::vector<PassAccess> accessesOf(const Pass &pass)
         {
-            const ResourceKey swapchain = {.kind = ResourceKind::SWAPCHAIN};
+            // Each window's swapchain is a resource of its own.
+            const ResourceKey swapchain = {.kind = ResourceKind::SWAPCHAIN, .index = pass.window.index, .generation = pass.window.generation};
             std::vector<PassAccess> accesses;
             for (auto handle : pass.inputTextures)
                 accesses.push_back({.key = keyOf(handle)});
@@ -170,7 +171,7 @@ namespace rasm
                 name = ctx ? ctx->getRenderTargetDesc(RenderTargetHandle{key.index, key.generation}).name : "";
                 break;
             case ResourceKind::SWAPCHAIN:
-                return "swapchain";
+                return key.index <= MAIN_WINDOW_INDEX ? std::string("swapchain") : "swapchain of window " + std::to_string(key.index);
             }
             return kind + (name.empty() ? " #" + std::to_string(key.index) + ":" + std::to_string(key.generation) : " '" + name + "'");
         }
@@ -560,6 +561,9 @@ namespace rasm
             // An async pass records into the compute queue's batch, every other pass into the graphics one. Without
             // a compute queue both are the graphics batch, and nothing waits across queues. A batch that can't be
             // opened drops the frame, and endFrame submits nothing.
+            // A window with no image this frame (minimized, out of date, removed) draws nothing.
+            if (pass.writesSwapchain && !(engine->isLive(pass.window) && engine->frameOf(pass.window).acquired))
+                continue;
             if (!engine->useQueue(pass.async ? QueueType::COMPUTE : QueueType::GRAPHICS))
                 break;
             const QueueType queue = engine->recordingQueue;
@@ -626,6 +630,7 @@ namespace rasm
                 continue;
             }
             engine->setRenderTarget(pass.outputRenderTarget, pass.outputFace);
+            engine->currentWindow = pass.window;
             engine->beginPass(pass.name, pass.attachmentOps);
             pass.execute(ctx);
             engine->endPass();
@@ -760,7 +765,8 @@ namespace rasm
     void RenderGraph::assignAttachmentOps(const std::vector<uint32_t> &order)
     {
         std::unordered_map<RenderTargetHandle, FaceWriters, HandleHash> lastWriters;
-        uint32_t lastSwapchainWriter = NO_PASS;
+        uint32_t lastSwapchainWriters[MAX_WINDOWS];
+        std::fill(std::begin(lastSwapchainWriters), std::end(lastSwapchainWriters), NO_PASS);
         for (uint32_t passIdx : order)
         {
             Pass &pass = passes[passIdx];
@@ -776,7 +782,7 @@ namespace rasm
             }
             if (pass.compute)
                 continue;
-            uint32_t *previous = &lastSwapchainWriter;
+            uint32_t *previous = &lastSwapchainWriters[pass.window.index < MAX_WINDOWS ? pass.window.index : 0];
             if (!pass.writesSwapchain)
             {
                 auto [it, first] = lastWriters.try_emplace(pass.outputRenderTarget);
@@ -954,7 +960,10 @@ namespace rasm
         if (pass.outputRenderTarget.isValid())
             useRenderTarget(pass.outputRenderTarget, false);
         if (pass.writesSwapchain)
-            use(engine->swapchain.imageHandles[engine->imageIdx]);
+        {
+            const Engine::WindowFrame &window = engine->frameOf(pass.window);
+            use(window.swapchain.imageHandles[window.imageIdx]);
+        }
     }
 
     TextureHandle RenderGraph::createTexture(const TextureDesc &desc)
@@ -1049,7 +1058,12 @@ namespace rasm
         passes[passIdx].frameOutputBuffers.push_back(buffers);
     }
 
-    void RenderGraph::writeSwapchain(uint32_t passIdx) { passes[passIdx].writesSwapchain = true; }
+    // An invalid window is the main one, named by its handle so the same window is one resource either way.
+    void RenderGraph::writeSwapchain(uint32_t passIdx, WindowHandle window)
+    {
+        passes[passIdx].writesSwapchain = true;
+        passes[passIdx].window = !window.isValid() && engine ? engine->getMainWindow().handle : window;
+    }
 
     TextureHandle PassBuilder::createTexture(const TextureDesc &desc)
     {
@@ -1090,6 +1104,6 @@ namespace rasm
 
     void PassBuilder::write(const BufferHandle (&perFrame)[MAX_FRAMES_IN_FLIGHT]) { graph.write(currentPass, perFrame); }
 
-    void PassBuilder::writeSwapchain() { graph.writeSwapchain(currentPass); }
+    void PassBuilder::writeSwapchain(WindowHandle window) { graph.writeSwapchain(currentPass, window); }
 
 }

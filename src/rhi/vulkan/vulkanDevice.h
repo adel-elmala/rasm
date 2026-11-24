@@ -73,6 +73,7 @@ namespace rasm::rhi
         const vkb::Device&          getVkbDevice() const;
         VkPhysicalDevice            getVkPhysicalDevice() const;
         VkSurfaceKHR                getSurface() const;
+        VkInstance                  getVkInstance() const;
         VulkanQueue*                getGraphicsQueue() const;
         uint32_t                    getTransferFamily() const;
         bool                        hasMutableSwapchainFormat() const;

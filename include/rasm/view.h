@@ -22,12 +22,13 @@ namespace rasm
         bool                operator==(const ViewRect&) const = default;
     };
 
-    // Where the tone-map pass draws a view: a rect of the window, or a rect of a color target instead (a view texture,
+    // Where the tone-map pass draws a view: a rect of a window, or a rect of a color target instead (a view texture,
     // which materials and ImGui::Image can show).
     struct ViewOutput
     {
         ViewRect            rect            = {};
         RenderTargetHandle  target;                         // valid: into this target, one color and no depth (R8G8B8A8_SRGB for a picture)
+        WindowHandle        window;                         // without a target: this window (Engine::addWindow); invalid: the main window
 
         bool                operator==(const ViewOutput&) const = default;
     };

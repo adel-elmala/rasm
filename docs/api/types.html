@@ -126,7 +126,7 @@ struct Handle
   <tr><td><code>DescriptorSetLayoutHandle</code></td><td>a descriptor set layout: <a href="low-level.html#createBindlessDescriptorSetLayout">createBindlessDescriptorSetLayout</a></td></tr>
   <tr><td><code>DescriptorPoolHandle</code></td><td>a descriptor pool: <a href="low-level.html#createDescriptorPool">createDescriptorPool</a></td></tr>
   <tr><td><code>DescriptorSetHandle</code></td><td>a descriptor set: <a href="low-level.html#allocateDescriptorSet">allocateDescriptorSet</a>; the engine's one from <a href="low-level.html#getBindlessDescriptorSet">getBindlessDescriptorSet</a></td></tr>
-  <tr><td><code>WindowHandle</code></td><td>the OS window, in <code>Window::handle</code>. Made by <a href="engine.html#createWindow">createWindow</a>; its <code>index</code> holds the SDL window pointer.</td></tr>
+  <tr><td><code>WindowHandle</code></td><td>a window the engine draws into, in <code>Window::handle</code>: the main one (<a href="engine.html#getMainWindow">getMainWindow</a>, index <code>MAIN_WINDOW_INDEX</code>) or one from <a href="engine.html#addWindow">addWindow</a>; at most <code>MAX_WINDOWS</code> − 1 at once.</td></tr>
   <tr><td><code>SwapchainHandle</code></td><td>declared, not used</td></tr>
   <tr><td><code>ResourceHandle</code></td><td>declared, not used</td></tr>
 </table>
@@ -605,6 +605,7 @@ struct RenderTarget
   <pre class="sig">struct Window
 {
     WindowHandle    handle;
+    void*           platformWindow  = nullptr;
     NativeWindow    native          = {};
     uint32_t        width           = 0;
     uint32_t        height          = 0;
@@ -615,15 +616,16 @@ struct RenderTarget
     bool            minimized       = false;
 };</pre>
   <div class="body">
-    <p>The state of the engine's one window, read with <a href="engine.html#getMainWindow">getMainWindow</a>. <code>pollEvents</code> keeps it up to date with SDL; with <code>NATIVE</code> and headless, <code>setWindowSize</code> and <code>setWindowContentScale</code> do. A headless engine's window has no handle, and its pixel size is the offscreen swapchain's.</p>
+    <p>The state of a window the engine draws into, read with <a href="engine.html#getMainWindow">getMainWindow</a> or <a href="engine.html#getWindow">getWindow</a>. <code>pollEvents</code> keeps it up to date with SDL; with <code>NATIVE</code> and headless, <code>setWindowSize</code> and <code>setWindowContentScale</code> do. A headless engine's window has no native handle, and its pixel size is its offscreen swapchain's. An engine draws into at most <code>MAX_WINDOWS</code> − 1 (7) windows at once; the main window's handle index is <code>MAIN_WINDOW_INDEX</code> (1).</p>
     <dl>
-      <dt>handle</dt><dd>Valid for the window the SDL platform opened; invalid for <code>NATIVE</code> and headless.</dd>
+      <dt>handle</dt><dd>The engine's handle of the window, on every platform: what <a href="engine.html#addWindow"><code>addWindow</code></a> returned, or the main window's.</dd>
+      <dt>platformWindow</dt><dd>The SDL platform's <code>SDL_Window</code>; null for <code>NATIVE</code> and headless.</dd>
       <dt>native</dt><dd>The handles the surface is made from: SDL's window's, or <code>EngineConfig::nativeWindow</code>. Type <code>NONE</code> headless.</dd>
       <dt>width, height</dt><dd>Logical size, the units of mouse coordinates.</dd>
       <dt>pixelWidth, pixelHeight</dt><dd>Drawable size in pixels. Larger than width and height on HiDPI displays. The swapchain, the render targets sized from it and the camera aspect follow these. Use them for viewport math, as <code>examples/01_render_graph</code> does.</dd>
       <dt>contentScale</dt><dd>The display's scale setting, which sizes the UI. 1 headless.</dd>
       <dt>resized</dt><dd>The pixel size changed; <code>beginFrame</code> re-creates the swapchain and clears it.</dd>
-      <dt>minimized</dt><dd>The window is minimized, or its pixel size is 0; frames are skipped.</dd>
+      <dt>minimized</dt><dd>The window is minimized, or its pixel size is 0: it sits the frames out, and a frame is skipped when no window can show.</dd>
     </dl>
   </div>
 </div>
@@ -718,6 +720,7 @@ if (rasm::readPng("golden.png", golden) &amp;&amp; golden.width == image.width)
   <pre class="sig">struct InputEvent
 {
     InputEventType  type            = InputEventType::NONE;
+    WindowHandle    window;
     Key             key             = Key::NONE;
     Key             physicalKey     = Key::NONE;
     bool            down            = false;
@@ -740,9 +743,12 @@ if (rasm::readPng("golden.png", golden) &amp;&amp; golden.width == image.width)
       <tr><td><code>MOUSE_LEAVE</code></td><td>none</td><td>ImGui: no window is hovered</td></tr>
       <tr><td><code>TEXT</code></td><td><code>codepoint</code>: one Unicode character</td><td>ImGui's text fields</td></tr>
       <tr><td><code>FOCUS</code></td><td><code>down</code>: gained, else lost</td><td>ImGui; losing it lets go of every held key and ends the camera's drag</td></tr>
+      <tr><td><code>WINDOW_CLOSE</code></td><td>none</td><td>the application: the user closed a window other than the main one (the SDL platform sends it; closing the main window quits). Remove it with <a href="engine.html#removeWindow"><code>removeWindow</code></a>.</td></tr>
     </table>
     </div>
+    <p>Only the main window's events (an invalid <code>window</code>, or the main window's handle) reach ImGui, the built-in keys and the engine's camera input; <a href="camera.html#getInputEvents"><code>getInputEvents</code></a> gives every window's.</p>
     <dl>
+      <dt>window</dt><dd>The window the event happened in (<a href="engine.html#addWindow"><code>addWindow</code></a>). The SDL platform sets it; an application that sends another window's events sets it too. Invalid: the main window.</dd>
       <dt>key</dt><dd>The key's meaning in the current keyboard layout: the key that types Z on an AZERTY keyboard is <code>Key::Z</code>.</dd>
       <dt>physicalKey</dt><dd>Where the key is, named after the US layout: the same key is <code>Key::W</code>, so the camera's W/A/S/D keep their places. <code>Key::NONE</code>: the same as <code>key</code>, for an application that knows only one of the two.</dd>
       <dt>x, y</dt><dd>Mouse positions in window points from the top-left corner, the units of <code>EngineConfig::windowWidth</code>.</dd>
@@ -764,6 +770,7 @@ engine.addInputEvent({.type = rasm::InputEventType::TEXT, .codepoint = 0x00E9});
     MOUSE_LEAVE,
     TEXT,
     FOCUS,
+    WINDOW_CLOSE,
 };</pre>
   <div class="body">
     <p>The kind of an <a href="#InputEvent"><code>InputEvent</code></a>, which says which of its fields are read.</p>
@@ -832,6 +839,7 @@ engine.addInputEvent({.type = rasm::InputEventType::TEXT, .codepoint = 0x00E9});
   <tr id="INVALID_TEXTURE_INDEX"><td><code>INVALID_TEXTURE_INDEX</code><br><code>rasm/types.h</code></td><td><code>0xFFFFFFFF</code></td><td>Not a limit: the bindless index written for a material slot with no texture. Shaders must not sample it.</td></tr>
   <tr id="maxMaterials"><td><code>EngineConfig::maxMaterials</code><br><code>rasm/types.h</code></td><td>4096</td><td>Materials alive at once, the engine's default material included. A field, not a constant.</td></tr>
   <tr id="MAX_CAMERAS"><td><code>MAX_CAMERAS</code><br><code>rasm/engine.h</code></td><td>32</td><td>Cameras: 31 fit.</td></tr>
+  <tr id="MAX_WINDOWS"><td><code>MAX_WINDOWS</code><br><code>rasm/types.h</code></td><td>8</td><td>Windows an engine draws into at once, the main one included: 7 fit (<a href="engine.html#addWindow"><code>addWindow</code></a>). The main window's handle index is <code>MAIN_WINDOW_INDEX</code> (1).</td></tr>
   <tr id="MAX_TONE_MAP_FORMATS"><td><code>MAX_TONE_MAP_FORMATS</code><br><code>rasm/engine.h</code></td><td>4</td><td>Output formats the tone-map pass keeps pipelines for: the swapchain's and its view textures' (<a href="engine.html#addToneMapPass"><code>addToneMapPass</code></a>). A fifth format logs an error and draws nothing.</td></tr>
   <tr id="MAX_GPU_TIMERS"><td><code>MAX_GPU_TIMERS</code><br><code>rasm/engine.h</code></td><td>64</td><td>GPU timers per frame: the frame, and 63 for passes and <code>beginGpuTimer</code>. <code>FrameStats::gpuTimers</code> has 63 entries.</td></tr>
   <tr id="SCENE_COLOR_FORMAT"><td><code>SCENE_COLOR_FORMAT</code><br><code>rasm/engine.h</code></td><td><code>Format::R16G16B16A16_SFLOAT</code></td><td>Not a limit: the color format of a target that <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> draws into, linear light with no upper limit. <a href="engine.html#addToneMapPass"><code>addToneMapPass</code></a> brings it to the window.</td></tr>

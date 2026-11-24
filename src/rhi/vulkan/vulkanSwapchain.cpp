@@ -92,7 +92,15 @@ namespace rasm::rhi
         }
     }
 
-    VulkanSwapchain::VulkanSwapchain(VulkanDevice &device) : device(device), vk(device.getVkTable()) {}
+    VulkanSwapchain::VulkanSwapchain(VulkanDevice &device, VkSurfaceKHR surface, bool ownsSurface) : device(device), vk(device.getVkTable()), surface(surface), ownsSurface(ownsSurface) {}
+
+    // The device's vk-bootstrap state, with this swapchain's surface: a second window has its own.
+    vkb::Device VulkanSwapchain::getSurfaceDevice() const
+    {
+        vkb::Device surfaceDevice = device.getVkbDevice();
+        surfaceDevice.surface = surface;
+        return surfaceDevice;
+    }
 
     VulkanSwapchain::~VulkanSwapchain()
     {
@@ -109,6 +117,8 @@ namespace rasm::rhi
         }
         if (releaseTimeline != VK_NULL_HANDLE)
             vk.vkDestroySemaphore(device.getVkDevice(), releaseTimeline, nullptr);
+        if (ownsSurface && surface != VK_NULL_HANDLE)
+            vkDestroySurfaceKHR(device.getVkInstance(), surface, nullptr);
     }
 
     bool VulkanSwapchain::initialize(const SwapchainDesc &desc)
@@ -124,7 +134,7 @@ namespace rasm::rhi
             return false;
 
         mutableFormat = device.hasMutableSwapchainFormat();
-        auto swapRet = buildSwapchain(device.getVkbDevice(), desc.width, desc.height, nullptr, mutableFormat, readable);
+        auto swapRet = buildSwapchain(getSurfaceDevice(), desc.width, desc.height, nullptr, mutableFormat, readable);
         if (!swapRet)
             return false;
 
@@ -384,7 +394,7 @@ namespace rasm::rhi
         // A minimized window has a 0x0 surface, and no swapchain can be created for it. Keep the
         // old swapchain until the surface has pixels again (B5). Both early returns leave it untouched.
         VkSurfaceCapabilitiesKHR capabilities{};
-        auto capsResult = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device.getVkPhysicalDevice(), device.getSurface(), &capabilities);
+        auto capsResult = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device.getVkPhysicalDevice(), surface, &capabilities);
         if (capsResult != VK_SUCCESS)
         {
             spdlog::error("Failed to query surface capabilities. Error: {}", toVkResultString(capsResult));
@@ -398,7 +408,7 @@ namespace rasm::rhi
 
         destroyImages();
         mutableFormat = device.hasMutableSwapchainFormat();
-        auto swapRet = buildSwapchain(device.getVkbDevice(), width, height, swapchain.swapchain != VK_NULL_HANDLE ? &swapchain : nullptr, mutableFormat, readable);
+        auto swapRet = buildSwapchain(getSurfaceDevice(), width, height, swapchain.swapchain != VK_NULL_HANDLE ? &swapchain : nullptr, mutableFormat, readable);
 
         // Passing it as oldSwapchain retired the old swapchain, even if creation failed, so it is destroyed
         // either way. Without a swapchain, acquire reports OUT_OF_DATE so the caller keeps trying to recreate it.

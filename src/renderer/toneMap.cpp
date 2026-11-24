@@ -35,6 +35,11 @@ namespace rasm
             return false;
         }
         const RenderTargetHandle target = output.target;
+        if (output.window.isValid() && (target.isValid() || !isLive(output.window)))
+        {
+            spdlog::error("addToneMapPass: the output names a window that is invalid or removed, or a window and a target.");
+            return false;
+        }
         if (target.isValid())
         {
             const RenderTarget &targetData = ctx.getRenderTarget(target);
@@ -47,7 +52,7 @@ namespace rasm
 
         graph.addPass(
             "Tone Map",
-            [source, bloom, target](PassBuilder &builder)
+            [source, bloom, target, window = output.window](PassBuilder &builder)
             {
                 builder.read(source);
                 if (bloom.isValid())
@@ -55,13 +60,13 @@ namespace rasm
                 if (target.isValid())
                     builder.write(target);
                 else
-                    builder.writeSwapchain();
+                    builder.writeSwapchain(window);
             },
-            [this, source, camera, bloom, target, rect = output.rect](RenderContext &)
+            [this, source, camera, bloom, target, window = output.window, rect = output.rect](RenderContext &)
             {
                 // The view the camera's scene views drew this frame: a view that drew shaded is tone mapped, a debug
                 // view shows its values as they are, or its counts as a heat color.
-                const Format format = target.isValid() ? ctx.getRenderTarget(target).colorFormats[0] : ctx.getSwapchainImageFormat();
+                const Format format = target.isValid() ? ctx.getRenderTarget(target).colorFormats[0] : ctx.getSwapchainImageFormat(window);
                 const PipelineHandle pipeline = getToneMapPipeline(format, getDrawnDebugView(camera));
                 if (!pipeline.isValid())
                     return;
@@ -74,6 +79,7 @@ namespace rasm
                                                               .bloom = bloomed ? getBindlessTextureIndex(getRenderTargetTexture(bloom)) : INVALID_TEXTURE_INDEX,
                                                               .bloomStrength = cameraData.bloomStrength};
                 const RenderTarget *targetData = target.isValid() ? &ctx.getRenderTarget(target) : nullptr;
+                const Swapchain &swapchain = frameOf(window).swapchain;
                 const ViewPixels pixels = getViewPixels(rect, targetData ? targetData->width : swapchain.width, targetData ? targetData->height : swapchain.height);
                 ctx.setViewport(commandBuffer, static_cast<float>(pixels.x), static_cast<float>(pixels.y), static_cast<float>(pixels.width), static_cast<float>(pixels.height));
                 ctx.setScissor(commandBuffer, static_cast<int32_t>(pixels.x), static_cast<int32_t>(pixels.y), pixels.width, pixels.height);

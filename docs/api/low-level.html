@@ -321,6 +321,14 @@ constexpr uint32_t QUEUE_COUNT = 2;</pre>
   </div>
 </div>
 
+<div class="api" id="beginEmptyPass">
+  <pre class="sig">void beginEmptyPass();
+void beginSwapchainFrame();</pre>
+  <div class="body">
+    <p><code>beginEmptyPass</code> starts a pass with nothing to draw into, which <code>Engine::beginPass</code> uses for a window with no image this frame: its draws record nothing, and <code>endRendering</code> ends it. <code>beginSwapchainFrame</code> runs before a frame's acquires: only the windows acquired after it take part in that frame's submits and presents, so a window that kept an image from a frame that never went out (a failed submit) is presented only once it is acquired again.</p>
+  </div>
+</div>
+
 <div class="api" id="beginRendering">
   <pre class="sig">bool beginRendering(const CommandBufferHandle&amp; commandBuffer,
                     const TextureHandle* colorAttachments,
@@ -1119,8 +1127,8 @@ void destroyRenderTarget(const RenderTargetHandle&amp; renderTarget);</pre>
       <dt>commandBuffers</dt><dd><code>commandBufferCount</code> command buffers, at most 8, made for <code>queue</code>. They run in array order, as one submission.</dd>
       <dt>waits</dt><dd><code>waitCount</code> fence values, at most 3. The command buffers start only when each fence has reached its value. The wait blocks all commands, barriers included. Use it to wait for work on the other queue.</dd>
       <dt>signal</dt><dd>The fence is set to <code>signal.value</code> when the work is done. An invalid fence signals nothing.</dd>
-      <dt>waitsForSwapchainImage</dt><dd><code>true</code> for a submit that may use the acquired swapchain image. Only the first such submit after the acquire really waits for the image.</dd>
-      <dt>presentsSwapchainImage</dt><dd><code>true</code> only for the frame's last submit that uses the swapchain image: it signals the present. Then call <code>present</code>.</dd>
+      <dt>waitsForSwapchainImage</dt><dd><code>true</code> for a submit that may use the acquired swapchain images: it waits for the image of every window that has one acquired. Only the first such submit after an acquire really waits for that image.</dd>
+      <dt>presentsSwapchainImage</dt><dd><code>true</code> only for the frame's last submit that uses the swapchain images: it signals the present of every window that has one acquired. Then call <code>present</code> for each window.</dd>
     </dl>
   </div>
 </div>
@@ -1169,27 +1177,35 @@ void destroyRenderTarget(const RenderTargetHandle&amp; renderTarget);</pre>
 </div>
 
 <div class="api" id="acquireNextImage">
-  <pre class="sig">[[nodiscard]] SwapchainStatus acquireNextImage(uint32_t&amp; imageIndex);
-[[nodiscard]] SwapchainStatus present();
-[[nodiscard]] SwapchainStatus recreateSwapchain();</pre>
+  <pre class="sig">[[nodiscard]] SwapchainStatus acquireNextImage(uint32_t&amp; imageIndex, const WindowHandle&amp; window = {});
+[[nodiscard]] SwapchainStatus present(const WindowHandle&amp; window = {});
+[[nodiscard]] SwapchainStatus recreateSwapchain(const WindowHandle&amp; window = {});</pre>
   <div class="body">
-    <p>The swapchain steps of <code>beginFrame</code>, <code>endFrame</code> and a resize. Each returns a <a href="types.html#SwapchainStatus">SwapchainStatus</a>. <code>recreateSwapchain</code> sizes the swapchain from the window's pixel size; on success the swapchain image handles change. Use <code>Engine::recreateSwapchain</code>, which also rebuilds the depth textures.</p>
+    <p>The swapchain steps of <code>beginFrame</code>, <code>endFrame</code> and a resize, for one window (an invalid handle: the main window). Each returns a <a href="types.html#SwapchainStatus">SwapchainStatus</a>. An acquired image makes the window part of the next submits' waits and presents (<a href="#SubmitInfo"><code>SubmitInfo</code></a>) until its <code>present</code>. <code>recreateSwapchain</code> sizes the swapchain from the window's pixel size; on success the swapchain image handles change. Use <code>Engine::recreateSwapchain</code>, which also rebuilds what is sized from the main window.</p>
+  </div>
+</div>
+
+<div class="api" id="createSwapchain">
+  <pre class="sig">bool createSwapchain(const WindowHandle&amp; window);
+void destroySwapchain(const WindowHandle&amp; window);</pre>
+  <div class="body">
+    <p>A window's swapchain, which <a href="engine.html#addWindow"><code>Engine::addWindow</code></a> and <a href="engine.html#removeWindow"><code>removeWindow</code></a> call. The main window's uses the surface the device was made with; another window's makes a surface of its own from its <code>NativeWindow</code>, and fails, logged, when the GPU's graphics queue can't present to it. A headless engine gets an offscreen swapchain of the window's pixel size. <code>destroySwapchain</code> waits for the device to be idle, since the frames in flight may still use the images, and the surface goes with the swapchain.</p>
   </div>
 </div>
 
 <div class="api" id="getSwapchainEncodedFormat">
-  <pre class="sig">Format getSwapchainEncodedFormat();</pre>
+  <pre class="sig">Format getSwapchainEncodedFormat(const WindowHandle&amp; window = {});</pre>
   <div class="body">
     <p>The format of the swapchain's second view, <code>B8G8R8A8_UNORM</code>, or <code>UNKNOWN</code> when it has none. The view sees the same image, but stores and blends the sRGB numbers as they are, without encoding: what Dear ImGui's colors are made for. A pass draws through it with <a href="engine.html#AttachmentOps"><code>AttachmentOps::encodedColor</code></a>, and a pipeline for it uses this format. The swapchain has it when the device has <code>VK_KHR_swapchain_mutable_format</code> and the swapchain is <code>B8G8R8A8_SRGB</code>. How it works: <a href="../guides/color-spaces.html">Color spaces</a>.</p>
   </div>
 </div>
 
 <div class="api" id="getSwapchainImages">
-  <pre class="sig">std::vector&lt;TextureHandle&gt; getSwapchainImages();
-Format                     getSwapchainImageFormat();
-glm::uvec2                 getSwapchainExtent();</pre>
+  <pre class="sig">std::vector&lt;TextureHandle&gt; getSwapchainImages(const WindowHandle&amp; window = {});
+Format                     getSwapchainImageFormat(const WindowHandle&amp; window = {});
+glm::uvec2                 getSwapchainExtent(const WindowHandle&amp; window = {});</pre>
   <div class="body">
-    <p>The swapchain's image handles (they change when it is re-created), its color format (RASM asks for <code>B8G8R8A8_SRGB</code>), and its size in pixels. Use the format for render targets and pipelines that should match the swapchain.</p>
+    <p>A window's swapchain (an invalid handle: the main window's): its image handles (they change when it is re-created), its color format (RASM asks for <code>B8G8R8A8_SRGB</code>), and its size in pixels. Use the format for render targets and pipelines that should match the swapchain.</p>
   </div>
 </div>
 

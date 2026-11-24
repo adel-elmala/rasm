@@ -160,7 +160,7 @@ namespace rasm
         io.BackendRendererName = "rasm";
         io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasTextures;
 
-        ui->scale = mainWindow.contentScale;
+        ui->scale = windows[MAIN_WINDOW_INDEX].contentScale;
         setUiScale(1.0f, ui->scale);
         initUiPlatform(*platform);
         // Dear ImGui's colors and its blending are meant for sRGB numbers. Through the swapchain's UNORM view the blend
@@ -193,7 +193,7 @@ namespace rasm
                 texture->SetTexID(ImTextureID_Invalid);
                 texture->SetStatus(ImTextureStatus_Destroyed);
             }
-            suspendUiPlatform(*platform, mainWindow, ui->platformState);
+            suspendUiPlatform(*platform, windows[MAIN_WINDOW_INDEX], ui->platformState);
             shutdownUiPlatform();
             ImGui::GetIO().BackendRendererName = nullptr;
             ImGui::GetIO().BackendFlags &= ~(ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasTextures);
@@ -216,7 +216,7 @@ namespace rasm
         if (!active)
         {
             if (ui->active)
-                suspendUiPlatform(*platform, mainWindow, ui->platformState);
+                suspendUiPlatform(*platform, windows[MAIN_WINDOW_INDEX], ui->platformState);
             ui->active = false;
             return;
         }
@@ -227,12 +227,12 @@ namespace rasm
         ui->active = true;
 
         // The window moved to a display of another scale, or its scale setting changed.
-        if (mainWindow.contentScale != ui->scale)
+        if (windows[MAIN_WINDOW_INDEX].contentScale != ui->scale)
         {
-            setUiScale(ui->scale, mainWindow.contentScale);
-            ui->scale = mainWindow.contentScale;
+            setUiScale(ui->scale, windows[MAIN_WINDOW_INDEX].contentScale);
+            ui->scale = windows[MAIN_WINDOW_INDEX].contentScale;
         }
-        newUiPlatformFrame(mainWindow, deltaTime);
+        newUiPlatformFrame(windows[MAIN_WINDOW_INDEX], deltaTime);
         ImGui::NewFrame();
         drawFrozenFrustums(camera);
         if (config.showStats)
@@ -240,7 +240,7 @@ namespace rasm
         if (ui->callback)
             ui->callback();
         ImGui::Render();
-        updateUiPlatform(*platform, mainWindow, ui->platformState);
+        updateUiPlatform(*platform, windows[MAIN_WINDOW_INDEX], ui->platformState);
 
         const ImDrawData *drawData = ImGui::GetDrawData();
         if (drawData->Textures)
@@ -293,7 +293,7 @@ namespace rasm
                 const float clip[4] = {command.ClipRect.x, command.ClipRect.y, command.ClipRect.z, command.ClipRect.w};
                 UiDraw draw = {};
                 const ImTextureID texture = command.GetTexID();
-                if (command.ElemCount == 0 || texture == ImTextureID_Invalid || !getUiScissor(clip, displayPos, framebufferScale, swapchain.width, swapchain.height, draw.scissor))
+                if (command.ElemCount == 0 || texture == ImTextureID_Invalid || !getUiScissor(clip, displayPos, framebufferScale, windowFrames[MAIN_WINDOW_INDEX].swapchain.width, windowFrames[MAIN_WINDOW_INDEX].swapchain.height, draw.scissor))
                     continue;
                 draw.vertices = vertexAddress + (vertexOffset + command.VtxOffset) * sizeof(ImDrawVert);
                 draw.firstIndex = indexOffset + command.IdxOffset;
@@ -323,7 +323,7 @@ namespace rasm
             ctx.pushConstants(commandBuffer, ui->pipeline, &pushConstants, sizeof(pushConstants), 0);
             ctx.drawIndexed(commandBuffer, draw.indexCount, 1, 0, draw.firstIndex, 0);
         }
-        ctx.setScissor(commandBuffer, 0, 0, swapchain.width, swapchain.height);
+        ctx.setScissor(commandBuffer, 0, 0, windowFrames[MAIN_WINDOW_INDEX].swapchain.width, windowFrames[MAIN_WINDOW_INDEX].swapchain.height);
     }
 
     // The frame's last draw on the swapchain, after the tone map. It keeps the image and has no depth.
