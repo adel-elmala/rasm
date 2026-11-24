@@ -162,7 +162,12 @@ namespace rasm
         const bool taa = antiAliasing == AntiAliasing::TAA;
         if (!state.sceneTarget.isValid())
         {
-            const std::string name = "view_" + std::to_string(view.camera.index) + (view.output.target.isValid() ? "_texture_" + std::to_string(view.output.target.index) : std::string()) + "_hdr";
+            // The lowest number no other view's targets have, so a single view's target is scene_hdr.
+            state.number = 0;
+            while (std::any_of(states.begin(), states.end(), [&state](const ViewState &other)
+                               { return &other != &state && other.sceneTarget.isValid() && other.number == state.number; }))
+                ++state.number;
+            const std::string name = state.number == 0 ? std::string("scene_hdr") : "scene_hdr_" + std::to_string(state.number);
             state.sceneTarget = engine.createRenderTarget({
                 .name = name,
                 .width = size.x,

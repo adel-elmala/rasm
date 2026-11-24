@@ -176,7 +176,7 @@ namespace rasm
 
         if (sceneRef.cameras.size() >= MAX_CAMERAS_PER_SCENE)
         {
-            spdlog::warn("Exceeded maximum cameras per scene.");
+            spdlog::error("addCameraToScene: the scene has {} cameras, the most it can hold (MAX_CAMERAS_PER_SCENE).", MAX_CAMERAS_PER_SCENE);
             return;
         }
 

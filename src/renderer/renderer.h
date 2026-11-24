@@ -30,6 +30,7 @@ namespace rasm
         RenderTargetHandle          sceneTarget;                    // HDR color (and motion with TAA) and depth, the scene view's target
         RenderTargetHandle          taaHistory;
         std::shared_ptr<TaaState>   taa;
+        uint32_t                    number              = 0;        // names its targets: scene_hdr for 0, scene_hdr_1, ... for the others alive
         bool                        used                = false;    // in the list the graph was built from
     };
 
