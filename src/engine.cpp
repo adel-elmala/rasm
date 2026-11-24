@@ -616,8 +616,18 @@ namespace rasm
         ctx.destroyBuffer(buffer);
     }
 
+    // A material may sample its colors (a view texture), so it loses them first, as with destroyTexture.
     void Engine::destroyRenderTarget(const RenderTargetHandle &renderTarget)
     {
+        if (ctx.isAlive(renderTarget))
+        {
+            const RenderTarget &target = ctx.getRenderTarget(renderTarget);
+            for (const RenderTargetAttachments &attachments : target.attachments)
+            {
+                for (uint32_t c = 0; c < target.colorCount; ++c)
+                    detachTexture(attachments.color[c]);
+            }
+        }
         ctx.destroyRenderTarget(renderTarget);
     }
 

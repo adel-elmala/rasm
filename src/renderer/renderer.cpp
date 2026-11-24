@@ -77,16 +77,25 @@ namespace rasm
         sizes.clear();
         for (uint32_t i = 0; i < viewCount; ++i)
         {
+            // A destroyed output target has no pixels, so the graph that draws into it is built again without it.
             const RenderTargetHandle target = views[i].output.target;
-            const RenderTarget *targetData = ctx.isAlive(target) ? &ctx.getRenderTarget(target) : nullptr;
-            const ViewPixels pixels = targetData ? getViewPixels(views[i].output.rect, targetData->width, targetData->height) : getViewPixels(views[i].output.rect, extent.x, extent.y);
+            const bool alive = !target.isValid() || ctx.isAlive(target);
+            const glm::uvec2 image = !alive ? glm::uvec2(0) : (target.isValid() ? glm::uvec2(ctx.getRenderTarget(target).width, ctx.getRenderTarget(target).height) : extent);
+            const ViewPixels pixels = getViewPixels(views[i].output.rect, image.x, image.y);
             sizes.emplace_back(pixels.width, pixels.height);
         }
 
         const bool same = built && viewCount == graphViews.size() && std::equal(views, views + viewCount, graphViews.begin()) && sizes == graphSizes;
         if (!same)
             build(views, viewCount);
-        graph.execute(viewCount > 0 ? views[0].camera : CameraHandle{});
+        // The built-in controller moves the camera of the first view in the window: view textures come first in a list.
+        CameraHandle controlled = viewCount > 0 ? views[0].camera : CameraHandle{};
+        for (uint32_t i = viewCount; i-- > 0;)
+        {
+            if (!views[i].output.target.isValid())
+                controlled = views[i].camera;
+        }
+        graph.execute(controlled);
     }
 
     void Renderer::build(const View *views, uint32_t viewCount)
@@ -137,7 +146,21 @@ namespace rasm
             return false;
         }
         if (size.x == 0 || size.y == 0)
+        {
+            spdlog::error("render: a view's output has no pixels (a destroyed target, or an empty window).");
             return false;
+        }
+        // A view texture is one color, no depth, one sample, not storage: what the tone map draws into.
+        auto &ctx = engine.getRenderContext();
+        if (view.output.target.isValid())
+        {
+            const RenderTarget &target = ctx.getRenderTarget(view.output.target);
+            if (target.colorCount != 1 || target.depthFormat != Format::UNKNOWN || target.samples != 1 || ctx.getRenderTargetDesc(view.output.target).storage)
+            {
+                spdlog::error("render: a view's output target needs one color, no depth and one sample, and must not be a storage target.");
+                return false;
+            }
+        }
         const AntiAliasing antiAliasing = getAntiAliasing(view, config);
         auto it = std::find_if(states.begin(), states.end(), [&view](const ViewState &state)
                                { return state.camera == view.camera && state.output == view.output.target; });
@@ -175,11 +198,11 @@ namespace rasm
                 .colorFormats = {SCENE_COLOR_FORMAT, taa ? MOTION_FORMAT : Format::UNKNOWN},
                 .depthFormat = Format::D32_SFLOAT,
                 .clearColor = BACKGROUND_COLOR,
-                .samples = getSceneSamples(engine.getRenderContext(), antiAliasing),
+                .samples = getSceneSamples(ctx, antiAliasing),
             });
             if (taa && state.sceneTarget.isValid())
             {
-                state.taaHistory = engine.createRenderTarget(getTaaHistoryDesc(engine.getRenderContext().getRenderTargetDesc(state.sceneTarget)));
+                state.taaHistory = engine.createRenderTarget(getTaaHistoryDesc(ctx.getRenderTargetDesc(state.sceneTarget)));
                 state.taa = std::make_shared<TaaState>();
             }
         }
@@ -191,7 +214,7 @@ namespace rasm
         if (!engine.addScenePasses(next, view.scene, view.camera, state.sceneTarget, nullptr, 0, textures.data(), static_cast<uint32_t>(textures.size())))
             return false;
         RenderTargetHandle resolved = state.sceneTarget;
-        if (engine.getRenderContext().getRenderTarget(state.sceneTarget).samples > 1)
+        if (ctx.getRenderTarget(state.sceneTarget).samples > 1)
             resolved = engine.addMsaaResolvePass(next, state.sceneTarget, view.camera);
         if (taa)
             resolved = engine.addTaaPass(next, state.sceneTarget, view.camera, state.taaHistory, state.taa);
@@ -216,10 +239,10 @@ namespace rasm
         state.taa.reset();
     }
 
-    bool Renderer::draws(SceneHandle scene, CameraHandle camera) const
+    bool Renderer::draws(SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget) const
     {
-        return built && std::any_of(states.begin(), states.end(), [scene, camera](const ViewState &state)
-                                    { return state.scene == scene && state.camera == camera; });
+        return built && std::any_of(states.begin(), states.end(), [&](const ViewState &state)
+                                    { return state.used && state.scene == scene && state.camera == camera && state.sceneTarget == renderTarget; });
     }
 
     // The next render builds a new graph from its list.
@@ -227,7 +250,7 @@ namespace rasm
     {
         const bool holds = std::any_of(states.begin(), states.end(), [scene, camera](const ViewState &state)
                                        { return state.scene == scene || state.camera == camera; });
-        if (!built || !holds)
+        if (!holds)
             return;
         graph = engine.createRenderGraph();
         for (ViewState &state : states)

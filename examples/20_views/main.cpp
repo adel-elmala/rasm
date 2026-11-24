@@ -26,7 +26,8 @@
 // emissive texture and the UI window shows with ImGui::Image. It is listed first, so the views after it show this
 // frame's picture; the security camera itself sees last frame's on the TV. The map keeps no bloom and no TAA
 // (View::bloom, View::antiAliasing), so it costs less. Each window view has its own camera rig, which takes the input
-// of its own rect (getInputArea): drag in a view to orbit its camera, wheel to zoom. Keys 1, 2 and 3 pick the layout.
+// of its own rect (getInputArea): drag in a view to orbit its camera, wheel to zoom; the map takes no input, so a drag
+// that starts on it turns the view under it. Keys 1, 2 and 3 pick the layout.
 // --layout 1|2|3 picks the first one (2); --bench measures that layout's GPU time (exampleBench.h); --async-compute
 // culls on the compute queue (EngineConfig::asyncCompute). A headless run plays a script first, so the checks of
 // verify-change cover the changes too: layout 3, then 1, then --layout's from frame 40, and the TV's texture at a new

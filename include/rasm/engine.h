@@ -203,7 +203,8 @@ namespace rasm
         // One frame of several views (split screen, a minimap over the scene, view textures for materials or the UI). A
         // view keeps its targets, culling and TAA history while its camera and output stay in the list, wherever it
         // is in the list. Views draw in list order: a later rect goes over an earlier one, and a view samples this
-        // frame's image of the view textures listed before it. The first view's camera takes the built-in controller.
+        // frame's image of the view textures listed before it. The first view in the window (no output target) takes
+        // the built-in controller (CameraController::Type::NONE turns it off).
         void                        render(const View* views, uint32_t viewCount);
         // sampled: view textures (color targets other passes draw this frame) that the scene's materials sample. The
         // draws run after the passes that draw them, so they see this frame's image; without it a material sees this
@@ -534,6 +535,7 @@ namespace rasm
         void                        releaseEntityAnimation(EntityHandle entity);
         void                        releaseMeshAnimation(MeshHandle mesh);
         void                        detachMaterial(MaterialHandle material);
+        void                        detachTexture(const TextureHandle& texture);
         bool                        viewHolds(SceneHandle scene, CameraHandle camera, const char* caller) const;
 
         // Each object vector is indexed by handle index and holds a slot for every index its pool handed out.

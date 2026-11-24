@@ -319,10 +319,10 @@ if (!engine.running())
       <li>Views draw in list order: a later view's rect goes over an earlier one, and a view's scene passes see this frame's picture of the view textures listed before it (the views before it, and its own, see the last frame's).</li>
       <li>A view keeps its HDR target, its culling history (Hi-Z, visibility) and its TAA history while its camera and <code>output.target</code> stay in the list, wherever it is in the list. Another view's insertion, removal or move does not reset it.</li>
       <li>The graph is built again only when the list or a view's size in pixels changes; a frame with the same list and sizes allocates nothing. A view that changed size makes its targets again at the new size (<a href="#resizeRenderTarget"><code>resizeRenderTarget</code></a>: one wait for the frames in flight).</li>
-      <li>The first view's camera takes the built-in controller (<code>beginFrame(views[0].camera)</code>). Give each other view's camera its own input with <a href="#getInputArea"><code>getInputArea</code></a>.</li>
+      <li>The camera of the first view in the window (no <code>output.target</code>) takes the built-in controller, through <code>beginFrame</code>; a list of view textures only gives it the first view's camera. <a href="camera.html#setCameraController"><code>CameraController::Type::NONE</code></a> turns it off. Give each other view's camera its own input with <a href="#getInputArea"><code>getInputArea</code></a>.</li>
     </ul>
     <dl>
-      <dt>views, viewCount</dt><dd>The list, read during the call only. A view with an invalid scene or camera, or with the camera and output target of an earlier view, is left out with an error, and the others draw. A view whose passes cannot be added (the <code>MAX_SCENE_VIEWS</code> limit, a target that is not one color with no depth and one sample) is left out until the list changes. 0 views: the window shows the clear color and the UI.</dd>
+      <dt>views, viewCount</dt><dd>The list, read during the call only. A view with an invalid scene or camera, or with the camera and output target of an earlier view, is left out with an error, and the others draw. A view whose passes cannot be added (the <code>MAX_SCENE_VIEWS</code> limit, a target that is not one color with no depth and one sample, a destroyed target) is left out until the list changes; nothing is made for it. 0 views: the window shows the clear color and the UI.</dd>
     </dl>
     <pre><code>// From examples/20_views/main.cpp: the TV's picture first, then split screen and a map in the corner.
 views.clear();
@@ -1326,7 +1326,7 @@ if (!engine.resizeRenderTarget(tv, TV_WIDTH * 3 / 2, TV_HEIGHT * 3 / 2))
 <div class="api" id="destroyRenderTarget">
   <pre class="sig">void destroyRenderTarget(const RenderTargetHandle&amp; renderTarget);</pre>
   <div class="body">
-    <p>Destroys a render target from <a href="render-graph.html#createRenderTarget"><code>createRenderTarget</code></a>: the handle at once, its textures and bindless slots once the GPU is done with them. A render graph destroys the targets it made itself. Calls <a href="low-level.html#destroyRenderTargets"><code>RenderContext::destroyRenderTarget</code></a>.</p>
+    <p>Destroys a render target from <a href="render-graph.html#createRenderTarget"><code>createRenderTarget</code></a>: the handle at once, its textures and bindless slots once the GPU is done with them. Materials that sample its colors (a view texture) lose them, as with <a href="#destroyTexture"><code>destroyTexture</code></a>; a view of <a href="#render-views"><code>render(views, count)</code></a> that still names it as its output is left out. A render graph destroys the targets it made itself. Calls <a href="low-level.html#destroyRenderTargets"><code>RenderContext::destroyRenderTarget</code></a>.</p>
   </div>
 </div>
 

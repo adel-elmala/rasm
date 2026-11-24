@@ -163,16 +163,11 @@ namespace rasm
         return ctx.isAlive(texture) && !pendingTextures.contains(texture);
     }
 
-    // Materials sample by slot number, so each one that uses the texture loses it before the slot can take another
-    // texture. A load still in the pool is dropped: a queued job never runs, a running one gives its result up.
-    void Engine::destroyTexture(const TextureHandle &texture)
+    // Each material that uses the texture loses it, and its row is written again.
+    void Engine::detachTexture(const TextureHandle &texture)
     {
-        if (!ctx.isAlive(texture))
-        {
-            spdlog::error("destroyTexture: texture handle {{{}, {}}} is invalid or was destroyed.", texture.index, texture.generation);
+        if (!texture.isValid())
             return;
-        }
-
         bool changed = false;
         for (uint64_t i = 1; i < registry.materials.size(); ++i)
         {
@@ -197,6 +192,19 @@ namespace rasm
         // An entity that waited for this texture may be drawable now.
         if (changed)
             gpuScene->texturesFinished = true;
+    }
+
+    // Materials sample by slot number, so each one that uses the texture loses it before the slot can take another
+    // texture. A load still in the pool is dropped: a queued job never runs, a running one gives its result up.
+    void Engine::destroyTexture(const TextureHandle &texture)
+    {
+        if (!ctx.isAlive(texture))
+        {
+            spdlog::error("destroyTexture: texture handle {{{}, {}}} is invalid or was destroyed.", texture.index, texture.generation);
+            return;
+        }
+
+        detachTexture(texture);
         dropTextureLoad(texture);
 
         if (texture.index < registry.textureCacheKeys.size() && !registry.textureCacheKeys[texture.index].empty())

@@ -41,21 +41,22 @@ namespace rasm
         void                        render(const View* views, uint32_t viewCount);
         // Lets go of its graph and of the views of this scene or camera, so they can be destroyed.
         void                        release(SceneHandle scene, CameraHandle camera);
-        bool                        draws(SceneHandle scene, CameraHandle camera) const;     // its graph holds a view of this scene and camera
+        // Its graph holds the scene view of this scene and camera into this target.
+        bool                        draws(SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget) const;
 
     private:
         void                        build(const View* views, uint32_t viewCount);
         bool                        addView(RenderGraph& graph, const View& view, glm::uvec2 size);
         void                        destroyState(ViewState& state);
 
-        Engine&                     engine;
-        RenderGraph                 graph;
-        std::vector<View>           graphViews;                     // the list the graph was built from; keeps its capacity
-        std::vector<glm::uvec2>     graphSizes;                     // each view's size in pixels then
-        std::vector<glm::uvec2>     sizes;                          // this frame's, compared with graphSizes
-        std::vector<ViewState>      states;
-        std::vector<RenderTargetHandle> textures;                   // the view textures added so far, which later views sample
-        bool                        built               = false;
+        Engine&                             engine;
+        RenderGraph                         graph;
+        std::vector<View>                   graphViews;             // the list the graph was built from; keeps its capacity
+        std::vector<glm::uvec2>             graphSizes;             // each view's size in pixels then
+        std::vector<glm::uvec2>             sizes;                  // this frame's, compared with graphSizes
+        std::vector<ViewState>              states;
+        std::vector<RenderTargetHandle>     textures;               // the view textures added so far, which later views sample
+        bool                                built       = false;
     };
 }
 // clang-format on
