@@ -256,7 +256,7 @@
   <li class="mem"><b>Record</b> the message as the thread's last error, and return the code.</li>
 </ol>
 
-<p>A function returns an integer code (0 for success, negative for an error), or a 0 handle when it creates something. The message goes into a <b>last error</b> string kept per thread, like <samp>errno</samp>: two threads never overwrite each other's message. A logging callback lets a binding route the library's log into its own; it may run on any thread the library logs from, so it must be thread-safe.</p>
+<p>A function returns an integer code (0 for success, negative for an error), or a 0 handle when it creates something. The message goes into a <b>last error</b> string kept per thread, like <samp>errno</samp>: two threads never overwrite each other's message. A logging callback lets a binding route the library's log into its own; it may run on any thread the library logs from, so it must be thread-safe. The library must not hold a lock while it runs: a callback that calls the library back would wait for itself.</p>
 
 <h2 id="memory"><span class="n">7</span>Who owns which memory</h2>
 
@@ -369,7 +369,7 @@
   <tr><td>Big objects</td><td>opaque pointers</td><td><code>rasm_renderer</code>, <code>rasm_engine</code>, <code>rasm_asset_loader</code>, <code>rasm_image</code>. An engine's renderer and loader belong to it.</td></tr>
   <tr><td>Small objects</td><td>integer handles</td><td><code>{ uint64_t id; }</code> per type, <code>generation &lt;&lt; 32 | index</code> of the C++ <code>Handle</code>. <code>HandlePool</code> retires a slot at <code>MAX_HANDLE_GENERATION</code> (2<sup>32</sup> − 1), so every handle packs with no loss, and a valid one is never 0.</td></tr>
   <tr><td>Enums and booleans</td><td><code>uint32_t</code></td><td>The same. A <code>static_assert</code> in <code>src/c/cApi.cpp</code> ties every C constant to its C++ enum value, so a reordered C++ enum fails the build.</td></tr>
-  <tr><td>Growing structs</td><td>a size field and init functions</td><td>The same: <code>rasm_renderer_config</code>, <code>rasm_engine_config</code>, <code>rasm_asset_loader_config</code>, <code>rasm_light_desc</code>, <code>rasm_material_desc</code>, <code>rasm_texture_desc</code>, <code>rasm_scene_environment</code>. The 1.0 sizes are the smallest a caller may pass.</td></tr>
+  <tr><td>Growing structs</td><td>a size field and init functions</td><td>The same: <code>rasm_renderer_config</code>, <code>rasm_engine_config</code>, <code>rasm_asset_loader_config</code>, <code>rasm_light_desc</code>, <code>rasm_material_desc</code>, <code>rasm_texture_desc</code>, <code>rasm_scene_environment</code>, <code>rasm_camera_projection</code>. The 1.0 sizes are the smallest a caller may pass.</td></tr>
   <tr><td>Errors</td><td>codes and a per-thread last error</td><td><code>rasm_result</code>, <code>rasm_get_last_error</code>, and <code>rasm_set_log_callback</code>. RASM's <code>spdlog::error</code> lines feed the last error too.</td></tr>
   <tr><td>Versions</td><td>refuse another major, or a newer minor</td><td>The same, in <code>rasm_renderer_create</code> and <code>rasm_engine_create</code>: <code>RASM_ERROR_VERSION</code>.</td></tr>
   <tr><td>Exports</td><td>only the C names</td><td>Only <code>rasm_*</code>; <code>tools/check_install.py</code> checks the export tables in CI.</td></tr>

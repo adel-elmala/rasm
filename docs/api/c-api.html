@@ -71,7 +71,7 @@
   <figcaption>Your program sees only C. The library holds a whole RASM, so it needs nothing from your build but its own files: the shaders beside it and, on Windows, the DLLs of its dependencies.</figcaption>
 </figure>
 
-<p>RASM builds both libraries when the CMake option <code>RASM_C_API</code> is on (the default). <code>cmake --install</code> puts them into <samp>bin/</samp> on Windows and <samp>lib/</samp> elsewhere, with a <samp>shaders/</samp> folder beside them, the header in <samp>include/rasm/</samp>, and on Windows the DLLs they load. A CMake project finds them as the component <code>c</code>, which needs no vcpkg and no other package:</p>
+<p>RASM builds both libraries when the CMake option <code>RASM_C_API</code> is on (the default, but off under <code>add_subdirectory</code>). <code>cmake --install</code> puts them into <samp>bin/</samp> on Windows and <samp>lib/</samp> elsewhere, with a <samp>shaders/</samp> folder beside them, the header in <samp>include/rasm/</samp>, and on Windows the DLLs they load. A CMake project finds them as the component <code>c</code>, which needs no vcpkg and no other package:</p>
 
 <pre><code>cmake_minimum_required(VERSION 3.23)
 project(my_app C)
@@ -130,7 +130,9 @@ int main(void)
     sun.range = 0.0f;
     rasm_add_light_to_scene(renderer, scene, rasm_create_light(renderer, &amp;sun));
 
-    const rasm_camera_projection projection = {.type = RASM_PROJECTION_TYPE_PERSPECTIVE, .fov_y = 45.0f, .aspect = 640.0f / 480.0f, .near_z = 0.1f};
+    rasm_camera_projection projection;
+    rasm_camera_projection_init(&amp;projection, sizeof(projection));
+    projection.aspect = 640.0f / 480.0f;
     const rasm_transform eye = {{0.0f, 0.0f, 3.0f}, {0.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}};
     const rasm_camera camera = rasm_create_camera(renderer, &amp;projection, &amp;eye);
     rasm_add_camera_to_scene(renderer, scene, camera);
@@ -182,7 +184,7 @@ lib.rasm_renderer_create((1 &lt;&lt; 16) | 0, ctypes.byref(config), ctypes.byref
   <li><b>Create</b> (<code>rasm_create_light</code>, <code>rasm_renderer_create</code>): a field past your <code>size</code> takes its default. <b>Update</b> (<code>rasm_update_light</code>, <code>rasm_update_material</code>): it keeps its current value. <b>Get</b> (<code>rasm_get_light</code>, <code>rasm_get_material</code>): set <code>size</code> before the call; the library writes only that much.</li>
   <li>A <code>size</code> below the struct's 1.0 size fails with <code>RASM_ERROR_INVALID_ARGUMENT</code>.</li>
   <li>In an array of sized structs, every element must have the <code>size</code> of the first one: the library steps through the array by it.</li>
-  <li>Small value structs have no <code>size</code>: <code>rasm_vec2</code>, <code>rasm_vec3</code>, <code>rasm_vec4</code>, <code>rasm_quat</code>, <code>rasm_mat4</code> (column-major), <code>rasm_transform</code>, <code>rasm_native_window</code>, <code>rasm_camera_projection</code>, <code>rasm_vertex</code>, <code>rasm_texture_transform</code>, <code>rasm_image_data</code>. A change to one of them would be a new struct and new functions.</li>
+  <li>Small value structs have no <code>size</code>: <code>rasm_vec2</code>, <code>rasm_vec3</code>, <code>rasm_vec4</code>, <code>rasm_quat</code>, <code>rasm_mat4</code> (column-major), <code>rasm_transform</code>, <code>rasm_native_window</code>, <code>rasm_vertex</code>, <code>rasm_texture_transform</code>, <code>rasm_image_data</code>. A change to one of them would be a new struct and new functions.</li>
 </ul>
 
 <h3 id="types">Types and handles</h3>
@@ -206,6 +208,7 @@ lib.rasm_renderer_create((1 &lt;&lt; 16) | 0, ctypes.byref(config), ctypes.byref
 </table>
 </div>
 <ul>
+  <li>A call on an object rejects the handle 0 with <code>RASM_ERROR_INVALID_ARGUMENT</code>, so a failed create is not mistaken for an object.</li>
   <li>A creation call returns a 0 handle when it fails. A call whose C++ counterpart returns nothing returns <code>RASM_ERROR_FAILED</code> when RASM logged an error during it, so <code>rasm_destroy_entity</code> of a stale handle tells you.</li>
   <li><a href="#rasm_get_last_error"><code>rasm_get_last_error</code></a> gives the last error of the calling thread, from the C layer or from RASM's log: <i>"rasm_create_scene: renderer is NULL."</i>. A call that succeeds does not clear it; <code>rasm_clear_last_error</code> does.</li>
 </ul>
@@ -215,7 +218,7 @@ lib.rasm_renderer_create((1 &lt;&lt; 16) | 0, ctypes.byref(config), ctypes.byref
   <li><b>In:</b> pointers you pass are read during the call only: strings (UTF-8, NUL-terminated), arrays (a pointer and a count), structs. RASM copies what it keeps.</li>
   <li><b>Out:</b> into your structs, or into your buffer for a string: a <code>char* buffer, uint32_t capacity</code> pair works like <code>snprintf</code>. It writes what fits with its NUL and returns the whole length, so call it with <code>NULL, 0</code> first to size the buffer.</li>
   <li><b>Library objects:</b> what <samp>_create</samp> returns lives until its <samp>_destroy</samp>. <code>rasm_image_get</code> gives a pointer into the image, valid until the image is filled again or destroyed. An engine's renderer and loader (<code>rasm_engine_get_renderer</code>, <code>rasm_engine_get_asset_loader</code>) belong to it: <code>rasm_engine_destroy</code> destroys them, and their own destroy calls refuse.</li>
-  <li><b>Threads:</b> the rules of the C++ API. Call a renderer, its engine and its loader from one thread. The last error is per thread. The log callback can run on the loader's worker threads, one call at a time.</li>
+  <li><b>Threads:</b> the rules of the C++ API. Call a renderer, its engine and its loader from one thread. The last error is per thread. The log callback can run on the loader's worker threads, and on two threads at once; RASM holds no lock while it runs, so it may call RASM on its own thread.</li>
 </ul>
 
 <h2 id="functions"><span class="n">4</span>Functions</h2>
@@ -348,7 +351,8 @@ rasm_result      rasm_destroy_light(rasm_renderer* renderer, rasm_light light);<
 </div>
 
 <div class="api" id="rasm_create_camera">
-  <pre class="sig">rasm_camera      rasm_create_camera(rasm_renderer* renderer, const rasm_camera_projection* projection, const rasm_transform* transform);
+  <pre class="sig">rasm_result      rasm_camera_projection_init(rasm_camera_projection* projection, uint32_t size);
+rasm_camera      rasm_create_camera(rasm_renderer* renderer, const rasm_camera_projection* projection, const rasm_transform* transform);
 rasm_result      rasm_destroy_camera(rasm_renderer* renderer, rasm_camera camera);
 rasm_result      rasm_get_camera_transform(rasm_renderer* renderer, rasm_camera camera, rasm_transform* transform);
 rasm_result      rasm_set_camera_transform(rasm_renderer* renderer, rasm_camera camera, const rasm_transform* transform);
@@ -362,7 +366,7 @@ rasm_result      rasm_reset_camera_history(rasm_renderer* renderer, rasm_camera 
 rasm_result      rasm_get_view_matrix(rasm_renderer* renderer, rasm_camera camera, rasm_mat4* matrix);
 rasm_result      rasm_get_projection_matrix(rasm_renderer* renderer, rasm_camera camera, float aspect, rasm_mat4* matrix);</pre>
   <div class="body">
-    <p>See <a href="camera.html#createCamera">camera.html</a>. <code>rasm_camera_projection</code> is <a href="camera.html#CameraProjection"><code>CameraProjection</code></a> without its union: <code>type</code> (<code>RASM_PROJECTION_TYPE_PERSPECTIVE</code> or <code>RASM_PROJECTION_TYPE_ORTHOGRAPHIC</code>), <code>fov_y</code> (degrees) and <code>aspect</code> for a perspective, <code>left</code>, <code>right</code>, <code>bottom</code>, <code>top</code> for an orthographic one, <code>near_z</code> and <code>far_z</code> for both (a perspective <code>far_z</code> of 0 is infinite). A camera has no controller in C yet: place it with <code>rasm_set_camera_transform</code>. <code>rasm_get_projection_matrix</code> with an <code>aspect</code> of 0 uses the camera's own.</p>
+    <p>See <a href="camera.html#createCamera">camera.html</a>. <code>rasm_camera_projection</code> is <a href="camera.html#CameraProjection"><code>CameraProjection</code></a> without its union, a sized struct: <code>type</code> (<code>RASM_PROJECTION_TYPE_PERSPECTIVE</code> or <code>RASM_PROJECTION_TYPE_ORTHOGRAPHIC</code>), <code>fov_y</code> (degrees) and <code>aspect</code> for a perspective, <code>left</code>, <code>right</code>, <code>bottom</code>, <code>top</code> for an orthographic one, <code>near_z</code> and <code>far_z</code> for both (a perspective <code>far_z</code> of 0 is infinite). Its init gives a perspective of 45 degrees, aspect 1, <code>near_z</code> 0.1 and an infinite far plane. A camera has no controller in C yet: place it with <code>rasm_set_camera_transform</code>. <code>rasm_get_projection_matrix</code> with an <code>aspect</code> of 0 uses the camera's own.</p>
   </div>
 </div>
 

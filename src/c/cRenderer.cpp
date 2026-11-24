@@ -31,7 +31,7 @@ try
     if (version != RASM_OK)
         return version;
     rasm_renderer_config values = c::toC(RendererConfig{});
-    if (!c::readSized(config, c::RENDERER_CONFIG_SIZE_1_0, &values, sizeof(values), __func__, "config"))
+    if (!c::readSized(config, c::RENDERER_CONFIG_SIZE_1_0, &values, sizeof(values), __func__, "config") || !c::checkRendererConfig(values, __func__))
         return RASM_ERROR_INVALID_ARGUMENT;
 
     auto created = std::make_unique<rasm_renderer>();
@@ -124,11 +124,14 @@ try
 RASM_C_CATCH(nullptr)
 
 void RASM_CALL rasm_image_destroy(rasm_image *image)
+try
 {
     delete image;
 }
+RASM_C_CATCH_VOID
 
 rasm_image_data RASM_CALL rasm_image_get(const rasm_image *image)
+try
 {
     if (image == nullptr)
         return {};
@@ -139,6 +142,7 @@ rasm_image_data RASM_CALL rasm_image_get(const rasm_image *image)
             .pixels = data.pixels.empty() ? nullptr : data.pixels.data(),
             .byte_size = data.pixels.size()};
 }
+RASM_C_CATCH({})
 
 rasm_result RASM_CALL rasm_image_write_png(const rasm_image *image, const char *path)
 try

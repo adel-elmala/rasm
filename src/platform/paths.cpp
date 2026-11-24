@@ -19,15 +19,18 @@ namespace rasm
 {
     namespace
     {
-        // The C API's shared library sets it to an address in its own code (setBaseModule); a static application leaves it null.
-        const void *baseModule = nullptr; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables): set once, before any path resolves
+        // The C API's shared library's folder, absolute (setBaseModule); empty for a static application. dladdr gives the
+        // path the library was opened with, which may be relative to a working directory that changes later.
+        std::filesystem::path baseModuleFolder; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables): set once, before any path resolves
 
         // The folder of the binary that holds RASM. A static application's is the executable's, as SDL_GetBasePath gave
         // it: in a macOS app bundle, Contents/Resources beside the executable's Contents/MacOS. The C API's is the shared
         // library's, so its shaders beside it are found under any host process (python.exe).
         std::filesystem::path getBaseFolder()
         {
-            const std::string binary = getModulePath(baseModule);
+            if (!baseModuleFolder.empty())
+                return baseModuleFolder;
+            const std::string binary = getModulePath(nullptr);
             if (binary.empty())
             {
                 // An empty result leaves callers relative to the working directory, which is the best guess left.
@@ -36,7 +39,7 @@ namespace rasm
             }
             const std::filesystem::path folder = pathFromUtf8(binary).lexically_normal().parent_path();
 #if defined(__APPLE__)
-            if (baseModule == nullptr && folder.filename() == "MacOS" && folder.parent_path().filename() == "Contents")
+            if (folder.filename() == "MacOS" && folder.parent_path().filename() == "Contents")
                 return folder.parent_path() / "Resources";
 #endif
             return folder;
@@ -123,7 +126,14 @@ namespace rasm
 
     void setBaseModule(const void *address)
     {
-        baseModule = address;
+        const std::string binary = getModulePath(address);
+        if (binary.empty())
+        {
+            spdlog::error("Failed to find the shared library that holds RASM; relative paths resolve against the executable.");
+            return;
+        }
+        std::error_code error;
+        baseModuleFolder = std::filesystem::absolute(pathFromUtf8(binary), error).lexically_normal().parent_path();
     }
 
     std::string getBaseDir()

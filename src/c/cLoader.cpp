@@ -100,7 +100,7 @@ try
     }
     rasm_renderer_config rendererValues = c::toC(RendererConfig{});
     rasm_asset_loader_config loaderValues = getLoaderDefaults();
-    if (!c::readSized(values.renderer, c::RENDERER_CONFIG_SIZE_1_0, &rendererValues, sizeof(rendererValues), __func__, "config->renderer") ||
+    if (!c::readSized(values.renderer, c::RENDERER_CONFIG_SIZE_1_0, &rendererValues, sizeof(rendererValues), __func__, "config->renderer") || !c::checkRendererConfig(rendererValues, __func__) ||
         (values.loader != nullptr && !c::readSized(values.loader, c::ASSET_LOADER_CONFIG_SIZE_1_0, &loaderValues, sizeof(loaderValues), __func__, "config->loader")))
         return RASM_ERROR_INVALID_ARGUMENT;
 
@@ -120,14 +120,18 @@ try
 RASM_C_CATCH_VOID
 
 rasm_renderer *RASM_CALL rasm_engine_get_renderer(rasm_engine *engine)
+try
 {
     return engine != nullptr ? &engine->renderer : nullptr;
 }
+RASM_C_CATCH(nullptr)
 
 rasm_asset_loader *RASM_CALL rasm_engine_get_asset_loader(rasm_engine *engine)
+try
 {
     return engine != nullptr ? &engine->loader : nullptr;
 }
+RASM_C_CATCH(nullptr)
 
 rasm_result RASM_CALL rasm_asset_loader_create(rasm_renderer *renderer, const rasm_asset_loader_config *config, rasm_asset_loader **loader)
 try

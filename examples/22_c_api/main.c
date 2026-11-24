@@ -297,7 +297,7 @@ int main(int argc, char **argv)
     rasm_add_light_to_scene(renderer, scene, rasm_create_light(renderer, &light));
 
     /* 4. The camera. It has no controller: the loop below places it every frame. */
-    memset(&projection, 0, sizeof(projection));
+    rasm_camera_projection_init(&projection, sizeof(projection));
     projection.type = RASM_PROJECTION_TYPE_PERSPECTIVE;
     projection.fov_y = 40.0f;
     projection.aspect = (float)WIDTH / (float)HEIGHT;

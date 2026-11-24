@@ -268,7 +268,7 @@ target_link_libraries(my_app PRIVATE rasm::renderer)
 
 ### The C API
 
-`RASM_C_API` (on by default) also builds the C API (`include/rasm/rasm_c.h`, [docs/api/c-api.html](api/c-api.html)) as two shared libraries: `rasm_c`, with the `Engine` and the `AssetLoader`, and `rasm_c_renderer`, the renderer alone. The project enables C for them (`project(rasm LANGUAGES C CXX)`), and the presets set `CMAKE_C_COMPILER` to `clang`. `cmake --install` puts them in `bin/` (Windows) or `lib/`, with the shaders beside them in `shaders/` and, on Windows, the DLLs they load. A C project needs nothing else, not even vcpkg:
+`RASM_C_API` (on by default, off when RASM is added with `add_subdirectory`) also builds the C API (`include/rasm/rasm_c.h`, [docs/api/c-api.html](api/c-api.html)) as two shared libraries: `rasm_c`, with the `Engine` and the `AssetLoader`, and `rasm_c_renderer`, the renderer alone. With the examples or the tests, it also enables C for the C example and the header checks, and the presets set `CMAKE_C_COMPILER` to `clang`. `cmake --install` puts them in `bin/` (Windows) or `lib/`, with the shaders beside them in `shaders/` and, on Windows, the DLLs they load. A C project needs nothing else, not even vcpkg:
 
 ```cmake
 find_package(rasm 0.1 CONFIG REQUIRED COMPONENTS c)

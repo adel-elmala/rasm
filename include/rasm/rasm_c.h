@@ -366,6 +366,7 @@ typedef struct rasm_light_desc
 
 typedef struct rasm_camera_projection
 {
+    uint32_t                        size;
     rasm_projection_type            type;
     float                           fov_y;                                     /* perspective, degrees */
     float                           aspect;
@@ -411,6 +412,7 @@ RASM_C_API rasm_result      RASM_CALL rasm_engine_config_init(rasm_engine_config
 RASM_C_API rasm_result      RASM_CALL rasm_texture_desc_init(rasm_texture_desc* desc, uint32_t size);
 RASM_C_API rasm_result      RASM_CALL rasm_light_desc_init(rasm_light_desc* desc, uint32_t size);
 RASM_C_API rasm_result      RASM_CALL rasm_scene_environment_init(rasm_scene_environment* environment, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_camera_projection_init(rasm_camera_projection* projection, uint32_t size);
 
 /* Renderer, Engine, AssetLoader */
 RASM_C_API rasm_result      RASM_CALL rasm_renderer_create(uint32_t api_version, const rasm_renderer_config* config, rasm_renderer** renderer);

@@ -1,7 +1,7 @@
 #include "c/cApi.h"
 #include "platform/paths.h"
 
-#include "spdlog/sinks/base_sink.h"
+#include "spdlog/sinks/sink.h"
 #include "spdlog/spdlog.h"
 
 #include <algorithm>
@@ -20,26 +20,28 @@ namespace rasm::c
         {
             std::string lastError;
             uint64_t count = 0;
-            std::string message; // the callback's copy, which keeps its capacity
         };
 
         // Gives every RASM error to the thread's last error, and every line to the application's callback. spdlog
-        // calls it under its mutex, from whichever thread logged: the caller's, or a load worker's.
-        class CSink : public spdlog::sinks::base_sink<std::mutex>
+        // calls it from whichever thread logged: the caller's, or a load worker's. It holds no lock while the callback
+        // runs, so the callback may call RASM, and two threads may be in it at once.
+        class CSink : public spdlog::sinks::sink
         {
         public:
+            void log(const spdlog::details::log_msg &message) override;
+            void flush() override {}
+            void set_pattern(const std::string &) override {}
+            void set_formatter(std::unique_ptr<spdlog::formatter>) override {}
+
             void setCallback(rasm_log_callback newCallback, void *newUserData)
             {
-                const std::lock_guard<std::mutex> lock(mutex_);
+                const std::lock_guard<std::mutex> lock(mutex);
                 callback = newCallback;
                 userData = newUserData;
             }
 
-        protected:
-            void sink_it_(const spdlog::details::log_msg &message) override;
-            void flush_() override {}
-
         private:
+            std::mutex mutex;
             rasm_log_callback callback = nullptr;
             void *userData = nullptr;
         };
@@ -159,18 +161,26 @@ namespace rasm::c
         static_assert(MAX_HANDLE_GENERATION <= UINT32_MAX);
     }
 
-    void CSink::sink_it_(const spdlog::details::log_msg &message)
+    void CSink::log(const spdlog::details::log_msg &message)
     {
-        ThreadErrors &errors = threadErrors;
         if (message.level >= spdlog::level::err)
         {
+            ThreadErrors &errors = threadErrors;
             errors.lastError.assign(message.payload.data(), message.payload.size());
             ++errors.count;
         }
-        if (callback != nullptr)
+        rasm_log_callback current = nullptr;
+        void *currentUserData = nullptr;
         {
-            errors.message.assign(message.payload.data(), message.payload.size());
-            callback(userData, static_cast<rasm_log_level>(message.level), errors.message.c_str());
+            const std::lock_guard<std::mutex> lock(mutex);
+            current = callback;
+            currentUserData = userData;
+        }
+        if (current != nullptr)
+        {
+            // A copy of its own: a callback that calls RASM may log again on this thread before it returns.
+            const std::string text(message.payload.data(), message.payload.size());
+            current(currentUserData, static_cast<rasm_log_level>(message.level), text.c_str());
         }
     }
 
@@ -311,6 +321,22 @@ namespace rasm::c
         if (value < count)
             return true;
         reportError(function, (std::string(name) + " " + std::to_string(value) + " is not one of its constants.").c_str());
+        return false;
+    }
+
+    bool checkRendererConfig(const rasm_renderer_config &config, const char *function)
+    {
+        return checkEnum(config.native_window.type, RASM_NATIVE_WINDOW_TYPE_METAL + 1, function, "config->native_window.type") &&
+               checkEnum(config.preferred_backend, RASM_BACKEND_WEBGPU + 1, function, "config->preferred_backend") &&
+               checkEnum(config.meshlet_path, RASM_MESHLET_PATH_AUTO + 1, function, "config->meshlet_path") &&
+               checkEnum(config.anti_aliasing, RASM_ANTI_ALIASING_DEFAULT + 1, function, "config->anti_aliasing");
+    }
+
+    bool checkHandle(uint64_t id, const char *function, const char *name)
+    {
+        if (id != 0)
+            return true;
+        reportError(function, (std::string(name) + " is 0, which names no object.").c_str());
         return false;
     }
 
@@ -465,10 +491,10 @@ namespace rasm::c
         if (projection.type == CameraProjection::Type::ORTHOGRAPHIC)
         {
             const CameraProjection::Orthographic &o = projection.orthographic;
-            return {.type = RASM_PROJECTION_TYPE_ORTHOGRAPHIC, .near_z = o.nearZ, .far_z = o.farZ, .left = o.left, .right = o.right, .bottom = o.bottom, .top = o.top};
+            return {.size = sizeof(rasm_camera_projection), .type = RASM_PROJECTION_TYPE_ORTHOGRAPHIC, .near_z = o.nearZ, .far_z = o.farZ, .left = o.left, .right = o.right, .bottom = o.bottom, .top = o.top};
         }
         const CameraProjection::Perspective &p = projection.perspective;
-        return {.type = RASM_PROJECTION_TYPE_PERSPECTIVE, .fov_y = p.fovY, .aspect = p.aspect, .near_z = p.nearZ, .far_z = p.farZ};
+        return {.size = sizeof(rasm_camera_projection), .type = RASM_PROJECTION_TYPE_PERSPECTIVE, .fov_y = p.fovY, .aspect = p.aspect, .near_z = p.nearZ, .far_z = p.farZ};
     }
 
     Light toCpp(const rasm_light_desc &light)
@@ -553,19 +579,25 @@ using namespace rasm;
 
 // NOLINTBEGIN(readability-identifier-naming): the parameters keep their names from rasm_c.h
 uint32_t RASM_CALL rasm_get_version(void)
+try
 {
     return RASM_C_API_VERSION;
 }
+RASM_C_CATCH(0)
 
 const char *RASM_CALL rasm_get_last_error(void)
+try
 {
     return c::threadErrors.lastError.c_str();
 }
+RASM_C_CATCH("")
 
 void RASM_CALL rasm_clear_last_error(void)
+try
 {
     c::threadErrors.lastError.clear();
 }
+RASM_C_CATCH_VOID
 
 void RASM_CALL rasm_set_log_callback(rasm_log_callback callback, void *user_data)
 try

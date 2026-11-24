@@ -106,6 +106,10 @@ namespace rasm::c
 
     // An enum value from the caller: false, with an error, when it is past the last constant.
     bool                    checkEnum(uint32_t value, uint32_t count, const char* function, const char* name);
+    // The config's enum fields.
+    bool                    checkRendererConfig(const rasm_renderer_config& config, const char* function);
+    // A handle the call acts on: false, with an error, for 0, which names no object.
+    bool                    checkHandle(uint64_t id, const char* function, const char* name);
 
     // The struct sizes of version 1.0: the smallest a caller may pass. They stay when fields are added.
     constexpr size_t        RENDERER_CONFIG_SIZE_1_0        = offsetof(rasm_renderer_config, anti_aliasing) + sizeof(rasm_anti_aliasing);
@@ -115,6 +119,7 @@ namespace rasm::c
     constexpr size_t        TEXTURE_DESC_SIZE_1_0           = offsetof(rasm_texture_desc, format) + sizeof(rasm_format);
     constexpr size_t        LIGHT_DESC_SIZE_1_0             = offsetof(rasm_light_desc, outer_cone_angle) + sizeof(float);
     constexpr size_t        SCENE_ENVIRONMENT_SIZE_1_0      = offsetof(rasm_scene_environment, sky) + sizeof(rasm_bool);
+    constexpr size_t        CAMERA_PROJECTION_SIZE_1_0      = offsetof(rasm_camera_projection, top) + sizeof(float);
 
 }
 

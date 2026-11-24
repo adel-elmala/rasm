@@ -89,7 +89,7 @@ class LightDesc(Structure):
 
 
 class CameraProjection(Structure):
-    _fields_ = [("type", c_uint32)] + [(name, c_float) for name in (
+    _fields_ = [("size", c_uint32), ("type", c_uint32)] + [(name, c_float) for name in (
         "fov_y", "aspect", "near_z", "far_z", "left", "right", "bottom", "top")]
 
 
@@ -105,6 +105,7 @@ def declare(lib):
         "rasm_set_log_callback": (None, [LogCallback, c_void_p]),
         "rasm_renderer_config_init": (c_int32, [POINTER(RendererConfig), c_uint32]),
         "rasm_light_desc_init": (c_int32, [POINTER(LightDesc), c_uint32]),
+        "rasm_camera_projection_init": (c_int32, [POINTER(CameraProjection), c_uint32]),
         "rasm_renderer_create": (c_int32, [c_uint32, POINTER(RendererConfig), POINTER(c_void_p)]),
         "rasm_renderer_destroy": (None, [c_void_p]),
         "rasm_running": (c_uint32, [c_void_p]),
@@ -208,7 +209,10 @@ def main():
         light.range = 0.0
         check(lib.rasm_add_light_to_scene(renderer, scene, lib.rasm_create_light(renderer, byref(light))) == OK, "the light", lib)
 
-        projection = CameraProjection(type=0, fov_y=45.0, aspect=width / height, near_z=0.1)
+        projection = CameraProjection()
+        lib.rasm_camera_projection_init(byref(projection), ctypes.sizeof(projection))
+        projection.fov_y = 45.0
+        projection.aspect = width / height
         eye = Transform(Vec3(0.0, 0.0, 3.0), Vec4(0.0, 0.0, 0.0, 1.0), Vec3(1.0, 1.0, 1.0))
         camera = lib.rasm_create_camera(renderer, byref(projection), byref(eye))
         check(camera.id != 0, "rasm_create_camera", lib)

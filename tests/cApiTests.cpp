@@ -256,3 +256,62 @@ TEST_CASE("vertex colors pack as the C++ API packs them")
     CHECK(rasm_pack_vertex_color(rasm_vec4{1.0f, 0.0f, 0.0f, 1.0f}) == 0xFF0000FFu);
     CHECK(rasm_pack_vertex_color(rasm_vec4{0.0f, 0.0f, 0.0f, 0.0f}) == 0u);
 }
+
+TEST_CASE("a config enum past its last constant is refused before anything starts")
+{
+    rasm_renderer_config config;
+    rasm_renderer_config_init(&config, sizeof(config));
+    config.anti_aliasing = 9;
+    rasm_renderer *renderer = nullptr;
+    CHECK(rasm_renderer_create(RASM_C_API_VERSION, &config, &renderer) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(contains(rasm_get_last_error(), "config->anti_aliasing 9"));
+    CHECK(renderer == nullptr);
+}
+
+TEST_CASE("a camera projection starts as a 45 degree perspective")
+{
+    rasm_camera_projection projection;
+    REQUIRE(rasm_camera_projection_init(&projection, sizeof(projection)) == RASM_OK);
+    CHECK(projection.size == sizeof(projection));
+    CHECK(projection.type == RASM_PROJECTION_TYPE_PERSPECTIVE);
+    CHECK(projection.fov_y == 45.0f);
+    CHECK(projection.near_z == 0.1f);
+    CHECK(projection.far_z == 0.0f);
+}
+
+namespace
+{
+    struct ReentrantLog
+    {
+        int depth = 0;
+        int calls = 0;
+    };
+
+    // Calls RASM from inside the callback, which logs again on this thread.
+    void RASM_CALL logAndCallBack(void *userData, rasm_log_level level, const char *)
+    {
+        auto *state = static_cast<ReentrantLog *>(userData);
+        ++state->calls;
+        if (level < RASM_LOG_LEVEL_ERROR || state->depth > 0)
+            return;
+        ++state->depth;
+        rasm_create_scene(nullptr);
+        --state->depth;
+    }
+}
+
+TEST_CASE("the log callback may call RASM")
+{
+    ReentrantLog state;
+    rasm_set_log_callback(logAndCallBack, &state);
+    rasm_create_scene(nullptr);
+    rasm_set_log_callback(nullptr, nullptr);
+    CHECK(state.calls == 2);
+}
+
+TEST_CASE("the base path is absolute")
+{
+    std::vector<char> path(rasm_get_base_path(nullptr, 0) + 1);
+    rasm_get_base_path(path.data(), static_cast<uint32_t>(path.size()));
+    CHECK(std::filesystem::path(reinterpret_cast<const char8_t *>(path.data())).is_absolute());
+}

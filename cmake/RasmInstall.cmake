@@ -35,8 +35,11 @@ if (RASM_C_API)
         set(rasm_c_library_dir "${CMAKE_INSTALL_LIBDIR}")
     endif()
     install(EXPORT rasmCTargets NAMESPACE rasm:: DESTINATION "${RASM_INSTALL_CONFIG_DIR}")
-    install(DIRECTORY "${PROJECT_SOURCE_DIR}/shaders/lib" "${PROJECT_SOURCE_DIR}/shaders/passes"
-            DESTINATION "${rasm_c_library_dir}/${RASM_SHADER_DIR}")
+    # An absolute RASM_SHADER_DIR is where the libraries look, wherever they are: nothing goes beside them then.
+    if (NOT IS_ABSOLUTE "${RASM_SHADER_DIR}")
+        install(DIRECTORY "${PROJECT_SOURCE_DIR}/shaders/lib" "${PROJECT_SOURCE_DIR}/shaders/passes"
+                DESTINATION "${rasm_c_library_dir}/${RASM_SHADER_DIR}")
+    endif()
 endif()
 
 # The install prefix and the build tree each get a config, because their shaders are in different places.
