@@ -812,9 +812,10 @@ namespace
         return rasm::Transform{position, glm::normalize(rotation), glm::vec3(1.0f)};
     }
 
-    bool cameraMovedByUser(const rasm::Transform &rendered, const rasm::Transform &tour)
+    // A drag or a held key: the user takes over the camera from the tour.
+    bool movesCamera(const rasm::CameraInput &input)
     {
-        return glm::distance(rendered.position, tour.position) > 1e-3f || std::abs(glm::dot(rendered.rotation, tour.rotation)) < 0.99999f;
+        return input.mouseStart != input.mouseEnd || input.forward || input.backward || input.left || input.right;
     }
 
     void updateTraffic(rasm::Engine &engine, const std::vector<Car> &cars, double seconds)
@@ -897,7 +898,10 @@ int main(int argc, char **argv)
     const rasm::CameraController freeFly{.type = rasm::CameraController::Type::FREE_FLY,
                                          .freeFly = {.speed = 80.0f, .lookSensitivity = 1.5f},
                                          .easingSpeed = 6.0f};
-    engine.setCameraController(camera, freeFly);
+    // The example drives the camera itself: the engine's controller is off, and a free-fly rig of its own takes the
+    // engine's input each frame.
+    engine.setCameraController(camera, rasm::CameraController{.type = rasm::CameraController::Type::NONE});
+    rasm::CameraRig rig = rasm::createCameraRig(freeFly, start);
     engine.addCameraToScene(city.scene, camera);
 
     // A cool moon, a warm glow from the city's own lights, and floodlights around the monument: 7 lights.
@@ -934,15 +938,15 @@ int main(int argc, char **argv)
     {
         if (freezeCulling && frame == 30)
             engine.setCullingFrozen(true);
-        // The tour sets the pose and re-seeds the free-fly controller from it. Mouse or WASD input then moves the
-        // camera away from the pose, and from that frame on the user flies.
-        rasm::Transform tour{};
+        // This frame's input, before the frame. The tour puts the rig at its pose; the first drag or held key moves
+        // it away from there, and from that frame on the user flies.
+        engine.pollEvents();
+        const rasm::CameraInput input = engine.getCameraInput();
         if (touring)
-        {
-            tour = tourTransform(seconds);
-            engine.setCameraTransform(camera, tour);
-            engine.setCameraController(camera, freeFly);
-        }
+            rig = rasm::createCameraRig(freeFly, tourTransform(seconds));
+        rasm::updateCameraRig(rig, input);
+        engine.setCameraTransform(camera, rig.transform);
+        touring = touring && !movesCamera(input);
 
         // Moving cars rewrite only their own instance rows.
         updateTraffic(engine, city.cars, seconds);
@@ -965,9 +969,6 @@ int main(int argc, char **argv)
         engine.render(city.scene, camera);
         if (bench.on)
             addBenchFrame(bench, engine.getFrameStats());
-
-        if (touring && cameraMovedByUser(engine.getCameraTransform(camera), tour))
-            touring = false;
 
         const std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
         seconds += args.fixedStep ? FIXED_STEP_SECONDS : std::chrono::duration<double>(now - lastTime).count();

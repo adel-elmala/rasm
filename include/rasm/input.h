@@ -67,5 +67,13 @@ namespace rasm
         uint32_t        codepoint       = 0;                    // Unicode
     };
 
+    // What Dear ImGui took from the last UI frame (Engine::getUiInputCapture). All false without a UI.
+    struct UiInputCapture
+    {
+        bool            mouse           = false;                // the pointer is over a UI window, or drags one
+        bool            keyboard        = false;                // a UI window has the keyboard focus
+        bool            text            = false;                // a text field takes typing
+    };
+
 }
 // clang-format on

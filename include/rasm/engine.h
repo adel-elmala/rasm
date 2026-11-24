@@ -3,6 +3,7 @@
 
 #include "rasm/types.h"
 #include "rasm/camera.h"
+#include "rasm/cameraInput.h"
 #include "rasm/entity.h"
 #include "rasm/scene.h"
 #include "rasm/material.h"
@@ -181,8 +182,8 @@ namespace rasm
         void                        setCameraBloomStrength(CameraHandle camera, float strength);
         // The camera's next frame starts TAA over, without the frames before: call it on a camera cut.
         void                        resetCameraHistory(CameraHandle camera);
-        // Returns false when the frame must be skipped (minimized, swapchain out of date); then do not
-        // record anything or call endFrame.
+        // Polls unless pollEvents ran, then moves the camera with its controller unless it is NONE or invalid. Returns
+        // false when the frame must be skipped (minimized, swapchain out of date); then do not record anything or call endFrame.
         [[nodiscard]] bool          beginFrame(CameraHandle camera);
         // Presents the swapchain image, cleared if no pass rendered to it this frame.
         void                        endFrame();
@@ -262,10 +263,16 @@ namespace rasm
         // window related
         Window                      createWindow(uint32_t width, uint32_t height);
         void                        destroyWindow(const Window& window);
-        void                        pollEvents(CameraHandle camera);
+        // The frame's input. Only the first call after a beginFrame works: call it before render to read this frame's.
+        void                        pollEvents();
         // Input from an application that runs the event loop (PlatformType::NATIVE, or a script of a headless engine):
-        // queued, and applied by the next beginFrame like the SDL platform's own events.
+        // queued for the next pollEvents, like the SDL platform's own events.
         void                        addInputEvent(const InputEvent& event);
+        // Valid until the next frame's pollEvents.
+        const InputEvent*           getInputEvents(uint32_t& count) const;
+        CameraInput                 getCameraInput() const;
+        UiInputCapture              getUiInputCapture() const;
+        float                       getDeltaTime() const;
         // The main window's size in points and in pixels, for NATIVE and HEADLESS; the SDL platform reads its own. A
         // size of 0 skips frames, as a minimized window does.
         void                        setWindowSize(uint32_t width, uint32_t height, uint32_t pixelWidth, uint32_t pixelHeight);
@@ -328,7 +335,10 @@ namespace rasm
         std::unique_ptr<Platform>                                   platform                                = {};
         Window                                                      mainWindow                              = {};
         std::unique_ptr<InputState>                                 inputState                              = {};
-        std::vector<InputEvent>                                     inputEvents                             = {}; // until the next beginFrame; keeps its capacity
+        std::vector<InputEvent>                                     inputEvents                             = {}; // the last pollEvents', until the next one; keeps its capacity
+        std::vector<InputEvent>                                     pendingInputEvents                      = {}; // added since the last pollEvents; keeps its capacity
+        CameraInput                                                 cameraInput                             = {}; // the main window's, from the last pollEvents
+        bool                                                        inputPolled                             = false; // pollEvents ran since the last beginFrame
         DescriptorSetLayoutHandle                                   bindlessDescriptorSetLayout             = {};
         DescriptorPoolHandle                                        bindlessDescriptorPool                  = {};
         DescriptorSetHandle                                         bindlessDescriptorSet                   = {};

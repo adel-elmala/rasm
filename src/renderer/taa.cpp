@@ -165,8 +165,8 @@ namespace rasm
                 const glm::uvec2 size(target.width, target.height);
                 const TextureHandle texture = target.attachments[0].color[0];
                 const bool reset = !state->valid || size != state->size || texture != state->texture || cameraData.historyResets != state->historyResets ||
-                                   isCameraJump(state->position, state->rotation, cameraData.transform.position, cameraData.transform.rotation, getJumpDistance(cameraData));
-                *state = {.size = size, .texture = texture, .historyResets = cameraData.historyResets, .position = cameraData.transform.position, .rotation = cameraData.transform.rotation, .valid = true};
+                                   isCameraJump(state->position, state->rotation, cameraData.rig.transform.position, cameraData.rig.transform.rotation, getJumpDistance(cameraData));
+                *state = {.size = size, .texture = texture, .historyResets = cameraData.historyResets, .position = cameraData.rig.transform.position, .rotation = cameraData.rig.transform.rotation, .valid = true};
 
                 const gfx::TaaPushConstants pushConstants{
                     .colorAndMotion = packIndices(getBindlessTextureIndex(getRenderTargetTexture(source, 0)), getBindlessTextureIndex(getRenderTargetTexture(source, 1))),

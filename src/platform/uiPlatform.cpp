@@ -148,8 +148,8 @@ namespace rasm
         ImGuiIO &io = ImGui::GetIO();
         io.ClearInputKeys();
         io.ClearInputMouse();
-        if (input.mouseInside)
-            io.AddMousePosEvent(input.mouseX, input.mouseY);
+        if (input.camera.pointerInWindow)
+            io.AddMousePosEvent(input.camera.pointerX, input.camera.pointerY);
         else
             io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
     }
@@ -195,7 +195,7 @@ namespace rasm
         style.FontScaleDpi = to;
     }
 
-    UiInputCapture getUiInputCapture()
+    UiInputCapture readUiInputCapture()
     {
         const ImGuiIO &io = ImGui::GetIO();
         return {.mouse = io.WantCaptureMouse, .keyboard = io.WantCaptureKeyboard, .text = io.WantTextInput};
