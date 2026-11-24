@@ -24,7 +24,8 @@ namespace rasm
     struct ViewState
     {
         CameraHandle                camera;
-        RenderTargetHandle          output;                         // ViewOutput::target; invalid: the swapchain
+        RenderTargetHandle          output;                         // ViewOutput::target; invalid: the swapchain of window
+        WindowHandle                window;                         // ViewOutput::window
         SceneHandle                 scene;
         AntiAliasing                antiAliasing        = AntiAliasing::NONE;   // the one its targets were made for
         RenderTargetHandle          sceneTarget;                    // HDR color (and motion with TAA) and depth, the scene view's target

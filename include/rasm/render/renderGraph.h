@@ -42,6 +42,7 @@ namespace rasm
         bool                                compute             = false;
         bool                                async               = false;
         bool                                writesSwapchain     = false;
+        WindowHandle                        window;                     // the swapchain's window: the main one when the graph has an engine
         bool                                encodedSwapchain    = false;    // draws the swapchain through its UNORM view (AttachmentOps::encodedColor): the UI pass
 
         // For Sorting
@@ -75,7 +76,9 @@ namespace rasm
         void                    write(BufferHandle handle);
         void                    write(RenderTargetHandle rt, uint32_t face = 0);
         void                    write(const BufferHandle (&perFrame)[MAX_FRAMES_IN_FLIGHT]);
-        void                    writeSwapchain();
+        // This frame's image of the window: an invalid handle is the main window. Passes on one window run in the
+        // order they were added; a pass whose window has no image this frame (minimized, removed) is skipped.
+        void                    writeSwapchain(WindowHandle window = {});
 
     private:
         RenderGraph&    graph;
@@ -145,7 +148,7 @@ namespace rasm
         void                write(uint32_t passIdx, BufferHandle h);
         void                write(uint32_t passIdx, RenderTargetHandle h, uint32_t face);
         void                write(uint32_t passIdx, const BufferHandle (&perFrame)[MAX_FRAMES_IN_FLIGHT]);
-        void                writeSwapchain(uint32_t passIdx);
+        void                writeSwapchain(uint32_t passIdx, WindowHandle window);
 
         std::vector<Pass>                                           passes;
         std::vector<uint32_t>                                       executionOrder; // Sorted pass indices

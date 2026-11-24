@@ -79,6 +79,7 @@ namespace rasm
             }
             break;
         case InputEventType::TEXT:
+        case InputEventType::WINDOW_CLOSE:
         case InputEventType::NONE:
             break;
         }

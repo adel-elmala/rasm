@@ -15,7 +15,7 @@ namespace rasm::rhi
     class VulkanSwapchain final : public Swapchain
     {
     public:
-                                    VulkanSwapchain(VulkanDevice& device);
+                                    VulkanSwapchain(VulkanDevice& device, VkSurfaceKHR surface, bool ownsSurface);
                                     ~VulkanSwapchain() override;
         bool                        initialize(const SwapchainDesc& desc);
         SwapchainStatus             acquireNextImage(uint32_t& outImageIndex) override;
@@ -34,6 +34,7 @@ namespace rasm::rhi
     private:
         static constexpr uint32_t   NO_ACQUIRE                                  = UINT32_MAX;
 
+        vkb::Device                 getSurfaceDevice() const;
         bool                        createImages();
         void                        destroyImages();
         void                        destroySwapchain();
@@ -41,6 +42,8 @@ namespace rasm::rhi
 
         VulkanDevice&               device;
         const VolkDeviceTable&      vk;
+        VkSurfaceKHR                surface                                     = VK_NULL_HANDLE;
+        bool                        ownsSurface                                 = false;    // a window of its own: destroyed with the swapchain
         vkb::Swapchain              swapchain                                   = {};
         std::vector<VulkanTexture>  images                                      = {};
         std::vector<VkSemaphore>    presentSemaphores                           = {};

@@ -67,6 +67,7 @@ namespace
         rasm::CameraHandle map;
         rasm::CameraHandle security;
         rasm::RenderTargetHandle viewTexture;
+        rasm::WindowHandle window; // a second, offscreen window, which the security camera's view also draws
     };
 
     // What every scene may use, loaded once.
@@ -93,6 +94,7 @@ namespace
         uint32_t threshold = 3;       // a channel differs when it is off by more than this (0-255)
         double fraction = 0.001;      // the test fails when more of the pixels than this differ
         bool views = false;           // drawn by Engine::render with the content's views instead of a graph
+        bool secondWindow = false;    // a views test that reads the content's second window instead of the main one
         const char *sameAs = nullptr; // compare with this test's image of the same run instead of a golden
     };
 
@@ -397,7 +399,8 @@ namespace
             engine.setCameraController(camera, rasm::CameraController{.type = rasm::CameraController::Type::NONE});
             engine.addCameraToScene(content.scene, camera);
         }
-        return helmet.isValid() && content.side.isValid() && content.security.isValid() && content.map.isValid() &&
+        content.window = engine.addWindow({.width = 256, .height = 144});
+        return helmet.isValid() && content.side.isValid() && content.security.isValid() && content.map.isValid() && content.window.isValid() &&
                addSunsetLight(engine, assets, content, 1.0f, glm::vec3(0.6f, -1.0f, -0.35f), 3.0f);
     }
 
@@ -420,6 +423,7 @@ namespace
         {.name = "node_anim",     .build = buildNodeAnimation, .time = 0.3},
         {.name = "materials",     .build = buildMaterials},
         {.name = "views",         .build = buildViews,         .views = true},
+        {.name = "views_window2", .build = buildViews,         .views = true, .secondWindow = true},
         // The same images drawn by meshlets: the same triangles, so the same pixels. The mesh_ tests take the mesh shaders
         // where the device has them (lavapipe and the desktop GPUs do), else vertex pulling. lavapipe's mesh shaders round a
         // few positions differently from its vertex shaders: up to 3 levels on 0.2% of the pixels after TAA, and a few edge
@@ -587,19 +591,21 @@ namespace
         engine.setDebugView(test.view);
         engine.setMeshletPath(test.meshlets);
 
-        // A views test draws through Engine::render: the view texture first, then the split screen and the map.
+        // A views test draws through Engine::render: the view texture first, then the split screen, the map, and the
+        // security camera in the second window.
         const rasm::View views[] = {
             {.scene = content->scene, .camera = content->security, .output = {.target = content->viewTexture}},
             {.scene = content->scene, .camera = camera, .output = {.rect = {.x = 0.0f, .y = 0.0f, .width = 0.5f, .height = 1.0f}}},
             {.scene = content->scene, .camera = content->side, .output = {.rect = {.x = 0.5f, .y = 0.0f, .width = 0.5f, .height = 1.0f}}},
             {.scene = content->scene, .camera = content->map, .output = {.rect = {.x = 0.75f, .y = 0.0f, .width = 0.25f, .height = 0.44f}}, .bloom = rasm::ViewToggle::OFF},
+            {.scene = content->scene, .camera = content->security, .output = {.window = content->window}},
         };
         rasm::RenderGraph graph = engine.createRenderGraph();
         auto frame = [&]()
         {
             engine.setAnimationTime(test.time);
             if (test.views)
-                engine.render(views, 4);
+                engine.render(views, 5);
             else
                 graph.execute(camera);
         };
@@ -613,7 +619,7 @@ namespace
         engine.waitForLoads();
         for (uint32_t i = 0; i < test.frames; ++i)
             frame();
-        const rasm::ReadbackHandle copy = engine.readFrame(rasm::ReadbackFormat::RGBA8_SRGB);
+        const rasm::ReadbackHandle copy = test.secondWindow ? engine.readFrame(content->window, rasm::ReadbackFormat::RGBA8_SRGB) : engine.readFrame(rasm::ReadbackFormat::RGBA8_SRGB);
         // The frame that copies keeps the same clock; the readback is ready once the GPU has finished it.
         for (uint32_t extra = 0; extra < 8 && copy.isValid() && !engine.isReadbackReady(copy); ++extra)
             frame();

@@ -97,14 +97,20 @@ namespace rasm
             platform = createHeadlessPlatform();
             break;
         case PlatformType::NATIVE:
-            platform = createNativePlatform(config.nativeWindow);
+            platform = createNativePlatform();
             break;
         case PlatformType::SDL:
             platform = createSdlPlatform();
             break;
         }
-        this->mainWindow = createWindow(config.windowWidth, config.windowHeight);
-        if (config.platform != PlatformType::HEADLESS && mainWindow.native.type == NativeWindowType::NONE)
+        // The main window is the first one, so its handle index is MAIN_WINDOW_INDEX.
+        const HandleSlot mainSlot = windowHandles.allocate();
+        windows[mainSlot.index] = platform->createWindow({.title = "RASM Engine",
+                                                          .width = static_cast<uint32_t>(config.windowWidth),
+                                                          .height = static_cast<uint32_t>(config.windowHeight),
+                                                          .native = config.nativeWindow});
+        windows[mainSlot.index].handle = {mainSlot.index, mainSlot.generation};
+        if (config.platform != PlatformType::HEADLESS && windows[MAIN_WINDOW_INDEX].native.type == NativeWindowType::NONE)
         {
             spdlog::error("Failed to initialize engine window.");
             return;
@@ -184,7 +190,7 @@ namespace rasm
             return;
         }
 
-        if (!createSwapchainResources() || !createEnvironments())
+        if (!createSwapchainResources(WindowHandle{}) || !createEnvironments())
             return;
 
         // Its pipeline is built with the bindless layout, so it comes after it.
@@ -237,19 +243,110 @@ namespace rasm
 #endif
         ctx.cleanup();
 
-        destroyWindow(this->mainWindow);
+        // The main window last: the SDL platform quits SDL with its last window.
+        for (uint32_t i = MAX_WINDOWS; i-- > 0;)
+        {
+            if (platform && windows[i].handle.isValid())
+                platform->destroyWindow(windows[i]);
+        }
         spdlog::info("Engine shutdown, cleaned up resources.");
     }
 
-    Window Engine::createWindow(uint32_t width, uint32_t height)
+    // The platform opens or wraps the window, and the render context gives it a swapchain. On failure nothing is left.
+    WindowHandle Engine::addWindow(const WindowDesc &desc)
     {
-        return platform ? platform->createWindow(width, height) : Window{};
+        if (!isRunning || !platform)
+        {
+            spdlog::error("addWindow: the engine did not start.");
+            return {};
+        }
+        if (recordingFrame)
+        {
+            spdlog::error("addWindow: a frame is being recorded; add windows between frames.");
+            return {};
+        }
+        const bool headless = config.platform == PlatformType::HEADLESS;
+        const bool hasNative = desc.native.type != NativeWindowType::NONE;
+        if ((config.platform == PlatformType::NATIVE) != hasNative)
+        {
+            spdlog::error("addWindow: {}", config.platform == PlatformType::NATIVE ? "a NATIVE engine draws into the application's windows: set WindowDesc::native."
+                                                                                   : "WindowDesc::native is for PlatformType::NATIVE; this platform opens its own windows.");
+            return {};
+        }
+        if ((headless || !hasNative) && (desc.width == 0 || desc.height == 0))
+        {
+            spdlog::error("addWindow: a window needs a width and a height.");
+            return {};
+        }
+        const HandleSlot slot = windowHandles.allocate();
+        if (slot.index == 0)
+        {
+            spdlog::error("addWindow: {} windows are open, the most there can be (MAX_WINDOWS - 1); remove one first.", windowHandles.liveCount());
+            return {};
+        }
+        Window window = platform->createWindow(desc);
+        if (!headless && window.native.type == NativeWindowType::NONE)
+        {
+            windowHandles.release(slot.index, slot.generation);
+            return {};
+        }
+        const WindowHandle handle = {slot.index, slot.generation};
+        window.handle = handle;
+        windows[slot.index] = window;
+        windowFrames[slot.index] = {};
+        if (!ctx.createSwapchain(handle) || !createSwapchainResources(handle))
+        {
+            ctx.destroySwapchain(handle);
+            platform->destroyWindow(windows[slot.index]);
+            windows[slot.index] = {};
+            windowHandles.release(slot.index, slot.generation);
+            return {};
+        }
+        return handle;
     }
 
-    void Engine::destroyWindow(const Window &window)
+    void Engine::removeWindow(WindowHandle window)
     {
+        if (!isLive(window) || window.index == MAIN_WINDOW_INDEX)
+        {
+            spdlog::error("removeWindow: the window is invalid, removed, or the main window.");
+            return;
+        }
+        if (recordingFrame)
+        {
+            spdlog::error("removeWindow: a frame is being recorded; remove windows between frames.");
+            return;
+        }
+        ctx.destroySwapchain(window);
         if (platform)
-            platform->destroyWindow(window);
+            platform->destroyWindow(windows[window.index]);
+        windows[window.index] = {};
+        windowFrames[window.index] = {};
+        windowHandles.release(window.index, window.generation);
+    }
+
+    const Window &Engine::getWindow(WindowHandle window) const
+    {
+        static const Window none{};
+        if (!window.isValid())
+            return windows[MAIN_WINDOW_INDEX];
+        return isLive(window) ? windows[window.index] : none;
+    }
+
+    bool Engine::isLive(const WindowHandle &window) const
+    {
+        return windowHandles.isAlive(window.index, window.generation);
+    }
+
+    // An invalid handle names the main window; a removed one, the main window too (its passes are skipped before).
+    Engine::WindowFrame &Engine::frameOf(const WindowHandle &window)
+    {
+        return windowFrames[isLive(window) ? window.index : MAIN_WINDOW_INDEX];
+    }
+
+    Window &Engine::windowOf(const WindowHandle &window)
+    {
+        return windows[isLive(window) ? window.index : MAIN_WINDOW_INDEX];
     }
 
     void Engine::pollEvents()
@@ -260,7 +357,7 @@ namespace rasm
         {
             bool closed = false;
             if (platform)
-                platform->pollEvents(mainWindow, pendingInputEvents, closed);
+                platform->pollEvents(windows, MAX_WINDOWS, pendingInputEvents, closed);
             if (closed)
                 isRunning = false;
             return;
@@ -280,16 +377,20 @@ namespace rasm
         pendingInputEvents.clear();
         bool closed = false;
         if (platform)
-            platform->pollEvents(mainWindow, inputEvents, closed);
+            platform->pollEvents(windows, MAX_WINDOWS, inputEvents, closed);
         bool uiActive = false;
         const UiInputCapture capture = getUiInputCapture();
 #if defined(RASM_IMGUI)
         uiActive = ui && ui->active;
 #endif
         beginInputFrame(*inputState);
+        const Window &mainWindow = windows[MAIN_WINDOW_INDEX];
         const InputArea area = {.width = static_cast<float>(mainWindow.width), .height = static_cast<float>(mainWindow.height)};
         for (const InputEvent &event : inputEvents)
         {
+            // The UI and the engine's camera input live in the main window; the others' events are the application's.
+            if (event.window.isValid() && event.window.index != MAIN_WINDOW_INDEX)
+                continue;
 #if defined(RASM_IMGUI)
             if (uiActive)
                 processUiEvent(event);
@@ -348,21 +449,37 @@ namespace rasm
 
     void Engine::setWindowSize(uint32_t width, uint32_t height, uint32_t pixelWidth, uint32_t pixelHeight)
     {
+        setWindowSize(WindowHandle{}, width, height, pixelWidth, pixelHeight);
+    }
+
+    void Engine::setWindowSize(WindowHandle window, uint32_t width, uint32_t height, uint32_t pixelWidth, uint32_t pixelHeight)
+    {
         if (config.platform == PlatformType::SDL)
         {
             spdlog::warn("setWindowSize: the SDL platform reads its window's size itself.");
             return;
         }
+        if (window.isValid() && !isLive(window))
+        {
+            spdlog::error("setWindowSize: the window is invalid or was removed.");
+            return;
+        }
         // The swapchain follows the pixel size from the next frame (B17); points only place the mouse and the UI.
-        mainWindow.resized = mainWindow.resized || pixelWidth != mainWindow.pixelWidth || pixelHeight != mainWindow.pixelHeight;
-        mainWindow.width = width;
-        mainWindow.height = height;
-        mainWindow.pixelWidth = pixelWidth;
-        mainWindow.pixelHeight = pixelHeight;
-        mainWindow.minimized = pixelWidth == 0 || pixelHeight == 0;
+        Window &target = windowOf(window);
+        target.resized = target.resized || pixelWidth != target.pixelWidth || pixelHeight != target.pixelHeight;
+        target.width = width;
+        target.height = height;
+        target.pixelWidth = pixelWidth;
+        target.pixelHeight = pixelHeight;
+        target.minimized = pixelWidth == 0 || pixelHeight == 0;
     }
 
     void Engine::setWindowContentScale(float scale)
+    {
+        setWindowContentScale(WindowHandle{}, scale);
+    }
+
+    void Engine::setWindowContentScale(WindowHandle window, float scale)
     {
         if (config.platform == PlatformType::SDL)
         {
@@ -374,7 +491,12 @@ namespace rasm
             spdlog::error("setWindowContentScale: the scale must be above 0, not {}.", scale);
             return;
         }
-        mainWindow.contentScale = scale;
+        if (window.isValid() && !isLive(window))
+        {
+            spdlog::error("setWindowContentScale: the window is invalid or was removed.");
+            return;
+        }
+        windowOf(window).contentScale = scale;
     }
 
     std::string Engine::resolveAssetPath(const std::string &path) const
@@ -782,21 +904,28 @@ namespace rasm
         return ctx.createPipeline({.name = "Compute Pipeline for " + name, .computeShader = shader, .descriptorSetLayout = bindlessDescriptorSetLayout});
     }
 
-    // Recreates the swapchain when the window changed size or it is out of date. Returns false when nothing can be
-    // presented: a minimized or zero-sized window (B5), or a failed recreation. Engine::render polls and calls it before
-    // beginFrame, so its views take the window's new size in the same frame.
+    // Recreates each window's swapchain when the window changed size or it is out of date. Returns false when no
+    // window can show anything: each is minimized or zero-sized (B5), or its recreation failed. Engine::render polls and
+    // calls it before beginFrame, so its views take a window's new size in the same frame.
     bool Engine::updateSwapchain()
     {
-        if (mainWindow.minimized || mainWindow.pixelWidth == 0 || mainWindow.pixelHeight == 0)
-            return false;
-        if (mainWindow.resized || swapchainOutOfDate)
+        bool anyShown = false;
+        for (uint32_t i = 0; i < MAX_WINDOWS; ++i)
         {
-            mainWindow.resized = false;
-            swapchainOutOfDate = !recreateSwapchain();
-            if (swapchainOutOfDate)
-                return false;
+            Window &window = windows[i];
+            WindowFrame &frame = windowFrames[i];
+            if (!window.handle.isValid() || window.minimized || window.pixelWidth == 0 || window.pixelHeight == 0)
+                continue;
+            if (window.resized || frame.outOfDate)
+            {
+                window.resized = false;
+                frame.outOfDate = !recreateSwapchain(window.handle);
+                if (frame.outOfDate)
+                    continue;
+            }
+            anyShown = true;
         }
-        return true;
+        return anyShown;
     }
 
     bool Engine::beginFrame(CameraHandle camera)
@@ -837,19 +966,27 @@ namespace rasm
 #endif
         syncGpuScene();
 
-        // B4
-        auto status = ctx.acquireNextImage(imageIdx);
-        if (status == SwapchainStatus::OUT_OF_DATE)
+        // B4. Each window that can show gets an image; one that can't (minimized, out of date) sits this frame out, and
+        // its passes are skipped. A frame with no image at all is skipped.
+        bool anyAcquired = false;
+        for (uint32_t i = 0; i < MAX_WINDOWS; ++i)
         {
-            swapchainOutOfDate = true;
-            return false;
+            const Window &window = windows[i];
+            WindowFrame &frame = windowFrames[i];
+            frame.acquired = false;
+            frame.rendered = false;
+            if (!window.handle.isValid() || window.minimized || window.pixelWidth == 0 || window.pixelHeight == 0 || frame.outOfDate)
+                continue;
+            const auto status = ctx.acquireNextImage(frame.imageIdx, window.handle);
+            if (status == SwapchainStatus::OUT_OF_DATE)
+                frame.outOfDate = true;
+            if (status == SwapchainStatus::SUBOPTIMAL)
+                frame.outOfDate = true; // The image is acquired and still usable; recreate after this frame.
+            frame.acquired = status == SwapchainStatus::OK || status == SwapchainStatus::SUBOPTIMAL;
+            anyAcquired = anyAcquired || frame.acquired;
         }
-        if (status == SwapchainStatus::FAILURE)
+        if (!anyAcquired)
             return false;
-        if (status == SwapchainStatus::SUBOPTIMAL)
-            swapchainOutOfDate = true; // The image is acquired and still usable; recreate after this frame.
-
-        swapchainRendered = false;
 
         // record commands for the current frame
         for (uint32_t q = 0; q < QUEUE_COUNT; ++q)
@@ -881,25 +1018,36 @@ namespace rasm
         {
             auto &currentFrame = frameResources[frameCount];
 
-            // Present needs the image in PRESENT_SRC, so a frame that only drew to render targets clears it.
-            if (!swapchainRendered)
+            // Present needs the image in PRESENT_SRC, so a window no pass drew is cleared.
+            const auto renderTarget = currentRenderTarget;
+            const uint32_t face = currentFace;
+            for (uint32_t i = 0; i < MAX_WINDOWS; ++i)
             {
-                auto renderTarget = currentRenderTarget;
-                const uint32_t face = currentFace;
+                if (!windowFrames[i].acquired || windowFrames[i].rendered)
+                    continue;
                 resetRenderTarget();
+                currentWindow = windows[i].handle;
                 beginPass("Clear");
                 endPass();
-                setRenderTarget(renderTarget, face);
             }
+            resetRenderTarget();
+            // The UI and the overlay are the main window's.
+            if (windowFrames[MAIN_WINDOW_INDEX].acquired)
+            {
 #if defined(RASM_IMGUI)
-            drawUiFallback();
+                drawUiFallback();
 #endif
-            if (!ui)
-                drawStatsOverlay();
+                if (!ui)
+                    drawStatsOverlay();
+            }
+            setRenderTarget(renderTarget, face);
             recordReadbacks();
             // An offscreen swapchain image is never presented; the next acquire of it drops what it holds.
-            if (config.platform != PlatformType::HEADLESS)
-                ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::PRESENT_SRC);
+            for (uint32_t i = 0; i < MAX_WINDOWS && config.platform != PlatformType::HEADLESS; ++i)
+            {
+                if (windowFrames[i].acquired)
+                    ctx.transitionImageLayout(currentFrame.commandBuffer, windowFrames[i].swapchain.imageHandles[windowFrames[i].imageIdx], TextureUsage::PRESENT_SRC);
+            }
             // updateFrameStats reads the cull stats on the host, after the slot's fence. With a compute queue the
             // culling runs there, and submitBatches puts the barrier in its last batch.
             if (!asyncCompute)
@@ -917,11 +1065,13 @@ namespace rasm
         ctx.tagReleases({.fence = frameFence, .value = frameFenceValue}, {.fence = computeFence, .value = computeFenceValue});
         finishReadbackSubmit(presenting);
         finishEnvironmentBakes();
-        if (presenting)
+        for (uint32_t i = 0; i < MAX_WINDOWS && presenting; ++i)
         {
-            auto status = ctx.present();
+            if (!windowFrames[i].acquired)
+                continue;
+            const auto status = ctx.present(windows[i].handle);
             if (status == SwapchainStatus::SUBOPTIMAL || status == SwapchainStatus::OUT_OF_DATE)
-                swapchainOutOfDate = true;
+                windowFrames[i].outOfDate = true;
         }
 
         frameCount = (frameCount + 1) % MAX_FRAMES_IN_FLIGHT; // Toggle between 0 and 1 for double buffering
@@ -1091,9 +1241,10 @@ namespace rasm
     {
         auto currentFrame = frameResources[frameCount];
         frameStats->passTimer = beginGpuTimer(currentFrame.commandBuffer, name);
-        uint32_t width = swapchain.width;
-        uint32_t height = swapchain.height;
-        TextureHandle colors[MAX_COLOR_ATTACHMENTS] = {swapchain.imageHandles[imageIdx]};
+        WindowFrame &window = frameOf(currentWindow);
+        uint32_t width = window.swapchain.width;
+        uint32_t height = window.swapchain.height;
+        TextureHandle colors[MAX_COLOR_ATTACHMENTS] = {window.swapchain.imageHandles[window.imageIdx]};
         uint32_t colorCount = 1;
         // The swapchain has no depth: the scene draws into a render target, and the tone-map pass brings it here.
         TextureHandle depth = {};
@@ -1140,7 +1291,7 @@ namespace rasm
         else
         {
             // endFrame moves it to PRESENT_SRC.
-            swapchainRendered = true;
+            frameOf(currentWindow).rendered = true;
         }
         endGpuTimer(currentFrame.commandBuffer, frameStats->passTimer);
     }
@@ -1155,35 +1306,46 @@ namespace rasm
     {
         this->currentRenderTarget = RenderTargetHandle{};
         this->currentFace = 0;
+        this->currentWindow = WindowHandle{};
     }
 
     bool Engine::recreateSwapchain()
     {
-        auto status = ctx.recreateSwapchain();
+        return recreateSwapchain(WindowHandle{});
+    }
+
+    bool Engine::recreateSwapchain(WindowHandle window)
+    {
+        WindowFrame &frame = frameOf(window);
+        auto status = ctx.recreateSwapchain(window);
         if (status != SwapchainStatus::OK)
         {
             // A 0x0 surface keeps the old swapchain, while a failure may have destroyed it with its images.
-            swapchain.imageHandles = ctx.getSwapchainImages();
+            frame.swapchain.imageHandles = ctx.getSwapchainImages(window);
             return false;
         }
-        if (!createSwapchainResources())
+        if (!createSwapchainResources(window))
             return false;
-        spdlog::info("Recreated swapchain: {}x{}", swapchain.width, swapchain.height);
+        spdlog::info("Recreated swapchain: {}x{}", frame.swapchain.width, frame.swapchain.height);
         return true;
     }
 
-    // Called at startup and after a successful swapchain recreation, both with the device idle.
-    bool Engine::createSwapchainResources()
+    // Called at startup, for a new window, and after a successful swapchain recreation, all with the device idle. The
+    // targets sized from the swapchain and the cameras' aspect follow the main window.
+    bool Engine::createSwapchainResources(WindowHandle window)
     {
-        swapchain.imageHandles = ctx.getSwapchainImages();
-        swapchain.imageFormat = ctx.getSwapchainImageFormat();
+        Swapchain &swapchain = frameOf(window).swapchain;
+        swapchain.imageHandles = ctx.getSwapchainImages(window);
+        swapchain.imageFormat = ctx.getSwapchainImageFormat(window);
 
         // Size everything from the swapchain extent. It is in pixels and can differ from the
         // window's logical size on HiDPI displays (B17).
-        auto extent = ctx.getSwapchainExtent();
+        auto extent = ctx.getSwapchainExtent(window);
         swapchain.width = extent.x;
         swapchain.height = extent.y;
 
+        if (window.isValid() && window.index != MAIN_WINDOW_INDEX)
+            return true;
         ctx.resizeRenderTargets();
         updateCameraAspectRatio(static_cast<float>(swapchain.width) / static_cast<float>(swapchain.height));
         return true;
@@ -1266,7 +1428,7 @@ namespace rasm
 
     const Window &Engine::getMainWindow() const
     {
-        return mainWindow;
+        return windows[MAIN_WINDOW_INDEX];
     }
 
     RenderContext &Engine::getRenderContext()

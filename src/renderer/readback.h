@@ -16,7 +16,8 @@ namespace rasm
     struct PendingReadback
     {
         ReadbackHandle              handle;
-        TextureHandle               texture;                                // invalid for readFrame: the frame's swapchain image
+        TextureHandle               texture;                                // invalid for readFrame: the frame's swapchain image of window
+        WindowHandle                window;                                 // readFrame's; invalid: the main window
         uint32_t                    layer           = 0;
         uint32_t                    mip             = 0;
         ReadbackFormat              format          = ReadbackFormat::RGBA8_SRGB;

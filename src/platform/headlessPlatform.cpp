@@ -9,19 +9,19 @@ namespace rasm
         class HeadlessPlatform final : public Platform
         {
         public:
-            Window createWindow(uint32_t width, uint32_t height) override
+            Window createWindow(const WindowDesc &desc) override
             {
                 Window window{};
-                window.width = width;
-                window.height = height;
-                window.pixelWidth = width;
-                window.pixelHeight = height;
+                window.width = desc.width;
+                window.height = desc.height;
+                window.pixelWidth = desc.width;
+                window.pixelHeight = desc.height;
                 return window;
             }
 
             void destroyWindow(const Window &) override {}
 
-            void pollEvents(Window &, std::vector<InputEvent> &, bool &) override {}
+            void pollEvents(Window *, uint32_t, std::vector<InputEvent> &, bool &) override {}
         };
     }
 

@@ -206,29 +206,45 @@ namespace rasm
             return true;
         }
 
+        // The window an SDL event names, or the main window for an event that names none it knows.
+        Window *findWindow(Window *windows, uint32_t count, SDL_WindowID id)
+        {
+            SDL_Window *sdlWindow = SDL_GetWindowFromID(id);
+            for (uint32_t i = 0; sdlWindow != nullptr && i < count; ++i)
+            {
+                if (windows[i].handle.isValid() && windows[i].platformWindow == sdlWindow)
+                    return &windows[i];
+            }
+            return &windows[MAIN_WINDOW_INDEX];
+        }
+
         class SdlPlatform final : public Platform
         {
         public:
-            Window createWindow(uint32_t width, uint32_t height) override
+            Window createWindow(const WindowDesc &desc) override
             {
-                if (!SDL_Init(SDL_INIT_VIDEO))
+                if (openWindows == 0 && !SDL_Init(SDL_INIT_VIDEO))
                 {
                     spdlog::error("Failed to initialize SDL: {}", SDL_GetError());
                     return Window{};
                 }
 
 #if defined(__APPLE__)
-                const SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_METAL;
+                SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_METAL;
 #else
-                const SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE;
+                SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE;
 #endif
-                SDL_Window *sdlWindow = SDL_CreateWindow("RASM Engine", static_cast<int>(width), static_cast<int>(height), flags);
+                if (desc.hidden)
+                    flags |= SDL_WINDOW_HIDDEN;
+                SDL_Window *sdlWindow = SDL_CreateWindow(desc.title != nullptr ? desc.title : "RASM", static_cast<int>(desc.width), static_cast<int>(desc.height), flags);
                 if (sdlWindow == nullptr)
                 {
                     spdlog::error("Failed to create SDL window: {}", SDL_GetError());
-                    SDL_Quit();
+                    if (openWindows == 0)
+                        SDL_Quit();
                     return Window{};
                 }
+                ++openWindows;
 
                 Window window{};
                 SDL_MetalView metalView = nullptr;
@@ -246,13 +262,13 @@ namespace rasm
                 if (!SDL_GetWindowSizeInPixels(sdlWindow, &pixelWidth, &pixelHeight))
                 {
                     spdlog::warn("Failed to query window size in pixels: {}", SDL_GetError());
-                    pixelWidth = static_cast<int>(width);
-                    pixelHeight = static_cast<int>(height);
+                    pixelWidth = static_cast<int>(desc.width);
+                    pixelHeight = static_cast<int>(desc.height);
                 }
 
-                window.handle = {.index = reinterpret_cast<uint64_t>(sdlWindow), .generation = 1};
-                window.width = width;
-                window.height = height;
+                window.platformWindow = sdlWindow;
+                window.width = desc.width;
+                window.height = desc.height;
                 window.pixelWidth = static_cast<uint32_t>(pixelWidth);
                 window.pixelHeight = static_cast<uint32_t>(pixelHeight);
                 window.contentScale = getContentScale(sdlWindow);
@@ -261,14 +277,17 @@ namespace rasm
 
             void destroyWindow(const Window &window) override
             {
-                if (window.handle.isValid())
+                if (window.platformWindow != nullptr)
                     destroySdlWindow(toSdl(window));
             }
 
-            void pollEvents(Window &window, std::vector<InputEvent> &events, bool &closed) override
+            void pollEvents(Window *windows, uint32_t count, std::vector<InputEvent> &events, bool &closed) override
             {
-                // Nothing is rendered while minimized, so block until an event arrives instead of spinning.
-                if (window.minimized)
+                // Nothing is rendered while every window is minimized, so block until an event arrives instead of spinning.
+                bool allMinimized = true;
+                for (uint32_t i = 0; i < count; ++i)
+                    allMinimized = allMinimized && (!windows[i].handle.isValid() || windows[i].minimized);
+                if (allMinimized)
                     SDL_WaitEventTimeout(nullptr, 100);
 
                 SDL_Event event;
@@ -280,10 +299,21 @@ namespace rasm
                         spdlog::info("Quit event received, shutting down.");
                         closed = true;
                         break;
+                    case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+                    {
+                        // The main window's close quits; another's is the application's to handle.
+                        Window &window = *findWindow(windows, count, event.window.windowID);
+                        if (&window == &windows[MAIN_WINDOW_INDEX])
+                            closed = true;
+                        else
+                            events.push_back({.type = InputEventType::WINDOW_CLOSE, .window = window.handle});
+                        break;
+                    }
                     case SDL_EVENT_KEY_DOWN:
                     case SDL_EVENT_KEY_UP:
                     {
                         const InputEvent key = {.type = InputEventType::KEY,
+                                                .window = findWindow(windows, count, event.key.windowID)->handle,
                                                 .key = toKey(event.key.key),
                                                 .physicalKey = toPhysicalKey(event.key.scancode),
                                                 .down = event.key.down,
@@ -294,15 +324,26 @@ namespace rasm
                         break;
                     }
                     case SDL_EVENT_TEXT_INPUT:
+                    {
+                        const size_t first = events.size();
                         appendText(event.text.text, events);
+                        const WindowHandle window = findWindow(windows, count, event.text.windowID)->handle;
+                        for (size_t i = first; i < events.size(); ++i)
+                            events[i].window = window;
                         break;
+                    }
                     case SDL_EVENT_MOUSE_BUTTON_DOWN:
                     case SDL_EVENT_MOUSE_BUTTON_UP:
                     {
                         MouseButton button = MouseButton::LEFT;
                         if (!toMouseButton(event.button.button, button))
                             break;
-                        events.push_back({.type = InputEventType::MOUSE_BUTTON, .down = event.button.down, .button = button, .x = event.button.x, .y = event.button.y});
+                        events.push_back({.type = InputEventType::MOUSE_BUTTON,
+                                          .window = findWindow(windows, count, event.button.windowID)->handle,
+                                          .down = event.button.down,
+                                          .button = button,
+                                          .x = event.button.x,
+                                          .y = event.button.y});
                         // The window keeps the mouse while a button is held, so a drag that leaves it still ends here.
                         if (event.button.down)
                             SDL_CaptureMouse(true);
@@ -311,43 +352,57 @@ namespace rasm
                         break;
                     }
                     case SDL_EVENT_MOUSE_MOTION:
-                        events.push_back({.type = InputEventType::MOUSE_MOVE, .x = event.motion.x, .y = event.motion.y});
+                        events.push_back({.type = InputEventType::MOUSE_MOVE, .window = findWindow(windows, count, event.motion.windowID)->handle, .x = event.motion.x, .y = event.motion.y});
                         break;
                     case SDL_EVENT_MOUSE_WHEEL:
-                        events.push_back({.type = InputEventType::MOUSE_WHEEL, .x = event.wheel.x, .y = event.wheel.y});
+                        events.push_back({.type = InputEventType::MOUSE_WHEEL, .window = findWindow(windows, count, event.wheel.windowID)->handle, .x = event.wheel.x, .y = event.wheel.y});
                         break;
                     case SDL_EVENT_WINDOW_MOUSE_LEAVE:
-                        events.push_back({.type = InputEventType::MOUSE_LEAVE});
+                        events.push_back({.type = InputEventType::MOUSE_LEAVE, .window = findWindow(windows, count, event.window.windowID)->handle});
                         break;
                     case SDL_EVENT_WINDOW_FOCUS_GAINED:
-                        events.push_back({.type = InputEventType::FOCUS, .down = true});
-                        break;
                     case SDL_EVENT_WINDOW_FOCUS_LOST:
-                        events.push_back({.type = InputEventType::FOCUS, .down = false});
+                        // Each window's own: the focus that moves to another window is a loss for the one it leaves.
+                        events.push_back({.type = InputEventType::FOCUS, .window = findWindow(windows, count, event.window.windowID)->handle, .down = event.type == SDL_EVENT_WINDOW_FOCUS_GAINED});
                         break;
                     case SDL_EVENT_WINDOW_RESIZED:
+                    {
                         // Logical size, only used for mouse coordinates.
+                        Window &window = *findWindow(windows, count, event.window.windowID);
                         window.width = static_cast<uint32_t>(event.window.data1);
                         window.height = static_cast<uint32_t>(event.window.data2);
                         break;
+                    }
                     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+                    {
                         // The swapchain, depth textures, viewport and camera aspect follow the pixel size (B17).
+                        Window &window = *findWindow(windows, count, event.window.windowID);
                         window.resized = true;
                         window.pixelWidth = static_cast<uint32_t>(event.window.data1);
                         window.pixelHeight = static_cast<uint32_t>(event.window.data2);
                         break;
+                    }
                     case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
                     case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
-                    case SDL_EVENT_DISPLAY_CONTENT_SCALE_CHANGED:
+                    {
                         // Moved to another monitor, or its scale setting changed: the UI rescales on its next frame.
+                        Window &window = *findWindow(windows, count, event.window.windowID);
                         window.contentScale = getContentScale(toSdl(window));
                         break;
+                    }
+                    case SDL_EVENT_DISPLAY_CONTENT_SCALE_CHANGED:
+                        for (uint32_t i = 0; i < count; ++i)
+                        {
+                            if (windows[i].platformWindow != nullptr)
+                                windows[i].contentScale = getContentScale(toSdl(windows[i]));
+                        }
+                        break;
                     case SDL_EVENT_WINDOW_MINIMIZED:
-                        window.minimized = true;
+                        findWindow(windows, count, event.window.windowID)->minimized = true;
                         break;
                     case SDL_EVENT_WINDOW_RESTORED:
                     case SDL_EVENT_WINDOW_MAXIMIZED:
-                        window.minimized = false;
+                        findWindow(windows, count, event.window.windowID)->minimized = false;
                         break;
                     default:
                         break;
@@ -379,7 +434,7 @@ namespace rasm
             // SDL sends text events only between these, and may show an on-screen keyboard.
             void setTextInput(const Window &window, bool on) override
             {
-                if (!window.handle.isValid())
+                if (window.platformWindow == nullptr)
                     return;
                 if (on)
                     SDL_StartTextInput(toSdl(window));
@@ -403,10 +458,10 @@ namespace rasm
         private:
             static SDL_Window *toSdl(const Window &window)
             {
-                return reinterpret_cast<SDL_Window *>(window.handle.index);
+                return static_cast<SDL_Window *>(window.platformWindow);
             }
 
-            // SDL_Quit frees what SDL made, so the cursors and the clipboard copy go first.
+            // SDL_Quit, after the last window, frees what SDL made, so the cursors and the clipboard copy go first.
             void destroySdlWindow(SDL_Window *window)
             {
                 for (size_t i = 0; i < metalViews.size(); ++i)
@@ -419,6 +474,9 @@ namespace rasm
                     metalViews.erase(metalViews.begin() + static_cast<std::ptrdiff_t>(i));
                     break;
                 }
+                SDL_DestroyWindow(window);
+                if (--openWindows > 0)
+                    return;
                 for (SDL_Cursor *&cursor : cursors)
                 {
                     if (cursor != nullptr)
@@ -427,7 +485,6 @@ namespace rasm
                 }
                 SDL_free(clipboard);
                 clipboard = nullptr;
-                SDL_DestroyWindow(window);
                 SDL_Quit();
             }
 
@@ -440,6 +497,7 @@ namespace rasm
             std::vector<MetalView> metalViews;
             SDL_Cursor *cursors[SDL_CURSOR_COUNT] = {};
             char *clipboard = nullptr;
+            uint32_t openWindows = 0;
         };
     }
 

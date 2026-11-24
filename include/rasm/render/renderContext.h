@@ -33,8 +33,8 @@ namespace rasm
         const FenceValue*                   waits                   = nullptr;
         uint32_t                            waitCount               = 0;
         FenceValue                          signal                  = {};
-        bool                                waitsForSwapchainImage  = false;
-        bool                                presentsSwapchainImage  = false;
+        bool                                waitsForSwapchainImage  = false;    // waits for the image of every window that has one acquired
+        bool                                presentsSwapchainImage  = false;    // presents them all
     };
 
     class RenderContext
@@ -66,11 +66,15 @@ namespace rasm
         bool                                resizeRenderTarget(const RenderTargetHandle& renderTarget, uint32_t width, uint32_t height);
         const RenderTarget&                 getRenderTarget(const RenderTargetHandle& handle);
         RenderTargetDesc                    getRenderTargetDesc(const RenderTargetHandle& handle);
-        std::vector<TextureHandle>          getSwapchainImages();
-        Format                              getSwapchainImageFormat();
+        // A window's swapchain (an invalid handle: the main window's). Engine::addWindow makes one, removeWindow destroys
+        // it, waiting for the device.
+        bool                                createSwapchain(const WindowHandle& window);
+        void                                destroySwapchain(const WindowHandle& window);
+        std::vector<TextureHandle>          getSwapchainImages(const WindowHandle& window = {});
+        Format                              getSwapchainImageFormat(const WindowHandle& window = {});
         // The swapchain's UNORM view format for AttachmentOps::encodedColor, or UNKNOWN when the device has none.
-        Format                              getSwapchainEncodedFormat();
-        glm::uvec2                          getSwapchainExtent();
+        Format                              getSwapchainEncodedFormat(const WindowHandle& window = {});
+        glm::uvec2                          getSwapchainExtent(const WindowHandle& window = {});
         uint64_t                            getBufferDeviceAddress(const BufferHandle& buffer);
         BufferDesc                          getBufferDesc(const BufferHandle& buffer);
         const TextureDesc&                  getTextureDesc(const TextureHandle& texture);
@@ -85,7 +89,7 @@ namespace rasm
         TextureUsage                        getTextureState(const TextureHandle& texture);
         uint64_t                            getFenceValue(FenceHandle fence);
         bool                                waitForFence(FenceHandle fence, uint64_t value, uint64_t timeout = UINT64_MAX);
-        [[nodiscard]] SwapchainStatus       acquireNextImage(uint32_t& imageIndex);
+        [[nodiscard]] SwapchainStatus       acquireNextImage(uint32_t& imageIndex, const WindowHandle& window = {});
         bool                                beginCommandBuffer(const CommandBufferHandle& commandBuffer);
         bool                                endCommandBuffer(const CommandBufferHandle& commandBuffer);
         bool                                transitionImageLayout(const CommandBufferHandle& commandBuffer, TextureHandle texture, TextureUsage newUsage, bool discard = false);
@@ -108,7 +112,7 @@ namespace rasm
         float                               takeUploadGpuMs();
         bool                                supportsTextureFormat(Format format) const;
         bool                                supportsSampleCount(uint32_t samples) const;
-        [[nodiscard]] SwapchainStatus       recreateSwapchain();
+        [[nodiscard]] SwapchainStatus       recreateSwapchain(const WindowHandle& window = {});
         bool                                beginRendering(const CommandBufferHandle& commandBuffer, const TextureHandle* colorAttachments, uint32_t colorCount, TextureHandle depthAttachment, const glm::vec4& clearColor, const AttachmentOps& ops = {}, uint32_t face = 0);
         bool                                endRendering(const CommandBufferHandle& commandBuffer);
         bool                                setViewport(const CommandBufferHandle& commandBuffer, float x, float y, float width, float height, float minDepth = 0.0f, float maxDepth = 1.0f);
@@ -119,7 +123,7 @@ namespace rasm
         bool                                hasAsyncCompute() const;
         bool                                hasMeshShaders() const;
         void                                discardRecording();
-        [[nodiscard]] SwapchainStatus       present();
+        [[nodiscard]] SwapchainStatus       present(const WindowHandle& window = {});
         // The handle is invalid at once; the GPU object, and a texture's bindless slot, are freed once the GPU is done
         // with every frame that may use them (tagReleases, collectReleases).
         void                                destroyTexture(const TextureHandle& texture);

@@ -1338,6 +1338,8 @@ namespace rasm::rhi
         return fence;
     }
 
+    // The device's own window uses the surface the device was chosen for. Another window gets a surface of its own,
+    // which the graphics queue must be able to present to; the swapchain destroys it.
     Swapchain *VulkanDevice::createSwapchain(const SwapchainDesc &desc)
     {
         if (surface == VK_NULL_HANDLE)
@@ -1345,7 +1347,21 @@ namespace rasm::rhi
             spdlog::error("A headless device has no surface to make a swapchain for.");
             return nullptr;
         }
-        auto *swapchain = new VulkanSwapchain(*this);
+        VkSurfaceKHR swapchainSurface = surface;
+        if (desc.window != nullptr)
+        {
+            if (!createVulkanSurface(*desc.window, instance.instance, &swapchainSurface))
+                return nullptr;
+            VkBool32 supported = VK_FALSE;
+            const VkResult result = vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice.physical_device, graphicsQueue->getFamilyIndex(), swapchainSurface, &supported);
+            if (result != VK_SUCCESS || supported != VK_TRUE)
+            {
+                spdlog::error("The GPU's graphics queue can't present to this window (vkGetPhysicalDeviceSurfaceSupportKHR: {}).", toVkResultString(result));
+                vkDestroySurfaceKHR(instance.instance, swapchainSurface, nullptr);
+                return nullptr;
+            }
+        }
+        auto *swapchain = new VulkanSwapchain(*this, swapchainSurface, desc.window != nullptr);
         if (!swapchain->initialize(desc))
         {
             delete swapchain;
@@ -1899,6 +1915,11 @@ namespace rasm::rhi
     VkSurfaceKHR VulkanDevice::getSurface() const
     {
         return surface;
+    }
+
+    VkInstance VulkanDevice::getVkInstance() const
+    {
+        return instance.instance;
     }
 
     VulkanQueue *VulkanDevice::getGraphicsQueue() const

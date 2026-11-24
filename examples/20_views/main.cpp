@@ -14,7 +14,9 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
 // Several views of one scene in one frame, with Engine::render(views, count). Each view is a camera's picture of the
@@ -28,10 +30,15 @@
 // (View::bloom, View::antiAliasing), so it costs less. Each window view has its own camera rig, which takes the input
 // of its own rect (getInputArea): drag in a view to orbit its camera, wheel to zoom; the map takes no input, so a drag
 // that starts on it turns the view under it. Keys 1, 2 and 3 pick the layout.
+// A second window (Engine::addWindow; not with --bench) shows an orbit camera that turns around the scene; drag in it to turn it
+// yourself. Closing it is an event (InputEventType::WINDOW_CLOSE): the example removes it, and N opens it again. Closing
+// the main window quits.
 // --layout 1|2|3 picks the first one (2); --bench measures that layout's GPU time (exampleBench.h); --async-compute
 // culls on the compute queue (EngineConfig::asyncCompute). A headless run plays a script first, so the checks of
-// verify-change cover the changes too: layout 3, then 1, then --layout's from frame 40, and the TV's texture at a new
-// size from frame 30. Each change builds the frame's graph again; the views that stay keep their culling and TAA history.
+// verify-change cover the changes too: layout 3, then 1, then --layout's from frame 40, the TV's texture at a new size
+// from frame 30, and the second window removed at frame 25 while a view still names it and opened again at frame 35.
+// Each change builds the frame's graph again; the views that stay keep their culling and TAA history. The second
+// window is an offscreen image under --headless, and its last frame goes to <out>_window2.png.
 
 namespace
 {
@@ -40,6 +47,8 @@ namespace
     constexpr uint32_t TV_WIDTH = 320;
     constexpr uint32_t TV_HEIGHT = 180;
     constexpr float MAP_HALF_SIZE = 9.0f;
+    constexpr uint32_t SECOND_WIDTH = 640;
+    constexpr uint32_t SECOND_HEIGHT = 360;
 
     // A window view's camera with its own rig and its own input.
     struct ViewCamera
@@ -144,16 +153,27 @@ namespace
                 .shown = {true, true, true, false}};
     }
 
-    // One frame of a view's camera: its rig takes the frame's events in its own rect, so a drag that starts in one
-    // view turns only that view's camera.
-    void updateViewCamera(rasm::Engine &engine, ViewCamera &view, const rasm::ViewRect &rect)
+    // An invalid handle and the main window's are one window.
+    bool isSameWindow(const rasm::Engine &engine, rasm::WindowHandle a, rasm::WindowHandle b)
     {
-        const rasm::InputArea area = rasm::getInputArea(engine.getMainWindow(), rect);
-        const rasm::UiInputCapture capture = engine.getUiInputCapture();
+        const rasm::WindowHandle main = engine.getMainWindow().handle;
+        return (a.isValid() ? a : main) == (b.isValid() ? b : main);
+    }
+
+    // One frame of a view's camera: its rig takes the frame's events of its window, in its own rect, so a drag that
+    // starts in one view turns only that view's camera. The UI lives in the main window, so only there it takes input.
+    void updateViewCamera(rasm::Engine &engine, ViewCamera &view, const rasm::ViewRect &rect, rasm::WindowHandle window = {})
+    {
+        const rasm::InputArea area = rasm::getInputArea(engine.getWindow(window), rect);
+        const bool main = isSameWindow(engine, window, {});
+        const rasm::UiInputCapture capture = main ? engine.getUiInputCapture() : rasm::UiInputCapture{};
         uint32_t count = 0;
         const rasm::InputEvent *events = engine.getInputEvents(count);
         for (uint32_t i = 0; i < count; ++i)
-            rasm::addCameraInputEvent(view.input, events[i], area, capture);
+        {
+            if (isSameWindow(engine, events[i].window, window))
+                rasm::addCameraInputEvent(view.input, events[i], area, capture);
+        }
         rasm::updateCameraRig(view.rig, rasm::takeCameraInput(view.input, capture, engine.getDeltaTime()));
         engine.setCameraTransform(view.camera, view.rig.transform);
     }
@@ -237,17 +257,23 @@ int main(int argc, char **argv)
 
     ViewCamera main = createViewCamera(engine, glm::vec3(0.0f, 2.2f, 7.0f), glm::vec3(0.0f, 1.0f, 0.0f));
     ViewCamera side = createViewCamera(engine, glm::vec3(7.0f, 2.5f, 2.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    ViewCamera orbit = createViewCamera(engine, glm::vec3(-6.0f, 4.0f, -6.0f), glm::vec3(0.0f, 1.0f, 0.0f));
     // The map looks straight down; its width is the ground's, and a view of another shape shows more or less of it.
     const rasm::CameraHandle map = engine.createCamera(
         rasm::CameraProjection{.type = rasm::CameraProjection::Type::ORTHOGRAPHIC,
                                .orthographic{.left = -MAP_HALF_SIZE, .right = MAP_HALF_SIZE, .bottom = -MAP_HALF_SIZE, .top = MAP_HALF_SIZE, .nearZ = 0.1f, .farZ = 40.0f}},
         rasm::Transform{glm::vec3(0.0f, 20.0f, 0.0f), glm::angleAxis(glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f)), glm::vec3(1.0f)});
     const rasm::CameraHandle security = engine.createCamera(perspective(static_cast<float>(TV_WIDTH) / static_cast<float>(TV_HEIGHT)), lookAt(glm::vec3(5.0f, 3.5f, 5.0f), glm::vec3(0.0f, 1.0f, 0.0f)));
-    if (!main.camera.isValid() || !side.camera.isValid() || !map.isValid() || !security.isValid() || !sun.isValid())
+    if (!main.camera.isValid() || !side.camera.isValid() || !orbit.camera.isValid() || !map.isValid() || !security.isValid() || !sun.isValid())
+        return 1;
+    // The second window: an SDL window the engine opens, or an offscreen image of the same size under --headless.
+    const rasm::WindowDesc secondDesc = {.title = "RASM: a second window", .width = SECOND_WIDTH, .height = SECOND_HEIGHT};
+    rasm::WindowHandle second = bench.on ? rasm::WindowHandle{} : engine.addWindow(secondDesc);
+    if (!bench.on && !second.isValid())
         return 1;
     engine.setCameraController(map, rasm::CameraController{.type = rasm::CameraController::Type::NONE});
     engine.setCameraController(security, rasm::CameraController{.type = rasm::CameraController::Type::NONE});
-    for (const rasm::CameraHandle camera : {main.camera, side.camera, map, security})
+    for (const rasm::CameraHandle camera : {main.camera, side.camera, orbit.camera, map, security})
         engine.addCameraToScene(scene, camera);
 
 #if defined(RASM_IMGUI)
@@ -271,7 +297,8 @@ int main(int argc, char **argv)
 
     // The list keeps its capacity, so building it every frame allocates nothing.
     std::vector<rasm::View> views;
-    views.reserve(5);
+    views.reserve(6);
+    rasm::ReadbackHandle secondReadback;
     float time = 0.0f;
     const int chosenLayout = layout;
     uint32_t frame = 0;
@@ -284,6 +311,14 @@ int main(int argc, char **argv)
             // Between frames: a new size waits for the frames in flight once, and the TV's material keeps its texture.
             if (frame == 30 && !engine.resizeRenderTarget(tv, TV_WIDTH * 3 / 2, TV_HEIGHT * 3 / 2))
                 return 1;
+            // The second window goes while its view is still in the list (that view is left out), then comes back.
+            if (frame == 25)
+                engine.removeWindow(second);
+            if (frame == 35)
+                second = engine.addWindow(secondDesc);
+            // The same frame as the main window's copy (exampleRunning asks for it before this frame too).
+            if (frame == args.frames && second.isValid())
+                secondReadback = engine.readFrame(second);
         }
         engine.pollEvents();
         uint32_t count = 0;
@@ -294,11 +329,30 @@ int main(int argc, char **argv)
             if (event.type == rasm::InputEventType::KEY && event.down && !event.repeat && !engine.getUiInputCapture().keyboard &&
                 event.key >= rasm::Key::DIGIT_1 && event.key <= rasm::Key::DIGIT_3)
                 layout = 1 + static_cast<int>(event.key) - static_cast<int>(rasm::Key::DIGIT_1);
+            // Closing the second window is the application's to handle; N opens it again.
+            if (event.type == rasm::InputEventType::WINDOW_CLOSE && event.window == second)
+            {
+                engine.removeWindow(second);
+                second = {};
+            }
+            if (event.type == rasm::InputEventType::KEY && event.down && !event.repeat && event.key == rasm::Key::N && !second.isValid() && !engine.getUiInputCapture().keyboard)
+                second = engine.addWindow(secondDesc);
         }
         const Layout rects = getLayout(layout);
         updateViewCamera(engine, main, rects.rects[0]);
         if (rects.shown[1])
             updateViewCamera(engine, side, rects.rects[1]);
+        if (second.isValid())
+            updateViewCamera(engine, orbit, {}, second);
+        // Untouched, the orbit camera turns slowly around the scene.
+        if (!orbit.input.dragActive)
+        {
+            const rasm::Transform pose = orbit.rig.transform;
+            const glm::quat turn = glm::angleAxis(0.2f * engine.getDeltaTime(), glm::vec3(0.0f, 1.0f, 0.0f));
+            const glm::vec3 center(0.0f, 1.0f, 0.0f);
+            orbit.rig = rasm::createCameraRig(orbit.rig.controller, rasm::Transform{center + turn * (pose.position - center), turn * pose.rotation, pose.scale});
+            engine.setCameraTransform(orbit.camera, orbit.rig.transform);
+        }
 
         // The security camera pans to and fro over the scene.
         time += engine.getDeltaTime();
@@ -315,9 +369,26 @@ int main(int argc, char **argv)
         if (rects.shown[3])
             views.push_back({.scene = scene, .camera = security, .output = {.rect = rects.rects[3]}});
         views.push_back({.scene = scene, .camera = map, .output = {.rect = rects.rects[2]}, .bloom = rasm::ViewToggle::OFF, .antiAliasing = rasm::AntiAliasing::NONE});
+        // The second window's one view, which sees the TV too. A removed window's view may stay listed: it draws nothing.
+        if (second.isValid())
+            views.push_back({.scene = scene, .camera = orbit.camera, .output = {.window = second}});
         engine.render(views.data(), static_cast<uint32_t>(views.size()));
         addBenchFrame(bench, engine.getFrameStats());
     }
     printBench(bench, config, engine.getRenderContext().hasMeshShaders());
+    if (secondReadback.isValid())
+    {
+        // <out> with _window2 before its extension.
+        const std::string out = args.out;
+        const size_t dot = out.find_last_of('.');
+        const std::string path = (dot == std::string::npos ? out : out.substr(0, dot)) + "_window2.png";
+        rasm::ReadbackImage image;
+        if (!engine.takeReadback(secondReadback, image) || !rasm::writePng(path, image))
+        {
+            std::fprintf(stderr, "error: the second window's frame was not written to %s.\n", path.c_str());
+            return 1;
+        }
+        std::printf("Wrote the second window's frame %u to %s.\n", args.frames, path.c_str());
+    }
     return exampleExit(args);
 }

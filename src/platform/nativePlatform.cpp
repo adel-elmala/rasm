@@ -12,13 +12,14 @@ namespace rasm
         class NativePlatform final : public Platform
         {
         public:
-            explicit NativePlatform(const NativeWindow &native) : native(native) {}
-
-            Window createWindow(uint32_t width, uint32_t height) override
+            Window createWindow(const WindowDesc &desc) override
             {
+                const NativeWindow &native = desc.native;
+                const uint32_t width = desc.width;
+                const uint32_t height = desc.height;
                 if (native.type == NativeWindowType::NONE || native.window == nullptr)
                 {
-                    spdlog::error("PlatformType::NATIVE needs EngineConfig::nativeWindow with a type and a window handle.");
+                    spdlog::error("PlatformType::NATIVE needs a window with a type and a handle (EngineConfig::nativeWindow, WindowDesc::native).");
                     return Window{};
                 }
                 Window window{};
@@ -33,15 +34,12 @@ namespace rasm
 
             void destroyWindow(const Window &) override {}
 
-            void pollEvents(Window &, std::vector<InputEvent> &, bool &) override {}
-
-        private:
-            NativeWindow native;
+            void pollEvents(Window *, uint32_t, std::vector<InputEvent> &, bool &) override {}
         };
     }
 
-    std::unique_ptr<Platform> createNativePlatform(const NativeWindow &native)
+    std::unique_ptr<Platform> createNativePlatform()
     {
-        return std::make_unique<NativePlatform>(native);
+        return std::make_unique<NativePlatform>();
     }
 }

@@ -36,8 +36,9 @@ namespace rasm::rhi
 
     struct SwapchainDesc
     {
-        uint32_t        width               = 0;
-        uint32_t        height              = 0;
+        uint32_t                width               = 0;
+        uint32_t                height              = 0;
+        const NativeWindow*     window              = nullptr;  // a window of its own, whose surface the swapchain makes and owns; nullptr: the device's window (DeviceDesc::window)
     };
 
     struct DeviceDesc
@@ -203,6 +204,7 @@ namespace rasm::rhi
 
     constexpr uint32_t                  MAX_SUBMIT_COMMAND_BUFFERS  = 8;
     constexpr uint32_t                  MAX_SUBMIT_WAITS            = 4;
+    constexpr uint32_t                  MAX_SUBMIT_SWAPCHAINS       = 8;    // windows one submit waits for or presents
 
     struct FenceWait
     {
@@ -216,8 +218,10 @@ namespace rasm::rhi
         uint32_t                        commandBufferCount  = 0;
         const FenceWait*                waits               = nullptr;
         uint32_t                        waitCount           = 0;
-        Swapchain*                      acquireSwapchain    = nullptr;
-        Swapchain*                      presentSwapchain    = nullptr;
+        Swapchain* const*               acquireSwapchains   = nullptr;  // the submit waits for each one's acquired image
+        uint32_t                        acquireCount        = 0;
+        Swapchain* const*               presentSwapchains   = nullptr;  // and signals each one's present
+        uint32_t                        presentCount        = 0;
         Fence*                          signalFence         = nullptr;
         uint64_t                        signalValue         = 0;
     };

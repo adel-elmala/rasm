@@ -33,8 +33,13 @@ namespace rasm::rhi
 
         // The fence waits block every stage: the first commands of the submit are often barriers whose layout
         // transitions must come after them.
-        VkSemaphoreSubmitInfo waits[MAX_SUBMIT_WAITS + 1] = {};
-        VkSemaphoreSubmitInfo signals[3] = {};
+        if (desc.acquireCount > MAX_SUBMIT_SWAPCHAINS || desc.presentCount > MAX_SUBMIT_SWAPCHAINS)
+        {
+            spdlog::error("A submit waits for or presents at most {} swapchains.", MAX_SUBMIT_SWAPCHAINS);
+            return false;
+        }
+        VkSemaphoreSubmitInfo waits[MAX_SUBMIT_WAITS + MAX_SUBMIT_SWAPCHAINS] = {};
+        VkSemaphoreSubmitInfo signals[2 * MAX_SUBMIT_SWAPCHAINS + 1] = {};
         uint32_t waitCount = 0;
         uint32_t signalCount = 0;
         for (uint32_t i = 0; i < desc.waitCount; ++i)
@@ -45,19 +50,19 @@ namespace rasm::rhi
                                   .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
         }
 
-        auto *acquireSwapchain = static_cast<VulkanSwapchain *>(desc.acquireSwapchain);
-        uint32_t acquireWaitCount = 0;
-        if (acquireSwapchain != nullptr)
+        // Each swapchain's image is waited for by the first submit that uses it, and presented after the last.
+        bool acquireWaited[MAX_SUBMIT_SWAPCHAINS] = {};
+        for (uint32_t i = 0; i < desc.acquireCount; ++i)
         {
-            if (!acquireSwapchain->getAcquireWait(waits[waitCount], acquireWaitCount))
+            uint32_t acquireWaitCount = 0;
+            if (!static_cast<VulkanSwapchain *>(desc.acquireSwapchains[i])->getAcquireWait(waits[waitCount], acquireWaitCount))
                 return false;
             waitCount += acquireWaitCount;
+            acquireWaited[i] = acquireWaitCount > 0;
         }
-
-        auto *presentSwapchain = static_cast<VulkanSwapchain *>(desc.presentSwapchain);
-        if (presentSwapchain != nullptr)
+        for (uint32_t i = 0; i < desc.presentCount; ++i)
         {
-            if (!presentSwapchain->getPresentSignals(signals[signalCount], signals[signalCount + 1]))
+            if (!static_cast<VulkanSwapchain *>(desc.presentSwapchains[i])->getPresentSignals(signals[signalCount], signals[signalCount + 1]))
                 return false;
             signalCount += 2;
         }
@@ -86,10 +91,13 @@ namespace rasm::rhi
             spdlog::error("Failed to submit command buffer. Error: {}", toVkResultString(result));
             return false;
         }
-        if (acquireWaitCount > 0)
-            acquireSwapchain->onAcquireWaited();
-        if (presentSwapchain != nullptr)
-            presentSwapchain->onSubmitted();
+        for (uint32_t i = 0; i < desc.acquireCount; ++i)
+        {
+            if (acquireWaited[i])
+                static_cast<VulkanSwapchain *>(desc.acquireSwapchains[i])->onAcquireWaited();
+        }
+        for (uint32_t i = 0; i < desc.presentCount; ++i)
+            static_cast<VulkanSwapchain *>(desc.presentSwapchains[i])->onSubmitted();
         return true;
     }
 

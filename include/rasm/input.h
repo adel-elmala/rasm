@@ -1,6 +1,8 @@
 // clang-format off
 #pragma once
 
+#include "rasm/handle.h"
+
 #include <cstdint>
 
 namespace rasm
@@ -43,6 +45,7 @@ namespace rasm
         MOUSE_LEAVE,    // the pointer left the window
         TEXT,           // codepoint: one character of typed text
         FOCUS,          // down: the window got the keyboard focus, else lost it
+        WINDOW_CLOSE,   // the user closed a window other than the main one: the application decides (Engine::removeWindow)
     };
 
     // InputEvent::modifiers: the modifier keys held during a key event.
@@ -52,10 +55,12 @@ namespace rasm
     constexpr uint8_t KEY_MOD_SUPER     = 1u << 3;
 
     // One input event from the application (Engine::addInputEvent) or from RASM's SDL platform. Only the fields its
-    // type names are read. Mouse positions are in window points from the top-left corner, like Window::width.
+    // type names are read. Mouse positions are in window points from the top-left corner, like Window::width. Only the
+    // main window's events reach Dear ImGui and the engine's own camera input.
     struct InputEvent
     {
         InputEventType  type            = InputEventType::NONE;
+        WindowHandle    window;                                 // the window it happened in; invalid: the main window
         Key             key             = Key::NONE;            // the key's meaning in the keyboard layout: Dear ImGui and the F keys
         Key             physicalKey     = Key::NONE;            // where the key is, as a US key: camera movement (W/A/S/D); NONE: the same as key
         bool            down            = false;

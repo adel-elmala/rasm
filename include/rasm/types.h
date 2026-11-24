@@ -54,8 +54,13 @@ namespace rasm
         METAL,
     };
 
+    // Windows an engine draws into at once, the main one included; a handle index of 0 is never used, so 7 fit.
+    constexpr uint32_t   MAX_WINDOWS             = 8;
+    // The main window's handle index: the engine makes it first.
+    constexpr uint32_t   MAIN_WINDOW_INDEX       = 1;
+
     // A window of the application's, which RASM draws into. RASM never changes it, and it must live longer than the
-    // engine. An X11 or XCB window is its id cast to a pointer.
+    // engine (or than Engine::removeWindow). An X11 or XCB window is its id cast to a pointer.
     struct NativeWindow
     {
         NativeWindowType type                = NativeWindowType::NONE;

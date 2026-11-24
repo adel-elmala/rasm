@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
 // RASM in a window the application owns. The application opens an SDL3 window and runs its event loop, as a game with
@@ -32,11 +33,17 @@
 // every example does, so the native surface, the swapchain and the input path run with nothing on screen. The script
 // needs about 40 frames. --no-window plays the same script on a headless engine (PlatformType::HEADLESS), for a
 // machine that cannot present to a hidden window.
+// A second window of the application's shows the helmet from above (Engine::addWindow with its native handle, a view
+// whose ViewOutput names it). The application passes its size on with setWindowSize(window, ...), and removes it when
+// the user closes it (removeWindow). Under --headless it is hidden too, and its last frame goes to <out>_window2.png;
+// with --no-window it is an offscreen image of the headless engine. One submit draws both windows and presents both.
 
 namespace
 {
     constexpr uint32_t WIDTH = 1280;
     constexpr uint32_t HEIGHT = 720;
+    constexpr uint32_t SECOND_WIDTH = 480;
+    constexpr uint32_t SECOND_HEIGHT = 360;
 
     struct UiTargets
     {
@@ -178,6 +185,7 @@ namespace
         switch (event.type)
         {
         case SDL_EVENT_QUIT:
+        case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
             return false;
         case SDL_EVENT_KEY_DOWN:
         case SDL_EVENT_KEY_UP:
@@ -250,6 +258,31 @@ namespace
             break;
         }
         return true;
+    }
+
+    // The second window's events: only its size and its closing matter, since its view takes no input.
+    void forwardSecondEvent(rasm::Engine &engine, SDL_Window *&window, rasm::WindowHandle &handle, const SDL_Event &event)
+    {
+        if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
+        {
+            // The engine lets go of its swapchain first; the window goes after it.
+            engine.removeWindow(handle);
+            handle = {};
+            SDL_HideWindow(window);
+            return;
+        }
+        if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED || event.type == SDL_EVENT_WINDOW_RESIZED || event.type == SDL_EVENT_WINDOW_MINIMIZED ||
+            event.type == SDL_EVENT_WINDOW_RESTORED)
+        {
+            int width = 0;
+            int height = 0;
+            int pixelWidth = 0;
+            int pixelHeight = 0;
+            SDL_GetWindowSize(window, &width, &height);
+            SDL_GetWindowSizeInPixels(window, &pixelWidth, &pixelHeight);
+            const bool minimized = (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) != 0;
+            engine.setWindowSize(handle, static_cast<uint32_t>(width), static_cast<uint32_t>(height), minimized ? 0 : static_cast<uint32_t>(pixelWidth), minimized ? 0 : static_cast<uint32_t>(pixelHeight));
+        }
     }
 
     // The scripted user of --headless: frame by frame, the events a person would make.
@@ -328,7 +361,7 @@ namespace
         engine.setCameraTransform(camera, rig.transform);
     }
 
-    int run(ExampleArgs &args, SDL_Window *window, const rasm::NativeWindow &native)
+    int run(ExampleArgs &args, SDL_Window *window, const rasm::NativeWindow &native, SDL_Window *secondWindow, const rasm::NativeWindow &secondNative)
     {
         rasm::EngineConfig config = {
             .appName = "example_19",
@@ -392,6 +425,20 @@ namespace
         if (!camera.isValid() || !sun.isValid())
             return 1;
 
+        // The second window: the application's (NATIVE), or an offscreen image of a headless engine. Its camera looks
+        // down at the helmet from above.
+        rasm::WindowHandle second = engine.addWindow(secondWindow != nullptr ? rasm::WindowDesc{.width = SECOND_WIDTH, .height = SECOND_HEIGHT, .native = secondNative}
+                                                                             : rasm::WindowDesc{.width = SECOND_WIDTH, .height = SECOND_HEIGHT});
+        const glm::vec3 abovePosition(0.0f, 6.0f, 0.5f);
+        const rasm::CameraHandle above = engine.createCamera(
+            rasm::CameraProjection{.type = rasm::CameraProjection::Type::PERSPECTIVE,
+                                   .perspective{.fovY = 40.0f, .aspect = static_cast<float>(SECOND_WIDTH) / static_cast<float>(SECOND_HEIGHT), .nearZ = 0.1f}},
+            rasm::Transform{abovePosition, glm::quatLookAt(-glm::normalize(abovePosition), glm::vec3(0.0f, 0.0f, -1.0f)), glm::vec3(1.0f)});
+        if (!second.isValid() || !above.isValid())
+            return 1;
+        engine.setCameraController(above, rasm::CameraController{.type = rasm::CameraController::Type::NONE});
+        rasm::ReadbackHandle secondReadback;
+
         UiTargets targets;
 #if defined(RASM_IMGUI)
         bool blueSun = false;
@@ -429,17 +476,28 @@ namespace
             SDL_Event event;
             while (SDL_PollEvent(&event))
             {
-                // A scripted run takes no input from the hidden window.
-                if (!args.headless)
+                // A scripted run takes no input from the hidden windows.
+                if (args.headless)
+                    continue;
+                if (secondWindow != nullptr && SDL_GetWindowFromEvent(&event) == secondWindow)
+                {
+                    if (second.isValid())
+                        forwardSecondEvent(engine, secondWindow, second, event);
+                }
+                else
                     open = forwardEvent(engine, window, event) && open;
             }
             if (args.headless)
                 playScript(engine, frame, targets);
+            // The same frame as the main window's copy (exampleRunning asks for it before this frame too).
+            if (args.headless && frame == args.frames && second.isValid())
+                secondReadback = engine.readFrame(second);
 
             // The frame's events, the same the UI gets, move the example's camera before the frame.
             engine.pollEvents();
             updateCamera(engine, camera, rig, cameraInput, orbit, fly);
-            engine.render(scene, camera);
+            const rasm::View views[] = {{.scene = scene, .camera = camera}, {.scene = scene, .camera = above, .output = {.window = second}}};
+            engine.render(views, second.isValid() ? 2 : 1);
 
 #if defined(RASM_IMGUI)
             if (window != nullptr && ImGui::GetIO().WantTextInput != textInput)
@@ -453,6 +511,20 @@ namespace
 #endif
         }
         (void)textInput;
+        if (secondReadback.isValid())
+        {
+            // <out> with _window2 before its extension.
+            const std::string out = args.out;
+            const size_t dot = out.find_last_of('.');
+            const std::string path = (dot == std::string::npos ? out : out.substr(0, dot)) + "_window2.png";
+            rasm::ReadbackImage image;
+            if (!engine.takeReadback(secondReadback, image) || !rasm::writePng(path, image))
+            {
+                std::fprintf(stderr, "error: the second window's frame was not written to %s.\n", path.c_str());
+                return 1;
+            }
+            std::printf("Wrote the second window's frame %u to %s.\n", args.frames, path.c_str());
+        }
         return exampleExit(args);
     }
 }
@@ -469,7 +541,7 @@ int main(int argc, char **argv)
         return 1;
     }
     if (noWindow)
-        return run(args, nullptr, {});
+        return run(args, nullptr, {}, nullptr, {});
 
     if (!SDL_Init(SDL_INIT_VIDEO))
     {
@@ -484,21 +556,28 @@ int main(int argc, char **argv)
     if (args.headless)
         flags |= SDL_WINDOW_HIDDEN;
     SDL_Window *window = SDL_CreateWindow("RASM in an application's window", static_cast<int>(WIDTH), static_cast<int>(HEIGHT), flags);
+    SDL_Window *secondWindow = SDL_CreateWindow("RASM: the helmet from above", static_cast<int>(SECOND_WIDTH), static_cast<int>(SECOND_HEIGHT), flags);
     rasm::NativeWindow native;
+    rasm::NativeWindow secondNative;
     SDL_MetalView metalView = nullptr;
+    SDL_MetalView secondMetalView = nullptr;
     int result = 1;
-    if (window == nullptr)
+    if (window == nullptr || secondWindow == nullptr)
         std::fprintf(stderr, "error: SDL_CreateWindow failed: %s\n", SDL_GetError());
-    else if (!getNativeWindow(window, native, metalView))
+    else if (!getNativeWindow(window, native, metalView) || !getNativeWindow(secondWindow, secondNative, secondMetalView))
         std::fprintf(stderr, "error: SDL gave no native handle for its window: %s\n", SDL_GetError());
     else
-        result = run(args, window, native);
+        result = run(args, window, native, secondWindow, secondNative);
 
-    // The engine is gone by now: the window and its layer go after it.
+    // The engine is gone by now: the windows and their layers go after it.
 #if defined(__APPLE__)
     if (metalView != nullptr)
         SDL_Metal_DestroyView(metalView);
+    if (secondMetalView != nullptr)
+        SDL_Metal_DestroyView(secondMetalView);
 #endif
+    if (secondWindow != nullptr)
+        SDL_DestroyWindow(secondWindow);
     if (window != nullptr)
         SDL_DestroyWindow(window);
     SDL_Quit();
