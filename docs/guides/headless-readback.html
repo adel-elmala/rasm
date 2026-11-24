@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Headless Rendering and Readback · RASM</title>
 <meta name="description" content="Rendering without a window into images of your own, and copying pixels back from the GPU to the CPU: the staging copy, waiting on the right fence so nothing stalls, converting formats, getting the same pixels on every run, and how RASM does it.">
-<meta name="rasm-sources" content="src/platform/platform.h src/platform/headlessPlatform.cpp src/platform/sdlPlatform.cpp src/rhi/offscreenSwapchain.h src/rhi/offscreenSwapchain.cpp src/rhi/device.h src/rhi/vulkan/vulkanCommandBuffer.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/renderContext.cpp src/renderer/readback.h src/renderer/readback.cpp src/renderer/renderGraph.cpp src/engine.cpp include/rasm/readback.h include/rasm/engine.h include/rasm/types.h include/rasm/render/resource.h examples/16_headless/main.cpp examples/exampleArgs.h src/platform/uiPlatform.cpp tests/readbackTests.cpp">
+<meta name="rasm-sources" content="src/platform/platform.h src/platform/headlessPlatform.cpp src/platform/nativePlatform.cpp src/platform/sdlPlatform.cpp src/rhi/offscreenSwapchain.h src/rhi/offscreenSwapchain.cpp src/rhi/device.h src/rhi/vulkan/vulkanCommandBuffer.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/renderContext.cpp src/renderer/readback.h src/renderer/readback.cpp src/renderer/renderGraph.cpp src/engine.cpp include/rasm/readback.h include/rasm/engine.h include/rasm/types.h include/rasm/render/resource.h examples/16_headless/main.cpp examples/19_embedding/main.cpp examples/exampleArgs.h src/platform/uiPlatform.cpp tests/readbackTests.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -354,7 +354,7 @@
 
 <h2 id="in-rasm"><span class="n">8</span>In RASM</h2>
 
-<p>RASM chooses the platform in <code>EngineConfig::platform</code>. <code>PlatformType::SDL</code> opens a window; <code>PlatformType::HEADLESS</code> opens none, starts no SDL and creates a Vulkan device without a surface. The frames then render into an <code>OffscreenSwapchain</code>: two readable <code>R8G8B8A8_SRGB</code> images on the device, which the rest of the engine sees as the swapchain. A readback is asked for with <code>Engine::readFrame</code> or <code>Engine::readTexture</code> and recorded at the end of the next frame.</p>
+<p>RASM chooses the platform in <code>EngineConfig::platform</code>. <code>PlatformType::SDL</code> opens a window, <code>PlatformType::NATIVE</code> draws into the application's (<a href="platform-layer.html">The platform layer</a>); <code>PlatformType::HEADLESS</code> opens none, starts no SDL and creates a Vulkan device without a surface. The frames then render into an <code>OffscreenSwapchain</code>: two readable <code>R8G8B8A8_SRGB</code> images on the device, which the rest of the engine sees as the swapchain. A readback is asked for with <code>Engine::readFrame</code> or <code>Engine::readTexture</code> and recorded at the end of the next frame.</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 330" role="img" aria-label="EngineConfig::platform picks SdlPlatform or HeadlessPlatform. With SDL, the Vulkan device has a surface and a VulkanSwapchain. Headless, it has no surface and an OffscreenSwapchain of two images. Either way the tone map and the UI write the swapchain image. At the end of the frame, recordReadbacks copies the image or a readable target into a host-readable buffer. After the frame's fence, takeReadback converts it into a ReadbackImage, and writePng saves it.">
@@ -396,10 +396,10 @@
   <tr><td>Convert on the CPU</td><td><code>convertReadback</code>, when the image is taken: <code>ReadbackFormat::RGBA8_SRGB</code> or <code>RGBA32_FLOAT</code>.</td></tr>
   <tr><td>Wait for all loads</td><td><code>Engine::waitForLoads</code>; the examples call it with <code>--wait-for-loads</code> (<code>C16</code>), which <code>verify-change</code> passes.</td></tr>
   <tr><td>A fixed time step</td><td><code>EngineConfig::fixedDeltaTime</code>: the cameras' easing, Dear ImGui and the stats' refresh step by it instead of the measured frame time (<code>C15</code>). The examples set 1/60 s with <code>--fixed-step</code>.</td></tr>
-  <tr><td>The UI without a window</td><td>Dear ImGui runs with no input and no SDL: the display is the window's pixel size (<code>newUiPlatformFrame</code>), and the UI draws through the offscreen images' <code>R8G8B8A8_UNORM</code> view (<code>TextureDesc::encodedView</code>), so it looks as on a window.</td></tr>
+  <tr><td>The UI without a window</td><td>Dear ImGui runs with no SDL: the display is the window's size (<code>newUiPlatformFrame</code>), its input is whatever the application sends with <code>Engine::addInputEvent</code> (none by default), and the UI draws through the offscreen images' <code>R8G8B8A8_UNORM</code> view (<code>TextureDesc::encodedView</code>), so it looks as on a window.</td></tr>
   <tr><td>Compare with a stored image, with a tolerance</td><td><code>readPng</code> reads a stored PNG back as an <code>RGBA8_SRGB</code> image, the format <code>writePng</code> writes. The golden-image tests compare frames this way (<a href="image-tests.html">Image tests</a>).</td></tr>
   <tr><td>A fixed GPU order</td><td>Culling compacts draws with prefix sums, the light clusters use integer atomics whose result does not depend on order, and the blend sort is a fixed bitonic network, so a frame does not depend on thread timing.</td></tr>
-  <tr><td>Bring your own window</td><td>Not yet: the private <code>Platform</code> interface is its first step (<code>D7</code>).</td></tr>
+  <tr><td>Bring your own window</td><td><code>PlatformType::NATIVE</code> draws into the application's window, and the application sends the input (<a href="platform-layer.html">The platform layer</a>). A native window's frames are read the same way when its surface allows copies: <code>19_embedding --headless</code> renders into a hidden window and writes frame N.</td></tr>
 </table>
 </div>
 
@@ -434,7 +434,7 @@
 <div class="table-wrap">
 <table>
   <tr><th>What</th><th>Where</th></tr>
-  <tr><td>The platform choice, events</td><td><code>Platform</code>, <code>PlatformEvents</code> in <code>src/platform/platform.h</code>; <code>src/platform/sdlPlatform.cpp</code>, <code>src/platform/headlessPlatform.cpp</code>; <code>Engine::pollEvents</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>The platform choice, events</td><td><code>Platform</code> in <code>src/platform/platform.h</code>; <code>src/platform/sdlPlatform.cpp</code>, <code>src/platform/headlessPlatform.cpp</code>, <code>src/platform/nativePlatform.cpp</code>; <code>Engine::pollEvents</code> in <code>src/engine.cpp</code></td></tr>
   <tr><td>A device without a surface</td><td><code>VulkanDevice::initialize</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
   <tr><td>The offscreen images</td><td><code>src/rhi/offscreenSwapchain.cpp</code>; made in <code>RenderContext::initialize</code> (<code>src/rhi/renderContext.cpp</code>)</td></tr>
   <tr><td>The copy</td><td><code>VulkanCommandBuffer::copyFromTexture</code>, <code>RenderContext::copyTextureToBuffer</code></td></tr>

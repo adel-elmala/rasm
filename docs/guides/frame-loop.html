@@ -97,7 +97,7 @@
 <div class="stepper">
   <div class="step">
     <h4>1. Input and finished loads</h4>
-    <svg viewBox="0 0 730 268" role="img" aria-label="pollEvents reads SDL events and updates the camera. finishLoads publishes the loads whose copies the GPU has, then fills finished background loads until 4 ms are spent, sending their copies to the transfer queue at once; the load that crosses 4 ms still finishes its step, the next waits for the next frame.">
+    <svg viewBox="0 0 730 268" role="img" aria-label="pollEvents applies the frame's input events, from the platform and the application, and updates the camera. finishLoads publishes the loads whose copies the GPU has, then fills finished background loads until 4 ms are spent, sending their copies to the transfer queue at once; the load that crosses 4 ms still finishes its step, the next waits for the next frame.">
       <!--strip 0-->
       <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><rect x="8" y="6" width="102" height="32" rx="7" class="hot"/><text x="59" y="26" class="mid small title">input · loads</text>
       <rect x="112" y="8" width="98" height="28" rx="5" class="ghost"/><text x="161" y="26" class="mid small t-faint">skip checks</text>
@@ -110,7 +110,7 @@
       <rect x="10" y="56" width="340" height="112" rx="6" class="cpu"/>
       <text x="24" y="78" class="title mono">pollEvents(camera)</text>
       <text x="24" y="100" class="small">deltaTime = fixedDeltaTime, or time since last frame (≤ 0.1 s)</text>
-      <text x="24" y="118" class="small">SDL events: quit, Esc, F1, F2, resize, minimize</text>
+      <text x="24" y="118" class="small">InputEvents: platform's + addInputEvent's</text>
       <text x="24" y="136" class="small">W A S D, mouse drag and wheel → CameraInput</text>
       <text x="24" y="154" class="small">updateCamera(camera, input)</text>
       <line x1="350" y1="112" x2="378" y2="112" class="arrow cpu" marker-end="url(#ah-cpu)"/>
@@ -177,7 +177,7 @@
       <path d="M470,170 H615 V112" class="arrow cpu" marker-end="url(#ah-cpu)"/>
       <text x="540" y="164" class="mid small">ok</text>
     </svg>
-    <p>While the window is minimized, <code>pollEvents</code> waits up to 100 ms for an event (<code>SDL_WaitEventTimeout</code>), so skipped frames do not spin the CPU. A failed recreation keeps <code>swapchainOutOfDate</code> set, so the next frame tries again.</p>
+    <p>The events come from the SDL platform and from the application's <code>Engine::addInputEvent</code>, all through one path (<a href="platform-layer.html">The platform layer</a>): quit, Esc (SDL only), F1–F3, resize, minimize, and the camera's input. While an SDL window is minimized, <code>pollEvents</code> waits up to 100 ms for an event (<code>SDL_WaitEventTimeout</code>), so skipped frames do not spin the CPU; a <code>NATIVE</code> application skips frames with a size of 0 (<code>setWindowSize</code>) and waits in its own loop. A failed recreation keeps <code>swapchainOutOfDate</code> set, so the next frame tries again.</p>
   </div>
 
   <div class="step">
@@ -816,7 +816,7 @@
 </figure>
 
 <ol class="steps">
-  <li><b>SDL reports a new pixel size.</b> <code>SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED</code> sets <code>resized</code> and the new <code>pixelWidth</code> and <code>pixelHeight</code> in <code>pollEvents</code>.</li>
+  <li><b>The window reports a new pixel size.</b> With SDL, <code>SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED</code> sets <code>resized</code> and the new <code>pixelWidth</code> and <code>pixelHeight</code> in <code>pollEvents</code>; a <code>NATIVE</code> or headless application calls <code>Engine::setWindowSize</code>, which does the same.</li>
   <li><b>The next <code>beginFrame</code> recreates.</b> It calls <code>Engine::recreateSwapchain</code>, which calls <code>RenderContext::recreateSwapchain</code>.</li>
   <li><b>The swapchain is rebuilt.</b> A 0 × 0 surface returns <code>OUT_OF_DATE</code> and keeps the old swapchain. Otherwise it releases pending semaphores, waits until the device is idle, and builds the new swapchain.</li>
   <li><b>Image handles change.</b> The old swapchain image handles are dropped and new ones are registered. Handles from an earlier <code>getSwapchainImages</code> are no longer valid.</li>
@@ -904,7 +904,7 @@
   <tr><td>Frame slot state</td><td><code>FrameResources</code> in <code>include/rasm/types.h</code>; <code>frameFence</code>, <code>frameFenceValue</code>, <code>computeFence</code>, <code>computeFenceValue</code>, <code>frameCount</code> in <code>include/rasm/engine.h</code></td></tr>
   <tr><td>Batches</td><td><code>Engine::useQueue</code>, <code>Engine::waitForQueue</code>, <code>Engine::waitForQueueWork</code>, <code>Engine::closeBatch</code>, <code>Engine::submitBatches</code> in <code>src/engine.cpp</code></td></tr>
   <tr><td>Resize</td><td><code>Engine::recreateSwapchain</code>, <code>Engine::createSwapchainResources</code> in <code>src/engine.cpp</code>; <code>RenderContext::recreateSwapchain</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
-  <tr><td>Events and minimize</td><td><code>Engine::pollEvents</code> in <code>src/engine.cpp</code>, the SDL events in <code>src/platform/sdlPlatform.cpp</code></td></tr>
+  <tr><td>Events and minimize</td><td><code>Engine::pollEvents</code>, <code>addInputEvent</code>, <code>setWindowSize</code> in <code>src/engine.cpp</code>, the input state in <code>src/platform/input.cpp</code>, the SDL events in <code>src/platform/sdlPlatform.cpp</code></td></tr>
   <tr><td>Scene sync, scene passes</td><td><code>Engine::syncGpuScene</code>, <code>Engine::addScenePasses</code>, <code>Engine::prepareSceneView</code>, <code>Engine::recordSceneCulling</code>, <code>Engine::recordHiz</code>, <code>Engine::drawSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Stats</td><td><code>Engine::updateFrameStats</code> in <code>src/renderer/frameStats.cpp</code></td></tr>
   <tr><td>Acquire, submit, present</td><td><code>VulkanSwapchain</code> in <code>src/rhi/vulkan/vulkanSwapchain.cpp</code>, <code>VulkanQueue::submit</code> in <code>src/rhi/vulkan/vulkanQueue.cpp</code></td></tr>

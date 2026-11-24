@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Vulkan Loader · RASM</title>
 <meta name="description" content="How a Vulkan call reaches the driver: the loader, layers and drivers, dispatchable handles and trampolines, linking against the loader or loading it at run time, the three levels of functions, a function table per device, and which version is whose.">
-<meta name="rasm-sources" content="src/rhi/vulkan/vulkanDevice.h src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.h src/rhi/vulkan/vulkanQueue.h src/rhi/vulkan/vulkanSwapchain.h src/rhi/vulkan/vulkanTypes.h src/platform/windowSurface.h src/platform/sdlPlatform.cpp src/CMakeLists.txt src/thirdparty_impl.cpp cmake/rasmConfig.cmake.in vcpkg.json .github/workflows/ci.yml">
+<meta name="rasm-sources" content="src/rhi/vulkan/vulkanDevice.h src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.h src/rhi/vulkan/vulkanQueue.h src/rhi/vulkan/vulkanSwapchain.h src/rhi/vulkan/vulkanTypes.h src/rhi/vulkan/vulkanSurface.cpp src/platform/sdlPlatform.cpp src/CMakeLists.txt src/thirdparty_impl.cpp cmake/rasmConfig.cmake.in vcpkg.json .github/workflows/ci.yml">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -266,19 +266,19 @@
 
 <h2 id="in-rasm"><span class="n">7</span>In RASM</h2>
 
-<p>Nothing in RASM links the loader. It is opened when the engine starts, by SDL with a window and by volk headless, and each <code>VulkanDevice</code> keeps its own table of device functions.</p>
+<p>Nothing in RASM links the loader. volk opens it when the device starts, with a window or without one, and each <code>VulkanDevice</code> keeps its own table of device functions. SDL never opens a loader: a window reaches the device as native handles, and RASM makes the surface itself with its own instance.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 330" role="img" aria-label="With a window, SdlPlatform loads the loader and hands its vkGetInstanceProcAddr to loadVulkan; headless, loadVulkan opens the loader with volkInitialize. loadVulkan checks the loader's version. volk's globals then hold the global and instance functions, which vk-bootstrap and VMA use. VulkanDevice loads its own VolkDeviceTable, vk, after it creates the device; VulkanCommandBuffer, VulkanQueue and VulkanSwapchain call through it, straight to the driver.">
-    <rect x="20" y="20" width="200" height="60" rx="6" class="cpu"/>
-    <text x="120" y="44" class="mid mono small">SdlPlatform::createWindow</text>
-    <text x="120" y="64" class="mid small">window: SDL opens the loader</text>
-    <rect x="20" y="100" width="200" height="50" rx="6" class="cpu o-50"/>
-    <text x="120" y="122" class="mid small">headless: no window</text>
+  <svg viewBox="0 0 760 330" role="img" aria-label="loadVulkan opens the loader with volkInitialize, with a window or headless; a window only brings its native handles, from which createVulkanSurface makes the surface with the same instance. loadVulkan checks the loader's version. volk's globals then hold the global and instance functions, which vk-bootstrap and VMA use. VulkanDevice loads its own VolkDeviceTable, vk, after it creates the device; VulkanCommandBuffer, VulkanQueue and VulkanSwapchain call through it, straight to the driver.">
+    <rect x="20" y="20" width="200" height="60" rx="6" class="cpu o-50"/>
+    <text x="120" y="44" class="mid small">a window: native handles</text>
+    <text x="120" y="64" class="mid small mono">createVulkanSurface</text>
+    <rect x="20" y="100" width="200" height="50" rx="6" class="cpu"/>
+    <text x="120" y="122" class="mid small">window or headless</text>
     <text x="120" y="140" class="mid small mono">volkInitialize()</text>
-    <line x1="220" y1="50" x2="266" y2="84" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <text x="236" y="54" class="small t-cpu">getWindowVulkanLoader</text>
     <line x1="220" y1="125" x2="266" y2="104" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="220" y1="50" x2="266" y2="76" class="arrow dashed" marker-end="url(#ah)"/>
+    <text x="232" y="48" class="small t-faint">after the instance</text>
     <rect x="270" y="64" width="200" height="66" rx="6" class="box"/>
     <text x="370" y="86" class="mid mono">loadVulkan</text>
     <text x="370" y="104" class="mid small">no loader, or older than 1.3:</text>
@@ -309,14 +309,14 @@
     <text x="690" y="240" class="mid title">driver</text>
     <text x="690" y="258" class="mid small">(or layer)</text>
   </svg>
-  <figcaption>The loader comes from SDL when there is a window, so the surface and the instance come from one library; headless, volk finds it. Global and instance functions are volk's process-wide globals. Device functions live in each device's <code>VolkDeviceTable</code>.</figcaption>
+  <figcaption>volk finds the loader in every mode, and the surface is made from the window's native handles with that loader's instance, so the surface and the instance always come from one library. Global and instance functions are volk's process-wide globals. Device functions live in each device's <code>VolkDeviceTable</code>.</figcaption>
 </figure>
 
 <div class="table-wrap">
 <table>
   <tr><th>This page</th><th>RASM</th></tr>
   <tr><td>Link or load</td><td>Load, with volk (vcpkg port <samp>volk</samp>). No executable imports <samp>vulkan-1.dll</samp> or <samp>libvulkan</samp>; CI checks every executable and DLL of the build with <samp>llvm-objdump</samp> and <samp>otool</samp>.</td></tr>
-  <tr><td>Which loader</td><td>With a window, SDL's (<code>getWindowVulkanLoader</code>; <code>SdlPlatform::createWindow</code> opens it before the window, and on macOS tries <samp>/usr/local/lib/libvulkan.dylib</samp> too). Headless, <code>volkInitialize</code>.</td></tr>
+  <tr><td>Which loader</td><td><code>volkInitialize</code>, with a window or headless; on macOS it tries <samp>/usr/local/lib/libvulkan.dylib</samp> too. The surface comes from the window's <code>NativeWindow</code> through that loader (<code>createVulkanSurface</code>), so no windowing library opens a second copy.</td></tr>
   <tr><td>Versions</td><td>The loader must be 1.3 or newer and the GPU 1.4. Each check logs the version it found. A 1.3 loader runs RASM, as the image tests show on CI's runner.</td></tr>
   <tr><td>Global and instance functions</td><td>volk's globals, one set per process, loaded with <code>volkLoadInstanceOnly</code>. They are trampolines, so a second instance does not break them.</td></tr>
   <tr><td>A table per device</td><td><code>VulkanDevice::vk</code>, a <code>VolkDeviceTable</code>. <code class="lang-text">VOLK_NO_DEVICE_PROTOTYPES</code> leaves no global device function, so a call outside the table does not compile. <code>vkSetDebugUtilsObjectNameEXT</code> belongs to an instance extension and stays global.</td></tr>
@@ -341,7 +341,7 @@
   <tr><td>Open the loader, check versions</td><td><code>loadVulkan</code>, <code>logOldDevices</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
   <tr><td>The device table, VMA</td><td><code>VulkanDevice::initialize</code> in the same file</td></tr>
   <tr><td>Calls through the table</td><td><code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code>, <code>src/rhi/vulkan/vulkanQueue.cpp</code>, <code>src/rhi/vulkan/vulkanSwapchain.cpp</code></td></tr>
-  <tr><td>SDL's loader</td><td><code>getWindowVulkanLoader</code> in <code>src/platform/sdlPlatform.cpp</code></td></tr>
+  <tr><td>The surface</td><td><code>createVulkanSurface</code> in <code>src/rhi/vulkan/vulkanSurface.cpp</code></td></tr>
   <tr><td>Build</td><td><code>src/CMakeLists.txt</code>, <code>vcpkg.json</code>, <code>cmake/rasmConfig.cmake.in</code></td></tr>
   <tr><td>CI check</td><td><samp>.github/workflows/ci.yml</samp></td></tr>
 </table>

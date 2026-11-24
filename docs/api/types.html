@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Types, Handles and Limits · RASM</title>
 <meta name="description" content="Handle and every handle alias, the enums and plain structs of types.h, Window, VRAMStats, and every compile-time limit with its value and header.">
-<meta name="rasm-sources" content="include/rasm/handle.h include/rasm/types.h include/rasm/readback.h include/rasm/window.h include/rasm/render/resource.h include/rasm/engine.h include/rasm/entity.h include/rasm/light.h include/rasm/material.h include/rasm/mesh.h include/rasm/scene.h src/core/handle.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/rhi/device.cpp src/rhi/vulkan/vulkanUtils.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/assets/texture.cpp src/assets/material.cpp src/assets/mesh.cpp src/scene/camera.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/scene.cpp src/renderer/gpuScene.cpp src/renderer/frameStats.cpp src/engine.cpp">
+<meta name="rasm-sources" content="include/rasm/handle.h include/rasm/types.h include/rasm/readback.h include/rasm/window.h include/rasm/input.h include/rasm/render/resource.h include/rasm/engine.h include/rasm/entity.h include/rasm/light.h include/rasm/material.h include/rasm/mesh.h include/rasm/scene.h src/core/handle.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/rhi/device.cpp src/rhi/vulkan/vulkanUtils.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/assets/texture.cpp src/assets/material.cpp src/assets/mesh.cpp src/scene/camera.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/scene.cpp src/renderer/gpuScene.cpp src/renderer/frameStats.cpp src/engine.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -313,45 +313,49 @@ public:
 <div class="api" id="EngineConfig">
   <pre class="sig">struct EngineConfig
 {
-    std::string  appName               = {};
-    PlatformType platform              = PlatformType::SDL;
-    int          windowWidth           = 0;
-    int          windowHeight          = 0;
-    bool         enableValidation      = false;
-    bool         enableSyncValidation  = false;
-    bool         enableGpuValidation   = false;
-    Backend      preferredBackend      = Backend::VULKAN;
-    std::string  assetRoot             = {};
-    std::string  shaderDir             = {};
-    std::string  cacheDir              = "cache";
-    uint32_t     geometryPoolVertices  = 1u &lt;&lt; 21;
-    uint32_t     geometryPoolColors    = 1u &lt;&lt; 20;
-    uint32_t     geometryPoolSkins     = 1u &lt;&lt; 20;
-    uint32_t     geometryPoolMorphs    = 1u &lt;&lt; 20;
-    uint32_t     geometryPoolIndices   = 1u &lt;&lt; 24;
-    uint32_t     geometryPoolSubMeshes = 1u &lt;&lt; 14;
-    uint32_t     geometryPoolMeshlets  = 1u &lt;&lt; 17;
-    uint32_t     maxInstances          = 1u &lt;&lt; 16;
-    uint32_t     maxLights             = 1u &lt;&lt; 14;
-    uint32_t     maxAnimatedEntities   = 1u &lt;&lt; 14;
-    uint32_t     animationPoolBytes    = 16u &lt;&lt; 20;
-    uint32_t     maxMorphWeights       = 1u &lt;&lt; 16;
-    uint32_t     loadThreads           = 0;
-    uint64_t     loadMemoryBudget      = 512ull &lt;&lt; 20;
-    bool         showStats             = false;
-    float        fixedDeltaTime        = 0.0f;
-    bool         occlusionCulling      = true;
-    bool         meshLods              = true;
-    float        lodErrorPixels        = 1.0f;
-    int32_t      forcedLod             = -1;
-    MeshletPath  meshletPath           = MeshletPath::OFF;
-    uint32_t     maxViewMeshlets       = 1u &lt;&lt; 16;
-    bool         asyncCompute          = false;
-    bool         clusteredLighting     = true;
-    bool         hostImageCopy         = true;
-    bool         bloom                 = false;
-    bool         ui                    = false;
-    AntiAliasing antiAliasing          = AntiAliasing::NONE;
+    std::string  appName                 = {};
+    PlatformType platform                = PlatformType::SDL;
+    int          windowWidth             = 0;
+    int          windowHeight            = 0;
+    NativeWindow nativeWindow            = {};
+    bool         enableValidation        = false;
+    bool         enableSyncValidation    = false;
+    bool         enableGpuValidation     = false;
+    Backend      preferredBackend        = Backend::VULKAN;
+    std::string  assetRoot               = {};
+    std::string  shaderDir               = {};
+    std::string  cacheDir                = "cache";
+    uint32_t     geometryPoolVertices    = 1u &lt;&lt; 21;
+    uint32_t     geometryPoolColors      = 1u &lt;&lt; 20;
+    uint32_t     geometryPoolSkins       = 1u &lt;&lt; 20;
+    uint32_t     geometryPoolMorphs      = 1u &lt;&lt; 20;
+    uint32_t     geometryPoolIndices     = 1u &lt;&lt; 24;
+    uint32_t     geometryPoolSubMeshes   = 1u &lt;&lt; 14;
+    uint32_t     geometryPoolMeshlets    = 1u &lt;&lt; 17;
+    uint32_t     geometryPoolMeshletData = 1u &lt;&lt; 23;
+    uint32_t     maxInstances            = 1u &lt;&lt; 16;
+    uint32_t     maxLights               = 1u &lt;&lt; 14;
+    uint32_t     maxMaterials            = 1u &lt;&lt; 12;
+    uint32_t     maxAnimatedEntities     = 1u &lt;&lt; 14;
+    uint32_t     animationPoolBytes      = 16u &lt;&lt; 20;
+    uint32_t     maxMorphWeights         = 1u &lt;&lt; 16;
+    uint32_t     loadThreads             = 0;
+    uint64_t     loadMemoryBudget        = 512ull &lt;&lt; 20;
+    bool         showStats               = false;
+    float        fixedDeltaTime          = 0.0f;
+    bool         occlusionCulling        = true;
+    bool         meshLods                = true;
+    float        lodErrorPixels          = 1.0f;
+    int32_t      forcedLod               = -1;
+    MeshletPath  meshletPath             = MeshletPath::AUTO;
+    uint32_t     maxViewMeshlets         = 1u &lt;&lt; 16;
+    bool         asyncCompute            = false;
+    bool         transferQueue           = true;
+    bool         clusteredLighting       = true;
+    bool         hostImageCopy           = true;
+    bool         bloom                   = false;
+    bool         ui                      = false;
+    AntiAliasing antiAliasing            = AntiAliasing::NONE;
 };</pre>
   <div class="body">
     <p>The engine's settings, given to its constructor. Every field is explained on the <a href="engine.html#EngineConfig">Engine page</a>.</p>
@@ -363,9 +367,25 @@ public:
 {
     SDL,
     HEADLESS,
+    NATIVE,
 };</pre>
   <div class="body">
-    <p>Who owns the window and the input (<code>EngineConfig::platform</code>). <code>SDL</code>: the engine opens an SDL3 window and reads its events. <code>HEADLESS</code>: no window, no events and no SDL; each frame renders into an offscreen swapchain of <code>windowWidth</code> × <code>windowHeight</code> pixels, which <a href="engine.html#readFrame"><code>readFrame</code></a> copies back. See <a href="engine.html#headless">Engine: headless</a> and <a href="../guides/headless-readback.html">Headless rendering and readback</a>.</p>
+    <p>Who owns the window and the input (<code>EngineConfig::platform</code>). <code>SDL</code>: the engine opens an SDL3 window and reads its events. <code>HEADLESS</code>: no window and no SDL; each frame renders into an offscreen swapchain of <code>windowWidth</code> × <code>windowHeight</code> pixels, which <a href="engine.html#readFrame"><code>readFrame</code></a> copies back. <code>NATIVE</code>: the engine draws into the application's window (<a href="#NativeWindow"><code>EngineConfig::nativeWindow</code></a>), and the application runs the event loop and sends the input with <a href="engine.html#addInputEvent"><code>addInputEvent</code></a>, <a href="engine.html#setWindowSize"><code>setWindowSize</code></a> and <a href="engine.html#setWindowContentScale"><code>setWindowContentScale</code></a>. See <a href="engine.html#native">Engine: your own window</a>, <a href="engine.html#headless">Engine: headless</a> and <a href="../guides/platform-layer.html">The platform layer</a>.</p>
+  </div>
+</div>
+
+<div class="api" id="NativeWindowType">
+  <pre class="sig">enum class NativeWindowType
+{
+    NONE,
+    WINDOWS,
+    X11,
+    XCB,
+    WAYLAND,
+    METAL,
+};</pre>
+  <div class="body">
+    <p>Which window system a <a href="#NativeWindow"><code>NativeWindow</code></a> comes from. <code>WINDOWS</code> on Windows, <code>METAL</code> (a <code>CAMetalLayer</code>) on macOS, <code>X11</code>, <code>XCB</code> or <code>WAYLAND</code> on Linux. A type another operating system's build has no surface for makes the engine fail to start, with an error.</p>
   </div>
 </div>
 
@@ -550,29 +570,58 @@ struct RenderTarget
   </div>
 </div>
 
+<div class="api" id="NativeWindow">
+  <pre class="sig">struct NativeWindow
+{
+    NativeWindowType type                = NativeWindowType::NONE;
+    void*            display             = nullptr;
+    void*            window              = nullptr;
+    uint32_t         pixelWidth          = 0;
+    uint32_t         pixelHeight         = 0;
+    float            contentScale        = 1.0f;
+};</pre>
+  <div class="body">
+    <p>A window of the application's, for <code>PlatformType::NATIVE</code> (<code>EngineConfig::nativeWindow</code>). RASM makes its surface from the handles and never changes the window. The window must live longer than the engine. The struct has no type of any window system, so the same one serves every backend and a C API.</p>
+    <div class="table-wrap">
+    <table>
+      <tr><th><code>type</code></th><th><code>display</code></th><th><code>window</code></th></tr>
+      <tr><td><code>WINDOWS</code></td><td><samp>HINSTANCE</samp>, or <code>nullptr</code> for the executable's</td><td><samp>HWND</samp></td></tr>
+      <tr><td><code>X11</code></td><td><samp>Display*</samp></td><td>the <samp>Window</samp> id, cast to a pointer</td></tr>
+      <tr><td><code>XCB</code></td><td><samp>xcb_connection_t*</samp></td><td>the <samp>xcb_window_t</samp>, cast to a pointer</td></tr>
+      <tr><td><code>WAYLAND</code></td><td><samp>wl_display*</samp></td><td><samp>wl_surface*</samp></td></tr>
+      <tr><td><code>METAL</code></td><td>unused</td><td><samp>CAMetalLayer*</samp> (from an <samp>NSView</samp> with a Metal layer, or <samp>SDL_Metal_GetLayer</samp>)</td></tr>
+    </table>
+    </div>
+    <dl>
+      <dt>pixelWidth, pixelHeight</dt><dd>The drawable's size in pixels at the start. 0: the same as <code>windowWidth</code> × <code>windowHeight</code>. Later sizes come from <a href="engine.html#setWindowSize"><code>setWindowSize</code></a>.</dd>
+      <dt>contentScale</dt><dd>The display's scale setting (1.5 at 150 %), without the pixel density. It sizes the UI; later changes come from <a href="engine.html#setWindowContentScale"><code>setWindowContentScale</code></a>.</dd>
+    </dl>
+  </div>
+</div>
+
 <div class="api" id="Window">
   <pre class="sig">struct Window
 {
-    WindowHandle handle;
-    uint32_t     width;
-    uint32_t     height;
-    uint32_t     pixelWidth;
-    uint32_t     pixelHeight;
-    bool         mouseDragActive;
-    bool         resized;
-    bool         minimized;
-    glm::vec2    lastMousePos = glm::vec2(0.0f);
+    WindowHandle    handle;
+    NativeWindow    native          = {};
+    uint32_t        width           = 0;
+    uint32_t        height          = 0;
+    uint32_t        pixelWidth      = 0;
+    uint32_t        pixelHeight     = 0;
+    float           contentScale    = 1.0f;
+    bool            resized         = false;
+    bool            minimized       = false;
 };</pre>
   <div class="body">
-    <p>The state of the engine's one window, read with <a href="engine.html#getMainWindow">getMainWindow</a>. <code>pollEvents</code> keeps it up to date. A headless engine's window has no handle, and its pixel size is the offscreen swapchain's.</p>
+    <p>The state of the engine's one window, read with <a href="engine.html#getMainWindow">getMainWindow</a>. <code>pollEvents</code> keeps it up to date with SDL; with <code>NATIVE</code> and headless, <code>setWindowSize</code> and <code>setWindowContentScale</code> do. A headless engine's window has no handle, and its pixel size is the offscreen swapchain's.</p>
     <dl>
-      <dt>handle</dt><dd>Valid when the window exists.</dd>
+      <dt>handle</dt><dd>Valid for the window the SDL platform opened; invalid for <code>NATIVE</code> and headless.</dd>
+      <dt>native</dt><dd>The handles the surface is made from: SDL's window's, or <code>EngineConfig::nativeWindow</code>. Type <code>NONE</code> headless.</dd>
       <dt>width, height</dt><dd>Logical size, the units of mouse coordinates.</dd>
       <dt>pixelWidth, pixelHeight</dt><dd>Drawable size in pixels. Larger than width and height on HiDPI displays. The swapchain, the render targets sized from it and the camera aspect follow these. Use them for viewport math, as <code>examples/01_render_graph</code> does.</dd>
-      <dt>mouseDragActive</dt><dd>A mouse button is held down.</dd>
+      <dt>contentScale</dt><dd>The display's scale setting, which sizes the UI. 1 headless.</dd>
       <dt>resized</dt><dd>The pixel size changed; <code>beginFrame</code> re-creates the swapchain and clears it.</dd>
-      <dt>minimized</dt><dd>The window is minimized; frames are skipped.</dd>
-      <dt>lastMousePos</dt><dd>The last drag position, in the NDC of <a href="camera.html#CameraInput">CameraInput</a>.</dd>
+      <dt>minimized</dt><dd>The window is minimized, or its pixel size is 0; frames are skipped.</dd>
     </dl>
   </div>
 </div>
@@ -659,7 +708,112 @@ if (rasm::readPng("golden.png", golden) &amp;&amp; golden.width == image.width)
   </div>
 </div>
 
-<h2><span class="n">4</span>Constants and limits</h2>
+<h2 id="input"><span class="n">4</span>Input events in <code>rasm/input.h</code></h2>
+
+<p>What an application that owns its window sends with <a href="engine.html#addInputEvent"><code>Engine::addInputEvent</code></a>. RASM's SDL platform makes the same events from its window, so every input reaches the camera, Dear ImGui and the built-in keys the same way (<a href="../guides/platform-layer.html">The platform layer</a>). The types are plain: an enum for the kind and plain fields, so a C API can copy them as they are.</p>
+
+<div class="api" id="InputEvent">
+  <pre class="sig">struct InputEvent
+{
+    InputEventType  type            = InputEventType::NONE;
+    Key             key             = Key::NONE;
+    Key             physicalKey     = Key::NONE;
+    bool            down            = false;
+    bool            repeat          = false;
+    uint8_t         modifiers       = 0;
+    MouseButton     button          = MouseButton::LEFT;
+    float           x               = 0.0f;
+    float           y               = 0.0f;
+    uint32_t        codepoint       = 0;
+};</pre>
+  <div class="body">
+    <p>One input event. Only the fields its <code>type</code> names are read:</p>
+    <div class="table-wrap">
+    <table>
+      <tr><th><code>type</code></th><th>Fields</th><th>Goes to</th></tr>
+      <tr><td><code>KEY</code></td><td><code>key</code>, <code>physicalKey</code>, <code>down</code>, <code>repeat</code>, <code>modifiers</code></td><td>ImGui and F1–F3 by <code>key</code>; the camera's W/A/S/D by <code>physicalKey</code></td></tr>
+      <tr><td><code>MOUSE_BUTTON</code></td><td><code>button</code>, <code>down</code>, <code>x</code>, <code>y</code></td><td>ImGui; any button starts the camera's drag</td></tr>
+      <tr><td><code>MOUSE_MOVE</code></td><td><code>x</code>, <code>y</code></td><td>ImGui; the camera while a drag runs</td></tr>
+      <tr><td><code>MOUSE_WHEEL</code></td><td><code>x</code>, <code>y</code>: steps, <code>y</code> &gt; 0 away from the user, <code>x</code> &gt; 0 to the right</td><td>ImGui; the camera's zoom</td></tr>
+      <tr><td><code>MOUSE_LEAVE</code></td><td>none</td><td>ImGui: no window is hovered</td></tr>
+      <tr><td><code>TEXT</code></td><td><code>codepoint</code>: one Unicode character</td><td>ImGui's text fields</td></tr>
+      <tr><td><code>FOCUS</code></td><td><code>down</code>: gained, else lost</td><td>ImGui; losing it lets go of every held key</td></tr>
+    </table>
+    </div>
+    <dl>
+      <dt>key</dt><dd>The key's meaning in the current keyboard layout: the key that types Z on an AZERTY keyboard is <code>Key::Z</code>.</dd>
+      <dt>physicalKey</dt><dd>Where the key is, named after the US layout: the same key is <code>Key::W</code>, so the camera's W/A/S/D keep their places. <code>Key::NONE</code>: the same as <code>key</code>, for an application that knows only one of the two.</dd>
+      <dt>x, y</dt><dd>Mouse positions in window points from the top-left corner, the units of <code>EngineConfig::windowWidth</code>.</dd>
+    </dl>
+    <pre><code>engine.addInputEvent({.type = rasm::InputEventType::KEY, .key = rasm::Key::Z, .physicalKey = rasm::Key::W, .down = true});
+engine.addInputEvent({.type = rasm::InputEventType::MOUSE_BUTTON, .down = true, .button = rasm::MouseButton::LEFT, .x = 400.0f, .y = 300.0f});
+engine.addInputEvent({.type = rasm::InputEventType::TEXT, .codepoint = 0x00E9});</code></pre>
+  </div>
+</div>
+
+<div class="api" id="InputEventType">
+  <pre class="sig">enum class InputEventType : uint8_t
+{
+    NONE,
+    KEY,
+    MOUSE_BUTTON,
+    MOUSE_MOVE,
+    MOUSE_WHEEL,
+    MOUSE_LEAVE,
+    TEXT,
+    FOCUS,
+};</pre>
+  <div class="body">
+    <p>The kind of an <a href="#InputEvent"><code>InputEvent</code></a>, which says which of its fields are read.</p>
+  </div>
+</div>
+
+<div class="api" id="Key">
+  <pre class="sig">enum class Key : uint16_t
+{
+    NONE,
+    A, B, C, /* ... */ Z,
+    DIGIT_0, /* ... */ DIGIT_9,
+    F1, /* ... */ F12,
+    ESCAPE, ENTER, TAB, BACKSPACE, SPACE, INSERT, DEL, HOME, END, PAGE_UP, PAGE_DOWN,
+    LEFT, RIGHT, UP, DOWN,
+    LEFT_SHIFT, RIGHT_SHIFT, LEFT_CTRL, RIGHT_CTRL, LEFT_ALT, RIGHT_ALT, LEFT_SUPER, RIGHT_SUPER, MENU,
+    APOSTROPHE, COMMA, MINUS, PERIOD, SLASH, SEMICOLON, EQUAL, LEFT_BRACKET, BACKSLASH, RIGHT_BRACKET, GRAVE,
+    CAPS_LOCK, SCROLL_LOCK, NUM_LOCK, PRINT_SCREEN, PAUSE,
+    KEYPAD_0, /* ... */ KEYPAD_9,
+    KEYPAD_DECIMAL, KEYPAD_DIVIDE, KEYPAD_MULTIPLY, KEYPAD_SUBTRACT, KEYPAD_ADD, KEYPAD_ENTER, KEYPAD_EQUAL,
+    COUNT
+};</pre>
+  <div class="body">
+    <p>A key, named after its place on a US keyboard. The same enum names a key's meaning (<code>InputEvent::key</code>) and its position (<code>InputEvent::physicalKey</code>). <code>DEL</code> is the Delete key (<samp>DELETE</samp> is a macro in <samp>&lt;windows.h&gt;</samp>). Each key maps to the ImGui key of the same name.</p>
+  </div>
+</div>
+
+<div class="api" id="MouseButton">
+  <pre class="sig">enum class MouseButton : uint8_t
+{
+    LEFT,
+    RIGHT,
+    MIDDLE,
+    BACK,
+    FORWARD,
+};</pre>
+  <div class="body">
+    <p>A mouse button, in Dear ImGui's order. <code>BACK</code> and <code>FORWARD</code> are the side buttons (SDL's <samp>X1</samp> and <samp>X2</samp>).</p>
+  </div>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Constant</th><th>Value</th><th>In <code>InputEvent::modifiers</code></th></tr>
+  <tr id="KEY_MOD_SHIFT"><td><code>KEY_MOD_SHIFT</code></td><td>1</td><td>a Shift key is held</td></tr>
+  <tr id="KEY_MOD_CTRL"><td><code>KEY_MOD_CTRL</code></td><td>2</td><td>a Ctrl key is held</td></tr>
+  <tr id="KEY_MOD_ALT"><td><code>KEY_MOD_ALT</code></td><td>4</td><td>an Alt key is held</td></tr>
+  <tr id="KEY_MOD_SUPER"><td><code>KEY_MOD_SUPER</code></td><td>8</td><td>a Windows or Command key is held</td></tr>
+</table>
+</div>
+
+<h2><span class="n">5</span>Constants and limits</h2>
 
 <p>All are <code>constexpr</code> in the public headers. Exceeding a <code>create</code> limit logs a warning or error and returns an invalid handle. Because handle indices start at 1, the limits on handle indices hold one live object less than their value. A destroyed object gives its index back; <code>loadMesh</code> keeps the index of a file that does not parse (B13).</p>
 

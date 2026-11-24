@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Camera Controllers · RASM</title>
 <meta name="description" content="How mouse and keys become a camera pose: fly (FPS) cameras, orbit cameras (turntable and arcball), pitch clamping, frame-time scaling, and frame-rate independent exponential easing. Then how RASM does it.">
-<meta name="rasm-sources" content="include/rasm/camera.h include/rasm/window.h src/scene/camera.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/engine.cpp tests/cameraTests.cpp">
+<meta name="rasm-sources" content="include/rasm/camera.h include/rasm/window.h include/rasm/input.h src/scene/camera.cpp src/platform/input.h src/platform/input.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/engine.cpp tests/cameraTests.cpp tests/inputTests.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -812,13 +812,13 @@ so                         t = 1 − e^(−k · dt)</code></pre>
   <figcaption>The two-pose split of <a href="#two-poses">section 1</a>: controllers write <code>targetTransform</code>, rendering reads <code>transform</code>. <code>setCameraTransform</code> sets both, so the camera jumps there.</figcaption>
 </figure>
 
-<p>How the input reaches <code>CameraInput</code>:</p>
+<p>How the input reaches <code>CameraInput</code>. Every event, from the SDL platform or from the application's <code>Engine::addInputEvent</code>, goes through one <code>InputState</code> (<a href="platform-layer.html">The platform layer</a>):</p>
 <ul>
-  <li><code>mouseStart</code> is last frame's drag position, <code>mouseEnd</code> the newest one, both from <code>toNDC</code>.</li>
+  <li><code>mouseStart</code> is last frame's drag position, <code>mouseEnd</code> the newest one, both from <code>toInputNdc</code>.</li>
   <li><code>wheelDelta</code> is summed over the frame.</li>
-  <li>W, A, S, D are scancodes from <code>SDL_GetKeyboardState</code>.</li>
+  <li>W, A, S, D are held keys by position (<code>InputEvent::physicalKey</code>), so they stay in the same place on an AZERTY keyboard.</li>
   <li><code>deltaTime</code> comes from <code>steady_clock</code>: 0 on the first frame, at most 0.1 s. With <code>EngineConfig::fixedDeltaTime</code> it is that step instead, so the easing is the same in every run.</li>
-  <li>A lost focus calls <code>SDL_ResetKeyboard</code>, so no key stays held.</li>
+  <li>A <code>FOCUS</code> event that loses the focus lets go of every key, so no key stays held.</li>
 </ul>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
@@ -826,7 +826,7 @@ so                         t = 1 − e^(−k · dt)</code></pre>
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>Mouse units</td><td>divide by the smaller side, flip <var>y</var></td><td>The same, in <code>toNDC</code>, with the logical window size (<code>Window</code>'s <code>width</code>, <code>height</code>), the units of SDL mouse positions.</td></tr>
+  <tr><td>Mouse units</td><td>divide by the smaller side, flip <var>y</var></td><td>The same, in <code>toInputNdc</code>, with the logical window size (<code>Window</code>'s <code>width</code>, <code>height</code>), the units of <code>InputEvent</code> mouse positions.</td></tr>
   <tr><td>Fly: angles</td><td>yaw around world up, pitch around right, clamp</td><td><code class="lang-text">yaw -= dx * lookSensitivity</code>, <code class="lang-text">pitch += dy * lookSensitivity</code>, pitch clamped to ±89°, rotation <code class="lang-text">angleAxis(yaw, +Y) * angleAxis(pitch, +X)</code>. <code>lookSensitivity</code> is radians per NDC unit.</td></tr>
   <tr><td>Fly: moving</td><td>normalized sum × speed × <var>dt</var></td><td>The same. It flies along the full view direction, and has no keys for up, down or a faster speed.</td></tr>
   <tr><td>Fly: mouse</td><td>drag or capture</td><td>Drag: the view turns only while a mouse button (any) is held.</td></tr>
@@ -837,7 +837,7 @@ so                         t = 1 − e^(−k · dt)</code></pre>
   <tr><td>Stop when close</td><td>snap below a threshold</td><td>Snaps once position, rotation and scale are within 1e-6 (relative for the position), so a camera at rest does not move (<code>B24</code>).</td></tr>
   <tr><td>Long frames</td><td>cap <var>dt</var></td><td>Capped at 0.1 s in <code>pollEvents</code>.</td></tr>
   <tr><td>Switching controllers</td><td>—</td><td><code>setCameraController</code> starts from the rendered pose. For free-fly it computes <code class="lang-text">pitch = asin(forward.y)</code> and <code class="lang-text">yaw = atan2(-forward.x, -forward.z)</code>, so the view does not jump; a roll is dropped.</td></tr>
-  <tr><td>Who owns input</td><td>the application, usually</td><td>The engine: <code>pollEvents</code> runs inside <code>beginFrame</code> for the camera passed to it (<code>D7</code>).</td></tr>
+  <tr><td>Who owns input</td><td>the application, usually</td><td>Either. The SDL platform reads its window's events, or the application sends its own with <code>addInputEvent</code>. Both are applied in <code>pollEvents</code>, inside <code>beginFrame</code>, to the camera passed to it; controllers the application drives itself are still open (<code>D7</code>).</td></tr>
 </table>
 </div>
 
@@ -849,7 +849,7 @@ so                         t = 1 − e^(−k · dt)</code></pre>
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>Types</td><td><code>CameraInput</code>, <code>CameraController</code>, <code>Camera</code> in <code>include/rasm/camera.h</code></td></tr>
-  <tr><td>Input to <code>CameraInput</code></td><td><code>Engine::pollEvents</code> in <code>src/engine.cpp</code>, <code>toNDC</code> in <code>src/platform/sdlPlatform.cpp</code></td></tr>
+  <tr><td>Input to <code>CameraInput</code></td><td><code>Engine::pollEvents</code> in <code>src/engine.cpp</code>, <code>toInputNdc</code> and <code>endInputFrame</code> in <code>src/platform/input.cpp</code></td></tr>
   <tr><td>Called each frame</td><td><code>Engine::beginFrame</code> in <code>src/engine.cpp</code></td></tr>
   <tr><td>Controllers</td><td><code>updateFreeFlyCamera</code>, <code>updateTrackballCamera</code>, <code>projectOnSphere</code> in <code>src/scene/camera.cpp</code></td></tr>
   <tr><td>Easing</td><td><code>easeCamera</code>, <code>Engine::updateCamera</code> in <code>src/scene/camera.cpp</code></td></tr>

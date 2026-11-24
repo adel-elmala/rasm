@@ -157,7 +157,7 @@ A change that changes a golden says why in its pull request, with the image befo
 
 ## Dear ImGui
 
-`RASM_IMGUI` (on by default) builds RASM with [Dear ImGui](https://github.com/ocornut/imgui) for `EngineConfig::ui`: the RASM window on F1 and the application's own windows (`Engine::setUiCallback`). The option adds the `imgui` feature of `vcpkg.json` to `VCPKG_MANIFEST_FEATURES` before `project()`, so vcpkg installs the `imgui` port with its `sdl3-binding` feature (SDL3 input; RASM draws ImGui itself through its RHI, so no `vulkan-binding`). `-DRASM_IMGUI=OFF` installs nothing, compiles no UI code and links no ImGui; `EngineConfig::ui` then logs a warning, and `examples/15_debug_ui` is not built. Change the option in a new build folder or delete `CMakeCache.txt`, so vcpkg installs again.
+`RASM_IMGUI` (on by default) builds RASM with [Dear ImGui](https://github.com/ocornut/imgui) for `EngineConfig::ui`: the RASM window on F1 and the application's own windows (`Engine::setUiCallback`). The option adds the `imgui` feature of `vcpkg.json` to `VCPKG_MANIFEST_FEATURES` before `project()`, so vcpkg installs the plain `imgui` port, with no backend: RASM feeds ImGui its own input events and draws it through its RHI. `-DRASM_IMGUI=OFF` installs nothing, compiles no UI code and links no ImGui; `EngineConfig::ui` then logs a warning, and `examples/15_debug_ui` is not built. Change the option in a new build folder or delete `CMakeCache.txt`, so vcpkg installs again.
 
 RASM links ImGui PUBLIC as a static library and defines `RASM_IMGUI` for the application too. RASM owns the ImGui context, and the application's `ImGui::` calls go to the same library: use the one `find_package(rasm)` brings, never a second copy of ImGui.
 
@@ -246,7 +246,7 @@ find_package(rasm 0.1 CONFIG REQUIRED)
 target_link_libraries(my_app PRIVATE rasm::rasm)
 ```
 
-- RASM is a static library, so the project also needs RASM's link dependencies: volk, the Vulkan headers, vk-bootstrap, VulkanMemoryAllocator, glm, SDL3, Tracy, spdlog, tinyobjloader, meshoptimizer, Slang, libktx and, with `RASM_IMGUI`, Dear ImGui. With vcpkg, add `volk`, `vulkan-headers`, `vk-bootstrap`, `vulkan-memory-allocator`, `glm`, `sdl3` with the `vulkan` feature, `tracy` with the `on-demand` feature, `spdlog`, `tinyobjloader`, `meshoptimizer`, `shader-slang` and `ktx` to its manifest (and `imgui` with the `sdl3-binding` feature for a RASM built with `RASM_IMGUI`, the default; `find_package(rasm)` then finds it with `find_dependency`), and copy the `ktx` block of `cmake/triplets/` into its own triplets to leave out the ETC decoder.
+- RASM is a static library, so the project also needs RASM's link dependencies: volk, the Vulkan headers, vk-bootstrap, VulkanMemoryAllocator, glm, SDL3, Tracy, spdlog, tinyobjloader, meshoptimizer, Slang, libktx and, with `RASM_IMGUI`, Dear ImGui. With vcpkg, add `volk`, `vulkan-headers`, `vk-bootstrap`, `vulkan-memory-allocator`, `glm`, `sdl3`, `tracy` with the `on-demand` feature, `spdlog`, `tinyobjloader`, `meshoptimizer`, `shader-slang` and `ktx` to its manifest (and `imgui` for a RASM built with `RASM_IMGUI`, the default; `find_package(rasm)` then finds it with `find_dependency`), and copy the `ktx` block of `cmake/triplets/` into its own triplets to leave out the ETC decoder.
 - Shaders are compiled at runtime, so the application needs them when it ships. By default the engine looks in a `shaders/` folder next to the executable. `find_package(rasm)` sets `rasm_SHADER_DIR` to the folder holding them, so a build step can copy them there:
 
   ```cmake

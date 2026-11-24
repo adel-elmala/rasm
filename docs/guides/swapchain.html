@@ -687,7 +687,7 @@
     <text x="670" y="270" class="mid small">if that submit worked</text>
     <text x="740" y="312" class="end small"><tspan class="mono">SUBOPTIMAL</tspan> or <tspan class="mono">OUT_OF_DATE</tspan>: set the flag, rebuild next frame</text>
   </svg>
-  <figcaption><code>swapchainOutOfDate</code> carries the news to the next <code>beginFrame</code>. The window sets <code>resized</code> on SDL's pixel-size event, so the swapchain follows the size in pixels (<b>B17</b>).</figcaption>
+  <figcaption><code>swapchainOutOfDate</code> carries the news to the next <code>beginFrame</code>. The window sets <code>resized</code> on SDL's pixel-size event, or when a <code>NATIVE</code> application calls <code>setWindowSize</code>, so the swapchain follows the size in pixels (<b>B17</b>).</figcaption>
 </figure>
 
 <h3>Resize, step by step</h3>
@@ -713,7 +713,7 @@
   <tr><td>Layout</td><td>discard at acquire, "present" before present</td><td><code>RenderContext::acquireNextImage</code> sets the image's state to <code>UNKNOWN</code>; <code>beginPass</code> moves it to <code>COLOR_ATTACHMENT</code>, discarding; <code>endFrame</code> moves it to <code>PRESENT_SRC</code>.</td></tr>
   <tr><td>Every acquired image is presented</td><td>yes</td><td>Yes. A frame that only drew into render targets gets a "Clear" pass in <code>endFrame</code>. A failed submit keeps the image acquired for the next frame.</td></tr>
   <tr><td>Suboptimal</td><td>finish the frame, rebuild</td><td>The same, through <code>swapchainOutOfDate</code>.</td></tr>
-  <tr><td>Minimized window</td><td>skip frames, sleep</td><td>The same: <code>beginFrame</code> skips, and <code>pollEvents</code> waits up to 100 ms for an event while minimized.</td></tr>
+  <tr><td>Minimized window</td><td>skip frames, sleep</td><td>The same: <code>beginFrame</code> skips, and with SDL <code>pollEvents</code> waits up to 100 ms for an event while minimized. A <code>NATIVE</code> application reports a size of 0 with <code>setWindowSize</code> and sleeps in its own loop.</td></tr>
   <tr><td>Rebuild</td><td>wait idle, old swapchain, release signals</td><td>All three.</td></tr>
   <tr><td>Present queue</td><td>any queue that can present</td><td>The graphics queue. Compute queue submits never wait for the image or present it.</td></tr>
   <tr><td>Submits per frame</td><td>one</td><td>One, or a few with <code>EngineConfig::asyncCompute</code>: the first graphics submit waits for the image, the last one presents.</td></tr>

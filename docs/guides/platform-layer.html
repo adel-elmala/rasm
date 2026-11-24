@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Platform Layer · RASM</title>
+<meta name="description" content="How a renderer lives in a window it does not own: who runs the event loop, native window handles and surfaces, points and pixels, input as a stream of events, keys by meaning and by position, which input the UI takes, and how RASM does it.">
+<meta name="rasm-sources" content="include/rasm/input.h include/rasm/types.h include/rasm/window.h include/rasm/engine.h src/platform/platform.h src/platform/input.h src/platform/input.cpp src/platform/sdlPlatform.cpp src/platform/nativePlatform.cpp src/platform/headlessPlatform.cpp src/platform/uiPlatform.h src/platform/uiPlatform.cpp src/renderer/ui.cpp src/engine.cpp src/rhi/device.h src/rhi/renderContext.cpp src/rhi/vulkan/vulkanSurface.h src/rhi/vulkan/vulkanSurface.cpp src/rhi/vulkan/vulkanDevice.cpp examples/19_embedding/main.cpp examples/CMakeLists.txt tests/inputTests.cpp vcpkg.json">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/platform-layer.js"></script>
+</head>
+<body data-root="../" data-page="guides/platform-layer.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Foundations</p>
+<h1>The platform layer</h1>
+<p class="lead">A renderer needs a place to draw and someone to tell it what the user does. In a small demo the renderer opens its own window and reads its own events. In an editor, a map application or a game with its own window library, the <b>application</b> owns the window and the event loop, and the renderer must fit in. This page explains the part between the two: who runs the loop, how a window becomes something the GPU can draw into, why a window has two sizes, and how input travels as a stream of small events. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>The <b>event loop</b> belongs to one owner. A renderer that is embedded does not run it: the application calls the renderer once per frame.</li>
+    <li>A window reaches the graphics API as a <b>native handle</b> (an <samp>HWND</samp>, a <samp>CAMetalLayer</samp>, an X11 window, a Wayland surface). From it, the renderer makes a <b>surface</b>, and from the surface a swapchain.</li>
+    <li>A window has a size in <b>points</b> (mouse positions, UI layout) and a size in <b>pixels</b> (the swapchain). On a HiDPI display they differ. The display also has a <b>scale setting</b> that makes the UI bigger.</li>
+    <li>Input is a <b>stream of events</b>: key down, key up, mouse move, button, wheel, text, focus. Every source, the renderer's own window or the application, sends the same events.</li>
+    <li>A key has a <b>meaning</b> (the letter it types) and a <b>position</b> (where it is). Shortcuts use the meaning, W/A/S/D movement uses the position.</li>
+    <li>The UI looks at each event first. What it <b>captures</b>, a click on a button, typing in a field, does not reach the camera.</li>
+  </ul>
+</div>
+
+<h2 id="owner"><span class="n">1</span>Who runs the event loop</h2>
+
+<p>The operating system puts every key press, mouse move and resize into a queue for the window. Somebody must take events out of that queue, again and again, or the window freezes. That repeating code is the <b>event loop</b>, and a program can have only one.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 150" role="img" aria-label="The renderer owns the loop: it reads the window's events itself, and the application sees none of them. An editor that has its own loop cannot use it.">
+      <rect x="10" y="20" width="140" height="110" rx="6" class="gpu o-25"/>
+      <text x="80" y="40" class="mid title">renderer</text>
+      <text x="80" y="62" class="mid small mono">while (running)</text>
+      <text x="80" y="80" class="mid small">read events</text>
+      <text x="80" y="98" class="mid small">draw</text>
+      <rect x="180" y="40" width="130" height="70" rx="6" class="cpu"/>
+      <text x="245" y="64" class="mid">application</text>
+      <text x="245" y="84" class="mid small">sees no events</text>
+      <text x="245" y="100" class="mid small t-bad">has its own loop?</text>
+      <line x1="150" y1="75" x2="178" y2="75" class="arrow bad dashed"/>
+    </svg>
+    <p><b>The renderer owns the loop.</b> Simple for a demo. But an editor (Qt, a game's own SDL or GLFW loop) already has a loop, and two loops can't both own one window.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 150" role="img" aria-label="The application owns the loop: it reads its window's events, passes them to the renderer, and calls the renderer's frame once per loop.">
+      <rect x="10" y="20" width="160" height="110" rx="6" class="cpu"/>
+      <text x="90" y="40" class="mid title">application</text>
+      <text x="90" y="62" class="mid small mono">while (open)</text>
+      <text x="90" y="80" class="mid small">read events, pass on</text>
+      <text x="90" y="98" class="mid small mono">renderer.frame()</text>
+      <rect x="200" y="40" width="110" height="70" rx="6" class="gpu"/>
+      <text x="255" y="64" class="mid">renderer</text>
+      <text x="255" y="84" class="mid small">applies events,</text>
+      <text x="255" y="100" class="mid small">draws one frame</text>
+      <line x1="170" y1="75" x2="198" y2="75" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    </svg>
+    <p><b>The application owns the loop.</b> It reads its window's events, gives the renderer what it needs, and asks for one frame each time around. The renderer never blocks and never quits by itself.</p>
+  </div>
+</div>
+
+<p>A good engine offers both: a ready-made window for small programs, and a mode where it only draws. The trick is that both modes feed the renderer the <b>same kind of events</b>, so the code after that point does not know who owns the window.</p>
+
+<h2 id="handles"><span class="n">2</span>From a window to a surface</h2>
+
+<p>A graphics API can't draw into "a window". It draws into images that the operating system's window system shows. The program gives the API the window system's own handle, and the API makes a <b>surface</b> from it: the API's view of that window. A swapchain is built on the surface (<a href="swapchain.html">The swapchain</a>).</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Four window systems and their handles: Windows gives an HWND and an HINSTANCE, macOS a CAMetalLayer, X11 a Display pointer and a window id, Wayland a wl_display and a wl_surface. Each handle goes into one graphics API function that makes a surface, and the swapchain is built on the surface.">
+    <text x="10" y="22" class="title t-cpu">window system: handle</text>
+    <rect x="10"  y="34" width="200" height="40" rx="6" class="cpu"/><text x="110" y="58" class="mid small">Windows: HWND (+ HINSTANCE)</text>
+    <rect x="10"  y="84" width="200" height="40" rx="6" class="cpu"/><text x="110" y="108" class="mid small">macOS: CAMetalLayer</text>
+    <rect x="10"  y="134" width="200" height="40" rx="6" class="cpu"/><text x="110" y="158" class="mid small">X11: Display* + window id</text>
+    <rect x="10"  y="184" width="200" height="40" rx="6" class="cpu"/><text x="110" y="208" class="mid small">Wayland: wl_display + wl_surface</text>
+    <text x="250" y="22" class="title">graphics API: one function each</text>
+    <rect x="250" y="34" width="250" height="40" rx="6" class="box"/><text x="375" y="58" class="mid small mono">vkCreateWin32SurfaceKHR</text>
+    <rect x="250" y="84" width="250" height="40" rx="6" class="box"/><text x="375" y="108" class="mid small mono">vkCreateMetalSurfaceEXT</text>
+    <rect x="250" y="134" width="250" height="40" rx="6" class="box"/><text x="375" y="158" class="mid small mono">vkCreateXlibSurfaceKHR</text>
+    <rect x="250" y="184" width="250" height="40" rx="6" class="box"/><text x="375" y="208" class="mid small mono">vkCreateWaylandSurfaceKHR</text>
+    <line x1="210" y1="54"  x2="248" y2="54"  class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="210" y1="104" x2="248" y2="104" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="210" y1="154" x2="248" y2="154" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="210" y1="204" x2="248" y2="204" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <path d="M500,54 H530 V120" class="arrow"/><path d="M500,104 H530" class="arrow"/><path d="M500,154 H530" class="arrow"/><path d="M500,204 H530 V130" class="arrow"/>
+    <line x1="530" y1="125" x2="568" y2="125" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="570" y="100" width="80" height="50" rx="6" class="gpu"/><text x="610" y="129" class="mid">surface</text>
+    <line x1="650" y1="125" x2="678" y2="125" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="680" y="100" width="72" height="50" rx="6" class="mem"/><text x="716" y="122" class="mid small">swap-</text><text x="716" y="138" class="mid small">chain</text>
+  </svg>
+  <figcaption>The handles are plain pointers or numbers. An engine can keep them in one struct with two pointers and a kind, with no window system's types in it, so its public API compiles everywhere. D3D12 takes the <samp>HWND</samp> itself, Metal the layer itself.</figcaption>
+</figure>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The application's window, then the renderer's engine object, then the engine is destroyed first and the window last.">
+      <rect x="20" y="30" width="200" height="30" rx="4" class="cpu"/><text x="120" y="50" class="mid small">window: lives longer</text>
+      <rect x="50" y="70" width="140" height="30" rx="4" class="gpu"/><text x="120" y="90" class="mid small">renderer: inside it</text>
+      <text x="120" y="120" class="mid small">destroy the renderer first</text>
+    </svg>
+    <h4>The window outlives the renderer</h4>
+    <p>The surface points into the window. Destroy the renderer, then the window, never the other way.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="One loader library: the instance and the surface are made through the same library.">
+      <rect x="70" y="20" width="100" height="30" rx="4" class="box"/><text x="120" y="40" class="mid small">one loader</text>
+      <line x1="100" y1="50" x2="70" y2="80" class="arrow" marker-end="url(#ah)"/>
+      <line x1="140" y1="50" x2="170" y2="80" class="arrow" marker-end="url(#ah)"/>
+      <rect x="20" y="82" width="90" height="30" rx="4" class="gpu"/><text x="65" y="102" class="mid small">instance</text>
+      <rect x="130" y="82" width="90" height="30" rx="4" class="gpu"/><text x="175" y="102" class="mid small">surface</text>
+    </svg>
+    <h4>One loader for both</h4>
+    <p>A window library may load Vulkan for itself. Make the surface from the handle with your own instance, and nothing loads a second copy (<a href="vulkan-loader.html">The Vulkan loader</a>).</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A hidden window: dashed outline. It still has a handle, a surface and a swapchain.">
+      <rect x="40" y="25" width="160" height="70" rx="4" class="ghost"/>
+      <text x="120" y="56" class="mid small">hidden window</text>
+      <text x="120" y="74" class="mid small">handle + surface</text>
+      <text x="120" y="118" class="mid small">tests the real path, shows nothing</text>
+    </svg>
+    <h4>A hidden window is still a window</h4>
+    <p>It has a handle and a surface. A test can render into it and copy the frame back, with nothing on screen, and so check the same path a user's window takes.</p>
+  </div>
+</div>
+
+<h2 id="sizes"><span class="n">3</span>Points, pixels and the scale setting</h2>
+
+<p>On a normal display, one point is one pixel. On a HiDPI display (a Retina screen) the window system keeps the old sizes in <b>points</b>, so windows and text keep their size, and draws each point with several <b>pixels</b>. Separately, the user can set a <b>scale</b> (150 % in Windows' settings), which asks programs to draw their UI larger.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="Left: a window of 400 by 250 points on a HiDPI display holds 800 by 500 pixels; mouse positions are in points, the swapchain in pixels. Right: at a 150 percent scale setting, a UI button is drawn 1.5 times larger.">
+    <rect x="20" y="40" width="200" height="125" class="paper"/>
+    <path d="M20,40 V165 M40,40 V165 M60,40 V165 M80,40 V165 M100,40 V165 M120,40 V165 M140,40 V165 M160,40 V165 M180,40 V165 M200,40 V165 M220,40 V165 M20,40 H220 M20,60 H220 M20,80 H220 M20,100 H220 M20,120 H220 M20,140 H220 M20,160 H220" class="grid"/>
+    <text x="120" y="28" class="mid small">400 × 250 points (mouse, UI layout)</text>
+    <rect x="270" y="40" width="200" height="125" class="paper"/>
+    <path d="M270,40 V165 M280,40 V165 M290,40 V165 M300,40 V165 M310,40 V165 M320,40 V165 M330,40 V165 M340,40 V165 M350,40 V165 M360,40 V165 M370,40 V165 M380,40 V165 M390,40 V165 M400,40 V165 M410,40 V165 M420,40 V165 M430,40 V165 M440,40 V165 M450,40 V165 M460,40 V165 M470,40 V165 M270,40 H470 M270,50 H470 M270,60 H470 M270,70 H470 M270,80 H470 M270,90 H470 M270,100 H470 M270,110 H470 M270,120 H470 M270,130 H470 M270,140 H470 M270,150 H470 M270,160 H470" class="grid"/>
+    <text x="370" y="28" class="mid small">800 × 500 pixels (swapchain)</text>
+    <text x="245" y="106" class="mid big">=</text>
+    <text x="245" y="190" class="mid small">pixels per point = 800 / 400 = 2</text>
+    <rect x="530" y="60" width="80" height="26" rx="4" class="box"/><text x="570" y="78" class="mid small">OK</text>
+    <text x="570" y="106" class="mid small">scale 1.0</text>
+    <rect x="630" y="54" width="120" height="39" rx="5" class="box"/><text x="690" y="79" class="mid big">OK</text>
+    <text x="690" y="112" class="mid small">scale 1.5</text>
+    <text x="640" y="150" class="mid small">the same button, drawn larger:</text>
+    <text x="640" y="166" class="mid small">sizes and fonts × scale</text>
+  </svg>
+  <figcaption>Three numbers per window: the size in points, the size in pixels, and the scale setting. Pixels per point sharpen the UI; the scale makes it bigger. Both can change while the program runs, when the window moves to another display.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Number</th><th>Used for</th><th>Changes when</th></tr>
+  <tr><td>size in points</td><td>mouse positions, the UI's layout</td><td>the user resizes the window</td></tr>
+  <tr><td>size in pixels</td><td>the swapchain, render targets, viewports</td><td>a resize, or a move to a display with another pixel density</td></tr>
+  <tr><td>scale setting</td><td>the UI's sizes and fonts</td><td>a move to another display, or the user changes the setting</td></tr>
+</table>
+</div>
+
+<h2 id="events"><span class="n">4</span>Input as a stream of events</h2>
+
+<p>Each window system has its own event types. The platform layer turns them into a small set of its own, and everything after it reads only that set. One frame's events form a short list, in the order they happened:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="One frame's events in order: a mouse move, a button down, two moves, a key down for W, a text character, a wheel step. They are applied at the start of the next frame, to the UI first, then to the camera and the program's keys.">
+    <text x="10" y="22" class="title">events since the last frame, in order</text>
+    <rect x="10"  y="34" width="96" height="44" rx="5" class="cpu"/><text x="58"  y="52" class="mid small mono">MOVE</text><text x="58" y="68" class="mid small">410, 300</text>
+    <rect x="112" y="34" width="96" height="44" rx="5" class="cpu"/><text x="160" y="52" class="mid small mono">BUTTON</text><text x="160" y="68" class="mid small">left down</text>
+    <rect x="214" y="34" width="96" height="44" rx="5" class="cpu"/><text x="262" y="52" class="mid small mono">MOVE</text><text x="262" y="68" class="mid small">430, 296</text>
+    <rect x="316" y="34" width="96" height="44" rx="5" class="cpu"/><text x="364" y="52" class="mid small mono">MOVE</text><text x="364" y="68" class="mid small">455, 290</text>
+    <rect x="418" y="34" width="96" height="44" rx="5" class="cpu"/><text x="466" y="52" class="mid small mono">KEY</text><text x="466" y="68" class="mid small">W down</text>
+    <rect x="520" y="34" width="96" height="44" rx="5" class="cpu"/><text x="568" y="52" class="mid small mono">TEXT</text><text x="568" y="68" class="mid small">"w"</text>
+    <rect x="622" y="34" width="96" height="44" rx="5" class="cpu"/><text x="670" y="52" class="mid small mono">WHEEL</text><text x="670" y="68" class="mid small">y = +1</text>
+    <line x1="380" y1="84" x2="380" y2="110" class="arrow" marker-end="url(#ah)"/>
+    <rect x="150" y="112" width="200" height="56" rx="6" class="shader"/><text x="250" y="134" class="mid">UI first</text><text x="250" y="152" class="mid small">takes what it captures</text>
+    <line x1="350" y1="140" x2="408" y2="140" class="arrow" marker-end="url(#ah)"/>
+    <rect x="410" y="112" width="200" height="56" rx="6" class="gpu"/><text x="510" y="134" class="mid">camera, shortcuts</text><text x="510" y="152" class="mid small">get the rest</text>
+    <text x="380" y="192" class="mid small">A held key is state: W stays down until its KEY up event, over many frames.</text>
+  </svg>
+  <figcaption>A key press brings two events: <samp>KEY</samp> (which key went down) and <samp>TEXT</samp> (which character it typed, after the layout, Shift and dead keys). Shortcuts and movement read keys; text fields read text.</figcaption>
+</figure>
+
+<p>Some state is kept between frames: which keys are held, where the pointer is, whether a drag runs. Events change that state; a frame reads it. The other way, polling the keyboard's state each frame, misses a press and release that both happen inside one frame, and can't tell which window had the focus.</p>
+
+<h3>A key's meaning and its position</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 120" role="img" aria-label="A US keyboard row Q W E R and a French AZERTY row A Z E R. The key in the second place is W on one and Z on the other.">
+    <text x="150" y="36" class="end small">US layout</text>
+    <rect x="170" y="14" width="40" height="32" rx="4" class="box"/><text x="190" y="35" class="mid">Q</text>
+    <rect x="216" y="14" width="40" height="32" rx="4" class="hot"/><text x="236" y="35" class="mid">W</text>
+    <rect x="262" y="14" width="40" height="32" rx="4" class="box"/><text x="282" y="35" class="mid">E</text>
+    <rect x="308" y="14" width="40" height="32" rx="4" class="box"/><text x="328" y="35" class="mid">R</text>
+    <text x="150" y="86" class="end small">AZERTY layout</text>
+    <rect x="170" y="64" width="40" height="32" rx="4" class="box"/><text x="190" y="85" class="mid">A</text>
+    <rect x="216" y="64" width="40" height="32" rx="4" class="hot"/><text x="236" y="85" class="mid">Z</text>
+    <rect x="262" y="64" width="40" height="32" rx="4" class="box"/><text x="282" y="85" class="mid">E</text>
+    <rect x="308" y="64" width="40" height="32" rx="4" class="box"/><text x="328" y="85" class="mid">R</text>
+    <text x="390" y="36" class="small">position: "W" (named after the US layout)</text>
+    <text x="390" y="86" class="small">meaning on this keyboard: "Z"</text>
+  </svg>
+  <figcaption>One key, two names. The same place on the keyboard types a different letter in each layout.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Use</th><th>Read</th><th>Why</th></tr>
+  <tr><td>Ctrl+Z, F1, menu keys</td><td>meaning</td><td>The user presses the letter printed on the key.</td></tr>
+  <tr><td>W/A/S/D movement</td><td>position</td><td>The four keys must stay in a cross, on any layout.</td></tr>
+  <tr><td>Typing</td><td>text events</td><td>Only the window system knows the character, after Shift and dead keys.</td></tr>
+</table>
+</div>
+
+<h2 id="capture"><span class="n">5</span>Who gets the input: the UI's capture</h2>
+
+<p>A click on a UI button must press the button, not turn the camera. An immediate-mode UI (<a href="immediate-mode-ui.html">Immediate-mode UI</a>) decides this itself at the end of each frame and sets flags: "I want the mouse", "I want the keyboard", "I want text". The rest of the program reads those flags and skips what the UI took. The flags come from the last frame, so the decision is one frame old; nobody notices.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Case</th><th>Who gets it</th></tr>
+  <tr><td>A press over a UI window</td><td>The UI, until the release, even when the pointer leaves the window (a slider drag).</td></tr>
+  <tr><td>A press outside every UI window</td><td>The camera starts a drag and keeps it until the release, even over a UI window.</td></tr>
+  <tr><td>The wheel over a UI window</td><td>The UI scrolls; the camera does not zoom.</td></tr>
+  <tr><td>A text field has the focus</td><td>Keys type into it. Shortcuts like F1 or Escape wait until it lets go.</td></tr>
+  <tr><td>The window loses the focus</td><td>Nobody: the window will never see the release of a held key, so every key counts as up.</td></tr>
+</table>
+</div>
+
+<figure class="lab" data-lab="route-input" data-title="Route the mouse: the UI or the camera">
+  <figcaption>Move the pointer, then press the button over the panel and outside it, and drag. The drag is shown in the units the camera uses: divided by the smaller side of the window, y up.</figcaption>
+</figure>
+
+<h2 id="pitfalls"><span class="n">6</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>The camera turns while you drag a UI slider</dt><dd>The camera does not read the UI's capture flags. Skip a press that the UI wants, and keep a drag with whoever started it.</dd></div>
+  <div><dt>The camera keeps moving after Alt+Tab</dt><dd>W went down, then the window lost the focus, and the release went to another window. Treat a lost focus as "every key up".</dd></div>
+  <div><dt>W/A/S/D are in the wrong place for French users</dt><dd>Movement reads the key's meaning. Read its position instead.</dd></div>
+  <div><dt>Ctrl+Z undoes on the wrong key</dt><dd>The opposite mistake: shortcuts read the position. Read the meaning.</dd></div>
+  <div><dt>Typing in a text field gives no characters</dt><dd>Some window libraries send text events only after the program asks for them (SDL3's <samp>SDL_StartTextInput</samp>). Ask when a text field takes the focus, and stop after.</dd></div>
+  <div><dt>The UI is blurry on a Retina display</dt><dd>It was drawn at one pixel per point. Lay out in points, and draw with the pixels per point.</dd></div>
+  <div><dt>The UI is tiny on a 4K laptop</dt><dd>The scale setting is ignored. Scale the UI's sizes and fonts by it, and again when the window moves to another display.</dd></div>
+  <div><dt>A crash when the program closes</dt><dd>The window was destroyed before the renderer, whose surface still pointed into it. Destroy the renderer first.</dd></div>
+  <div><dt>The embedded renderer quits on Escape</dt><dd>A renderer that owns no window must never end the application's loop. Leave quitting to the owner.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">7</span>In RASM</h2>
+
+<p><code>EngineConfig::platform</code> picks the platform. <code>SDL</code> opens a window and reads its events. <code>NATIVE</code> draws into the application's window (<code>EngineConfig::nativeWindow</code>), and the application runs the loop and sends the input with <code>Engine::addInputEvent</code>, <code>setWindowSize</code> and <code>setWindowContentScale</code>. <code>HEADLESS</code> has no window (<a href="headless-readback.html">Headless rendering</a>). After the platform, all three look the same: one list of <code>InputEvent</code>s, and one <code>NativeWindow</code> for the device.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 330" role="img" aria-label="Three sources of InputEvents: the SdlPlatform turns SDL events into them, the application calls addInputEvent, a headless script does the same. They go into Engine::inputEvents. In beginFrame, pollEvents applies each event to Dear ImGui through processUiEvent, while the UI builds frames, and to InputState through applyInputEvent, with the last UI frame's capture. endInputFrame gives the CameraInput for updateCamera, and the F-key counts. Below: SdlPlatform reads SDL's window properties into a NativeWindow, or the application gives EngineConfig::nativeWindow; DeviceDesc::window carries it to createVulkanSurface.">
+    <text x="10" y="20" class="title t-cpu">sources</text>
+    <rect x="10" y="30" width="150" height="40" rx="6" class="cpu"/><text x="85" y="49" class="mid small mono">SdlPlatform</text><text x="85" y="63" class="mid small">SDL events → InputEvents</text>
+    <rect x="10" y="78" width="150" height="40" rx="6" class="cpu"/><text x="85" y="97" class="mid small">the application</text><text x="85" y="111" class="mid small mono">addInputEvent</text>
+    <rect x="10" y="126" width="150" height="40" rx="6" class="cpu o-50"/><text x="85" y="145" class="mid small">a headless script</text><text x="85" y="159" class="mid small mono">addInputEvent</text>
+    <path d="M160,50 H190 V96 M160,98 H190 M160,146 H190 V100" class="arrow cpu"/>
+    <line x1="190" y1="98" x2="218" y2="98" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="220" y="74" width="140" height="48" rx="6" class="mem"/><text x="290" y="94" class="mid small mono">inputEvents</text><text x="290" y="110" class="mid small">keeps its capacity</text>
+    <line x1="360" y1="98" x2="388" y2="98" class="arrow" marker-end="url(#ah)"/>
+    <rect x="390" y="60" width="150" height="76" rx="6" class="box"/><text x="465" y="82" class="mid mono">pollEvents</text><text x="465" y="100" class="mid small">in beginFrame, in order,</text><text x="465" y="116" class="mid small">capture of the last UI frame</text>
+    <line x1="540" y1="78" x2="588" y2="50" class="arrow shader" marker-end="url(#ah)"/>
+    <line x1="540" y1="118" x2="588" y2="146" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="590" y="26" width="160" height="48" rx="6" class="shader"/><text x="670" y="46" class="mid small mono">processUiEvent</text><text x="670" y="62" class="mid small">ImGuiIO, while it builds</text>
+    <rect x="590" y="122" width="160" height="48" rx="6" class="gpu"/><text x="670" y="142" class="mid small mono">applyInputEvent</text><text x="670" y="158" class="mid small">InputState: keys, drag</text>
+    <line x1="670" y1="170" x2="670" y2="194" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="590" y="196" width="160" height="40" rx="6" class="gpu"/><text x="670" y="214" class="mid small mono">endInputFrame</text><text x="670" y="229" class="mid small">CameraInput, F1–F3</text>
+
+    <line x1="10" y1="252" x2="560" y2="252" class="grid"/>
+    <rect x="10" y="266" width="150" height="48" rx="6" class="cpu"/><text x="85" y="286" class="mid small">SDL's window properties</text><text x="85" y="302" class="mid small">or nativeWindow</text>
+    <line x1="160" y1="290" x2="198" y2="290" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="200" y="266" width="140" height="48" rx="6" class="box"/><text x="270" y="286" class="mid small mono">NativeWindow</text><text x="270" y="302" class="mid small mono">DeviceDesc::window</text>
+    <line x1="340" y1="290" x2="378" y2="290" class="arrow" marker-end="url(#ah)"/>
+    <rect x="380" y="266" width="170" height="48" rx="6" class="gpu"/><text x="465" y="286" class="mid small mono">createVulkanSurface</text><text x="465" y="302" class="mid small">surface, then swapchain</text>
+  </svg>
+  <figcaption>No ImGui platform backend runs: ImGui is fed by the same events as the camera. What only a window's owner can do, the cursor shape, the clipboard and starting text input, goes back to the <code>Platform</code>; the SDL platform does it, and a <code>NATIVE</code> application reads ImGui's requests itself.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>This page</th><th>RASM</th></tr>
+  <tr><td>The application owns the loop</td><td><code>PlatformType::NATIVE</code>. <code>running()</code> stays true, Escape does not quit, and <code>NativePlatform::pollEvents</code> reads nothing. The SDL platform keeps the old behaviour for small programs: its own loop, Escape quits.</td></tr>
+  <tr><td>Native handles in one struct</td><td><code>NativeWindow</code>: <code>NativeWindowType</code>, two <code>void*</code>, the first pixel size and the content scale. The SDL platform fills the same struct from SDL's window properties (<samp>SDL_Metal_CreateView</samp> for a <samp>CAMetalLayer</samp> on macOS), so every window takes the embedder's path.</td></tr>
+  <tr><td>The surface from the handle</td><td><code>createVulkanSurface</code> in <code>src/rhi/vulkan/vulkanSurface.cpp</code>, the only file with a window system's types, through volk's <code>vkGetInstanceProcAddr</code>. The instance enables every surface extension the loader has.</td></tr>
+  <tr><td>Three numbers per window</td><td><code>Window::width</code>/<code>height</code> (points), <code>pixelWidth</code>/<code>pixelHeight</code>, <code>contentScale</code>. SDL reports all three, also on a move to another display; a <code>NATIVE</code> application calls <code>setWindowSize</code> and <code>setWindowContentScale</code>. A pixel size of 0 skips frames.</td></tr>
+  <tr><td>One event set</td><td><code>InputEvent</code> in <code>rasm/input.h</code>: a type and plain fields, ready for a C API. Mouse positions in points.</td></tr>
+  <tr><td>Events applied at the start of a frame</td><td><code>Engine::inputEvents</code>, a vector that keeps its capacity (no allocation in a steady frame, <code>P27</code>). <code>pollEvents</code> appends the platform's events after the application's and applies them in order.</td></tr>
+  <tr><td>Meaning and position</td><td><code>InputEvent::key</code> and <code>physicalKey</code>, one <code>Key</code> enum for both. ImGui and F1–F3 read <code>key</code>; W/A/S/D read <code>physicalKey</code>, which <code>Key::NONE</code> makes the same as <code>key</code>.</td></tr>
+  <tr><td>The UI's capture</td><td><code>getUiInputCapture</code> after the last UI frame: <code>WantCaptureMouse</code> keeps presses and the wheel from the camera, <code>WantCaptureKeyboard</code> W/A/S/D, <code>WantTextInput</code> Escape and F1–F3.</td></tr>
+  <tr><td>Focus lost: every key up</td><td><code>applyInputEvent</code> clears <code>InputState::keysDown</code> on a lost <code>FOCUS</code>; ImGui gets <code>AddFocusEvent</code>.</td></tr>
+  <tr><td>Ask for text input</td><td><code>updateUiPlatform</code> calls <code>Platform::setTextInput</code> when <code>WantTextInput</code> changes; SDL starts and stops its text events. Cursor shapes and the clipboard go the same way. The SDL platform also captures the mouse while a button is held.</td></tr>
+  <tr><td>Scale the UI</td><td><code>setUiScale</code> rebuilds the style from ImGui's default when <code>Window::contentScale</code> changes; ImGui's framebuffer scale is pixels per point.</td></tr>
+  <tr><td>A hidden window as a test</td><td><code>19_embedding --headless</code> opens a hidden SDL window, makes a <code>NATIVE</code> engine on it, plays a scripted drag, click and typing, and writes frame N. <code>verify-change</code> runs it like every example.</td></tr>
+</table>
+</div>
+
+<h3>Code map</h3>
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Public types</td><td><code>InputEvent</code>, <code>Key</code>, <code>MouseButton</code> in <code>include/rasm/input.h</code>; <code>PlatformType</code>, <code>NativeWindow</code> in <code>include/rasm/types.h</code>; <code>Window</code> in <code>include/rasm/window.h</code></td></tr>
+  <tr><td>The platforms</td><td><code>Platform</code> in <code>src/platform/platform.h</code>; <code>src/platform/sdlPlatform.cpp</code>, <code>src/platform/nativePlatform.cpp</code>, <code>src/platform/headlessPlatform.cpp</code></td></tr>
+  <tr><td>Input state, camera input</td><td><code>InputState</code>, <code>applyInputEvent</code>, <code>endInputFrame</code>, <code>toInputNdc</code> in <code>src/platform/input.cpp</code></td></tr>
+  <tr><td>The engine's side</td><td><code>Engine::pollEvents</code>, <code>addInputEvent</code>, <code>setWindowSize</code>, <code>setWindowContentScale</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Dear ImGui's input</td><td><code>processUiEvent</code>, <code>updateUiPlatform</code>, <code>setUiScale</code> in <code>src/platform/uiPlatform.cpp</code>; called from <code>src/renderer/ui.cpp</code></td></tr>
+  <tr><td>The surface</td><td><code>createVulkanSurface</code> in <code>src/rhi/vulkan/vulkanSurface.cpp</code>, called by <code>VulkanDevice::initialize</code></td></tr>
+  <tr><td>Example</td><td><code>examples/19_embedding/main.cpp</code>: an SDL3 window of the application's own, with <code>--headless</code> and <code>--no-window</code></td></tr>
+  <tr><td>Tests</td><td><code>tests/inputTests.cpp</code>: NDC, drags across frames, the UI's capture, keys by position, focus loss, the F keys</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Rules to keep</strong>
+  <ul>
+    <li>Every input reaches the engine as an <code>InputEvent</code>. A new platform turns its events into them; it never calls the camera or ImGui itself.</li>
+    <li>No window system's type in a public header or outside <code>src/platform/</code> and <code>vulkanSurface.cpp</code>.</li>
+    <li>An engine on a window it does not own never quits by itself.</li>
+  </ul>
+</div>
+
+<p>Still open in <code>D7</code>: camera controllers that the application drives as helpers (today the engine runs the controller of the camera given to <code>beginFrame</code>), and more than one window.</p>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Vulkan specification, "Window System Integration (WSI)": the platform surface extensions.</li>
+  <li>SDL3 wiki: <samp>SDL_GetWindowProperties</samp>, <samp>SDL_StartTextInput</samp>, "README-highdpi".</li>
+  <li>Dear ImGui, <samp>docs/BACKENDS.md</samp> and the <samp>ImGuiIO</samp> input functions.</li>
+  <li><a href="swapchain.html">The swapchain and presenting</a>, <a href="camera-controllers.html">Camera controllers</a>, <a href="immediate-mode-ui.html">Immediate-mode UI</a>.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>
