@@ -99,7 +99,7 @@ namespace rasm
         const HandleSlot slot = registry.cameraHandles.allocate();
         if (slot.index == 0)
         {
-            spdlog::warn("Exceeded maximum number of cameras ({} alive, MAX_CAMERAS).", registry.cameraHandles.liveCount());
+            spdlog::error("createCamera: {} cameras are alive, the most there can be (MAX_CAMERAS - 1); destroy one first.", registry.cameraHandles.liveCount());
             return {};
         }
         const CameraHandle handle{slot.index, slot.generation};

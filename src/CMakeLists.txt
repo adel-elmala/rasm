@@ -82,6 +82,7 @@ target_sources(rasm PRIVATE
     "renderer/debugViews.cpp"
     "renderer/taa.cpp"
     "renderer/toneMap.cpp"
+    "renderer/view.cpp"
     "rhi/device.cpp"
     "rhi/memoryAliasing.cpp"
     "rhi/offscreenSwapchain.cpp"

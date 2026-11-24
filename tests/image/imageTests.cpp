@@ -61,6 +61,12 @@ namespace
         glm::vec3 eye = glm::vec3(0.0f, 0.0f, 5.0f);
         glm::vec3 center = glm::vec3(0.0f);
         float fovY = 40.0f;
+        // A test of Engine::render(views, count): a side camera, a top-down map and a security camera, whose view
+        // texture a screen in the scene shows.
+        rasm::CameraHandle side;
+        rasm::CameraHandle map;
+        rasm::CameraHandle security;
+        rasm::RenderTargetHandle viewTexture;
     };
 
     // What every scene may use, loaded once.
@@ -86,6 +92,7 @@ namespace
         rasm::MeshletPath meshlets = rasm::MeshletPath::OFF;
         uint32_t threshold = 3;       // a channel differs when it is off by more than this (0-255)
         double fraction = 0.001;      // the test fails when more of the pixels than this differ
+        bool views = false;           // drawn by Engine::render with the content's views instead of a graph
         const char *sameAs = nullptr; // compare with this test's image of the same run instead of a golden
     };
 
@@ -346,6 +353,54 @@ namespace
         return transforms.isValid() && colors.isValid() && lantern.isValid() && addSunsetLight(engine, assets, content, 1.0f, glm::vec3(0.45f, -0.75f, -0.5f), 3.0f);
     }
 
+    // Split screen, a map over it and a view texture on a screen in the scene (Engine::render): the helmet from the
+    // test's camera on the left and from the side on the right, the map in the top-right corner, and a security camera
+    // drawn into a view texture first, which the screen behind the helmet glows with.
+    bool buildViews(rasm::Engine &engine, const Assets &assets, Content &content)
+    {
+        const rasm::MeshHandle helmet = engine.loadGLTF("models/gltf/DamagedHelmet/DamagedHelmet.gltf");
+        addGround(engine, assets, content, 8.0f, glm::vec3(0.5f));
+        addModel(engine, content, "helmet", helmet, makeTransform(glm::vec3(0.0f, 1.0f, 0.0f), 1.0f));
+        for (uint32_t i = 0; i < 4; ++i)
+        {
+            const float angle = glm::radians(45.0f + 90.0f * static_cast<float>(i));
+            engine.addEntityToScene(content.scene, engine.createEntity("box", assets.cube, createColorMaterial(engine, getHue(i, 4), 0.5f),
+                                                                       makeTransform(glm::vec3(4.0f * std::cos(angle), 0.6f, 4.0f * std::sin(angle)), 1.2f)));
+        }
+        content.viewTexture = engine.createRenderTarget({.name = "screen", .width = 192, .height = 108, .colorFormats = {rasm::Format::R8G8B8A8_SRGB}});
+        if (!content.viewTexture.isValid())
+            return false;
+        const rasm::MaterialHandle screen = createColorMaterial(engine, glm::vec3(0.02f), 0.3f);
+        rasm::Material values = engine.getMaterial(screen);
+        values.textures[static_cast<uint32_t>(rasm::PbrSlot::EMISSIVE)] = engine.getRenderTargetTexture(content.viewTexture);
+        for (uint32_t i = 0; i < 3; ++i)
+            values.params[static_cast<uint32_t>(rasm::PbrParam::EMISSIVE_FACTOR) + i] = 1.0f;
+        values.params[static_cast<uint32_t>(rasm::PbrParam::EMISSIVE_STRENGTH)] = 1.0f;
+        engine.updateMaterial(screen, values);
+        engine.addEntityToScene(content.scene, engine.createEntity("screen", assets.cube, screen,
+                                                                   rasm::Transform{glm::vec3(0.0f, 1.8f, -2.5f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(3.2f, 1.8f, 0.05f)}));
+        content.eye = glm::vec3(0.0f, 2.0f, 6.0f);
+        content.center = glm::vec3(0.0f, 1.2f, 0.0f);
+
+        const rasm::CameraProjection perspective = {.type = rasm::CameraProjection::Type::PERSPECTIVE, .perspective{.fovY = 45.0f, .aspect = 16.0f / 9.0f, .nearZ = 0.1f}};
+        const glm::vec3 target(0.0f, 1.0f, 0.0f);
+        const glm::vec3 sideEye(6.0f, 2.5f, 1.5f);
+        const glm::vec3 securityEye(4.5f, 3.0f, 4.5f);
+        const glm::vec3 up(0.0f, 1.0f, 0.0f);
+        content.side = engine.createCamera(perspective, rasm::Transform{sideEye, glm::quatLookAt(glm::normalize(target - sideEye), up), glm::vec3(1.0f)});
+        content.security = engine.createCamera(perspective, rasm::Transform{securityEye, glm::quatLookAt(glm::normalize(target - securityEye), up), glm::vec3(1.0f)});
+        content.map = engine.createCamera(rasm::CameraProjection{.type = rasm::CameraProjection::Type::ORTHOGRAPHIC,
+                                                                 .orthographic{.left = -8.0f, .right = 8.0f, .bottom = -8.0f, .top = 8.0f, .nearZ = 0.1f, .farZ = 40.0f}},
+                                          rasm::Transform{glm::vec3(0.0f, 20.0f, 0.0f), glm::angleAxis(glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f)), glm::vec3(1.0f)});
+        for (const rasm::CameraHandle camera : {content.side, content.security, content.map})
+        {
+            engine.setCameraController(camera, rasm::CameraController{.type = rasm::CameraController::Type::NONE});
+            engine.addCameraToScene(content.scene, camera);
+        }
+        return helmet.isValid() && content.side.isValid() && content.security.isValid() && content.map.isValid() &&
+               addSunsetLight(engine, assets, content, 1.0f, glm::vec3(0.6f, -1.0f, -0.35f), 3.0f);
+    }
+
     // clang-format off
     const ImageTest TESTS[] = {
         {.name = "helmet_ibl",    .build = buildHelmet},
@@ -364,6 +419,7 @@ namespace
         {.name = "morph",         .build = buildMorph},
         {.name = "node_anim",     .build = buildNodeAnimation, .time = 0.3},
         {.name = "materials",     .build = buildMaterials},
+        {.name = "views",         .build = buildViews,         .views = true},
         // The same images drawn by meshlets: the same triangles, so the same pixels. The mesh_ tests take the mesh shaders
         // where the device has them (lavapipe and the desktop GPUs do), else vertex pulling. lavapipe's mesh shaders round a
         // few positions differently from its vertex shaders: up to 3 levels on 0.2% of the pixels after TAA, and a few edge
@@ -531,8 +587,23 @@ namespace
         engine.setDebugView(test.view);
         engine.setMeshletPath(test.meshlets);
 
+        // A views test draws through Engine::render: the view texture first, then the split screen and the map.
+        const rasm::View views[] = {
+            {.scene = content->scene, .camera = content->security, .output = {.target = content->viewTexture}},
+            {.scene = content->scene, .camera = camera, .output = {.rect = {.x = 0.0f, .y = 0.0f, .width = 0.5f, .height = 1.0f}}},
+            {.scene = content->scene, .camera = content->side, .output = {.rect = {.x = 0.5f, .y = 0.0f, .width = 0.5f, .height = 1.0f}}},
+            {.scene = content->scene, .camera = content->map, .output = {.rect = {.x = 0.75f, .y = 0.0f, .width = 0.25f, .height = 0.44f}}, .bloom = rasm::ViewToggle::OFF},
+        };
         rasm::RenderGraph graph = engine.createRenderGraph();
-        if (!buildGraph(engine, test, *content, camera, graph))
+        auto frame = [&]()
+        {
+            engine.setAnimationTime(test.time);
+            if (test.views)
+                engine.render(views, 4);
+            else
+                graph.execute(camera);
+        };
+        if (!test.views && !buildGraph(engine, test, *content, camera, graph))
         {
             engine.setDebugView(rasm::DebugView::NONE);
             engine.setMeshletPath(rasm::MeshletPath::OFF);
@@ -540,26 +611,19 @@ namespace
         }
         // Every load is in place before the first frame, so frame N looks the same on every run.
         engine.waitForLoads();
-        for (uint32_t frame = 0; frame < test.frames; ++frame)
-        {
-            engine.setAnimationTime(test.time);
-            graph.execute(camera);
-        }
+        for (uint32_t i = 0; i < test.frames; ++i)
+            frame();
         const rasm::ReadbackHandle copy = engine.readFrame(rasm::ReadbackFormat::RGBA8_SRGB);
         // The frame that copies keeps the same clock; the readback is ready once the GPU has finished it.
         for (uint32_t extra = 0; extra < 8 && copy.isValid() && !engine.isReadbackReady(copy); ++extra)
-        {
-            engine.setAnimationTime(test.time);
-            graph.execute(camera);
-        }
+            frame();
         const bool taken = copy.isValid() && engine.takeReadback(copy, image);
         // A steady frame makes no heap allocation on the main thread.
-        for (uint32_t frame = 0; taken && frame < SETTLE_FRAMES + STEADY_FRAMES; ++frame)
+        for (uint32_t i = 0; taken && i < SETTLE_FRAMES + STEADY_FRAMES; ++i)
         {
-            if (frame == SETTLE_FRAMES)
+            if (i == SETTLE_FRAMES)
                 startCountingAllocations();
-            engine.setAnimationTime(test.time);
-            graph.execute(camera);
+            frame();
         }
         steady = taken ? stopCountingAllocations() : AllocationCount{};
         engine.setDebugView(rasm::DebugView::NONE);

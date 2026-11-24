@@ -15,20 +15,6 @@ namespace rasm
 {
     namespace
     {
-        // What one TAA pass remembers between frames, to know when its history no longer fits this frame.
-        struct TaaState
-        {
-            glm::uvec2 size = glm::uvec2(0);
-            TextureHandle texture = {}; // the history's first copy: a resize or a new swapchain makes new, unwritten ones
-            uint32_t historyResets = 0;
-            glm::vec3 position = glm::vec3(0.0f);
-            glm::quat rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
-            bool valid = false;
-        };
-    }
-
-    namespace
-    {
         // numthreads of taaMain in shaders/passes/taa.slang.
         constexpr uint32_t TAA_GROUP_SIZE = 8;
         // The flags in the high half of TaaPushConstants::targetAndReset. Without a sky, nothing writes the motion of the
@@ -81,12 +67,31 @@ namespace rasm
         return angle > TAA_JUMP_ANGLE || glm::length(position - previousPosition) > jumpDistance;
     }
 
+    // The history target's desc for a source: the source's size, one SCENE_COLOR_FORMAT storage color with history.
+    RenderTargetDesc getTaaHistoryDesc(const RenderTargetDesc &source)
+    {
+        return {.name = source.name + "_taa",
+                .width = source.width,
+                .height = source.height,
+                .swapchainScale = source.swapchainScale,
+                .colorFormats = {SCENE_COLOR_FORMAT},
+                .history = true,
+                .storage = true};
+    }
+
     // One compute pass that blends the source's color into a history target, a storage target with a copy per frame
     // slot, which it returns for the bloom and the tone map. The scene view that draws the source is jittered from
     // now on. The pass drops its history when it was just made, when its textures were made again (a resize, a new
     // swapchain), after resetCameraHistory, and when the camera jumps (isCameraJump); it reads the camera when it
     // runs, so the result depends only on the frames.
     RenderTargetHandle Engine::addTaaPass(RenderGraph &graph, const RenderTargetHandle &source, CameraHandle camera)
+    {
+        return addTaaPass(graph, source, camera, {}, std::make_shared<TaaState>());
+    }
+
+    // history and state from a caller that keeps them across graphs, as Engine::render does for each view; an invalid
+    // history is made in the graph and lives with it.
+    RenderTargetHandle Engine::addTaaPass(RenderGraph &graph, const RenderTargetHandle &source, CameraHandle camera, RenderTargetHandle history, std::shared_ptr<TaaState> state)
     {
         if (!isLive(camera))
         {
@@ -124,14 +129,8 @@ namespace rasm
             return {};
         }
 
-        const RenderTargetDesc sourceDesc = ctx.getRenderTargetDesc(source);
-        const RenderTargetHandle history = graph.createRenderTarget({.name = sourceDesc.name + "_taa",
-                                                                     .width = sourceDesc.width,
-                                                                     .height = sourceDesc.height,
-                                                                     .swapchainScale = sourceDesc.swapchainScale,
-                                                                     .colorFormats = {SCENE_COLOR_FORMAT},
-                                                                     .history = true,
-                                                                     .storage = true});
+        if (!history.isValid())
+            history = graph.createRenderTarget(getTaaHistoryDesc(ctx.getRenderTargetDesc(source)));
         if (!history.isValid())
         {
             spdlog::error("addTaaPass could not create its history target.");
@@ -139,8 +138,8 @@ namespace rasm
         }
 
         sourceView->jitter = true;
-        const auto state = std::make_shared<TaaState>();
         graph.addComputePass(
+
             "TAA",
             [source, history](PassBuilder &builder)
             {
@@ -163,10 +162,9 @@ namespace rasm
                 const Camera &cameraData = registry.cameras[camera.index];
                 const RenderTarget &target = ctx.getRenderTarget(history);
                 const glm::uvec2 size(target.width, target.height);
-                const TextureHandle texture = target.attachments[0].color[0];
-                const bool reset = !state->valid || size != state->size || texture != state->texture || cameraData.historyResets != state->historyResets ||
+                const bool reset = !state->valid || size != state->size || target.version != state->version || cameraData.historyResets != state->historyResets ||
                                    isCameraJump(state->position, state->rotation, cameraData.rig.transform.position, cameraData.rig.transform.rotation, getJumpDistance(cameraData));
-                *state = {.size = size, .texture = texture, .historyResets = cameraData.historyResets, .position = cameraData.rig.transform.position, .rotation = cameraData.rig.transform.rotation, .valid = true};
+                *state = {.size = size, .version = target.version, .historyResets = cameraData.historyResets, .position = cameraData.rig.transform.position, .rotation = cameraData.rig.transform.rotation, .valid = true};
 
                 const gfx::TaaPushConstants pushConstants{
                     .colorAndMotion = packIndices(getBindlessTextureIndex(getRenderTargetTexture(source, 0)), getBindlessTextureIndex(getRenderTargetTexture(source, 1))),

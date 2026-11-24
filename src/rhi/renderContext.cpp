@@ -154,8 +154,9 @@ namespace rasm
                        checkArgument(std::all_of(desc.colorFormats, desc.colorFormats + colorCount, [](Format format)
                                                  { return format == Format::R16G16B16A16_SFLOAT; }),
                                      caller, "a storage render target's colors are R16G16B16A16_SFLOAT, the format of binding 1 in the shaders.");
+            // A target without depth has colors: a view texture that a tone-map pass draws into.
             return checkArgument(contiguous, caller, "a render target's color formats can't have a gap.") &&
-                   checkArgument(desc.depthFormat != Format::UNKNOWN, caller, "a render target needs a depth format.") &&
+                   checkArgument(desc.depthFormat != Format::UNKNOWN || colorCount > 0, caller, "a render target needs a color or a depth format.") &&
                    checkArgument(colorCount > 0 || !desc.history, caller, "history keeps a render target's colors, so a depth-only target can't have it.") &&
                    checkArgument(!desc.cube || (colorCount == 0 && desc.swapchainScale <= 0.0f && desc.width == desc.height), caller, "a cube render target is depth-only, with a fixed square size.");
         }
@@ -432,6 +433,20 @@ namespace rasm
             textures.slots[texture.index] = UINT32_MAX;
             slotTextures[slot] = {};
             return slot;
+        }
+
+        // The handle and its slot stay; the old texture goes once the GPU is done with every frame that may use it. A
+        // render target's textures keep their handles when they are made again (a resize), so what holds them still works.
+        void replaceTexture(const TextureHandle& texture, rhi::Texture* replacement)
+        {
+            rhi::Texture* rhiTexture = textures.objects[texture.index];
+            textures.objects[texture.index] = replacement;
+            releases.release([this, rhiTexture]()
+                             {
+                                 textureStates.forget(rhiTexture);
+                                 uploads.cancelUploads(rhiTexture);
+                                 loadUploads().cancelUploads(rhiTexture);
+                                 device->destroyTexture(rhiTexture); });
         }
 
         // The handle dies now; the texture and its slot once the GPU is done with every frame that may use them.
@@ -1036,6 +1051,35 @@ namespace rasm
         }
     }
 
+    // A transient target's textures share heaps with its group, so the whole group is placed again.
+    bool RenderContext::resizeRenderTarget(const RenderTargetHandle &renderTarget, uint32_t width, uint32_t height)
+    {
+        if (!checkArgument(impl->isRenderTarget(renderTarget), __func__, "the render target is invalid or was destroyed.") ||
+            !checkArgument(width > 0 && height > 0, __func__, "a render target is at least 1 x 1."))
+            return false;
+        RenderTargetInfo &info = impl->renderTargetInfos[renderTarget.index];
+        if (!checkArgument(info.desc.swapchainScale <= 0.0f, __func__, "a target with swapchainScale follows the swapchain's size.") ||
+            !checkArgument(!info.desc.cube, __func__, "a cube render target has a fixed size."))
+            return false;
+        RenderTarget &target = impl->renderTargets[renderTarget.index];
+        if (info.desc.width == width && info.desc.height == height && target.width == width && target.height == height)
+            return true;
+        info.desc.width = width;
+        info.desc.height = height;
+        if (!info.transient)
+            return createAttachments(target, info.desc, nullptr, nullptr);
+        for (uint32_t g = 0; g < impl->transientGroups.size(); ++g)
+        {
+            const auto &targets = impl->transientGroups[g].targets;
+            if (std::find(targets.begin(), targets.end(), renderTarget) != targets.end())
+                return placeGroup(g);
+        }
+        // Not placed yet: its graph places it at the new size.
+        target.width = width;
+        target.height = height;
+        return true;
+    }
+
     // One request per texture of each target, its colors then its depth. The old textures are destroyed by
     // createAttachments, then the old heaps.
     bool RenderContext::placeGroup(uint32_t groupIndex)
@@ -1161,21 +1205,76 @@ namespace rasm
                 }
             }
         };
-        destroyAttachments(renderTarget);
+        // A texture made again keeps its handle (Impl::replaceTexture), so materials and UI images that hold it stay
+        // valid. The old textures' clears go: the new ones are queued below.
+        RenderTargetAttachments old[MAX_FRAMES_IN_FLIGHT];
+        std::copy(std::begin(renderTarget.attachments), std::end(renderTarget.attachments), std::begin(old));
+        for (const RenderTargetAttachments &attachment : old)
+        {
+            for (uint32_t c = 0; c <= MAX_COLOR_ATTACHMENTS; ++c)
+            {
+                const TextureHandle texture = c < MAX_COLOR_ATTACHMENTS ? attachment.color[c] : attachment.depth;
+                auto clears = [texture](const HistoryClear &clear)
+                { return texture.isValid() && std::find(std::begin(clear.colors), std::end(clear.colors), texture) != std::end(clear.colors); };
+                std::erase_if(impl->pendingClears, clears);
+                std::erase_if(impl->recordedClears, clears);
+            }
+        }
+        std::fill(std::begin(renderTarget.attachments), std::end(renderTarget.attachments), RenderTargetAttachments{});
         renderTarget.width = textureDescs[0].width;
         renderTarget.height = textureDescs[0].height;
+        ++renderTarget.version;
 
-        auto makeTexture = [this, heaps, offsets](const TextureDesc &textureDesc, uint32_t attachment) -> TextureHandle
+        // The old handles that hold no new texture die, the textures after the GPU is done with them.
+        auto retireOld = [this, &old, &renderTarget]()
         {
+            for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+            {
+                for (uint32_t c = 0; c <= MAX_COLOR_ATTACHMENTS; ++c)
+                {
+                    const TextureHandle texture = c < MAX_COLOR_ATTACHMENTS ? old[i].color[c] : old[i].depth;
+                    bool kept = false;
+                    for (const RenderTargetAttachments &attachment : renderTarget.attachments)
+                        kept = kept || texture == attachment.depth || std::find(std::begin(attachment.color), std::end(attachment.color), texture) != std::end(attachment.color);
+                    if (!kept && texture.isValid() && impl->textures.handles.isAlive(texture.index, texture.generation))
+                        impl->retireTexture(texture);
+                }
+            }
+        };
+
+        auto makeTexture = [this, heaps, offsets](const TextureDesc &textureDesc, uint32_t attachment, TextureHandle reuse) -> TextureHandle
+        {
+            rhi::Texture *texture = nullptr;
             TextureHandle handle;
             if (!heaps)
+            {
+                // createTexture checks the desc; the new handle only carries the texture over to the old one.
                 handle = createTexture(textureDesc);
-            else if (auto *texture = impl->device->createPlacedTexture(textureDesc, heaps[attachment], offsets[attachment]))
-                handle = impl->addTexture(texture);
-            if (handle.isValid())
-                impl->textures.attachments[handle.index] = 1;
+                texture = handle.isValid() ? impl->textures.objects[handle.index] : nullptr;
+                if (texture && reuse.isValid())
+                {
+                    impl->textures.objects[handle.index] = nullptr;
+                    impl->textures.handles.release(handle.index, handle.generation);
+                }
+            }
+            else
+            {
+                texture = impl->device->createPlacedTexture(textureDesc, heaps[attachment], offsets[attachment]);
+                if (texture && !reuse.isValid())
+                    handle = impl->addTexture(texture);
+            }
+            if (!texture)
+                return {};
+            if (reuse.isValid())
+            {
+                impl->replaceTexture(reuse, texture);
+                handle = reuse;
+            }
+            impl->textures.attachments[handle.index] = 1;
             return handle;
         };
+        auto reusable = [this](TextureHandle texture)
+        { return texture.isValid() && impl->textures.handles.isAlive(texture.index, texture.generation) ? texture : TextureHandle{}; };
 
         for (uint32_t i = 0; i < copies; ++i)
         {
@@ -1183,19 +1282,21 @@ namespace rasm
             bool created = true;
             for (uint32_t c = 0; c < colorCount; ++c)
             {
-                attachment.color[c] = makeTexture(textureDescs[c], c);
+                attachment.color[c] = makeTexture(textureDescs[c], c, reusable(old[i].color[c]));
                 created = created && attachment.color[c].isValid();
             }
             if (hasDepth)
-                attachment.depth = makeTexture(depthDesc, colorCount);
+                attachment.depth = makeTexture(depthDesc, colorCount, reusable(old[i].depth));
             if (!created || (hasDepth && !attachment.depth.isValid()))
             {
                 spdlog::error("Failed to create the attachments of render target '{}'.", desc.name);
                 releaseTakenSlots();
+                retireOld();
                 destroyAttachments(renderTarget);
                 return false;
             }
         }
+        retireOld();
 
         // Only once every attachment exists, so that a failed creation leaves the bindless set untouched.
         for (uint32_t i = 0; i < copies; ++i)
@@ -1219,10 +1320,11 @@ namespace rasm
         for (uint32_t i = copies; i < MAX_FRAMES_IN_FLIGHT; ++i)
             renderTarget.attachments[i] = renderTarget.attachments[0];
 
-        // Each frame reads the copy the frame before drew, so on the first frame that copy holds nothing yet. A copy is
-        // cleared by drawing into it; a storage target's colors are not attachments, so its writer starts it over
-        // instead (addTaaPass drops its history on its first frame and after a resize).
-        if (desc.history && !desc.storage)
+        // Each frame reads the copy the frame before drew, so on the first frame that copy holds nothing yet; a target
+        // that lives across frames (not transient) may be sampled before any pass draws it, as a view texture is. So
+        // their colors start cleared and SAMPLED. A storage target's colors are not attachments, so its writer starts
+        // it over instead (addTaaPass drops its history on its first frame and after a resize).
+        if ((desc.history || !heaps) && !desc.storage && colorCount > 0)
         {
             for (uint32_t i = 0; i < copies; ++i)
             {
@@ -1659,6 +1761,11 @@ namespace rasm
     bool RenderContext::isAlive(const BufferHandle &buffer) const
     {
         return impl->buffers.handles.isAlive(buffer.index, buffer.generation);
+    }
+
+    bool RenderContext::isAlive(const RenderTargetHandle &renderTarget) const
+    {
+        return impl->isRenderTarget(renderTarget);
     }
 
     // Called at the end of every frame, after its submits, also for a frame that was dropped: what was destroyed since

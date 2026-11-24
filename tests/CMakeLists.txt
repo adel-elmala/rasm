@@ -40,6 +40,7 @@ add_executable(rasm_tests
             "transformTests.cpp"
             "uiTests.cpp"
             "uploadManagerTests.cpp"
+            "viewTests.cpp"
             "workerPoolTests.cpp"
     )
 

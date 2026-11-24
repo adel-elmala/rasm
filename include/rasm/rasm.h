@@ -16,6 +16,7 @@
 #include "rasm/mesh.h"
 #include "rasm/animation.h"
 #include "rasm/readback.h"
+#include "rasm/view.h"
 #include "rasm/render/renderGraph.h"
 
 // clang-format on

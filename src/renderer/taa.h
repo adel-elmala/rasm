@@ -4,6 +4,8 @@
 #include "glm/glm.hpp"
 #include "glm/gtc/quaternion.hpp"
 
+#include "rasm/render/resource.h"
+
 #include <cstdint>
 
 namespace rasm
@@ -17,6 +19,20 @@ namespace rasm
     // A perspective camera that moves more than this many times its near plane in one frame has jumped.
     constexpr float             TAA_JUMP_NEAR_PLANES    = 100.0f;
 
+    // What one TAA pass remembers between frames, to know when its history no longer fits this frame. Engine::render
+    // keeps it with the view's history target, so a new graph goes on with the history.
+    struct TaaState
+    {
+        glm::uvec2              size                    = glm::uvec2(0);
+        uint32_t                version                 = 0;    // the history's RenderTarget::version: a resize or a new swapchain makes new, unwritten textures
+        uint32_t                historyResets           = 0;
+        glm::vec3               position                = glm::vec3(0.0f);
+        glm::quat               rotation                = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        bool                    valid                   = false;
+    };
+
+    // A TAA history target for a source target: its size, one SCENE_COLOR_FORMAT storage color with a copy per frame slot.
+    RenderTargetDesc            getTaaHistoryDesc(const RenderTargetDesc& source);
     // The offset of frame `frame`, in pixels from the pixel's center (-0.5 to 0.5): the Halton (2, 3) sequence.
     glm::vec2                   getTaaJitter(uint32_t frame);
     // Whether the camera moved too far since the last frame for its history to help: a turn above TAA_JUMP_ANGLE, or

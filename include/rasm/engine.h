@@ -13,6 +13,7 @@
 #include "rasm/light.h"
 #include "rasm/mesh.h"
 #include "rasm/readback.h"
+#include "rasm/view.h"
 #include "rasm/handle.h"
 #include "rasm/render/renderContext.h"
 
@@ -50,13 +51,16 @@ namespace rasm
     struct Inspector;
     struct Readbacks;
     struct InspectEntry;
+    struct TaaState;
     namespace gfx { struct SceneData; }
 
-    constexpr uint32_t MAX_CAMERAS          = 8;
+    constexpr uint32_t MAX_CAMERAS          = 32;
     constexpr uint32_t MAX_GPU_TIMERS       = 64;
     constexpr Format   SCENE_COLOR_FORMAT   = Format::R16G16B16A16_SFLOAT;
     // A scene target's optional second color: each pixel's motion since the last frame, in UV units, for addTaaPass.
     constexpr Format   MOTION_FORMAT        = Format::R16G16_SFLOAT;
+    // Output formats the tone-map pass keeps pipelines for at once: the swapchain's and its view textures'.
+    constexpr uint32_t MAX_TONE_MAP_FORMATS = 4;
 
     struct GpuTimer
     {
@@ -91,6 +95,7 @@ namespace rasm
     {
         friend class RenderContext;
         friend class RenderGraph;
+        friend class Renderer;
 
     public:
                                     Engine(const EngineConfig& config);
@@ -152,6 +157,11 @@ namespace rasm
         void                        destroyTexture(const TextureHandle& texture);
         void                        destroyBuffer(const BufferHandle& buffer);
         void                        destroyRenderTarget(const RenderTargetHandle& renderTarget);
+        // A fixed-size target (no swapchainScale, not a cube) at a new size, for a view whose window part or texture
+        // changed. Its texture handles and bindless slots stay, so materials and UI images that show it keep working;
+        // its contents do not. A new size waits once for the frames in flight, as a window resize does; the same size
+        // costs nothing. Not while a frame records (between beginFrame and endFrame).
+        bool                        resizeRenderTarget(const RenderTargetHandle& renderTarget, uint32_t width, uint32_t height);
         RenderGraph                 createRenderGraph();
         // Compiles Slang source with vertMain and fragMain entry points. The pipeline has no vertex input and
         // renders to the swapchain's color format with D32_SFLOAT depth (reversed-Z, compare GREATER_OR_EQUAL), and
@@ -190,7 +200,16 @@ namespace rasm
         void                        beginPass(const std::string& name = "Pass", const AttachmentOps& ops = {});
         void                        endPass();
         void                        render(SceneHandle scene, CameraHandle camera);
-        bool                        addScenePasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, const SceneShadow* shadows = nullptr, uint32_t shadowCount = 0);
+        // One frame of several views (split screen, a minimap over the scene, view textures for materials or the UI). A
+        // view keeps its targets, culling and TAA history while its camera and output stay in the list, wherever it
+        // is in the list. Views draw in list order: a later rect goes over an earlier one, and a view samples this
+        // frame's image of the view textures listed before it. The first view's camera takes the built-in controller.
+        void                        render(const View* views, uint32_t viewCount);
+        // sampled: view textures (color targets other passes draw this frame) that the scene's materials sample. The
+        // draws run after the passes that draw them, so they see this frame's image; without it a material sees this
+        // frame's or the last frame's, whichever the graph's order gives.
+        bool                        addScenePasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, const SceneShadow* shadows = nullptr, uint32_t shadowCount = 0,
+                                                   const RenderTargetHandle* sampled = nullptr, uint32_t sampledCount = 0);
         SceneShadow                 addShadowPasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const ShadowDesc& desc);
         // Resolves a multisampled target's color 0 into a new single-sample target (weighted by brightness, so bright
         // edges stay smooth), which addBloomPasses and addToneMapPass read. Returns invalid on failure.
@@ -201,10 +220,13 @@ namespace rasm
         RenderTargetHandle          addTaaPass(RenderGraph& graph, const RenderTargetHandle& source, CameraHandle camera);
         // Returns the bloom target for addToneMapPass, or invalid on failure.
         RenderTargetHandle          addBloomPasses(RenderGraph& graph, const RenderTargetHandle& source, CameraHandle camera);
-        bool                        addToneMapPass(RenderGraph& graph, const RenderTargetHandle& source, CameraHandle camera, const RenderTargetHandle& bloom = {});
+        // Maps the HDR source to display colors into the output: a rect of the swapchain, or of a view texture (one color,
+        // no depth). Passes that draw one output run in the order they were added, so a later rect goes over an earlier one.
+        bool                        addToneMapPass(RenderGraph& graph, const RenderTargetHandle& source, CameraHandle camera, const RenderTargetHandle& bloom = {}, const ViewOutput& output = {});
         // Draws the frame's Dear ImGui windows onto the swapchain: add it after addToneMapPass. Without it endFrame draws
-        // them in a render pass of its own. Returns false when the UI is off (EngineConfig::ui).
-        bool                        addUiPass(RenderGraph& graph);
+        // them in a render pass of its own. Returns false when the UI is off (EngineConfig::ui). shown: view textures the
+        // UI shows (ImGui::Image), so it draws after the passes that draw them this frame.
+        bool                        addUiPass(RenderGraph& graph, const RenderTargetHandle* shown = nullptr, uint32_t shownCount = 0);
         // Runs every frame between ImGui::NewFrame and ImGui::Render, after the input and before the scene is uploaded,
         // so what it changes shows in the same frame. Needs EngineConfig::ui.
         void                        setUiCallback(std::function<void()> callback);
@@ -281,6 +303,7 @@ namespace rasm
 
     protected:
         bool                                                        createSwapchainResources();
+        bool                                                        updateSwapchain();
         bool                                                        useQueue(QueueType queue);
         uint64_t                                                    openBatchValue(QueueType queue) const;
         void                                                        waitForQueue(QueueType waiter, QueueType queue, uint64_t value);
@@ -310,6 +333,7 @@ namespace rasm
         std::vector<ClosedBatch>                                    closedBatches;
         QueueType                                                   recordingQueue                          = QueueType::GRAPHICS;
         bool                                                        recordingFailed                         = false; // the frame is dropped at endFrame
+        bool                                                        recordingFrame                          = false; // between a beginFrame that returned true and its endFrame
         bool                                                        asyncCompute                            = false;
         uint64_t                                                    readbackComputeWait                     = 0;  // graphics value of the last frame with readback copies, which compute batches wait for
         Swapchain                                                   swapchain                               = {};
@@ -322,9 +346,14 @@ namespace rasm
         std::unique_ptr<StatsOverlay>                               statsOverlay                            = {};
         std::unique_ptr<Ui>                                         ui                                      = {};
         std::unique_ptr<Renderer>                                   renderer                                = {};
-        PipelineHandle                                              toneMapPipeline                         = {};
-        PipelineHandle                                              debugDisplayPipeline                    = {};
-        PipelineHandle                                              debugHeatPipeline                       = {};
+        struct ToneMapPipelines
+        {
+            Format                                                  format                                  = Format::UNKNOWN;
+            PipelineHandle                                          toneMap                                 = {};
+            PipelineHandle                                          debugDisplay                            = {};
+            PipelineHandle                                          debugHeat                               = {};
+        };
+        ToneMapPipelines                                            toneMapPipelines[MAX_TONE_MAP_FORMATS]  = {}; // by output format, made the first time a pass draws one
         PipelineHandle                                              msaaResolvePipeline                     = {};
         PipelineHandle                                              taaPipeline                             = {};
         PipelineHandle                                              bloomFirstDownPipeline                  = {};
@@ -407,6 +436,8 @@ namespace rasm
         void                        recordEnvironmentBakes();
         void                        finishEnvironmentBakes();
         void                        drawSky(uint32_t view);
+        PipelineHandle              getToneMapPipeline(Format format, DebugView shown);
+        RenderTargetHandle          addTaaPass(RenderGraph& graph, const RenderTargetHandle& source, CameraHandle camera, RenderTargetHandle history, std::shared_ptr<TaaState> state);
         bool                        bloomPipelinesReady() const;
         bool                        bloomRuns(CameraHandle camera) const;
         bool                        createBloomPipelines();
@@ -453,7 +484,7 @@ namespace rasm
         void                        addAnimationPass(RenderGraph& graph);
         void                        recordAnimation();
         void                        recordSkinning();
-        bool                        addSceneViewPasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, uint32_t face, const SceneShadow* shadows, uint32_t shadowCount, bool depthOnly);
+        bool                        addSceneViewPasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, uint32_t face, const SceneShadow* shadows, uint32_t shadowCount, bool depthOnly, const RenderTargetHandle* sampled, uint32_t sampledCount);
         uint32_t                    createSceneView(SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, uint32_t face, const SceneShadow* shadows, uint32_t shadowCount, bool depthOnly);
         void                        releaseSceneView(uint32_t view);
         void                        prepareSceneView(uint32_t view);
