@@ -464,7 +464,7 @@ engine.resetCameraHistory(camera);</code></pre>
   <pre class="sig">void pollEvents();</pre>
   <div class="body">
     <p>Starts the frame's input. It measures the frame's step (<a href="#getDeltaTime"><code>getDeltaTime</code></a>), takes the events queued with <a href="engine.html#addInputEvent"><code>addInputEvent</code></a> and then the platform's window events (SDL; none for <code>NATIVE</code> and headless), and applies them all in order to the UI, the built-in keys, the window state (size, minimized, quit) and the engine's <a href="#CameraInputState"><code>CameraInputState</code></a> for the main window, which gives the frame's <a href="#getCameraInput"><code>getCameraInput</code></a>.</p>
-    <p>Only the first call after a <code>beginFrame</code> does this. A second call in the same frame, and the one inside <code>beginFrame</code>, do nothing. An event you add after it goes into the next frame. <code>beginFrame</code> then runs <code>updateCamera</code> on the camera given to it with that input, unless the camera's controller is <code>NONE</code> or the handle is invalid (no camera to move).</p>
+    <p>Only the first call after a <code>beginFrame</code> does this. A second call in the same frame, and the one inside <code>beginFrame</code>, leave this frame's input as it is: they only take the window's new events into the next frame's queue, and stop <code>running()</code> when the window was closed, so a loop that renders no frame can still end. An event you add after it goes into the next frame. <code>beginFrame</code> then runs <code>updateCamera</code> on the camera given to it with that input, unless the camera's controller is <code>NONE</code> or the handle is invalid (no camera to move).</p>
     <p><span class="tag main-thread">main thread</span> The frame time it measures is capped at 0.1 s, and the first frame has 0. While an SDL window is minimized it waits up to 100 ms for an event.</p>
   </div>
 </div>
@@ -597,6 +597,7 @@ engine.render(scene, camera);</code></pre>
     float       pointerX        = 0.0f;
     float       pointerY        = 0.0f;
     bool        pointerInWindow = false;
+    bool        pointerSeen     = false;
     bool        dragActive      = false;
     glm::vec2   dragStart       = glm::vec2(0.0f);
     glm::vec2   dragEnd         = glm::vec2(0.0f);
@@ -607,8 +608,9 @@ engine.render(scene, camera);</code></pre>
     <dl>
       <dt>keysDown</dt><dd>Keys held, by position (<code>InputEvent::physicalKey</code>, else <code>key</code>).</dd>
       <dt>pointerX, pointerY, pointerInWindow</dt><dd>The pointer in window points, from the last move or button event; <code>MOUSE_LEAVE</code> clears <code>pointerInWindow</code>.</dd>
+      <dt>pointerSeen</dt><dd>A move, button or leave event told where the pointer is. Until then a wheel event counts in every area, since it carries no position.</dd>
       <dt>dragActive, dragStart, dragEnd</dt><dd>A drag that began with a press in the area, outside the UI, in NDC.</dd>
-      <dt>wheel</dt><dd>This frame's wheel steps with the pointer in the area.</dd>
+      <dt>wheel</dt><dd>This frame's wheel steps with the pointer in the area, or not seen yet.</dd>
     </dl>
   </div>
 </div>
@@ -629,7 +631,7 @@ engine.render(scene, camera);</code></pre>
 <div class="api" id="addCameraInputEvent">
   <pre class="sig">void addCameraInputEvent(CameraInputState&amp; state, const InputEvent&amp; event, const InputArea&amp; area, const UiInputCapture&amp; capture);</pre>
   <div class="body">
-    <p>Applies one event. A press in the area starts a drag, which goes on outside the area until the release. The wheel counts while the pointer is in the area. A lost <code>FOCUS</code> lets go of every key and ends the drag.</p>
+    <p>Applies one event. A press in the area starts a drag, which goes on outside the area until the release. The wheel counts while the pointer is in the area, or before any event told where it is. A lost <code>FOCUS</code> lets go of every key and ends the drag.</p>
     <dl>
       <dt>capture</dt><dd>What the UI took (<code>getUiInputCapture</code>): a press or the wheel over a UI window does not reach the camera. Pass <code>{}</code> without a UI.</dd>
     </dl>

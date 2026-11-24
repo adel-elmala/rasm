@@ -27,17 +27,18 @@ namespace rasm
         float       pointerX        = 0.0f;     // the pointer, in window points
         float       pointerY        = 0.0f;
         bool        pointerInWindow = false;    // a move or a button event put the pointer in the window, and it has not left
+        bool        pointerSeen     = false;    // a move, button or leave event told where the pointer is
         bool        dragActive      = false;    // a button went down in the area, outside the UI, and is not up yet
         glm::vec2   dragStart       = glm::vec2(0.0f);  // NDC, this frame's
         glm::vec2   dragEnd         = glm::vec2(0.0f);
-        float       wheel           = 0.0f;     // this frame's steps, with the pointer in the area
+        float       wheel           = 0.0f;     // this frame's steps, with the pointer in the area or not seen yet
     };
 
     // Window points to the camera's NDC: both axes divided by the area's smaller side, so the trackball stays round
     // on a wide area, the area's center at 0, and y up.
     glm::vec2       toInputNdc(float x, float y, const InputArea& area);
     // A press in the area starts a drag, which goes on outside it until the release; the wheel counts with the pointer
-    // in the area. capture is what the UI took (Engine::getUiInputCapture), and keeps presses and the wheel from it.
+    // in the area, or before any event told where it is. capture is what the UI took (Engine::getUiInputCapture).
     void            addCameraInputEvent(CameraInputState& state, const InputEvent& event, const InputArea& area, const UiInputCapture& capture);
     // The frame's input without what the UI took, W/A/S/D held by position. The next frame's drag starts where this
     // one ended, with no wheel steps yet.

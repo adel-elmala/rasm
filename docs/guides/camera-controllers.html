@@ -926,7 +926,7 @@ while (engine.running())
 <ul>
   <li><code>mouseStart</code> is last frame's drag position, <code>mouseEnd</code> the newest one, both from <code>toInputNdc</code> in the <code>InputArea</code>: a rectangle in window points, the units of <code>InputEvent</code> mouse positions.</li>
   <li>A press starts a drag only inside the area and not on the UI (<code>UiInputCapture</code>, from <code>Engine::getUiInputCapture</code>). The drag goes on outside the area until the release.</li>
-  <li><code>wheelDelta</code> is summed over the frame, only while the pointer is in the area.</li>
+  <li><code>wheelDelta</code> is summed over the frame while the pointer is in the area. A wheel event has no position, so before the first move it counts in every area.</li>
   <li>W, A, S, D are held keys by position (<code>InputEvent::physicalKey</code>), so they stay in the same place on an AZERTY keyboard.</li>
   <li><code>deltaTime</code> comes from <code>steady_clock</code>: 0 on the first frame, at most 0.1 s. With <code>EngineConfig::fixedDeltaTime</code> it is that step instead, so the easing is the same in every run. <code>Engine::getDeltaTime</code> returns it.</li>
   <li>A <code>FOCUS</code> event that loses the focus lets go of every key and ends the drag, so no key stays held.</li>

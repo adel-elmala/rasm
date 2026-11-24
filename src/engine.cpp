@@ -254,8 +254,17 @@ namespace rasm
 
     void Engine::pollEvents()
     {
+        // A second call in the same frame leaves this frame's input as it is: the window's new events wait for the
+        // next frame, but a close request stops the engine at once, so a loop that renders no frames can still end.
         if (inputPolled)
+        {
+            bool closed = false;
+            if (platform)
+                platform->pollEvents(mainWindow, pendingInputEvents, closed);
+            if (closed)
+                isRunning = false;
             return;
+        }
         inputPolled = true;
 
         // The first frame has no previous one, and a long stall (a debugger, a window drag) is capped so the camera does not jump.

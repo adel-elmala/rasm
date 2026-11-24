@@ -41,6 +41,7 @@ namespace rasm
             state.pointerX = event.x;
             state.pointerY = event.y;
             state.pointerInWindow = true;
+            state.pointerSeen = true;
             if (!event.down)
             {
                 state.dragActive = false;
@@ -56,15 +57,18 @@ namespace rasm
             state.pointerX = event.x;
             state.pointerY = event.y;
             state.pointerInWindow = true;
+            state.pointerSeen = true;
             if (state.dragActive)
                 state.dragEnd = toInputNdc(event.x, event.y, area);
             break;
         case InputEventType::MOUSE_WHEEL:
-            if (!capture.mouse && state.pointerInWindow && isInArea(state.pointerX, state.pointerY, area))
+            // Wheel events carry no position. Before the first move, a wheel over the window counts.
+            if (!capture.mouse && (!state.pointerSeen || (state.pointerInWindow && isInArea(state.pointerX, state.pointerY, area))))
                 state.wheel += event.y;
             break;
         case InputEventType::MOUSE_LEAVE:
             state.pointerInWindow = false;
+            state.pointerSeen = true;
             break;
         case InputEventType::FOCUS:
             // Keys and buttons released while another window has the focus never send their release here.

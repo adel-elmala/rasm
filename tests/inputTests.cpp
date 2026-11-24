@@ -159,8 +159,9 @@ TEST_CASE("the wheel counts only with the pointer in the area")
 {
     const InputArea right = {.x = 400.0f, .y = 0.0f, .width = 400.0f, .height = 600.0f};
     CameraInputState state;
-    // No pointer seen yet: it is not known to be in the area.
+    // No pointer seen yet: wheel events come only over the window, so it counts.
     rasm::addCameraInputEvent(state, wheel(1.0f), right, {});
+    CHECK(rasm::takeCameraInput(state, {}, 0.016f).wheelDelta == doctest::Approx(1.0f));
     rasm::addCameraInputEvent(state, move(100.0f, 300.0f), right, {});
     rasm::addCameraInputEvent(state, wheel(1.0f), right, {});
     CHECK(rasm::takeCameraInput(state, {}, 0.016f).wheelDelta == 0.0f);

@@ -291,6 +291,20 @@ namespace
         }
     }
 
+    // An orbit around the helmet from where the camera is: at its distance, turned at once to look at the helmet. A
+    // trackball always looks at its center, so a rig that does not would jump on its first frame.
+    rasm::CameraRig orbitFrom(const rasm::CameraController &orbit, const rasm::Transform &pose)
+    {
+        const glm::vec3 offset = pose.position - orbit.trackBall.center;
+        const float distance = glm::length(offset);
+        if (distance < 1e-3f)
+            return rasm::createCameraRig(orbit, pose);
+        rasm::CameraController controller = orbit;
+        controller.trackBall.radius = distance;
+        const glm::quat lookAtCenter = glm::quatLookAt(-offset / distance, glm::vec3(0.0f, 1.0f, 0.0f));
+        return rasm::createCameraRig(controller, rasm::Transform{pose.position, lookAtCenter, pose.scale});
+    }
+
     // One frame of the application's camera: its rig takes the events of the last pollEvents, in the window's area, and
     // skips what the UI took. F switches between orbit and fly from where the camera is.
     void updateCamera(rasm::Engine &engine, rasm::CameraHandle camera, rasm::CameraRig &rig, rasm::CameraInputState &cameraInput, const rasm::CameraController &orbit, const rasm::CameraController &fly)
@@ -304,14 +318,10 @@ namespace
         {
             rasm::addCameraInputEvent(cameraInput, events[i], area, capture);
             const bool switchKey = events[i].type == rasm::InputEventType::KEY && events[i].key == rasm::Key::F && events[i].down && !events[i].repeat;
-            if (switchKey && !capture.text)
+            if (switchKey && !capture.keyboard)
             {
                 const bool flying = rig.controller.type == rasm::CameraController::Type::FREE_FLY;
-                rasm::CameraController next = flying ? orbit : fly;
-                // Back to the orbit at the camera's distance from the helmet.
-                if (flying)
-                    next.trackBall.radius = glm::length(rig.transform.position - orbit.trackBall.center);
-                rig = rasm::createCameraRig(next, rig.transform);
+                rig = flying ? orbitFrom(orbit, rig.transform) : rasm::createCameraRig(fly, rig.transform);
             }
         }
         rasm::updateCameraRig(rig, rasm::takeCameraInput(cameraInput, capture, engine.getDeltaTime()));
@@ -360,7 +370,9 @@ namespace
         engine.addEntityToScene(scene, engine.createEntity("ground", cube, ground, rasm::Transform{glm::vec3(0.0f, -1.2f, 0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(20.0f, 0.5f, 20.0f)}));
         engine.addEntityToScene(scene, engine.createEntity("helmet", helmet, {}, rasm::Transform{}));
 
-        const rasm::Transform start{glm::vec3(0.0f, 0.4f, 4.2f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(1.0f)};
+        // Looking at the helmet, so the camera is on its orbit from the start.
+        const glm::vec3 startPosition(0.0f, 0.4f, 4.2f);
+        const rasm::Transform start{startPosition, glm::quatLookAt(-glm::normalize(startPosition), glm::vec3(0.0f, 1.0f, 0.0f)), glm::vec3(1.0f)};
         const rasm::CameraHandle camera = engine.createCamera(rasm::CameraProjection{.type = rasm::CameraProjection::Type::PERSPECTIVE,
                                                                                      .perspective{.fovY = 45.0f, .aspect = static_cast<float>(WIDTH) / static_cast<float>(HEIGHT), .nearZ = 0.1f}},
                                                               start);
@@ -371,7 +383,7 @@ namespace
         const rasm::CameraController fly{.type = rasm::CameraController::Type::FREE_FLY,
                                          .freeFly = {.speed = 2.0f, .lookSensitivity = 1.5f},
                                          .easingSpeed = 6.0f};
-        rasm::CameraRig rig = rasm::createCameraRig(orbit, start);
+        rasm::CameraRig rig = orbitFrom(orbit, start);
         rasm::CameraInputState cameraInput;
         engine.addCameraToScene(scene, camera);
 
