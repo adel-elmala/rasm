@@ -211,7 +211,7 @@ def message_key(text):
 
 # Examples that only render without a window: they present nothing for GFXR to count, so even with --windowed
 # they run headless.
-HEADLESS_EXAMPLES = ("16_headless",)
+HEADLESS_EXAMPLES = ("16_headless", "21_renderer")
 # Every example gets these (exampleArgs.h): a fixed time step, and every load in place before frame 1 (C16).
 RUN_ARGS = ["--fixed-step", "--wait-for-loads"]
 

@@ -140,7 +140,8 @@ int main(int argc, char **argv)
     ExampleArgs args = parseExampleArgs(argc, argv);
     args.headless = true;
 
-    // No nativeWindow: the renderer draws into offscreen images of windowWidth x windowHeight pixels.
+    // No nativeWindow: the renderer draws into offscreen images of windowWidth x windowHeight pixels. No assetRoot: it
+    // reads no file but its shaders.
     rasm::RendererConfig config = {
         .appName = "example_21",
         .windowWidth = WIDTH,
@@ -188,6 +189,10 @@ int main(int argc, char **argv)
 
     // The 3D view fills the image; the map is a square in the top-right corner, drawn over it.
     const float mapHeight = 0.36f;
+    // Nothing loads in the background here, so this returns at once; it keeps the examples' --wait-for-loads.
+    if (args.waitForLoads)
+        renderer.waitForLoads();
+
     const rasm::View views[2] = {
         {.scene = scene, .camera = camera},
         {.scene = scene, .camera = map, .output = {.rect = {.x = 1.0f - mapHeight / aspect - 0.02f, .y = 0.03f, .width = mapHeight / aspect, .height = mapHeight}}, .antiAliasing = rasm::AntiAliasing::NONE},

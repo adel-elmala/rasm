@@ -66,7 +66,7 @@ namespace rasm
         NativeWindowType type                = NativeWindowType::NONE;
         void*            display             = nullptr;  // WINDOWS: HINSTANCE (nullptr: the executable's); X11: Display*; XCB: xcb_connection_t*; WAYLAND: wl_display*
         void*            window              = nullptr;  // WINDOWS: HWND; X11: Window; XCB: xcb_window_t; WAYLAND: wl_surface*; METAL: CAMetalLayer*
-        uint32_t         pixelWidth          = 0;        // the drawable's size in pixels; 0: EngineConfig::windowWidth x windowHeight
+        uint32_t         pixelWidth          = 0;        // the drawable's size in pixels; 0: the config's windowWidth x windowHeight
         uint32_t         pixelHeight         = 0;
         float            contentScale        = 1.0f;     // the display's scale setting (1.5 at 150 %), which sizes the UI
     };
@@ -149,8 +149,8 @@ namespace rasm
         FAILURE
     };
 
-    // How Engine::render smooths edges. MSAA_nX draws the scene with n samples per pixel and resolves them in a pass of
-    // the graph (Engine::addMsaaResolvePass). TAA jitters the view and blends the frames (Engine::addTaaPass).
+    // How Renderer::render smooths edges. MSAA_nX draws the scene with n samples per pixel and resolves them in a pass of
+    // the graph (Renderer::addMsaaResolvePass). TAA jitters the view and blends the frames (Renderer::addTaaPass).
     enum class AntiAliasing
     {
         NONE,
@@ -181,7 +181,7 @@ namespace rasm
         AUTO,
     };
 
-    // What the RASM window's Buffers section shows of a frame resource (Engine::setInspection).
+    // What the RASM window's Buffers section shows of a frame resource (Renderer::setInspection).
     enum class InspectKind
     {
         COLOR,              // a color of a render target: a motion color as a direction and length, any other one with exposure
@@ -244,15 +244,15 @@ namespace rasm
         bool         meshLods                = true;
         float        lodErrorPixels          = 1.0f;
         int32_t      forcedLod               = -1;
-        MeshletPath  meshletPath             = MeshletPath::AUTO; // Engine::setMeshletPath; AUTO: MESH_SHADERS where the GPU has them, else OFF
+        MeshletPath  meshletPath             = MeshletPath::AUTO; // Renderer::setMeshletPath; AUTO: MESH_SHADERS where the GPU has them, else OFF
         uint32_t     maxViewMeshlets         = 1u << 16; // VERTEX_PULLING: meshlet draws per scene view and frame slot, 20 B each (1.3 MiB); past it a mesh is drawn whole
         bool         asyncCompute            = false;
         bool         transferQueue           = true;     // loads copy their data on a queue family that only copies (the copy engine), where the GPU has one; else on the graphics queue
         bool         clusteredLighting       = true;     // false: every pixel shades every light of the scene
         bool         hostImageCopy           = true;     // where the device copies a format on the host into video memory at full speed; false: every texture comes from the staging ring
-        bool         bloom                   = false;    // Engine::render adds the bloom passes (Camera::bloomStrength)
-        bool         ui                      = false;    // Dear ImGui (CMake RASM_IMGUI): the RASM window on F1 and Engine::setUiCallback
-        AntiAliasing antiAliasing            = AntiAliasing::NONE; // Engine::render's scene target: MSAA draws it with several samples per pixel
+        bool         bloom                   = false;    // Renderer::render adds the bloom passes (Camera::bloomStrength)
+        bool         ui                      = false;    // Dear ImGui (CMake RASM_IMGUI): the RASM window on F1 and Renderer::setUiCallback
+        AntiAliasing antiAliasing            = AntiAliasing::NONE; // Renderer::render's scene target: MSAA draws it with several samples per pixel
     };
 
     // What an Engine is made with: the RendererConfig fields, flat (designated initializers), and the platform. A
@@ -293,15 +293,15 @@ namespace rasm
         bool         meshLods                = true;
         float        lodErrorPixels          = 1.0f;
         int32_t      forcedLod               = -1;
-        MeshletPath  meshletPath             = MeshletPath::AUTO; // Engine::setMeshletPath; AUTO: MESH_SHADERS where the GPU has them, else OFF
+        MeshletPath  meshletPath             = MeshletPath::AUTO; // Renderer::setMeshletPath; AUTO: MESH_SHADERS where the GPU has them, else OFF
         uint32_t     maxViewMeshlets         = 1u << 16; // VERTEX_PULLING: meshlet draws per scene view and frame slot, 20 B each (1.3 MiB); past it a mesh is drawn whole
         bool         asyncCompute            = false;
         bool         transferQueue           = true;     // loads copy their data on a queue family that only copies (the copy engine), where the GPU has one; else on the graphics queue
         bool         clusteredLighting       = true;     // false: every pixel shades every light of the scene
         bool         hostImageCopy           = true;     // where the device copies a format on the host into video memory at full speed; false: every texture comes from the staging ring
-        bool         bloom                   = false;    // Engine::render adds the bloom passes (Camera::bloomStrength)
-        bool         ui                      = false;    // Dear ImGui (CMake RASM_IMGUI): the RASM window on F1 and Engine::setUiCallback
-        AntiAliasing antiAliasing            = AntiAliasing::NONE; // Engine::render's scene target: MSAA draws it with several samples per pixel
+        bool         bloom                   = false;    // Renderer::render adds the bloom passes (Camera::bloomStrength)
+        bool         ui                      = false;    // Dear ImGui (CMake RASM_IMGUI): the RASM window on F1 and Renderer::setUiCallback
+        AntiAliasing antiAliasing            = AntiAliasing::NONE; // Renderer::render's scene target: MSAA draws it with several samples per pixel
     };
 
     // The renderer's part of an EngineConfig. tests/rendererConfigTests.cpp checks that every field arrives.

@@ -13,7 +13,7 @@ so the RASM window and an example's own ImGui windows are in the screenshot.
 
 `--windowed` runs the examples in a window under the GFXReconstruct layer (Vulkan SDK) instead: the layer quits each
 one after frame N, and its replay renders that frame to PNG. Use it only for captures (`--keep-captures`, for
-`frame-debug`); it opens a window per example. `16_headless` (`HEADLESS_EXAMPLES` in the script) runs headless
+`frame-debug`); it opens a window per example. `16_headless` and `21_renderer` (`HEADLESS_EXAMPLES` in the script) run headless
 either way.
 
 ```sh
