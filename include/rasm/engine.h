@@ -2,11 +2,13 @@
 #pragma once
 
 #include "rasm/types.h"
+#include "rasm/camera.h"
 #include "rasm/entity.h"
 #include "rasm/scene.h"
 #include "rasm/material.h"
 #include "rasm/render/renderGraph.h"
 #include "rasm/window.h"
+#include "rasm/input.h"
 #include "rasm/light.h"
 #include "rasm/mesh.h"
 #include "rasm/readback.h"
@@ -28,6 +30,7 @@ namespace rasm
 
     class GeometryPool;
     class Platform;
+    struct InputState;
     class Renderer;
     class WorkerPool;
     struct LoadTicket;
@@ -260,6 +263,14 @@ namespace rasm
         Window                      createWindow(uint32_t width, uint32_t height);
         void                        destroyWindow(const Window& window);
         void                        pollEvents(CameraHandle camera);
+        // Input from an application that runs the event loop (PlatformType::NATIVE, or a script of a headless engine):
+        // queued, and applied by the next beginFrame like the SDL platform's own events.
+        void                        addInputEvent(const InputEvent& event);
+        // The main window's size in points and in pixels, for NATIVE and HEADLESS; the SDL platform reads its own. A
+        // size of 0 skips frames, as a minimized window does.
+        void                        setWindowSize(uint32_t width, uint32_t height, uint32_t pixelWidth, uint32_t pixelHeight);
+        // The display's scale setting (1.5 at 150 %), which sizes the UI; for NATIVE when the window moves to another display.
+        void                        setWindowContentScale(float scale);
 
     protected:
         bool                                                        createSwapchainResources();
@@ -316,6 +327,8 @@ namespace rasm
         std::unique_ptr<ShaderCompiler>                             shaderCompiler                          = {};
         std::unique_ptr<Platform>                                   platform                                = {};
         Window                                                      mainWindow                              = {};
+        std::unique_ptr<InputState>                                 inputState                              = {};
+        std::vector<InputEvent>                                     inputEvents                             = {}; // until the next beginFrame; keeps its capacity
         DescriptorSetLayoutHandle                                   bindlessDescriptorSetLayout             = {};
         DescriptorPoolHandle                                        bindlessDescriptorPool                  = {};
         DescriptorSetHandle                                         bindlessDescriptorSet                   = {};

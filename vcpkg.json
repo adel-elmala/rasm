@@ -7,10 +7,7 @@
         "vk-bootstrap",
         "vulkan-memory-allocator",
         "glm",
-        {
-            "name": "sdl3",
-            "features": ["vulkan"]
-        },
+        "sdl3",
         {
             "name": "tracy",
             "features": ["on-demand"]
@@ -28,10 +25,7 @@
         "imgui": {
             "description": "Dear ImGui for the engine's debug window and the application's UI (CMake option RASM_IMGUI)",
             "dependencies": [
-                {
-                    "name": "imgui",
-                    "features": ["sdl3-binding"]
-                }
+                "imgui"
             ]
         }
     }

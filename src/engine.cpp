@@ -2,6 +2,7 @@
 #include "assets/loadJobs.h"
 #include "core/utils.h"
 #include "core/workerPool.h"
+#include "platform/input.h"
 #include "platform/paths.h"
 #include "platform/platform.h"
 #include "renderer/environmentBake.h"
@@ -59,6 +60,9 @@ namespace rasm
     Engine::Engine(const EngineConfig &config) : config(config), geometryPool(std::make_unique<GeometryPool>()), gpuScene(std::make_unique<GpuScene>()), gpuLights(std::make_unique<GpuLights>()), gpuAnimation(std::make_unique<GpuAnimation>()), environments(std::make_unique<Environments>()), frameStats(std::make_unique<FrameStatsCollector>()), statsOverlay(std::make_unique<StatsOverlay>()), ctx(this), shaderCompiler(std::make_unique<ShaderCompiler>())
     {
         readbacks = std::make_unique<Readbacks>();
+        // Room for a burst of events, so a steady frame does not grow the queue (P27).
+        inputState = std::make_unique<InputState>();
+        inputEvents.reserve(256);
         // Before anything can fail, so a load on an engine that did not start still has workers. One hardware thread is
         // left for the main thread.
         const uint32_t hardwareThreads = std::thread::hardware_concurrency();
@@ -86,10 +90,20 @@ namespace rasm
         if (!this->config.cacheDir.empty())
             spdlog::info("Shader and pipeline caches in {}", this->config.cacheDir);
 
-        const bool headless = config.platform == PlatformType::HEADLESS;
-        platform = headless ? createHeadlessPlatform() : createSdlPlatform();
+        switch (config.platform)
+        {
+        case PlatformType::HEADLESS:
+            platform = createHeadlessPlatform();
+            break;
+        case PlatformType::NATIVE:
+            platform = createNativePlatform(config.nativeWindow);
+            break;
+        case PlatformType::SDL:
+            platform = createSdlPlatform();
+            break;
+        }
         this->mainWindow = createWindow(config.windowWidth, config.windowHeight);
-        if (!headless && !mainWindow.handle.isValid())
+        if (config.platform != PlatformType::HEADLESS && mainWindow.native.type == NativeWindowType::NONE)
         {
             spdlog::error("Failed to initialize engine window.");
             return;
@@ -245,26 +259,82 @@ namespace rasm
         deltaTime = config.fixedDeltaTime > 0.0f ? config.fixedDeltaTime : frameTime;
         lastFrameTime = now;
 
-        PlatformEvents events = {};
+        // The platform's events go after the application's, which it queued since the last frame. Both go to the UI
+        // only while it builds frames, and what the last UI frame took does not reach the camera or the engine's keys.
+        bool closed = false;
+        if (platform)
+            platform->pollEvents(mainWindow, inputEvents, closed);
         bool uiActive = false;
+        UiInputCapture capture = {};
 #if defined(RASM_IMGUI)
         uiActive = ui && ui->active;
+        if (uiActive)
+            capture = getUiInputCapture();
 #endif
-        if (platform)
-            platform->pollEvents(mainWindow, uiActive, events);
+        beginInputFrame(*inputState);
+        for (const InputEvent &event : inputEvents)
+        {
+#if defined(RASM_IMGUI)
+            if (uiActive)
+                processUiEvent(event);
+#endif
+            applyInputEvent(*inputState, event, mainWindow, capture);
+        }
+        inputEvents.clear();
+        (void)uiActive;
 
-        if (events.quit)
+        // Escape closes only a window RASM opened: an application that owns its window decides when to stop.
+        if (closed || (inputState->escapes > 0 && config.platform == PlatformType::SDL))
+        {
+            if (!closed)
+                spdlog::info("Escape key pressed, closing window.");
             isRunning = false;
-        if (events.statsToggles % 2 == 1)
+        }
+        if (inputState->statsToggles % 2 == 1)
             config.showStats = !config.showStats;
         // Cycles by distance (-1), LOD 0, 1, ..., MAX_MESH_LODS - 1, by distance.
-        for (uint32_t i = 0; i < events.forcedLodSteps; ++i)
+        for (uint32_t i = 0; i < inputState->forcedLodSteps; ++i)
             config.forcedLod = config.forcedLod + 1 >= static_cast<int32_t>(MAX_MESH_LODS) ? -1 : config.forcedLod + 1;
-        if (events.dumpGraph)
+        if (inputState->dumpGraph)
             graphDumpRequested = true;
 
-        events.camera.deltaTime = deltaTime;
-        updateCamera(camera, events.camera);
+        updateCamera(camera, endInputFrame(*inputState, capture, deltaTime));
+    }
+
+    void Engine::addInputEvent(const InputEvent &event)
+    {
+        inputEvents.push_back(event);
+    }
+
+    void Engine::setWindowSize(uint32_t width, uint32_t height, uint32_t pixelWidth, uint32_t pixelHeight)
+    {
+        if (config.platform == PlatformType::SDL)
+        {
+            spdlog::warn("setWindowSize: the SDL platform reads its window's size itself.");
+            return;
+        }
+        // The swapchain follows the pixel size from the next frame (B17); points only place the mouse and the UI.
+        mainWindow.resized = mainWindow.resized || pixelWidth != mainWindow.pixelWidth || pixelHeight != mainWindow.pixelHeight;
+        mainWindow.width = width;
+        mainWindow.height = height;
+        mainWindow.pixelWidth = pixelWidth;
+        mainWindow.pixelHeight = pixelHeight;
+        mainWindow.minimized = pixelWidth == 0 || pixelHeight == 0;
+    }
+
+    void Engine::setWindowContentScale(float scale)
+    {
+        if (config.platform == PlatformType::SDL)
+        {
+            spdlog::warn("setWindowContentScale: the SDL platform reads its display's scale itself.");
+            return;
+        }
+        if (!(scale > 0.0f))
+        {
+            spdlog::error("setWindowContentScale: the scale must be above 0, not {}.", scale);
+            return;
+        }
+        mainWindow.contentScale = scale;
     }
 
     std::string Engine::resolveAssetPath(const std::string &path) const

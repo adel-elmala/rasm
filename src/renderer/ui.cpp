@@ -145,7 +145,7 @@ namespace rasm
         return capacity;
     }
 
-    // Startup with EngineConfig::ui: the context, the SDL3 input backend (none when headless) and the pipeline. The font atlas is made by the
+    // Startup with EngineConfig::ui: the context, its input from the engine's InputEvents and the pipeline. The font atlas is made by the
     // first frame's texture requests. A failure leaves the UI off and the engine running.
     bool Engine::createUi()
     {
@@ -160,13 +160,9 @@ namespace rasm
         io.BackendRendererName = "rasm";
         io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasTextures;
 
-        // The style and the fonts follow the display's scale, so the UI keeps its size on a 150 % or 4K display.
-        const float scale = getUiContentScale(mainWindow);
-        ImGuiStyle &style = ImGui::GetStyle();
-        style.ScaleAllSizes(scale);
-        style.FontScaleDpi = scale;
-
-        ui->platform = initUiPlatform(mainWindow);
+        ui->scale = mainWindow.contentScale;
+        setUiScale(ui->scale);
+        initUiPlatform(*platform);
         // Dear ImGui's colors and its blending are meant for sRGB numbers. Through the swapchain's UNORM view the blend
         // works on them, as ImGui's own backends do; without one the shader decodes the colors and the blend is in
         // linear light, which makes light text on a dark window look a little bolder.
@@ -175,13 +171,13 @@ namespace rasm
         const Format colorFormats[MAX_COLOR_ATTACHMENTS] = {ui->encoded ? encodedFormat : ctx.getSwapchainImageFormat()};
         const std::string source = std::string(ui->encoded ? "#define RASM_UI_ENCODED 1\n" : "") + readFile(pathFromUtf8(config.shaderDir) / "passes/ui.slang");
         ui->pipeline = createGraphicsPipeline("ui", source, colorFormats, Format::UNKNOWN, "vertMain", "fragMain", BlendMode::PREMULTIPLIED_ALPHA, false);
-        if (!ui->platform || !ui->pipeline.isValid())
+        if (!ui->pipeline.isValid())
         {
             spdlog::error("Failed to start the UI; it stays off.");
             destroyUi();
             return false;
         }
-        spdlog::info("Dear ImGui {} is on, at a scale of {:.2f}; F1 shows the RASM window.", ImGui::GetVersion(), scale);
+        spdlog::info("Dear ImGui {} is on, at a scale of {:.2f}; F1 shows the RASM window.", ImGui::GetVersion(), ui->scale);
         return true;
     }
 
@@ -197,8 +193,8 @@ namespace rasm
                 texture->SetTexID(ImTextureID_Invalid);
                 texture->SetStatus(ImTextureStatus_Destroyed);
             }
-            if (ui->platform)
-                shutdownUiPlatform(mainWindow);
+            suspendUiPlatform(*platform, mainWindow, ui->platformState);
+            shutdownUiPlatform();
             ImGui::GetIO().BackendRendererName = nullptr;
             ImGui::GetIO().BackendFlags &= ~(ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasTextures);
             ImGui::DestroyContext(ui->context);
@@ -219,15 +215,23 @@ namespace rasm
         const bool active = config.showStats || static_cast<bool>(ui->callback);
         if (!active)
         {
+            if (ui->active)
+                suspendUiPlatform(*platform, mainWindow, ui->platformState);
             ui->active = false;
             return;
         }
         ZoneScopedN("UI");
         // The UI got no events while it slept: keys would stay down and the mouse would be where it was.
         if (!ui->active)
-            resumeUiInput(mainWindow);
+            resumeUiInput(*inputState);
         ui->active = true;
 
+        // The window moved to a display of another scale, or its scale setting changed.
+        if (mainWindow.contentScale != ui->scale)
+        {
+            ui->scale = mainWindow.contentScale;
+            setUiScale(ui->scale);
+        }
         newUiPlatformFrame(mainWindow, deltaTime);
         ImGui::NewFrame();
         drawFrozenFrustums(camera);
@@ -236,6 +240,7 @@ namespace rasm
         if (ui->callback)
             ui->callback();
         ImGui::Render();
+        updateUiPlatform(*platform, mainWindow, ui->platformState);
 
         const ImDrawData *drawData = ImGui::GetDrawData();
         if (drawData->Textures)

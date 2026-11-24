@@ -570,7 +570,7 @@ namespace rasm
 
         const bool headless = config.platform == PlatformType::HEADLESS;
         impl->device = rhi::createDevice(backend, {.appName = config.appName,
-                                                   .window = headless ? nullptr : &window,
+                                                   .window = headless ? nullptr : &window.native,
                                                    .enableValidation = config.enableValidation,
                                                    .enableSyncValidation = config.enableSyncValidation,
                                                    .enableGpuValidation = config.enableGpuValidation,

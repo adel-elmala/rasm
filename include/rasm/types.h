@@ -35,11 +35,35 @@ namespace rasm
 
     // Who owns the window and the input. SDL: RASM opens a window and reads its events. HEADLESS: no window and no
     // events; each frame renders into an offscreen swapchain of windowWidth x windowHeight pixels, which
-    // Engine::readFrame copies back.
+    // Engine::readFrame copies back. NATIVE: the application's window (EngineConfig::nativeWindow), its event loop and
+    // its input, which it passes on with Engine::addInputEvent, setWindowSize and setWindowContentScale.
     enum class PlatformType
     {
         SDL,
         HEADLESS,
+        NATIVE,
+    };
+
+    enum class NativeWindowType
+    {
+        NONE,
+        WINDOWS,
+        X11,
+        XCB,
+        WAYLAND,
+        METAL,
+    };
+
+    // A window of the application's, which RASM draws into. RASM never changes it, and it must live longer than the
+    // engine. An X11 or XCB window is its id cast to a pointer.
+    struct NativeWindow
+    {
+        NativeWindowType type                = NativeWindowType::NONE;
+        void*            display             = nullptr;  // WINDOWS: HINSTANCE (nullptr: the executable's); X11: Display*; XCB: xcb_connection_t*; WAYLAND: wl_display*
+        void*            window              = nullptr;  // WINDOWS: HWND; X11: Window; XCB: xcb_window_t; WAYLAND: wl_surface*; METAL: CAMetalLayer*
+        uint32_t         pixelWidth          = 0;        // the drawable's size in pixels; 0: EngineConfig::windowWidth x windowHeight
+        uint32_t         pixelHeight         = 0;
+        float            contentScale        = 1.0f;     // the display's scale setting (1.5 at 150 %), which sizes the UI
     };
 
     enum class Format
@@ -176,8 +200,9 @@ namespace rasm
     {
         std::string  appName                 = {};
         PlatformType platform                = PlatformType::SDL;
-        int          windowWidth             = 0;        // headless: the offscreen swapchain's size in pixels
+        int          windowWidth             = 0;        // in points, which mouse positions use; headless: the offscreen swapchain's size in pixels
         int          windowHeight            = 0;
+        NativeWindow nativeWindow            = {};       // PlatformType::NATIVE: the window to draw into
         bool         enableValidation        = false;
         bool         enableSyncValidation    = false;
         bool         enableGpuValidation     = false;

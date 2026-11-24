@@ -3,7 +3,7 @@
 #include "rhi/vulkan/vulkanSwapchain.h"
 #include "rhi/vulkan/vulkanUtils.h"
 #include "rhi/mipChain.h"
-#include "platform/windowSurface.h"
+#include "rhi/vulkan/vulkanSurface.h"
 
 #include "spdlog/spdlog.h"
 
@@ -36,23 +36,13 @@ namespace rasm::rhi
             return desc.encodedView && desc.format == Format::R8G8B8A8_SRGB && !desc.cube;
         }
 
-        // The loader and volk's global functions, for the whole process (D24). With a window they come from SDL, which
-        // loaded the loader for the window, so the surface and the instance come from one library; headless, volk finds
-        // the loader. A 1.3 loader is enough: Vulkan 1.4 added only device-level commands, and those come from the
-        // driver through each device's table.
-        bool loadVulkan(bool window)
+        // The loader and volk's global functions, for the whole process (D24), with or without a window: the surface is
+        // made from the window's native handle (createVulkanSurface), so the instance and the surface come from one
+        // library. A 1.3 loader is enough: Vulkan 1.4 added only device-level commands, and those come from the driver
+        // through each device's table.
+        bool loadVulkan()
         {
-            if (window)
-            {
-                const PFN_vkGetInstanceProcAddr getInstanceProcAddr = getWindowVulkanLoader();
-                if (getInstanceProcAddr == nullptr)
-                {
-                    spdlog::error("The window has no Vulkan loader ({}).", LOADER_NAME);
-                    return false;
-                }
-                volkInitializeCustom(getInstanceProcAddr);
-            }
-            else if (volkInitialize() != VK_SUCCESS)
+            if (volkInitialize() != VK_SUCCESS)
             {
                 spdlog::error("No Vulkan loader found ({}). Install a GPU driver with Vulkan 1.4.", LOADER_NAME);
                 return false;
@@ -566,7 +556,7 @@ namespace rasm::rhi
 
     bool VulkanDevice::initialize(const DeviceDesc &desc)
     {
-        if (!loadVulkan(desc.window != nullptr))
+        if (!loadVulkan())
             return false;
 
         auto vkbInstance = initInstance(desc, debugUtilsEnabled);
@@ -576,7 +566,7 @@ namespace rasm::rhi
         volkLoadInstanceOnly(instance.instance);
 
         // Headless: no window, so no surface; the frames go to an OffscreenSwapchain.
-        if (desc.window != nullptr && !createWindowSurface(*desc.window, instance.instance, &surface))
+        if (desc.window != nullptr && !createVulkanSurface(*desc.window, instance.instance, &surface))
             return false;
 
         auto vkbPhysicalDevice = initPhysicalDevice(instance, surface);

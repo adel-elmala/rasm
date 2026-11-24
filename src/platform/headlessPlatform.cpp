@@ -5,6 +5,7 @@ namespace rasm
     namespace
     {
         // No window and no events: the application drives every frame, and the frames go to the offscreen swapchain.
+        // Its input, if any, comes through Engine::addInputEvent.
         class HeadlessPlatform final : public Platform
         {
         public:
@@ -20,7 +21,7 @@ namespace rasm
 
             void destroyWindow(const Window &) override {}
 
-            void pollEvents(Window &, bool, PlatformEvents &) override {}
+            void pollEvents(Window &, std::vector<InputEvent> &, bool &) override {}
         };
     }
 

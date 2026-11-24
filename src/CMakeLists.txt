@@ -38,6 +38,8 @@ target_sources(rasm PRIVATE
     "core/workerPool.cpp"
     "platform/paths.cpp"
     "platform/headlessPlatform.cpp"
+    "platform/input.cpp"
+    "platform/nativePlatform.cpp"
     "platform/sdlPlatform.cpp"
     "assets/mesh.cpp"
     "assets/meshImport.cpp"
@@ -91,11 +93,12 @@ target_sources(rasm PRIVATE
     "rhi/vulkan/vulkanDevice.cpp"
     "rhi/vulkan/vulkanPipelineCache.cpp"
     "rhi/vulkan/vulkanQueue.cpp"
+    "rhi/vulkan/vulkanSurface.cpp"
     "rhi/vulkan/vulkanSwapchain.cpp"
     "rhi/vulkan/vulkanUtils.cpp"
 )
 
-# Dear ImGui: the UI renderer, the RASM window and the SDL3 input. PUBLIC, so the application's ImGui calls use the same
+# Dear ImGui: the UI renderer, the RASM window and its input from RASM's InputEvents. PUBLIC, so the application's ImGui calls use the same
 # static library and context as RASM's, and RASM_IMGUI tells its code that the UI exists.
 if (RASM_IMGUI)
     target_sources(rasm PRIVATE
