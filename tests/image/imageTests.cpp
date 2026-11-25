@@ -488,6 +488,78 @@ namespace
         return assets.cube.isValid() && addSunsetLight(engine, assets, content, 1.0f, glm::vec3(0.45f, -0.75f, -0.5f), 3.0f);
     }
 
+    // A terrain tile of cells x cells over [x0, x0 + size] x [z0, z0 + size]: heights on the world's grid of 1/64 m, so
+    // neighbours share bit-equal edges and border samples, and an image of rings whose colour is the tile's level.
+    void addTerrainTile(rasm::Engine &engine, Content &content, double x0, double z0, double size, uint32_t cells, const glm::vec3 &tint)
+    {
+        constexpr double STEP = 1.0 / 64.0;
+        const uint32_t width = cells + 3;
+        const double cell = size / cells;
+        std::vector<int64_t> steps(static_cast<size_t>(width) * width);
+        int64_t lowest = INT64_MAX;
+        int64_t highest = INT64_MIN;
+        for (uint32_t j = 0; j < width; ++j)
+        {
+            for (uint32_t i = 0; i < width; ++i)
+            {
+                const double x = x0 + (static_cast<double>(i) - 1.0) * cell;
+                const double z = z0 + (static_cast<double>(j) - 1.0) * cell;
+                const double height = 1.6 * std::sin(x * 0.45) * std::cos(z * 0.35) + 0.5 * std::sin(x * 1.3 + z * 0.9);
+                steps[static_cast<size_t>(j) * width + i] = std::llround(height / STEP);
+                lowest = std::min(lowest, steps[static_cast<size_t>(j) * width + i]);
+                highest = std::max(highest, steps[static_cast<size_t>(j) * width + i]);
+            }
+        }
+        std::vector<uint16_t> samples(steps.size());
+        for (size_t k = 0; k < steps.size(); ++k)
+            samples[k] = static_cast<uint16_t>(steps[k] - lowest);
+        const rasm::TextureHandle heights = engine.createTexture({.name = "terrain heights", .width = width, .height = width, .format = rasm::Format::R16_UNORM, .usage = rasm::TextureUsage::SAMPLED});
+        engine.getRenderContext().fillTexture(heights, samples.data());
+        // Rings around the world's origin, so lines that run across tiles show a seam if there is one.
+        constexpr uint32_t IMAGE = 64;
+        std::vector<uint8_t> pixels(IMAGE * IMAGE * 4);
+        for (uint32_t j = 0; j < IMAGE; ++j)
+        {
+            for (uint32_t i = 0; i < IMAGE; ++i)
+            {
+                const double x = x0 + size * (i + 0.5) / IMAGE;
+                const double z = z0 + size * (j + 0.5) / IMAGE;
+                const float ring = 0.65f + 0.35f * static_cast<float>(std::cos(std::sqrt(x * x + z * z) * 2.0));
+                const glm::vec3 color = tint * ring;
+                for (uint32_t c = 0; c < 3; ++c)
+                    pixels[(j * IMAGE + i) * 4 + c] = static_cast<uint8_t>(255.0f * glm::clamp(color[c], 0.0f, 1.0f));
+                pixels[(j * IMAGE + i) * 4 + 3] = 255;
+            }
+        }
+        const rasm::TextureHandle imagery = engine.createTexture({.name = "terrain imagery", .width = IMAGE, .height = IMAGE, .format = rasm::Format::R8G8B8A8_SRGB, .usage = rasm::TextureUsage::SAMPLED});
+        engine.getRenderContext().fillTexture(imagery, pixels.data());
+        const rasm::TerrainTile tile = engine.createTerrainTile({.center = glm::dvec3(x0 + 0.5 * size, 0.0, z0 + 0.5 * size),
+                                                                 .size = size,
+                                                                 .terrain = {.heights = heights,
+                                                                             .heightScale = static_cast<float>(STEP),
+                                                                             .heightOffset = static_cast<float>(static_cast<double>(lowest) * STEP),
+                                                                             .minHeight = static_cast<float>(static_cast<double>(lowest) * STEP),
+                                                                             .maxHeight = static_cast<float>(static_cast<double>(highest) * STEP),
+                                                                             .skirt = static_cast<float>(0.1 * size)},
+                                                                 .imagery = imagery});
+        engine.addEntityToScene(content.scene, tile.entity);
+        content.entities.push_back(tile.entity);
+    }
+
+    // Terrain of two levels side by side: three tiles of 8 m with 16 cells, and four of 4 m in the fourth quarter, so the
+    // levels meet along two edges (T-junctions the skirts hide). The sun's shadows fall across the tiles.
+    bool buildTerrain(rasm::Engine &engine, const Assets &assets, Content &content)
+    {
+        for (int32_t i = 0; i < 3; ++i)
+            addTerrainTile(engine, content, i % 2 == 0 ? -8.0 : 0.0, i < 2 ? -8.0 : 0.0, 8.0, 16, glm::vec3(0.55f, 0.75f, 0.45f));
+        for (int32_t i = 0; i < 4; ++i)
+            addTerrainTile(engine, content, i % 2 == 0 ? 0.0 : 4.0, i < 2 ? 0.0 : 4.0, 4.0, 16, glm::vec3(0.75f, 0.65f, 0.45f));
+        content.eye = glm::vec3(-6.0f, 7.0f, 11.0f);
+        content.center = glm::vec3(1.0f, 0.0f, 0.0f);
+        content.fovY = 50.0f;
+        return addSunsetLight(engine, assets, content, 0.6f, glm::vec3(0.7f, -0.3f, -0.3f), 3.0f);
+    }
+
     // The tile_streaming test's frame: the streamer's update, and the tiles it hands out get their boxes at once.
     void updateTiles(rasm::Engine &engine, const Assets &assets, const Content &content, rasm::CameraHandle camera)
     {
@@ -530,6 +602,7 @@ namespace
         {.name = "views",         .build = buildViews,         .views = true},
         {.name = "views_window2", .build = buildViews,         .views = true, .secondWindow = true},
         {.name = "tile_streaming", .build = buildTiles},
+        {.name = "terrain",       .build = buildTerrain},
         // The same images drawn by meshlets: the same triangles, so the same pixels. The mesh_ tests take the mesh shaders
         // where the device has them (lavapipe and the desktop GPUs do), else vertex pulling. lavapipe's mesh shaders round a
         // few positions differently from its vertex shaders: up to 3 levels on 0.2% of the pixels after TAA, and a few edge
@@ -547,6 +620,7 @@ namespace
         {.name = "far_shadows",   .build = buildLocalShadows,  .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "local_shadows"},
         {.name = "far_skinning",  .build = buildSkinning,      .time = 1.25, .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "skinning"},
         {.name = "far_taa",       .build = buildHelmet,        .taa = true, .frames = 16, .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "taa"},
+        {.name = "far_terrain",   .build = buildTerrain,       .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "terrain"},
     };
     // clang-format on
 
