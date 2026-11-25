@@ -81,6 +81,33 @@ struct ShadowMap
     float       split;          // a cascade's: the view depth where it ends
 };
 
+// Must match rasm::gfx::GridData: the camera's reference grid in the view's render space (passes/grid.slang).
+struct GridData
+{
+    float3      axisX;          // the plane's X axis
+    float       height;         // the view origin's height above the plane, along normal
+    float3      axisZ;
+    float       cellSize;       // the finest level's cells
+    float3      normal;
+    float       subdivisions;
+    uint32_t    residueX;       // floor(the origin's X on the plane / cellSize) modulo period
+    uint32_t    residueZ;
+    float       fractionX;      // the rest, in cells
+    float       fractionZ;
+    float2      originCells;    // the origin on the plane in cells, rounded: the axes and the extent
+    float2      extent;         // half sizes in cells; 0: endless
+    float4      minorColor;
+    float4      majorColor;
+    float4      xAxisColor;     // the line along axisX, alpha 0 without axes
+    float4      zAxisColor;
+    float       lineWidth;      // pixels
+    float       majorLineWidth;
+    float       fadeDistance;   // 0: no fade
+    uint32_t    levelCount;     // the levels above the finest; 0: no grid
+    uint32_t    period;         // subdivisions^levelCount
+    uint32_t    zero;           // keeps the size a multiple of 8
+};
+
 struct MetallicRoughnessMaterial
 {
     float4      baseColorFactor;
@@ -260,6 +287,7 @@ struct SceneData
     uint32_t            zero;                   // 0, which the shader compiler cannot know (renderSpace.slang)
     float4              environmentOrientation; // quaternion (x, y, z, w): the environment's frame in the world (environment.slang)
     float*              labelsPtr;              // a shaded view's label slots' alpha (lib/vector.slang); null: every label shown
+    GridData            grid;                   // the camera's grid, levelCount 0 without one
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.

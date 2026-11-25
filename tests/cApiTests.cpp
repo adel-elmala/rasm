@@ -2,6 +2,8 @@
 #include "rasm/assetLoader.h"
 #include "rasm/vector.h"
 #include "rasm/picking.h"
+#include "rasm/grid.h"
+#include "rasm/cameraInput.h"
 #include "rasm/light.h"
 #include "rasm/scene.h"
 #include "rasm/input.h"
@@ -754,6 +756,98 @@ TEST_CASE("the 1.7 structs start from the C++ defaults, and a pick call with a b
     uint32_t x = 0;
     uint32_t y = 0;
     CHECK(rasm_get_view_pixel(nullptr, rasm_window{}, nullptr, 1.0f, 1.0f, &x, &y) == RASM_FALSE);
+}
+
+TEST_CASE("the 1.8 structs start from the C++ defaults, and a grid call with a bad argument gives a last error")
+{
+    const rasm::Grid defaults;
+    rasm_grid grid;
+    REQUIRE(rasm_grid_init(&grid, sizeof(grid)) == RASM_OK);
+    CHECK(grid.size == sizeof(grid));
+    CHECK(grid.enabled == RASM_FALSE);
+    CHECK(grid.orientation.w == 1.0f);
+    CHECK(grid.cell_size == defaults.cellSize);
+    CHECK(grid.subdivisions == defaults.subdivisions);
+    CHECK(grid.minor_color.w == defaults.minorColor.w);
+    CHECK(grid.major_line_width == defaults.majorLineWidth);
+    CHECK(grid.axes == RASM_TRUE);
+    CHECK(grid.z_axis_color.z == defaults.zAxisColor.z);
+    CHECK(grid.fade_distance == 0.0f);
+    rasm_camera_buttons buttons;
+    REQUIRE(rasm_camera_buttons_init(&buttons, sizeof(buttons)) == RASM_OK);
+    CHECK(buttons.left == RASM_CAMERA_DRAG_ORBIT);
+    CHECK(buttons.right == RASM_CAMERA_DRAG_PAN);
+    CHECK(buttons.middle == RASM_CAMERA_DRAG_PAN);
+    CHECK(buttons.back == RASM_CAMERA_DRAG_NONE);
+    CHECK(buttons.shift_left == RASM_CAMERA_DRAG_PAN);
+    rasm_camera_input input;
+    REQUIRE(rasm_camera_input_init(&input, sizeof(input)) == RASM_OK);
+    CHECK(input.pointer.x == 0.0f);
+    CHECK(input.pan_end.y == 0.0f);
+
+    CHECK(rasm_set_camera_grid(nullptr, rasm_camera{}, &grid) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(contains(rasm_get_last_error(), "renderer is NULL"));
+    CHECK(rasm_get_camera_grid(nullptr, rasm_camera{}, &grid) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(rasm_set_camera_buttons(nullptr, &buttons) == RASM_ERROR_INVALID_ARGUMENT);
+    buttons.middle = 7;
+    CHECK(rasm_camera_input_state_set_buttons(nullptr, &buttons) == RASM_ERROR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("a C rig zooms an orthographic box at the pointer, and a mapped button pans")
+{
+    rasm_camera_controller controller;
+    rasm_camera_controller_init(&controller, sizeof(controller));
+    controller.type = RASM_CAMERA_CONTROLLER_TYPE_TRACK_BALL;
+    controller.track_ball_radius = 10.0f;
+    controller.easing_speed = 0.0f;
+    rasm_transform transform = {{0.0f, 0.0f, 10.0f}, {0.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}};
+    rasm_camera_rig *rig = rasm_camera_rig_create(&controller, &transform);
+    REQUIRE(rig != nullptr);
+    rasm_camera_projection projection;
+    rasm_camera_projection_init(&projection, sizeof(projection));
+    projection.type = RASM_PROJECTION_TYPE_ORTHOGRAPHIC;
+    projection.left = -8.0f;
+    projection.right = 8.0f;
+    projection.bottom = -4.0f;
+    projection.top = 4.0f;
+    projection.near_z = 0.1f;
+    projection.far_z = 50.0f;
+    rasm_camera_input input;
+    rasm_camera_input_init(&input, sizeof(input));
+    input.wheel_delta = 1.0f;
+    input.pointer = {0.5f, 0.0f};
+    REQUIRE(rasm_camera_rig_update_projection(rig, &projection, &input) == RASM_OK);
+    CHECK(projection.right == doctest::Approx(8.0f * RASM_CAMERA_WHEEL_ZOOM));
+    rasm_transform pose;
+    rasm_transform target;
+    REQUIRE(rasm_camera_rig_get_transform(rig, &pose, &target) == RASM_OK);
+    // The pointer is 2 units right of the axis; that point stays: the camera moves 2 x (1 - 0.9).
+    CHECK(pose.position.x == doctest::Approx(0.2f));
+
+    // The right button maps to ORBIT here, so a right drag gives the orbit fields and no pan.
+    rasm_camera_buttons buttons;
+    rasm_camera_buttons_init(&buttons, sizeof(buttons));
+    buttons.right = RASM_CAMERA_DRAG_ORBIT;
+    rasm_camera_input_state *state = rasm_camera_input_state_create();
+    REQUIRE(rasm_camera_input_state_set_buttons(state, &buttons) == RASM_OK);
+    const rasm_input_area area = {0.0f, 0.0f, 400.0f, 400.0f};
+    rasm_input_event event;
+    rasm_input_event_init(&event, sizeof(event));
+    event.type = RASM_INPUT_EVENT_TYPE_MOUSE_BUTTON;
+    event.button = RASM_MOUSE_BUTTON_RIGHT;
+    event.down = RASM_TRUE;
+    event.x = 200.0f;
+    event.y = 200.0f;
+    REQUIRE(rasm_camera_input_state_add_event(state, &event, &area, nullptr) == RASM_OK);
+    event.type = RASM_INPUT_EVENT_TYPE_MOUSE_MOVE;
+    event.x = 300.0f;
+    REQUIRE(rasm_camera_input_state_add_event(state, &event, &area, nullptr) == RASM_OK);
+    REQUIRE(rasm_camera_input_state_take(state, nullptr, 0.016f, &input) == RASM_OK);
+    CHECK(input.mouse_end.x == doctest::Approx(0.5f));
+    CHECK(input.pan_end.x == input.pan_start.x);
+    CHECK(input.pointer.x == doctest::Approx(0.5f));
+    rasm_camera_input_state_destroy(state);
+    rasm_camera_rig_destroy(rig);
 }
 
 TEST_CASE("a font atlas and labels build on any thread, with no renderer")

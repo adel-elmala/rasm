@@ -24,7 +24,7 @@
 
 // NOLINTBEGIN(readability-identifier-naming): C names, snake_case with the rasm_ prefix, as C APIs and their bindings expect
 #define RASM_C_API_VERSION_MAJOR    1
-#define RASM_C_API_VERSION_MINOR    7
+#define RASM_C_API_VERSION_MINOR    8
 #define RASM_C_API_VERSION          (((uint32_t)RASM_C_API_VERSION_MAJOR << 16) | (uint32_t)RASM_C_API_VERSION_MINOR)
 
 #if defined(_WIN32)
@@ -721,6 +721,9 @@ typedef struct rasm_camera_input
     rasm_bool                       backward;
     rasm_bool                       left;
     rasm_bool                       right;
+    rasm_vec2                       pan_start;                                 /* 1.8: the pan drag, NDC */
+    rasm_vec2                       pan_end;
+    rasm_vec2                       pointer;                                   /* 1.8: NDC, where an orthographic view zooms */
 } rasm_camera_input;
 
 typedef struct rasm_camera_controller
@@ -1060,6 +1063,48 @@ typedef struct rasm_pick_hit
     double                          distance;                                  /* from the camera */
 } rasm_pick_hit;
 
+/* 1.8: what a mouse button's drag does (rasm/cameraInput.h), and a camera's reference grid (rasm/grid.h). */
+typedef uint32_t                    rasm_camera_drag;
+enum
+{
+    RASM_CAMERA_DRAG_NONE           = 0,
+    RASM_CAMERA_DRAG_ORBIT          = 1,
+    RASM_CAMERA_DRAG_PAN            = 2,
+};
+
+#define RASM_CAMERA_WHEEL_ZOOM      0.9f        /* 1.8: a wheel step's scale of a trackball's radius or an orthographic box */
+#define RASM_MIN_TRACK_BALL_RADIUS  1e-4f       /* 1.8 */
+
+typedef struct rasm_camera_buttons
+{
+    uint32_t                        size;
+    rasm_camera_drag                left;                                      /* ORBIT by default */
+    rasm_camera_drag                right;                                     /* PAN */
+    rasm_camera_drag                middle;                                    /* PAN */
+    rasm_camera_drag                back;                                      /* NONE */
+    rasm_camera_drag                forward;                                   /* NONE */
+    rasm_camera_drag                shift_left;                                /* PAN: the left button with shift held */
+} rasm_camera_buttons;
+
+typedef struct rasm_grid
+{
+    uint32_t                        size;
+    rasm_bool                       enabled;
+    rasm_dvec3                      origin;                                    /* world space */
+    rasm_quat                       orientation;                               /* the plane is its local XZ plane */
+    double                          cell_size;                                 /* the finest level's cells; 1 by default */
+    uint32_t                        subdivisions;                              /* 2 to 1000; 10 by default */
+    rasm_vec2                       extent;                                    /* half sizes along X and Z; 0: endless */
+    rasm_vec4                       minor_color;                               /* linear, with alpha */
+    rasm_vec4                       major_color;
+    float                           line_width;                                /* pixels */
+    float                           major_line_width;
+    rasm_bool                       axes;
+    rasm_vec4                       x_axis_color;
+    rasm_vec4                       z_axis_color;
+    float                           fade_distance;                             /* perspective; 0: no fade */
+} rasm_grid;
+
 typedef void (RASM_CALL* rasm_log_callback)(void* user_data, rasm_log_level level, const char* message);
 
 /* The library */
@@ -1329,6 +1374,21 @@ RASM_C_API rasm_bool        RASM_CALL rasm_is_pick_ready(rasm_renderer* renderer
 RASM_C_API rasm_result      RASM_CALL rasm_take_pick(rasm_renderer* renderer, rasm_pick pick, rasm_pick_hit* hits, uint32_t capacity, uint32_t* hit_count);
 RASM_C_API rasm_bool        RASM_CALL rasm_is_entity_alive(rasm_renderer* renderer, rasm_entity entity);
 RASM_C_API rasm_bool        RASM_CALL rasm_get_view_pixel(rasm_renderer* renderer, rasm_window window, const rasm_view_rect* rect, float x, float y, uint32_t* pixel_x, uint32_t* pixel_y);
+
+/* Added in 1.8: orthographic controls and reference grids. A camera input state's buttons decide which drag each mouse
+ * button starts (rasm_camera_buttons_init: left orbits, right, middle and shift + left pan); rasm_set_camera_buttons sets
+ * the renderer's own. A trackball pans its center with a pan drag, and its wheel scales the radius by
+ * RASM_CAMERA_WHEEL_ZOOM a step, or, for an orthographic projection, the box at the pointer: rasm_update_camera passes the
+ * camera's projection, rasm_camera_rig_update_projection takes one and writes it back. rasm_set_camera_grid draws a
+ * reference grid in every shaded view of the camera (rasm_grid_init: disabled, the XZ plane through the origin, 1 unit
+ * cells in levels of 10). */
+RASM_C_API rasm_result      RASM_CALL rasm_camera_buttons_init(rasm_camera_buttons* buttons, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_set_camera_buttons(rasm_renderer* renderer, const rasm_camera_buttons* buttons);
+RASM_C_API rasm_result      RASM_CALL rasm_camera_input_state_set_buttons(rasm_camera_input_state* state, const rasm_camera_buttons* buttons);
+RASM_C_API rasm_result      RASM_CALL rasm_camera_rig_update_projection(rasm_camera_rig* rig, rasm_camera_projection* projection, const rasm_camera_input* input);
+RASM_C_API rasm_result      RASM_CALL rasm_grid_init(rasm_grid* grid, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_set_camera_grid(rasm_renderer* renderer, rasm_camera camera, const rasm_grid* grid);
+RASM_C_API rasm_result      RASM_CALL rasm_get_camera_grid(rasm_renderer* renderer, rasm_camera camera, rasm_grid* grid);
 
 #ifdef __cplusplus
 }

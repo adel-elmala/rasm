@@ -27,7 +27,78 @@ namespace
                 .bottom = -1.0f,
                 .top = 1.0f};
     }
+
+    rasm_grid toC(const Grid &grid)
+    {
+        return {.size = sizeof(rasm_grid),
+                .enabled = grid.enabled ? RASM_TRUE : RASM_FALSE,
+                .origin = c::toC(grid.origin),
+                .orientation = {grid.orientation.x, grid.orientation.y, grid.orientation.z, grid.orientation.w},
+                .cell_size = grid.cellSize,
+                .subdivisions = grid.subdivisions,
+                .extent = c::toC(grid.extent),
+                .minor_color = c::toC(grid.minorColor),
+                .major_color = c::toC(grid.majorColor),
+                .line_width = grid.lineWidth,
+                .major_line_width = grid.majorLineWidth,
+                .axes = grid.axes ? RASM_TRUE : RASM_FALSE,
+                .x_axis_color = c::toC(grid.xAxisColor),
+                .z_axis_color = c::toC(grid.zAxisColor),
+                .fade_distance = grid.fadeDistance};
+    }
+
+    Grid toCpp(const rasm_grid &grid)
+    {
+        return {.enabled = grid.enabled != 0,
+                .origin = c::toCpp(grid.origin),
+                .orientation = glm::quat(grid.orientation.w, grid.orientation.x, grid.orientation.y, grid.orientation.z),
+                .cellSize = grid.cell_size,
+                .subdivisions = grid.subdivisions,
+                .extent = c::toCpp(grid.extent),
+                .minorColor = c::toCpp(grid.minor_color),
+                .majorColor = c::toCpp(grid.major_color),
+                .lineWidth = grid.line_width,
+                .majorLineWidth = grid.major_line_width,
+                .axes = grid.axes != 0,
+                .xAxisColor = c::toCpp(grid.x_axis_color),
+                .zAxisColor = c::toCpp(grid.z_axis_color),
+                .fadeDistance = grid.fade_distance};
+    }
 }
+
+rasm_result RASM_CALL rasm_grid_init(rasm_grid *grid, uint32_t size)
+try
+{
+    const rasm_grid defaults = toC(Grid{});
+    return c::initSized(grid, size, c::GRID_SIZE_1_8, &defaults, sizeof(defaults), __func__, "grid");
+}
+RASM_C_CATCH_RESULT
+
+rasm_result RASM_CALL rasm_set_camera_grid(rasm_renderer *renderer, rasm_camera camera, const rasm_grid *grid)
+try
+{
+    Renderer *r = c::getRenderer(renderer, __func__);
+    rasm_grid values = toC(Grid{});
+    if (r == nullptr || !c::checkHandle(camera.id, __func__, "camera") || !c::checkPointer(grid, __func__, "grid") ||
+        !c::readSized(grid, c::GRID_SIZE_1_8, &values, sizeof(values), __func__, "grid"))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    return r->setCameraGrid(c::toCpp(camera), toCpp(values)) ? RASM_OK : RASM_ERROR_INVALID_ARGUMENT;
+}
+RASM_C_CATCH_RESULT
+
+rasm_result RASM_CALL rasm_get_camera_grid(rasm_renderer *renderer, rasm_camera camera, rasm_grid *grid)
+try
+{
+    Renderer *r = c::getRenderer(renderer, __func__);
+    if (r == nullptr || !c::checkHandle(camera.id, __func__, "camera"))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    const c::CallErrors errors;
+    const rasm_grid values = toC(r->getCameraGrid(c::toCpp(camera)));
+    if (errors.result() != RASM_OK)
+        return errors.result();
+    return c::writeSized(grid, c::GRID_SIZE_1_8, &values, sizeof(values), __func__, "grid") ? RASM_OK : RASM_ERROR_INVALID_ARGUMENT;
+}
+RASM_C_CATCH_RESULT
 
 rasm_result RASM_CALL rasm_texture_desc_init(rasm_texture_desc *desc, uint32_t size)
 try

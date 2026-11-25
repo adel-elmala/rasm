@@ -34,6 +34,11 @@ namespace
         return {.type = InputEventType::MOUSE_BUTTON, .down = down, .x = x, .y = y};
     }
 
+    InputEvent press(rasm::MouseButton which, float x, float y, bool down, uint8_t modifiers = 0)
+    {
+        return {.type = InputEventType::MOUSE_BUTTON, .down = down, .modifiers = modifiers, .button = which, .x = x, .y = y};
+    }
+
     InputEvent move(float x, float y)
     {
         return {.type = InputEventType::MOUSE_MOVE, .x = x, .y = y};
@@ -79,6 +84,45 @@ TEST_CASE("a drag gives the camera this frame's start and end, and the next fram
     rasm::addCameraInputEvent(state, move(700.0f, 100.0f), window, {});
     input = rasm::takeCameraInput(state, {}, 0.016f);
     CHECK(isNear(input.mouseStart, input.mouseEnd));
+}
+
+TEST_CASE("the button map decides which drag a button starts, and only its release ends it")
+{
+    const InputArea window = WINDOW_800X600;
+    CameraInputState state;
+    rasm::addCameraInputEvent(state, press(rasm::MouseButton::RIGHT, 400.0f, 300.0f, true), window, {});
+    rasm::addCameraInputEvent(state, move(460.0f, 300.0f), window, {});
+    rasm::CameraInput input = rasm::takeCameraInput(state, {}, 0.016f);
+    CHECK(isNear(input.panStart, glm::vec2(0.0f)));
+    CHECK(isNear(input.panEnd, glm::vec2(0.2f, 0.0f)));
+    CHECK(isNear(input.mouseStart, input.mouseEnd));
+    CHECK(isNear(input.pointer, glm::vec2(0.2f, 0.0f)));
+
+    // Another button during the drag changes nothing, and its release does not end the drag.
+    rasm::addCameraInputEvent(state, press(rasm::MouseButton::LEFT, 460.0f, 300.0f, true), window, {});
+    rasm::addCameraInputEvent(state, press(rasm::MouseButton::LEFT, 460.0f, 300.0f, false), window, {});
+    rasm::addCameraInputEvent(state, move(520.0f, 300.0f), window, {});
+    input = rasm::takeCameraInput(state, {}, 0.016f);
+    CHECK(isNear(input.panEnd, glm::vec2(0.4f, 0.0f)));
+    rasm::addCameraInputEvent(state, press(rasm::MouseButton::RIGHT, 520.0f, 300.0f, false), window, {});
+    CHECK(!state.dragActive);
+
+    // Shift + left pans; with every button mapped to ORBIT, the right button orbits as before pans existed.
+    rasm::addCameraInputEvent(state, press(rasm::MouseButton::LEFT, 400.0f, 300.0f, true, rasm::KEY_MOD_SHIFT), window, {});
+    CHECK(state.drag == rasm::CameraDrag::PAN);
+    rasm::addCameraInputEvent(state, press(rasm::MouseButton::LEFT, 400.0f, 300.0f, false), window, {});
+    state.buttons = {.right = rasm::CameraDrag::ORBIT, .middle = rasm::CameraDrag::ORBIT, .back = rasm::CameraDrag::ORBIT, .forward = rasm::CameraDrag::ORBIT, .shiftLeft = rasm::CameraDrag::ORBIT};
+    rasm::addCameraInputEvent(state, press(rasm::MouseButton::RIGHT, 400.0f, 300.0f, true), window, {});
+    rasm::addCameraInputEvent(state, move(400.0f, 240.0f), window, {});
+    input = rasm::takeCameraInput(state, {}, 0.016f);
+    CHECK(isNear(input.mouseEnd, glm::vec2(0.0f, 0.2f)));
+    CHECK(isNear(input.panStart, input.panEnd));
+    rasm::addCameraInputEvent(state, press(rasm::MouseButton::RIGHT, 400.0f, 240.0f, false), window, {});
+
+    // A button mapped to NONE starts nothing.
+    state.buttons.middle = rasm::CameraDrag::NONE;
+    rasm::addCameraInputEvent(state, press(rasm::MouseButton::MIDDLE, 400.0f, 300.0f, true), window, {});
+    CHECK(!state.dragActive);
 }
 
 TEST_CASE("what the UI captures does not reach the camera")

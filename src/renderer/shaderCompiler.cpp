@@ -606,7 +606,8 @@ namespace rasm
                                      {"originLow", offsetof(gfx::SceneData, originLow)},
                                      {"zero", offsetof(gfx::SceneData, zero)},
                                      {"environmentOrientation", offsetof(gfx::SceneData, environmentOrientation)},
-                                     {"labelsPtr", offsetof(gfx::SceneData, labelsPtr)}});
+                                     {"labelsPtr", offsetof(gfx::SceneData, labelsPtr)},
+                                     {"grid", offsetof(gfx::SceneData, grid)}});
 
             valid &= validateStruct(fieldStruct(layouts, scene, "meshletsPtr"), "GeometryMeshlet", sizeof(gfx::GeometryMeshlet),
                                     {{"center", offsetof(gfx::GeometryMeshlet, center)},
@@ -640,6 +641,30 @@ namespace rasm
                                     {{"matrix", offsetof(gfx::ShadowMap, matrix)},
                                      {"texture", offsetof(gfx::ShadowMap, texture)},
                                      {"split", offsetof(gfx::ShadowMap, split)}});
+
+            valid &= validateStruct(fieldStruct(layouts, scene, "grid"), "GridData", sizeof(gfx::GridData),
+                                    {{"axisX", offsetof(gfx::GridData, axisX)},
+                                     {"height", offsetof(gfx::GridData, height)},
+                                     {"axisZ", offsetof(gfx::GridData, axisZ)},
+                                     {"cellSize", offsetof(gfx::GridData, cellSize)},
+                                     {"normal", offsetof(gfx::GridData, normal)},
+                                     {"subdivisions", offsetof(gfx::GridData, subdivisions)},
+                                     {"residueX", offsetof(gfx::GridData, residueX)},
+                                     {"residueZ", offsetof(gfx::GridData, residueZ)},
+                                     {"fractionX", offsetof(gfx::GridData, fractionX)},
+                                     {"fractionZ", offsetof(gfx::GridData, fractionZ)},
+                                     {"originCells", offsetof(gfx::GridData, originCells)},
+                                     {"extent", offsetof(gfx::GridData, extent)},
+                                     {"minorColor", offsetof(gfx::GridData, minorColor)},
+                                     {"majorColor", offsetof(gfx::GridData, majorColor)},
+                                     {"xAxisColor", offsetof(gfx::GridData, xAxisColor)},
+                                     {"zAxisColor", offsetof(gfx::GridData, zAxisColor)},
+                                     {"lineWidth", offsetof(gfx::GridData, lineWidth)},
+                                     {"majorLineWidth", offsetof(gfx::GridData, majorLineWidth)},
+                                     {"fadeDistance", offsetof(gfx::GridData, fadeDistance)},
+                                     {"levelCount", offsetof(gfx::GridData, levelCount)},
+                                     {"period", offsetof(gfx::GridData, period)},
+                                     {"zero", offsetof(gfx::GridData, zero)}});
 
             valid &= validateStruct(fieldStruct(layouts, scene, "vertsPtr"), "VertexFull", sizeof(gfx::VertexFull),
                                     {{"pos", offsetof(gfx::VertexFull, pos)},

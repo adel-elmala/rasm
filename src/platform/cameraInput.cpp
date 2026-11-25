@@ -15,6 +15,24 @@ namespace rasm
         {
             return x >= area.x && x < area.x + area.width && y >= area.y && y < area.y + area.height;
         }
+
+        CameraDrag getDrag(const CameraButtons &buttons, const InputEvent &event)
+        {
+            switch (event.button)
+            {
+            case MouseButton::LEFT:
+                return (event.modifiers & KEY_MOD_SHIFT) != 0 ? buttons.shiftLeft : buttons.left;
+            case MouseButton::RIGHT:
+                return buttons.right;
+            case MouseButton::MIDDLE:
+                return buttons.middle;
+            case MouseButton::BACK:
+                return buttons.back;
+            case MouseButton::FORWARD:
+                return buttons.forward;
+            }
+            return CameraDrag::NONE;
+        }
     }
 
     glm::vec2 toInputNdc(float x, float y, const InputArea &area)
@@ -42,14 +60,20 @@ namespace rasm
             state.pointerY = event.y;
             state.pointerInWindow = true;
             state.pointerSeen = true;
+            state.pointerNdc = toInputNdc(event.x, event.y, area);
             if (!event.down)
             {
-                state.dragActive = false;
+                if (event.button == state.dragButton)
+                    state.dragActive = false;
                 break;
             }
-            if (capture.mouse || !isInArea(event.x, event.y, area))
+            if (state.dragActive || capture.mouse || !isInArea(event.x, event.y, area))
                 break;
-            state.dragStart = toInputNdc(event.x, event.y, area);
+            state.drag = getDrag(state.buttons, event);
+            if (state.drag == CameraDrag::NONE)
+                break;
+            state.dragButton = event.button;
+            state.dragStart = state.pointerNdc;
             state.dragEnd = state.dragStart;
             state.dragActive = true;
             break;
@@ -58,8 +82,9 @@ namespace rasm
             state.pointerY = event.y;
             state.pointerInWindow = true;
             state.pointerSeen = true;
+            state.pointerNdc = toInputNdc(event.x, event.y, area);
             if (state.dragActive)
-                state.dragEnd = toInputNdc(event.x, event.y, area);
+                state.dragEnd = state.pointerNdc;
             break;
         case InputEventType::MOUSE_WHEEL:
             // Wheel events carry no position. Before the first move, a wheel over the window counts.
@@ -87,11 +112,16 @@ namespace rasm
 
     CameraInput takeCameraInput(CameraInputState &state, const UiInputCapture &capture, float deltaTime)
     {
-        CameraInput input = {.wheelDelta = state.wheel, .deltaTime = deltaTime};
-        if (state.dragActive)
+        CameraInput input = {.wheelDelta = state.wheel, .deltaTime = deltaTime, .pointer = state.pointerNdc};
+        if (state.dragActive && state.drag == CameraDrag::ORBIT)
         {
             input.mouseStart = state.dragStart;
             input.mouseEnd = state.dragEnd;
+        }
+        else if (state.dragActive && state.drag == CameraDrag::PAN)
+        {
+            input.panStart = state.dragStart;
+            input.panEnd = state.dragEnd;
         }
         if (!capture.keyboard)
         {

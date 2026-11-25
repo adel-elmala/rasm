@@ -216,7 +216,7 @@ TEST_CASE("an update without input keeps a new trackball camera's pose")
     CHECK(isNear(engine.getCameraTransform(camera).position, transform.position));
 }
 
-TEST_CASE("the trackball wheel zooms toward the center and stops there")
+TEST_CASE("the trackball wheel scales the radius by a step each and never reaches the center")
 {
     rasm::Engine engine(headlessConfig());
     rasm::Transform transform;
@@ -225,11 +225,60 @@ TEST_CASE("the trackball wheel zooms toward the center and stops there")
     engine.setCameraController(camera, trackBall(5.0f, glm::vec3(0.0f)));
 
     engine.updateCamera(camera, rasm::CameraInput{.wheelDelta = 2.0f});
-    CHECK(isNear(engine.getCameraTransform(camera).position, glm::vec3(0.0f, 0.0f, 3.0f)));
+    CHECK(isNear(engine.getCameraTransform(camera).position, glm::vec3(0.0f, 0.0f, 5.0f * 0.81f)));
+    engine.updateCamera(camera, rasm::CameraInput{.wheelDelta = -2.0f});
+    CHECK(isNear(engine.getCameraTransform(camera).position, glm::vec3(0.0f, 0.0f, 5.0f)));
 
-    engine.updateCamera(camera, rasm::CameraInput{.wheelDelta = 10.0f});
-    CHECK(isNear(engine.getCameraTransform(camera).position, glm::vec3(0.0f)));
-    CHECK(engine.getCameraController(camera).trackBall.radius == doctest::Approx(0.0f));
+    engine.updateCamera(camera, rasm::CameraInput{.wheelDelta = 1000.0f});
+    CHECK(engine.getCameraController(camera).trackBall.radius == doctest::Approx(rasm::MIN_TRACK_BALL_RADIUS));
+    engine.updateCamera(camera, rasm::CameraInput{.wheelDelta = -1.0f});
+    CHECK(engine.getCameraController(camera).trackBall.radius == doctest::Approx(rasm::MIN_TRACK_BALL_RADIUS / rasm::CAMERA_WHEEL_ZOOM));
+}
+
+TEST_CASE("an orthographic trackball zooms its box at the pointer, which stays on the same world point")
+{
+    rasm::Engine engine(headlessConfig());
+    rasm::Transform transform;
+    transform.position = glm::vec3(0.0f, 0.0f, 10.0f);
+    const rasm::CameraProjection box{.type = rasm::CameraProjection::Type::ORTHOGRAPHIC, .orthographic = {.left = -8.0f, .right = 8.0f, .bottom = -4.0f, .top = 4.0f, .nearZ = 0.1f, .farZ = 50.0f}};
+    auto camera = engine.createCamera(box, transform);
+    engine.setCameraController(camera, trackBall(10.0f, glm::vec3(0.0f)));
+
+    // The pointer at (0.5, 0.25) in the input's NDC, which divides by the smaller side: 4 units a step, at (2, 1).
+    const glm::vec2 pointer(0.5f, 0.25f);
+    engine.updateCamera(camera, rasm::CameraInput{.wheelDelta = 3.0f, .pointer = pointer});
+    const rasm::CameraProjection zoomed = engine.getCameraProjection(camera);
+    const float zoom = 0.9f * 0.9f * 0.9f;
+    CHECK(zoomed.orthographic.right == doctest::Approx(8.0f * zoom));
+    CHECK(zoomed.orthographic.top == doctest::Approx(4.0f * zoom));
+    CHECK(engine.getCameraController(camera).trackBall.radius == doctest::Approx(10.0f));
+    // Under the pointer: the camera's position across the view plus the pointer's offset in the box.
+    const glm::dvec3 position = engine.getCameraTransform(camera).position;
+    const float perNdc = 4.0f * zoom;
+    CHECK(position.x + pointer.x * perNdc == doctest::Approx(2.0));
+    CHECK(position.y + pointer.y * perNdc == doctest::Approx(1.0));
+    CHECK(position.z == doctest::Approx(10.0));
+}
+
+TEST_CASE("a pan drag moves the trackball's center with the pointer, in perspective and orthographic views")
+{
+    rasm::Engine engine(headlessConfig());
+    rasm::Transform transform;
+    transform.position = glm::vec3(0.0f, 0.0f, 10.0f);
+    auto camera = engine.createCamera(perspective(), transform);
+    engine.setCameraController(camera, trackBall(10.0f, glm::vec3(0.0f)));
+    // The scene follows the pointer: a drag to the right moves the center to the left, by the view's half height at
+    // the center per NDC unit (perspective() is 60 degrees, aspect 1.5).
+    engine.updateCamera(camera, rasm::CameraInput{.panStart = glm::vec2(0.0f), .panEnd = glm::vec2(0.5f, 0.0f)});
+    const double half = 10.0 * std::tan(glm::radians(30.0));
+    CHECK(engine.getCameraController(camera).trackBall.center.x == doctest::Approx(-0.5 * half).epsilon(1e-5));
+    CHECK(engine.getCameraTransform(camera).position.x == doctest::Approx(-0.5 * half).epsilon(1e-5));
+    CHECK(engine.getCameraTransform(camera).rotation == glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+
+    engine.setCameraProjection(camera, rasm::CameraProjection{.type = rasm::CameraProjection::Type::ORTHOGRAPHIC, .orthographic = {.left = -8.0f, .right = 8.0f, .bottom = -4.0f, .top = 4.0f, .nearZ = 0.1f, .farZ = 50.0f}});
+    engine.setCameraController(camera, trackBall(10.0f, glm::vec3(0.0f)));
+    engine.updateCamera(camera, rasm::CameraInput{.panStart = glm::vec2(0.0f), .panEnd = glm::vec2(0.0f, -0.25f)});
+    CHECK(engine.getCameraController(camera).trackBall.center.y == doctest::Approx(1.0));
 }
 
 TEST_CASE("a trackball drag keeps the camera on the orbit sphere")

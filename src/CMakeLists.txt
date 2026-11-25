@@ -71,6 +71,7 @@ target_sources(rasm_renderer PRIVATE
     "renderer/frameStats.cpp"
     "renderer/geometryPool.cpp"
     "renderer/gpuScene.cpp"
+    "renderer/grid.cpp"
     "renderer/lightClusters.cpp"
     "renderer/animation.cpp"
     "renderer/animationTime.cpp"

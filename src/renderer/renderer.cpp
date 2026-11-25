@@ -399,6 +399,11 @@ namespace rasm
         return cameraInput;
     }
 
+    void Renderer::setCameraButtons(const CameraButtons &buttons)
+    {
+        inputState->camera.buttons = buttons;
+    }
+
     UiInputCapture Renderer::getUiInputCapture() const
     {
 #if defined(RASM_IMGUI)

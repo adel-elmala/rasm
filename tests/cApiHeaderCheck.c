@@ -37,6 +37,9 @@ int main(void)
     rasm_label_desc label;
     rasm_pick_desc pickDesc;
     rasm_pick_hit pickHit;
+    rasm_grid grid;
+    rasm_camera_buttons buttons;
+    rasm_camera camera = {0};
 
     if (rasm_get_version() != RASM_C_API_VERSION)
         return 1;
@@ -87,6 +90,9 @@ int main(void)
     if (rasm_pick_desc_init(&pickDesc, sizeof(pickDesc)) != RASM_OK || pickDesc.rect.width != 1 || pickDesc.min_alpha != 0.5f ||
         rasm_pick_hit_init(&pickHit, sizeof(pickHit)) != RASM_OK || rasm_is_pick_ready(NULL, rasm_pick_view(NULL, &views[0], &pickDesc)) != RASM_FALSE)
         return 16;
+    if (rasm_grid_init(&grid, sizeof(grid)) != RASM_OK || grid.subdivisions != 10 || rasm_camera_buttons_init(&buttons, sizeof(buttons)) != RASM_OK ||
+        buttons.right != RASM_CAMERA_DRAG_PAN || rasm_set_camera_grid(NULL, camera, &grid) != RASM_ERROR_INVALID_ARGUMENT)
+        return 17;
     printf("rasm_c.h %u.%u compiles as C (__STDC_VERSION__ %ld) and links rasm_c_renderer.\n", RASM_C_API_VERSION_MAJOR, RASM_C_API_VERSION_MINOR, (long)__STDC_VERSION__);
     return 0;
 }

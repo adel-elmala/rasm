@@ -911,7 +911,10 @@ namespace rasm::c
                 .forward = input.forward != 0,
                 .backward = input.backward != 0,
                 .left = input.left != 0,
-                .right = input.right != 0};
+                .right = input.right != 0,
+                .panStart = toCpp(input.pan_start),
+                .panEnd = toCpp(input.pan_end),
+                .pointer = toCpp(input.pointer)};
     }
 
     rasm_camera_input toC(const CameraInput &input)
@@ -924,7 +927,10 @@ namespace rasm::c
                 .forward = input.forward ? RASM_TRUE : RASM_FALSE,
                 .backward = input.backward ? RASM_TRUE : RASM_FALSE,
                 .left = input.left ? RASM_TRUE : RASM_FALSE,
-                .right = input.right ? RASM_TRUE : RASM_FALSE};
+                .right = input.right ? RASM_TRUE : RASM_FALSE,
+                .pan_start = toC(input.panStart),
+                .pan_end = toC(input.panEnd),
+                .pointer = toC(input.pointer)};
     }
 
     // The C struct is flat: only the fields of its type reach the union.

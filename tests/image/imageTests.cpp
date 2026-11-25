@@ -107,6 +107,8 @@ namespace
         std::vector<TileBox> tileBoxes;
         std::vector<rasm::TileHandle> cut;
         std::vector<PickProbe> probes;
+        rasm::Grid grid;          // the camera's, its origin moved with the content
+        float orthoHeight = 0.0f; // above 0: an orthographic camera whose box is this high, from the eye
     };
 
     // What every scene may use, loaded once.
@@ -814,6 +816,50 @@ namespace
         return assets.cube.isValid() && font.isValid() && addSunsetLight(engine, assets, content, 0.8f, glm::vec3(0.4f, -0.8f, -0.3f), 2.5f);
     }
 
+    constexpr rasm::Grid FLOOR_GRID = {.enabled = true, .cellSize = 0.01, .fadeDistance = 40.0f};
+    constexpr rasm::Grid ORTHO_GRID = {.enabled = true,
+                                       .origin = glm::dvec3(0.5, 0.02, 0.0),
+                                       .cellSize = 0.1,
+                                       .extent = glm::vec2(3.0f, 2.0f),
+                                       .minorColor = glm::vec4(0.01f, 0.02f, 0.06f, 0.5f),
+                                       .majorColor = glm::vec4(0.01f, 0.02f, 0.06f, 0.9f)};
+
+    // The grid tests' scene: no ground, so the camera's grid is the floor; boxes stand on it, one of them see-through,
+    // which blends over the grid.
+    bool buildGrid(rasm::Engine &engine, const Assets &assets, Content &content)
+    {
+        addEntity(engine, content, "box", assets.cube, createColorMaterial(engine, glm::vec3(0.7f, 0.35f, 0.2f), 0.5f),
+                  rasm::Transform{glm::vec3(-1.0f, 0.5f, -1.5f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(1.0f)});
+        addEntity(engine, content, "tall box", assets.cube, createColorMaterial(engine, glm::vec3(0.25f, 0.45f, 0.7f), 0.5f),
+                  rasm::Transform{glm::vec3(1.6f, 1.0f, -3.0f), glm::angleAxis(0.5f, glm::vec3(0.0f, 1.0f, 0.0f)), glm::vec3(0.8f, 2.0f, 0.8f)});
+        rasm::MaterialHandle glass = createColorMaterial(engine, glm::vec3(0.6f, 0.85f, 0.6f), 0.2f);
+        rasm::Material values = engine.getMaterial(glass);
+        values.alphaMode = rasm::AlphaMode::BLEND;
+        values.params[static_cast<uint32_t>(rasm::PbrParam::ALBEDO) + 3] = 0.45f;
+        engine.updateMaterial(glass, values);
+        addEntity(engine, content, "glass", assets.cube, glass, rasm::Transform{glm::vec3(0.6f, 0.4f, 0.6f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(0.8f)});
+        content.eye = glm::vec3(-1.5f, 1.6f, 4.5f);
+        content.center = glm::vec3(0.3f, 0.0f, -2.0f);
+        content.fovY = 55.0f;
+        content.grid = FLOOR_GRID;
+        return assets.cube.isValid() && addSunsetLight(engine, assets, content, 0.6f, glm::vec3(0.5f, -0.7f, -0.4f), 2.0f);
+    }
+
+    // The same scene through an oblique orthographic box.
+    bool buildGridOrtho(rasm::Engine &engine, const Assets &assets, Content &content)
+    {
+        content.orthoHeight = 7.0f;
+        return buildGrid(engine, assets, content);
+    }
+
+    // The picking scene through an orthographic box from the same eye, with a bounded grid just over its ground.
+    bool buildOrtho(rasm::Engine &engine, const Assets &assets, Content &content)
+    {
+        content.orthoHeight = 6.5f;
+        content.grid = ORTHO_GRID;
+        return buildPicking(engine, assets, content);
+    }
+
     // The tile_streaming test's frame: the streamer's update, and the tiles it hands out get their boxes at once.
     void updateTiles(rasm::Engine &engine, const Assets &assets, const Content &content, rasm::CameraHandle camera)
     {
@@ -867,6 +913,15 @@ namespace
         {.name = "picking",       .build = buildPicking,       .time = 0.5, .picks = true},
         {.name = "picking_msaa4", .build = buildPicking,       .samples = 4, .time = 0.5, .picks = true},
         {.name = "picking_taa",   .build = buildPicking,       .taa = true, .frames = 16, .time = 0.5, .picks = true},
+        // Orthographic views: the picking scene from the same eye (shadows, Hi-Z, terrain, skinning, vectors and labels in
+        // pixels, picks), with a bounded grid just over its ground. The grid tests: levels from 1 cm cells to the horizon,
+        // under perspective, an oblique orthographic box, MSAA and TAA.
+        {.name = "ortho",         .build = buildOrtho,         .time = 0.5, .picks = true},
+        {.name = "ortho_taa",     .build = buildOrtho,         .taa = true, .frames = 16, .time = 0.5, .picks = true},
+        {.name = "grid",          .build = buildGrid},
+        {.name = "grid_ortho",    .build = buildGridOrtho},
+        {.name = "grid_msaa4",    .build = buildGrid,          .samples = 4},
+        {.name = "grid_taa",      .build = buildGrid,          .taa = true, .frames = 16},
         // The same images drawn by meshlets: the same triangles, so the same pixels. The mesh_ tests take the mesh shaders
         // where the device has them (lavapipe and the desktop GPUs do), else vertex pulling. lavapipe's mesh shaders round a
         // few positions differently from its vertex shaders: up to 3 levels on 0.2% of the pixels after TAA, and a few edge
@@ -887,6 +942,7 @@ namespace
         {.name = "far_terrain",   .build = buildTerrain,       .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "terrain"},
         {.name = "far_labels",    .build = buildLabels,        .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "labels"},
         {.name = "far_picking",   .build = buildPicking,       .time = 0.5, .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "picking", .picks = true},
+        {.name = "far_grid",      .build = buildGrid,          .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "grid"},
     };
     // clang-format on
 
@@ -1084,7 +1140,7 @@ namespace
         else
         {
             const double distance = glm::length(point - engine.getCameraTransform(camera).position);
-            const double pixel = 2.0 * distance * std::tan(glm::radians(static_cast<double>(content.fovY)) * 0.5) / HEIGHT;
+            const double pixel = content.orthoHeight > 0.0f ? static_cast<double>(content.orthoHeight) / HEIGHT : 2.0 * distance * std::tan(glm::radians(static_cast<double>(content.fovY)) * 0.5) / HEIGHT;
             error = glm::length(hit->position - point);
             tolerance = probe.pixels * pixel + probe.metres;
         }
@@ -1102,8 +1158,16 @@ namespace
         const Content *content = getContent(engine, assets, camera, test, built);
         if (!content)
             return false;
-        engine.setCameraProjection(camera, rasm::CameraProjection{.type = rasm::CameraProjection::Type::PERSPECTIVE,
-                                                                  .perspective{.fovY = content->fovY, .aspect = static_cast<float>(WIDTH) / static_cast<float>(HEIGHT), .nearZ = 0.1f}});
+        const float aspect = static_cast<float>(WIDTH) / static_cast<float>(HEIGHT);
+        const float halfHeight = 0.5f * content->orthoHeight;
+        if (content->orthoHeight > 0.0f)
+            engine.setCameraProjection(camera, rasm::CameraProjection{.type = rasm::CameraProjection::Type::ORTHOGRAPHIC,
+                                                                      .orthographic{.left = -halfHeight * aspect, .right = halfHeight * aspect, .bottom = -halfHeight, .top = halfHeight, .nearZ = 0.1f, .farZ = 200.0f}});
+        else
+            engine.setCameraProjection(camera, rasm::CameraProjection{.type = rasm::CameraProjection::Type::PERSPECTIVE, .perspective{.fovY = content->fovY, .aspect = aspect, .nearZ = 0.1f}});
+        rasm::Grid grid = content->grid;
+        grid.origin += content->origin;
+        engine.setCameraGrid(camera, grid);
         engine.setCameraTransform(camera, rasm::Transform{content->origin + glm::dvec3(content->eye), glm::quatLookAt(glm::normalize(content->center - content->eye), glm::vec3(0.0f, 1.0f, 0.0f)), glm::vec3(1.0f)});
         engine.setCameraBloomStrength(camera, test.bloom ? 0.15f : 0.0f);
         engine.resetCameraHistory(camera);
