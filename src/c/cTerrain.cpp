@@ -50,14 +50,15 @@ namespace
         return true;
     }
 
-    bool readTileDesc(const rasm_terrain_tile_desc *desc, TerrainTileDesc &tile, const char *function)
-    {
-        rasm_terrain_tile_desc values = toC(TerrainTileDesc{});
-        if (!c::readSized(desc, c::TERRAIN_TILE_DESC_SIZE_1_4, &values, sizeof(values), function, "desc") || !c::checkFinite(values.center, function, "desc->center"))
-            return false;
-        tile = toCpp(values);
-        return true;
-    }
+}
+
+bool rasm::c::readTerrainTileDesc(const rasm_terrain_tile_desc *desc, TerrainTileDesc &tile, const char *function)
+{
+    rasm_terrain_tile_desc values = ::toC(TerrainTileDesc{});
+    if (!readSized(desc, TERRAIN_TILE_DESC_SIZE_1_4, &values, sizeof(values), function, "desc") || !checkFinite(values.center, function, "desc->center"))
+        return false;
+    tile = ::toCpp(values);
+    return true;
 }
 
 rasm_result RASM_CALL rasm_terrain_tile_desc_init(rasm_terrain_tile_desc *desc, uint32_t size)
@@ -83,7 +84,7 @@ try
 {
     Renderer *r = c::getRenderer(renderer, __func__);
     TerrainTileDesc tile;
-    if (r == nullptr || !readTileDesc(desc, tile, __func__) || !c::checkPointer(entity, __func__, "entity") || !c::checkPointer(material, __func__, "material"))
+    if (r == nullptr || !c::readTerrainTileDesc(desc, tile, __func__) || !c::checkPointer(entity, __func__, "entity") || !c::checkPointer(material, __func__, "material"))
         return RASM_ERROR_INVALID_ARGUMENT;
     const c::CallErrors errors;
     const TerrainTile made = r->createTerrainTile(tile);
@@ -97,7 +98,7 @@ rasm_result RASM_CALL rasm_get_terrain_transform(const rasm_terrain_tile_desc *d
 try
 {
     TerrainTileDesc tile;
-    if (!readTileDesc(desc, tile, __func__) || !c::checkPointer(transform, __func__, "transform"))
+    if (!c::readTerrainTileDesc(desc, tile, __func__) || !c::checkPointer(transform, __func__, "transform"))
         return RASM_ERROR_INVALID_ARGUMENT;
     *transform = c::toTransformD(getTerrainTransform(tile));
     return RASM_OK;
@@ -117,7 +118,7 @@ rasm_result RASM_CALL rasm_get_terrain_position(const rasm_terrain_tile_desc *de
 try
 {
     TerrainTileDesc tile;
-    if (!readTileDesc(desc, tile, __func__) || !checkHeights(heights, __func__) || !c::checkPointer(position, __func__, "position"))
+    if (!c::readTerrainTileDesc(desc, tile, __func__) || !checkHeights(heights, __func__) || !c::checkPointer(position, __func__, "position"))
         return RASM_ERROR_INVALID_ARGUMENT;
     *position = c::toC(getTerrainPosition(tile, toCpp(*heights), u, v));
     return RASM_OK;

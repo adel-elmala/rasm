@@ -130,6 +130,12 @@ namespace rasm::c
     rasm_material_desc      toC(const Material& material);
     TerrainMaterial         toCpp(const rasm_terrain_material& terrain);
     rasm_terrain_material   toC(const TerrainMaterial& terrain);
+    VectorMaterial          toCpp(const rasm_vector_material& vector);
+    rasm_vector_material    toC(const VectorMaterial& vector);
+    // A material desc's enums, its vector style's included.
+    bool                    checkMaterialDesc(const rasm_material_desc& desc, const char* function);
+    // A sized rasm_terrain_tile_desc, its defaults past the caller's size.
+    bool                    readTerrainTileDesc(const rasm_terrain_tile_desc* desc, TerrainTileDesc& tile, const char* function);
     SceneEnvironment        toCpp(const rasm_scene_environment& environment);
     rasm_scene_environment  toC(const SceneEnvironment& environment);
     InputEvent              toCpp(const rasm_input_event& event);
@@ -182,6 +188,9 @@ namespace rasm::c
     constexpr size_t        SCENE_ENVIRONMENT_SIZE_1_0      = offsetof(rasm_scene_environment, sky) + sizeof(rasm_bool);
     constexpr size_t        CAMERA_PROJECTION_SIZE_1_0      = offsetof(rasm_camera_projection, top) + sizeof(float);
     constexpr size_t        TERRAIN_TILE_DESC_SIZE_1_4      = offsetof(rasm_terrain_tile_desc, roughness) + sizeof(float);
+    constexpr size_t        MESH_BUILD_OPTIONS_SIZE_1_5     = offsetof(rasm_mesh_build_options, meshlets) + sizeof(rasm_bool);
+    constexpr size_t        LINE_SHAPE_SIZE_1_5             = offsetof(rasm_line_shape, miter_limit) + sizeof(float);
+    constexpr size_t        VECTOR_PLACEMENT_SIZE_1_5       = offsetof(rasm_vector_placement, drape_heights) + sizeof(rasm_terrain_heights);
     // The structs of version 1.1.
     constexpr size_t        WINDOW_DESC_SIZE_1_1            = offsetof(rasm_window_desc, hidden) + sizeof(rasm_bool);
     constexpr size_t        WINDOW_INFO_SIZE_1_1            = offsetof(rasm_window_info, minimized) + sizeof(rasm_bool);

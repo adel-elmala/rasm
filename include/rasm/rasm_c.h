@@ -24,7 +24,7 @@
 
 // NOLINTBEGIN(readability-identifier-naming): C names, snake_case with the rasm_ prefix, as C APIs and their bindings expect
 #define RASM_C_API_VERSION_MAJOR    1
-#define RASM_C_API_VERSION_MINOR    4
+#define RASM_C_API_VERSION_MINOR    5
 #define RASM_C_API_VERSION          (((uint32_t)RASM_C_API_VERSION_MAJOR << 16) | (uint32_t)RASM_C_API_VERSION_MINOR)
 
 #if defined(_WIN32)
@@ -160,6 +160,7 @@ enum
     RASM_MATERIAL_TYPE_PBR          = 0,
     RASM_MATERIAL_TYPE_UNLIT        = 1,
     RASM_MATERIAL_TYPE_TERRAIN      = 2,        /* 1.4: a terrain tile (rasm_create_terrain_tile) */
+    RASM_MATERIAL_TYPE_VECTOR       = 3,        /* 1.5: lines, polygons and points (rasm_vector_*), styled by the desc's vector */
 };
 
 typedef uint32_t                    rasm_pbr_slot;
@@ -357,6 +358,42 @@ typedef struct rasm_terrain_material
     double                          sphere_radius;                             /* 0: flat; else the tile bends down by d^2 / 2R */
 } rasm_terrain_material;
 
+/* 1.5: a VECTOR material's style (VectorMaterial in C++). */
+typedef uint32_t                    rasm_vector_unit;
+enum
+{
+    RASM_VECTOR_UNIT_PIXELS         = 0,
+    RASM_VECTOR_UNIT_METRES         = 1,
+};
+
+typedef uint32_t                    rasm_vector_facing;
+enum
+{
+    RASM_VECTOR_FACING_SCREEN       = 0,        /* across the screen */
+    RASM_VECTOR_FACING_GROUND       = 1,        /* in the ground's plane */
+};
+
+typedef uint32_t                    rasm_vector_depth;
+enum
+{
+    RASM_VECTOR_DEPTH_TESTED        = 0,
+    RASM_VECTOR_DEPTH_OVERLAY       = 1,        /* over everything */
+};
+
+typedef struct rasm_vector_material
+{
+    rasm_vec4                       color;                                     /* linear RGB and alpha */
+    float                           width;                                     /* a line's width, a point's diameter, in width_unit */
+    rasm_vector_unit                width_unit;
+    rasm_vector_facing              facing;
+    float                           dash_length;                               /* in width_unit; 0: solid */
+    float                           gap_length;
+    rasm_vec4                       outline_color;
+    float                           outline_width;                             /* in width_unit, inside width; 0: none */
+    int32_t                         draw_order;                                /* -127 to 127 */
+    rasm_vector_depth               depth;
+} rasm_vector_material;
+
 typedef struct rasm_material_desc
 {
     uint32_t                        size;
@@ -369,6 +406,7 @@ typedef struct rasm_material_desc
     rasm_alpha_mode                 alpha_mode;
     float                           alpha_cutoff;
     rasm_terrain_material           terrain;                                   /* 1.4: TERRAIN only; textures[ALBEDO] is the imagery */
+    rasm_vector_material            vector;                                    /* 1.5: VECTOR only; textures[ALBEDO] is the points' icon atlas */
 } rasm_material_desc;
 
 typedef struct rasm_texture_desc
@@ -884,6 +922,53 @@ typedef struct rasm_terrain_heights
     uint32_t                        width;                                     /* cells + 3 */
 } rasm_terrain_heights;
 
+/* 1.5: a mesh's data built on any thread (MeshBuild in C++), which rasm_create_mesh_from_build uploads. */
+typedef struct rasm_mesh_build      rasm_mesh_build;
+
+typedef struct rasm_mesh_build_options
+{
+    uint32_t                        size;
+    rasm_bool                       lods;                                      /* simplified LODs; RASM_TRUE by default */
+    rasm_bool                       meshlets;                                  /* meshlets for a sub-mesh of 1024 triangles or more; RASM_TRUE by default */
+} rasm_mesh_build_options;
+
+/* 1.5: vector features (rasm/vector.h): geometry the add functions append to, on any thread. */
+typedef struct rasm_vector_geometry rasm_vector_geometry;
+
+typedef uint32_t                    rasm_line_join;
+enum
+{
+    RASM_LINE_JOIN_MITER            = 0,
+    RASM_LINE_JOIN_BEVEL            = 1,
+    RASM_LINE_JOIN_ROUND            = 2,
+};
+
+typedef uint32_t                    rasm_line_cap;
+enum
+{
+    RASM_LINE_CAP_BUTT              = 0,
+    RASM_LINE_CAP_SQUARE            = 1,
+    RASM_LINE_CAP_ROUND             = 2,
+};
+
+#define RASM_MAX_VECTOR_MITER       2.0f        /* 1.5: half widths */
+
+typedef struct rasm_line_shape
+{
+    uint32_t                        size;
+    rasm_line_join                  join;                                      /* ROUND by default */
+    rasm_line_cap                   cap;
+    float                           miter_limit;                               /* half widths, 1 to RASM_MAX_VECTOR_MITER */
+} rasm_line_shape;
+
+typedef struct rasm_vector_placement
+{
+    uint32_t                        size;
+    rasm_vec3                       up;                                        /* the ground's up, world space; (0, 1, 0) by default */
+    const rasm_terrain_tile_desc*   drape_tile;                                /* NULL: at the points' own heights; else draped on this tile */
+    rasm_terrain_heights            drape_heights;
+} rasm_vector_placement;
+
 typedef void (RASM_CALL* rasm_log_callback)(void* user_data, rasm_log_level level, const char* message);
 
 /* The library */
@@ -1103,6 +1188,25 @@ RASM_C_API rasm_result      RASM_CALL rasm_create_terrain_tile(rasm_renderer* re
 RASM_C_API rasm_result      RASM_CALL rasm_get_terrain_transform(const rasm_terrain_tile_desc* desc, rasm_transform_d* transform);
 RASM_C_API double           RASM_CALL rasm_sample_terrain_height(const rasm_terrain_heights* heights, const rasm_terrain_material* terrain, double u, double v);
 RASM_C_API rasm_result      RASM_CALL rasm_get_terrain_position(const rasm_terrain_tile_desc* desc, const rasm_terrain_heights* heights, double u, double v, rasm_dvec3* position);
+
+/* Added in 1.5: meshes built on any thread, and vector features. rasm_build_mesh checks and builds a mesh's data with no
+ * renderer, so any thread may call it; rasm_create_mesh_from_build uploads it on the renderer's thread and destroys the
+ * build, whatever it returns. The vector geometry functions append lines, polygons and points to a geometry, also on any
+ * thread (one thread per geometry); rasm_build_vector_mesh builds its data with no LODs and no meshlets and empties it.
+ * Draw the mesh with a RASM_MATERIAL_TYPE_VECTOR material, on an entity at the origin the features were given. */
+RASM_C_API rasm_result      RASM_CALL rasm_mesh_build_options_init(rasm_mesh_build_options* options, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_build_mesh(const rasm_vertex* vertices, uint32_t vertex_count, const uint32_t* indices, uint32_t index_count, const uint32_t* colors, const rasm_mesh_build_options* options, rasm_mesh_build** build);
+RASM_C_API void             RASM_CALL rasm_mesh_build_destroy(rasm_mesh_build* build);
+RASM_C_API rasm_mesh        RASM_CALL rasm_create_mesh_from_build(rasm_renderer* renderer, rasm_mesh_build* build);
+RASM_C_API rasm_result      RASM_CALL rasm_line_shape_init(rasm_line_shape* shape, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_vector_placement_init(rasm_vector_placement* placement, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_vector_geometry_create(rasm_vector_geometry** geometry);
+RASM_C_API void             RASM_CALL rasm_vector_geometry_destroy(rasm_vector_geometry* geometry);
+RASM_C_API rasm_result      RASM_CALL rasm_vector_geometry_get_size(const rasm_vector_geometry* geometry, uint32_t* vertex_count, uint32_t* index_count);
+RASM_C_API rasm_result      RASM_CALL rasm_vector_add_lines(rasm_vector_geometry* geometry, rasm_dvec3 origin, const rasm_dvec3* points, const uint32_t* line_sizes, uint32_t line_count, const rasm_line_shape* shape, const rasm_vector_placement* placement, const uint32_t* feature_ids);
+RASM_C_API rasm_result      RASM_CALL rasm_vector_add_polygons(rasm_vector_geometry* geometry, rasm_dvec3 origin, const rasm_dvec3* points, const uint32_t* ring_sizes, const uint32_t* ring_counts, uint32_t polygon_count, const rasm_vector_placement* placement, const uint32_t* feature_ids);
+RASM_C_API rasm_result      RASM_CALL rasm_vector_add_points(rasm_vector_geometry* geometry, rasm_dvec3 origin, const rasm_dvec3* points, uint32_t point_count, const rasm_vector_placement* placement, const uint32_t* feature_ids, const rasm_vec4* icon_rects);
+RASM_C_API rasm_result      RASM_CALL rasm_build_vector_mesh(rasm_vector_geometry* geometry, rasm_mesh_build** build);
 
 #ifdef __cplusplus
 }

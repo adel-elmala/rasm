@@ -249,7 +249,7 @@ rasm_material RASM_CALL rasm_create_material(rasm_renderer *renderer, rasm_mater
 try
 {
     Renderer *r = c::getRenderer(renderer, __func__);
-    if (r == nullptr || !c::checkEnum(type, RASM_MATERIAL_TYPE_TERRAIN + 1, __func__, "type") || (texture_count > 0 && !c::checkPointer(textures, __func__, "textures")))
+    if (r == nullptr || !c::checkEnum(type, RASM_MATERIAL_TYPE_VECTOR + 1, __func__, "type") || (texture_count > 0 && !c::checkPointer(textures, __func__, "textures")))
         return {};
     std::vector<TextureHandle> slots(texture_count);
     for (uint32_t i = 0; i < texture_count; ++i)
@@ -284,8 +284,7 @@ try
         return RASM_ERROR_FAILED;
     // A field past the caller's size keeps its current value.
     rasm_material_desc values = c::toC(current);
-    if (!c::readSized(desc, c::MATERIAL_DESC_SIZE_1_0, &values, sizeof(values), __func__, "desc") || !c::checkEnum(values.type, RASM_MATERIAL_TYPE_TERRAIN + 1, __func__, "desc->type") ||
-        !c::checkEnum(values.alpha_mode, RASM_ALPHA_MODE_BLEND + 1, __func__, "desc->alpha_mode"))
+    if (!c::readSized(desc, c::MATERIAL_DESC_SIZE_1_0, &values, sizeof(values), __func__, "desc") || !c::checkMaterialDesc(values, __func__))
         return RASM_ERROR_INVALID_ARGUMENT;
     r->updateMaterial(c::toCpp(material), c::toCpp(values, current));
     return errors.result();
