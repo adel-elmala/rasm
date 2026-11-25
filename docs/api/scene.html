@@ -960,7 +960,7 @@ engine.setSceneEnvironment(scene, {});</code></pre>
 <div class="api" id="setSceneEnvironment">
   <pre class="sig">void setSceneEnvironment(SceneHandle scene, const SceneEnvironment& environment);</pre>
   <div class="body">
-    <p>Gives the scene an environment, or takes it away with an invalid handle (<code>SceneEnvironment{}</code>). The scene's views read it every frame, so a change shows in the next frame and needs no new render graph. An invalid scene, a handle <code>loadEnvironment</code> did not return, a negative or non-finite intensity, a non-finite rotation, or an orientation that is zero or not finite logs an error and changes nothing. Several scenes can share one environment.</p>
+    <p>Gives the scene an environment, or takes it away with an invalid handle (<code>SceneEnvironment{}</code>). The scene's views read it every frame, so a change shows in the next frame and needs no new render graph. An invalid scene, a handle <code>loadEnvironment</code> did not return, a negative or non-finite intensity, a non-finite rotation, or an orientation that is not finite logs an error and changes nothing; a zero orientation is the identity. Several scenes can share one environment.</p>
   </div>
 </div>
 

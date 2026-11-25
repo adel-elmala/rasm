@@ -2,6 +2,7 @@
 
 #include "doctest/doctest.h"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -439,4 +440,27 @@ TEST_CASE("a free-fly rig yaws around its up axis")
     const glm::vec3 forward = tilted.transform.rotation * glm::vec3(0.0f, 0.0f, -1.0f);
     CHECK(glm::dot(cameraUp, up) == doctest::Approx(1.0f).epsilon(1e-5));
     CHECK(glm::dot(forward, up) == doctest::Approx(0.0f).epsilon(1e-5));
+}
+
+// A globe's normal may sweep over the whole sphere, through -Y too: the camera follows it without a jump.
+TEST_CASE("a free-fly rig follows an up that sweeps past -Y without a jump")
+{
+    rasm::CameraController controller{.type = rasm::CameraController::Type::FREE_FLY,
+                                      .freeFly = {.yaw = 0.0f, .pitch = 0.0f, .speed = 2.0f, .lookSensitivity = 1.0f, .up = glm::vec3(std::sin(0.01f), std::cos(0.01f), 0.0f)},
+                                      .easingSpeed = 0.0f};
+    rasm::CameraRig rig = rasm::createCameraRig(controller, rasm::Transform{.rotation = glm::angleAxis(0.01f, glm::vec3(0.0f, 0.0f, -1.0f))});
+    glm::vec3 lastForward = rig.transform.rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+    float largestTurn = 0.0f;
+    for (int step = 2; step < 600; ++step)
+    {
+        const float angle = 0.01f * static_cast<float>(step);
+        rig.controller.freeFly.up = glm::vec3(std::sin(angle), std::cos(angle), 0.3f);
+        rasm::updateCameraRig(rig, rasm::CameraInput{.deltaTime = 1.0f / 60.0f});
+        const glm::vec3 forward = rig.transform.rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+        largestTurn = std::max(largestTurn, std::acos(glm::clamp(glm::dot(forward, lastForward), -1.0f, 1.0f)));
+        lastForward = forward;
+        const glm::vec3 up = glm::normalize(rig.controller.freeFly.up);
+        CHECK(glm::dot(rig.transform.rotation * glm::vec3(0.0f, 1.0f, 0.0f), up) > 0.0f);
+    }
+    CHECK(largestTurn < 0.05f);
 }

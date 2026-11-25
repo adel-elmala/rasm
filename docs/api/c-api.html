@@ -297,7 +297,7 @@ rasm_result      rasm_scene_environment_init(rasm_scene_environment* environment
 rasm_result      rasm_set_scene_environment(rasm_renderer* renderer, rasm_scene scene, const rasm_scene_environment* environment);
 rasm_result      rasm_destroy_environment(rasm_renderer* renderer, rasm_environment environment);</pre>
   <div class="body">
-    <p>See <a href="scene.html#createScene">scene.html</a>. <code>rasm_scene_environment</code> is <a href="scene.html#setSceneEnvironment"><code>SceneEnvironment</code></a>: <code>{size, environment, intensity, rotation, sky, orientation}</code>; <code>orientation</code> (1.2, a <code>rasm_quat</code>, identity by default) turns the environment into a local frame, such as a globe's east, up and south.</p>
+    <p>See <a href="scene.html#createScene">scene.html</a>. <code>rasm_scene_environment</code> is <a href="scene.html#setSceneEnvironment"><code>SceneEnvironment</code></a>: <code>{size, environment, intensity, rotation, sky, orientation}</code>; <code>orientation</code> (1.2, a <code>rasm_quat</code>, identity by default, and all zeros counts as the identity, so a zero-filled struct works) turns the environment into a local frame, such as a globe's east, up and south.</p>
   </div>
 </div>
 
@@ -347,7 +347,7 @@ rasm_result      rasm_get_light(rasm_renderer* renderer, rasm_light light, rasm_
 rasm_result      rasm_update_light(rasm_renderer* renderer, rasm_light light, const rasm_light_desc* desc);
 rasm_result      rasm_destroy_light(rasm_renderer* renderer, rasm_light light);</pre>
   <div class="body">
-    <p>See <a href="scene.html#createLight">scene.html</a>. <code>rasm_light_desc</code> is <a href="scene.html#Light"><code>Light</code></a> without its handle: <code>type</code> (<code>RASM_LIGHT_TYPE_DIRECTIONAL</code>, <code>RASM_LIGHT_TYPE_POINT</code>, <code>RASM_LIGHT_TYPE_SPOT</code>), <code>intensity</code>, <code>range</code>, <code>color</code>, <code>position</code>, <code>direction</code>, <code>inner_cone_angle</code>, <code>outer_cone_angle</code>, and from 1.2 <code>position_d</code>, a <code>rasm_dvec3</code> added to <code>position</code>: the light is at <code>position + position_d</code>, in doubles. <code>rasm_get_light</code> gives the float nearest to the position and the rest, so a get and an update keep it bit for bit. A 1.1 caller's update keeps the exact position when it leaves <code>position</code> as it got it, and puts the light at the float <code>position</code> otherwise. Its init gives a directional light.</p>
+    <p>See <a href="scene.html#createLight">scene.html</a>. <code>rasm_light_desc</code> is <a href="scene.html#Light"><code>Light</code></a> without its handle: <code>type</code> (<code>RASM_LIGHT_TYPE_DIRECTIONAL</code>, <code>RASM_LIGHT_TYPE_POINT</code>, <code>RASM_LIGHT_TYPE_SPOT</code>), <code>intensity</code>, <code>range</code>, <code>color</code>, <code>position</code>, <code>direction</code>, <code>inner_cone_angle</code>, <code>outer_cone_angle</code>, and from 1.2 <code>position_d</code>, a <code>rasm_dvec3</code> added to <code>position</code>: the light is at <code>position + position_d</code>, in doubles. <code>rasm_get_light</code> gives the float nearest to the position and the rest, so a get and an update keep it bit for bit. A 1.1 caller's update keeps the exact position when it leaves <code>position</code> as it got it, and puts the light at the float <code>position</code> otherwise; <code>rasm_set_camera_controller</code> does the same with a trackball's center. Its init gives a directional light.</p>
   </div>
 </div>
 
@@ -509,10 +509,11 @@ rasm_result      rasm_get_light_position_d(rasm_renderer* renderer, rasm_light l
 rasm_result      rasm_set_light_position_d(rasm_renderer* renderer, rasm_light light, const rasm_dvec3* position);
 rasm_camera_rig* rasm_camera_rig_create_d(const rasm_camera_controller* controller, const rasm_transform_d* transform);
 rasm_result      rasm_camera_rig_get_transform_d(const rasm_camera_rig* rig, rasm_transform_d* transform, rasm_transform_d* target_transform);
+rasm_result      rasm_camera_rig_set_free_fly_up(rasm_camera_rig* rig, rasm_vec3 up);
 rasm_vec3        rasm_to_render_position(rasm_dvec3 world_position, rasm_dvec3 origin);
 rasm_dvec3       rasm_to_world_position(rasm_vec3 render_position, rasm_dvec3 origin);</pre>
   <div class="body">
-    <p>1.2. Positions in doubles, as the engine keeps them (<a href="../guides/large-world-precision.html">Large worlds</a>): an entity, a camera, a light or a rig millions of metres from the origin, in Earth-centred coordinates for example, goes in and comes out bit for bit. The 1.0 calls with a <code>rasm_transform</code> keep working and round the position to floats. <code>rasm_to_render_position</code> and <code>rasm_to_world_position</code> are <a href="camera.html#toRenderPosition"><code>toRenderPosition</code></a> and <a href="camera.html#toWorldPosition"><code>toWorldPosition</code></a>: a view's origin is its camera's position in the frame it drew.</p>
+    <p>1.2. Positions in doubles, as the engine keeps them (<a href="../guides/large-world-precision.html">Large worlds</a>): an entity, a camera, a light or a rig millions of metres from the origin, in Earth-centred coordinates for example, goes in and comes out bit for bit. The 1.0 calls with a <code>rasm_transform</code> keep working and round the position to floats. <code>rasm_camera_rig_set_free_fly_up</code> gives a free-fly rig a new up, a globe's normal under the camera as it flies. A position that is not finite is refused. <code>rasm_to_render_position</code> and <code>rasm_to_world_position</code> are <a href="camera.html#toRenderPosition"><code>toRenderPosition</code></a> and <a href="camera.html#toWorldPosition"><code>toWorldPosition</code></a>: a view's origin is its camera's position in the frame it drew.</p>
     <pre><code>const rasm_dvec3 paris = {4197000.25, 168000.5, 4786000.75};
 const rasm_transform_d at = {paris, {0.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}};
 rasm_update_transform_d(renderer, entity, &amp;at);</code></pre>

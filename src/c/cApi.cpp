@@ -507,14 +507,37 @@ namespace rasm::c
                 .scale = toC(transform.scale)};
     }
 
+    // A coordinate past a float's range has a float part of 0 and is all remainder, so the sum stays the double.
+    glm::vec3 getFloatPart(const glm::dvec3 &v)
+    {
+        glm::vec3 part = glm::vec3(v);
+        for (int i = 0; i < 3; ++i)
+            part[i] = std::isfinite(part[i]) ? part[i] : 0.0f;
+        return part;
+    }
+
     rasm_vec3 toFloatPart(const glm::dvec3 &v)
     {
-        return toC(glm::vec3(v));
+        return toC(getFloatPart(v));
     }
 
     rasm_dvec3 toRemainder(const glm::dvec3 &v)
     {
-        return toC(v - glm::dvec3(glm::vec3(v)));
+        return toC(v - glm::dvec3(getFloatPart(v)));
+    }
+
+    rasm_dvec3 keepRemainder(const rasm_vec3 &given, const rasm_vec3 &current, const rasm_dvec3 &currentRemainder)
+    {
+        const bool unchanged = given.x == current.x && given.y == current.y && given.z == current.z;
+        return unchanged ? currentRemainder : rasm_dvec3{0.0, 0.0, 0.0};
+    }
+
+    bool checkFinite(const rasm_dvec3 &v, const char *function, const char *name)
+    {
+        if (std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z))
+            return true;
+        reportError(function, (std::string(name) + " is not finite.").c_str());
+        return false;
     }
 
     rasm_mat4 toC(const glm::mat4 &matrix)
@@ -757,7 +780,8 @@ namespace rasm::c
             reportError(function, "controller->free_fly_up is not finite.");
             return false;
         }
-        return checkEnum(controller.type, RASM_CAMERA_CONTROLLER_TYPE_NONE + 1, function, "controller->type");
+        return checkFinite(controller.track_ball_center_d, function, "controller->track_ball_center_d") &&
+               checkEnum(controller.type, RASM_CAMERA_CONTROLLER_TYPE_NONE + 1, function, "controller->type");
     }
 
     bool checkView(const rasm_view &view, const char *function)

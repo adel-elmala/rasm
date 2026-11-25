@@ -150,9 +150,10 @@ namespace rasm
             return;
         }
 
+        // The rig starts again at the new pose, so a free-fly controller takes its angles from it instead of turning
+        // the camera back to the old ones in the next update.
         auto &rig = registry.cameras[camera.index].rig;
-        rig.transform = transform;
-        rig.targetTransform = transform;
+        rig = createCameraRig(rig.controller, transform);
     }
 
     void Renderer::setCameraProjection(CameraHandle camera, CameraProjection projection)

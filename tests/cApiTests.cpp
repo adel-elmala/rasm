@@ -479,8 +479,8 @@ TEST_CASE("a position in doubles goes in and comes out bit for bit")
     rasm_transform_d transform;
     rasm_transform_d target;
     REQUIRE(rasm_camera_rig_get_transform_d(rig, &transform, &target) == RASM_OK);
-    CHECK(std::memcmp(&transform.position, &paris, sizeof(paris)) == 0);
-    CHECK(std::memcmp(&target.position, &paris, sizeof(paris)) == 0);
+    CHECK((transform.position.x == paris.x && transform.position.y == paris.y && transform.position.z == paris.z));
+    CHECK((target.position.x == paris.x && target.position.y == paris.y && target.position.z == paris.z));
     rasm_transform rounded;
     REQUIRE(rasm_camera_rig_get_transform(rig, &rounded, nullptr) == RASM_OK);
     CHECK(rounded.position.x == static_cast<float>(paris.x));
@@ -523,5 +523,9 @@ TEST_CASE("a free-fly rig turns around its up axis")
     CHECK(up.z == doctest::Approx(1.0f).epsilon(1e-5));
     CHECK(forward.z == doctest::Approx(0.0f).epsilon(1e-5));
     CHECK(forward.x > -0.99f);
+    // A new up for the next frames, as a globe's normal changes along a flight.
+    CHECK(rasm_camera_rig_set_free_fly_up(rig, rasm_vec3{0.0f, 1.0f, 0.0f}) == RASM_OK);
+    CHECK(rasm_camera_rig_set_free_fly_up(rig, rasm_vec3{NAN, 0.0f, 0.0f}) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(rasm_camera_rig_set_free_fly_up(nullptr, rasm_vec3{0.0f, 1.0f, 0.0f}) == RASM_ERROR_INVALID_ARGUMENT);
     rasm_camera_rig_destroy(rig);
 }

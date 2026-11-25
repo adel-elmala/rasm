@@ -354,7 +354,8 @@ try
 {
     Renderer *r = c::getRenderer(renderer, __func__);
     rasm_light_desc values = c::toC(Light{.type = LightType::DIRECTIONAL});
-    if (r == nullptr || !c::readSized(desc, c::LIGHT_DESC_SIZE_1_0, &values, sizeof(values), __func__, "desc") || !c::checkEnum(values.type, RASM_LIGHT_TYPE_SPOT + 1, __func__, "desc->type"))
+    if (r == nullptr || !c::readSized(desc, c::LIGHT_DESC_SIZE_1_0, &values, sizeof(values), __func__, "desc") || !c::checkEnum(values.type, RASM_LIGHT_TYPE_SPOT + 1, __func__, "desc->type") ||
+        !c::checkFinite(values.position_d, __func__, "desc->position_d"))
         return {};
     const Light light = c::toCpp(values);
     return c::toC(r->createLight(light.type, light.color, light.position, light.direction, light.intensity, light.range, light.innerConeAngle, light.outerConeAngle));
@@ -391,10 +392,9 @@ try
     // A caller without position_d (1.1) gives the position in floats: it is that float position, or the light's exact
     // one when the caller left the float part as rasm_get_light gave it.
     if (desc->size < c::LIGHT_DESC_SIZE_1_2)
-    {
-        const bool unchanged = std::memcmp(&values.position, &current.position, sizeof(rasm_vec3)) == 0;
-        values.position_d = unchanged ? current.position_d : rasm_dvec3{0.0, 0.0, 0.0};
-    }
+        values.position_d = c::keepRemainder(values.position, current.position, current.position_d);
+    if (!c::checkFinite(values.position_d, __func__, "desc->position_d"))
+        return RASM_ERROR_INVALID_ARGUMENT;
     Light updated = c::toCpp(values);
     updated.handle = c::toCpp(light);
     r->updateLight(c::toCpp(light), updated);
@@ -457,7 +457,7 @@ rasm_result RASM_CALL rasm_set_light_position_d(rasm_renderer *renderer, rasm_li
 try
 {
     Renderer *r = c::getRenderer(renderer, __func__);
-    if (r == nullptr || !c::checkHandle(light.id, __func__, "light") || !c::checkPointer(position, __func__, "position"))
+    if (r == nullptr || !c::checkHandle(light.id, __func__, "light") || !c::checkPointer(position, __func__, "position") || !c::checkFinite(*position, __func__, "position"))
         return RASM_ERROR_INVALID_ARGUMENT;
     const c::CallErrors errors;
     Light values = r->getLight(c::toCpp(light));

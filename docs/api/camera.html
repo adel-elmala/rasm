@@ -258,7 +258,7 @@ engine.addCameraToScene(scene, camera);</code></pre>
       <dt>yaw, pitch</dt><dd>Radians. <code>setCameraController</code> overwrites them from the current view direction, so the view does not jump. Pitch stays within ±89°.</dd>
       <dt>speed</dt><dd>World units per second for W, A, S, D.</dd>
       <dt>lookSensitivity</dt><dd>Radians per NDC unit of mouse drag.</dd>
-      <dt>up</dt><dd>The axis the free-fly camera yaws around, and its pitch is measured from: its horizon stays level with the plane across <code>up</code>. Zero, or +Y, is the world's +Y, exactly as without it. On a globe, the local up (the ellipsoid's normal at the place).</dd>
+      <dt>up</dt><dd>The axis the free-fly camera yaws around, and its pitch is measured from: its horizon stays level with the plane across <code>up</code>. Zero, or +Y, is the world's +Y, exactly as without it. On a globe, the local up (the ellipsoid's normal at the place); it may change every frame, as the normal does along a flight. With its own up, <code>yaw</code> counts the turns since the rig started and <code>pitch</code> is the angle above the plane.</dd>
       <dt>easingSpeed</dt><dd>How fast the rendered pose follows the target: each frame it moves <code>1 − exp(−easingSpeed × dt)</code> of the way. Higher is snappier. 0 or less snaps at once. Once the pose is within one millionth of a unit of the target, and turned by less than about one millionth, it snaps to it, so a camera at rest does not move. The position is a double, so this holds far from the origin too.</dd>
     </dl>
   </div>

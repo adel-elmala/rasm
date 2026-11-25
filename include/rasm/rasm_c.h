@@ -945,6 +945,7 @@ RASM_C_API rasm_result      RASM_CALL rasm_get_light_position_d(rasm_renderer* r
 RASM_C_API rasm_result      RASM_CALL rasm_set_light_position_d(rasm_renderer* renderer, rasm_light light, const rasm_dvec3* position);
 RASM_C_API rasm_camera_rig* RASM_CALL rasm_camera_rig_create_d(const rasm_camera_controller* controller, const rasm_transform_d* transform);
 RASM_C_API rasm_result      RASM_CALL rasm_camera_rig_get_transform_d(const rasm_camera_rig* rig, rasm_transform_d* transform, rasm_transform_d* target_transform);
+RASM_C_API rasm_result      RASM_CALL rasm_camera_rig_set_free_fly_up(rasm_camera_rig* rig, rasm_vec3 up);
 RASM_C_API rasm_vec3        RASM_CALL rasm_to_render_position(rasm_dvec3 world_position, rasm_dvec3 origin);
 RASM_C_API rasm_dvec3       RASM_CALL rasm_to_world_position(rasm_vec3 render_position, rasm_dvec3 origin);
 
