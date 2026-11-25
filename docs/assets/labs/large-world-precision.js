@@ -5,7 +5,7 @@
 // split (each position as a float plus the float of what it left over, subtracted part by part). Math.fround rounds
 // to a 32-bit float, as the GPU does.
 RasmLab.register("float-split", function (lab) {
-    const svg = lab.svg(760, 320, "Two panels with the same house seen from the camera. Left: plain floats, where the house's corners snap to the float steps of its world position. Right: the high/low split, where the house keeps its shape.");
+    const svg = lab.svg(760, 340, "Two panels with the same house seen from the camera. Left: plain floats, where the house's corners snap to the float steps of its world position. Right: the high/low split, where the house keeps its shape.");
     const distance = lab.slider({ label: "Distance from the origin (10^x m)", min: 0, max: 10, step: 0.05, value: 3, format: function (v) { return "10^" + v.toFixed(2) + " m"; } });
     const nudge = lab.slider({ label: "Move the camera (m)", min: 0, max: 1, step: 0.01, value: 0, format: function (v) { return v.toFixed(2) + " m"; } });
     const stepOut = lab.readout("float step there");
@@ -33,7 +33,7 @@ RasmLab.register("float-split", function (lab) {
         lab.el(group, "polygon", { points: HOUSE.map(function (p) { return (cx + p[0] * SCALE) + "," + (cy - p[1] * SCALE); }).join(" "), class: "solid o-25" });
         shapes.push({ polygon: lab.el(group, "polygon", { class: "arrow thick " + panel.cls }), cx: cx, cy: cy });
     });
-    lab.el(svg, "text", { x: 380, y: 300, class: "mid small t-faint", text: "grey: where the house is; outline: where the GPU draws it (1 grid cell = 1 m)" });
+    lab.el(svg, "text", { x: 380, y: 330, class: "mid small t-faint", text: "grey: where the house is; outline: where the GPU draws it (1 grid cell = 1 m)" });
 
     function split(v) {
         const high = Math.fround(v);

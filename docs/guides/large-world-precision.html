@@ -54,7 +54,7 @@
     <text x="20" y="40" class="title">near 1 m</text>
     <line x1="170" y1="40" x2="740" y2="40" class="surface"/>
     <path d="M170,32V48M175,32V48M180,32V48M185,32V48M190,32V48M195,32V48M200,32V48M205,32V48M210,32V48M215,32V48M220,32V48M225,32V48M230,32V48M235,32V48M240,32V48M245,32V48M250,32V48M255,32V48M260,32V48M265,32V48M270,32V48M275,32V48M280,32V48M285,32V48M290,32V48M295,32V48M300,32V48" class="grid"/>
-    <text x="320" y="44" class="small">step 0.000 000 12 m: too small to see</text>
+    <text x="320" y="66" class="small">step 0.000 000 12 m: too small to see</text>
     <text x="20" y="110" class="title">near 100 km</text>
     <line x1="170" y1="110" x2="740" y2="110" class="surface"/>
     <path d="M170,102V118M230,102V118M290,102V118M350,102V118M410,102V118M470,102V118M530,102V118M590,102V118M650,102V118M710,102V118" class="grid"/>
@@ -108,7 +108,7 @@
   </div>
 </div>
 
-<p>This is <b>cancellation</b>: subtracting two close numbers cancels their leading digits, and the error that was small next to the big numbers becomes big next to the result. It is why the far scene of the next section shakes, and also why depth or lighting can break into blocks: every value computed from a world position carries the same error.</p>
+<p>This is <b>cancellation</b>: subtracting two close numbers cancels their leading digits, and the error that was small next to the big numbers becomes big next to the result. It is why a scene far from the origin shakes, and also why lighting can break into blocks: every value computed from a world position carries the same error.</p>
 
 <h2 id="render-space"><span class="n">3</span>Render space: the camera at the origin</h2>
 
@@ -190,7 +190,7 @@
 
 <h2 id="order"><span class="n">5</span>Keep the order of the sums</h2>
 
-<p>The formula only works if it runs exactly as written. A compiler that sees <code class="lang-text">(high − cameraHigh) + (low − cameraLow) − pixel</code> is free, with fast math, to regroup it, for example as <code class="lang-text">(high − pixel) − cameraHigh + …</code>. Then a big number meets a small one first and the low parts are lost again.</p>
+<p>The formula only works if it runs exactly as written. A compiler that sees <code class="lang-text">(high − cameraHigh) + (low − cameraLow) − pixel</code> may regroup it, for example as <code class="lang-text">(high − pixel) − cameraHigh + …</code>. Then a big number meets a small one first and the low parts are lost again.</p>
 
 <div class="split">
   <div class="bad">
@@ -279,7 +279,7 @@
     <path d="M485,64 C510,64 510,96 528,96" class="arrow mem" marker-end="url(#ah-mem)"/>
     <path d="M485,154 C510,154 510,140 528,140" class="arrow mem" marker-end="url(#ah-mem)"/>
     <text x="20" y="220" class="small">Lights: Light::position the same way, in the light table (positionLow).</text>
-    <text x="20" y="240" class="small">Animated rows: the Animate pass keeps the entity's high part and adds the node's offset to the low part.</text>
+    <text x="20" y="240" class="small">Animated rows: the Animate pass adds the node's offset to the low part.</text>
     <text x="530" y="200" class="small">then the shaders work as before:</text>
     <text x="530" y="218" class="small">culling, Hi-Z, LODs, clusters,</text>
     <text x="530" y="236" class="small">shadows, motion, the sky</text>
@@ -294,8 +294,8 @@
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>CPU positions</td><td>doubles</td><td><code>glm::dvec3</code> positions; rotation and scale stay floats. Mesh vertices and glTF node transforms are floats, in their mesh's space.</td></tr>
   <tr><td>Render space</td><td>the camera at the origin</td><td>Each scene view uses its camera's position, also its shadow maps' views (they belong to the camera of <code>addShadowPasses</code>). <code>toRenderMatrix</code> moves a world-space matrix there in doubles.</td></tr>
-  <tr><td>Rows</td><td>high/low</td><td><code>InstanceData</code>: three rows, w = the high part, and <code>translationLow</code> (160 B, was 164 with a 4×4 matrix). <code>InstanceTransform</code> and <code>AnimatedEntity</code> the same. <code>gfx::Light</code> adds <code>positionLow</code> (68 B).</td></tr>
-  <tr><td>Keeping the order</td><td>opaque steps</td><td><code>subtractSplit</code> in <code>shaders/lib/renderSpace.slang</code> ORs each step with <code>SceneData::zero</code> (<code>AnimatePushConstants::zero</code> in the Animate pass). Slang drops <code>precise</code>, and the NVIDIA driver regrouped across <code class="lang-text">NoContraction</code>: lighting fell in 0.5 m blocks before.</td></tr>
+  <tr><td>Rows</td><td>high/low</td><td><code>InstanceData</code>: three rows, w = the high part, and <code>translationLow</code> (160 B). <code>InstanceTransform</code> and <code>AnimatedEntity</code> the same. <code>gfx::Light</code> adds <code>positionLow</code> (68 B).</td></tr>
+  <tr><td>Keeping the order</td><td>opaque steps</td><td><code>subtractSplit</code> in <code>shaders/lib/renderSpace.slang</code> ORs each step with <code>SceneData::zero</code> (<code>AnimatePushConstants::zero</code> in the Animate pass). Slang drops <code>precise</code>, and the NVIDIA driver regroups across <code class="lang-text">NoContraction</code>, which makes lighting fall in 0.5 m blocks.</td></tr>
   <tr><td>Motion</td><td>last frame in world space</td><td><code>SceneView::previousViewProjection</code> is a world-space <code>glm::dmat4</code>; <code>previousWorld</code> rows hold last − now in w.</td></tr>
   <tr><td>Shadows</td><td>world texel grid</td><td><code>fitShadowCascade</code> snaps in doubles; <code>getSpotShadowView</code> and <code>getCubeFaceView</code> return world-space <code>glm::dmat4</code>s.</td></tr>
   <tr><td>Frozen culling</td><td>—</td><td>The frozen planes and LOD plane stay in the render space of the frame that froze them and are moved to each new origin (<code>moveRenderPlane</code>).</td></tr>
