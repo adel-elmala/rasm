@@ -28,11 +28,15 @@
 // - B: a box pick of 128 x 128 under the mouse, listing what it covers.
 // A headless run (or --check) also runs scripted picks after the loads, each at the pixel a known world point projects
 // to, and checks the answers: the entity, the feature, the kind, and the position within a tolerance (to a millimetre
-// where the surface is a known plane, far from the origin too). Then it picks a building, destroys it and makes another
+// where the surface is a known plane, far from the origin too). The road is draped across its whole width
+// (LineShape::drapeWidth), so picks at both of its edges from above hit it on the terrain's surface, and the markers'
+// names are drawn whole (the Label Depth pass), so picks at their left half hit them. Then it picks a building, destroys it and makes another
 // in the next frame, which takes its instance row: the answer must still name the destroyed one. A failed check makes the
 // run exit with 1.
 //   --bench    the GPU time of a 1 x 1 pick every frame (exampleBench.h), at 1920 x 1080
 //   --near     the scene at the world's origin instead
+//   --fly      the main camera circles the tile, a degree a frame (after the checks, when they run)
+//   --no-aa    both views without anti-aliasing (the vectors' own smooth edges only)
 
 namespace
 {
@@ -40,6 +44,7 @@ namespace
     constexpr uint32_t HEIGHT = 720;
     constexpr double TILE_SIZE = 96.0;
     constexpr uint32_t CELLS = 48;
+    constexpr float ROAD_WIDTH = 4.0f; // metres: the material's width and the width the road is draped at
     constexpr double HEIGHT_STEP = 1.0 / 64.0;
     constexpr float MAP_HALF_SIZE = 52.0f;
     constexpr uint32_t CHECK_FRAME = 12;
@@ -48,6 +53,8 @@ namespace
     constexpr uint32_t HOVER_SIZE = 7;
     constexpr uint32_t BOX_SIZE = 128;
     constexpr uint32_t MAX_HITS = 64;
+    constexpr double FLY_RADIUS = 83.6;
+    constexpr double FLY_HEIGHT = 42.0;
     const glm::dvec3 FAR_ORIGIN = glm::dvec3(4.1e6, 320.0, -4.7e6);
     const rasm::ViewRect MAIN_RECT = {.x = 0.0f, .y = 0.0f, .width = 0.62f, .height = 1.0f};
     const rasm::ViewRect MAP_RECT = {.x = 0.62f, .y = 0.0f, .width = 0.38f, .height = 1.0f};
@@ -92,7 +99,8 @@ namespace
         double pixels = 3.0;                           // NEAR: the tolerance in pixels at the probe's distance
         uint32_t skip = 0;
         float minAlpha = 0.5f;
-        uint32_t size = 1; // the rect, size x size around the pixel; above 1 the entity or feature may be any hit
+        uint32_t size = 1;                // the rect, size x size around the pixel; above 1 the entity or feature may be any hit
+        glm::ivec2 shift = glm::ivec2(0); // the rect's centre from the point's pixel
         rasm::PickHandle pick;
         uint32_t pixelX = 0;
         uint32_t pixelY = 0;
@@ -124,6 +132,7 @@ namespace
         rasm::EntityHandle labels;
         rasm::EntityHandle route;
         glm::dvec3 roadPoint = glm::dvec3(0.0);
+        glm::dvec3 roadEdges[12];
         glm::dvec3 lakePoint = glm::dvec3(0.0);
         glm::dvec3 markerPoints[4];
         glm::dvec3 labelPoint = glm::dvec3(0.0);
@@ -263,10 +272,23 @@ namespace
         const auto roadSize = static_cast<uint32_t>(road.size());
         const uint32_t roadId = 101;
         rasm::VectorGeometry roads;
-        rasm::addVectorLines(roads, origin, road.data(), &roadSize, 1, {}, drape, &roadId);
+        rasm::addVectorLines(roads, origin, road.data(), &roadSize, 1, {.drapeWidth = ROAD_WIDTH}, drape, &roadId);
         content.road = addVectors(engine, content.scene, origin, std::move(roads),
-                                  createVectorMaterial(engine, {.color = glm::vec4(0.25f, 0.25f, 0.27f, 1.0f), .width = 4.0f, .widthUnit = rasm::VectorUnit::METRES, .facing = rasm::VectorFacing::GROUND, .outlineColor = glm::vec4(0.95f, 0.9f, 0.6f, 1.0f), .outlineWidth = 0.4f}));
+                                  createVectorMaterial(engine, {.color = glm::vec4(0.25f, 0.25f, 0.27f, 1.0f), .width = ROAD_WIDTH, .widthUnit = rasm::VectorUnit::METRES, .facing = rasm::VectorFacing::GROUND, .outlineColor = glm::vec4(0.95f, 0.9f, 0.6f, 1.0f), .outlineWidth = 0.4f}));
         content.roadPoint = content.terrain.at((road[20].x - origin.x) / TILE_SIZE + 0.5, (road[20].z - origin.z) / TILE_SIZE + 0.5);
+        // Points 1.5 m off the middle on both sides, away from the model and the names that cover the road from above.
+        const int32_t edgePoints[6] = {10, 12, 13, 27, 29, 31};
+        for (uint32_t i = 0; i < 6; ++i)
+        {
+            const int32_t k = edgePoints[i];
+            const glm::dvec3 along = glm::normalize(road[k + 1] - road[k - 1]);
+            const glm::dvec3 across(-along.z, 0.0, along.x);
+            for (uint32_t s = 0; s < 2; ++s)
+            {
+                const glm::dvec3 edge = road[k] + across * (s == 0 ? -1.5 : 1.5) - origin;
+                content.roadEdges[i * 2 + s] = content.terrain.at(edge.x / TILE_SIZE + 0.5, edge.z / TILE_SIZE + 0.5);
+            }
+        }
 
         std::vector<glm::dvec3> lake;
         for (int32_t k = 0; k < 32; ++k)
@@ -427,9 +449,13 @@ int main(int argc, char **argv)
     ExampleArgs args = parseExampleArgs(argc, argv);
     bool near = false;
     bool check = args.headless;
+    bool fly = false;
+    bool noAntiAliasing = false;
     for (int i = 1; i < argc; ++i)
     {
         near = near || std::strcmp(argv[i], "--near") == 0;
+        fly = fly || std::strcmp(argv[i], "--fly") == 0;
+        noAntiAliasing = noAntiAliasing || std::strcmp(argv[i], "--no-aa") == 0;
         check = check || std::strcmp(argv[i], "--check") == 0;
     }
     rasm::EngineConfig config = {
@@ -473,12 +499,12 @@ int main(int argc, char **argv)
                                .orthographic{.left = -MAP_HALF_SIZE, .right = MAP_HALF_SIZE, .bottom = -MAP_HALF_SIZE, .top = MAP_HALF_SIZE, .nearZ = 1.0f, .farZ = 200.0f}},
         rasm::Transform{origin + glm::dvec3(0.0, 100.0, 0.0), glm::angleAxis(glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f)), glm::vec3(1.0f)});
     engine.setCameraController(mapCamera, rasm::CameraController{.type = rasm::CameraController::Type::NONE});
-    if (bench.on || check)
+    if (bench.on || check || fly)
         engine.setCameraController(mainCamera, rasm::CameraController{.type = rasm::CameraController::Type::NONE});
     engine.addCameraToScene(content.scene, mainCamera);
     engine.addCameraToScene(content.scene, mapCamera);
-    const rasm::View views[2] = {{.scene = content.scene, .camera = mainCamera, .output = {.rect = MAIN_RECT}, .antiAliasing = rasm::AntiAliasing::TAA},
-                                 {.scene = content.scene, .camera = mapCamera, .output = {.rect = MAP_RECT}, .antiAliasing = rasm::AntiAliasing::MSAA_4X}};
+    const rasm::View views[2] = {{.scene = content.scene, .camera = mainCamera, .output = {.rect = MAIN_RECT}, .antiAliasing = noAntiAliasing ? rasm::AntiAliasing::NONE : rasm::AntiAliasing::TAA},
+                                 {.scene = content.scene, .camera = mapCamera, .output = {.rect = MAP_RECT}, .antiAliasing = noAntiAliasing ? rasm::AntiAliasing::NONE : rasm::AntiAliasing::MSAA_4X}};
 
     // The probes: a known point each, and what a pick at its pixel must answer.
     const uint32_t labelOnly = rasm::PICK_SKIP_ALL & ~rasm::PICK_SKIP_LABELS;
@@ -500,6 +526,19 @@ int main(int argc, char **argv)
         {.name = "map: box", .map = true, .point = content.buildingTops[2], .entity = content.buildings[2], .surface = Surface::PLANE, .size = 64},
         {.name = "map: cut-out model", .map = true, .point = engine.getTransform(content.model).position, .entity = content.model, .pixels = 60.0, .size = 32},
     };
+    // The road's edges, 1.5 m off its middle on both sides, seen from above: all of the road lies on the drawn ground
+    // (LineShape::drapeWidth), so the ground never covers it and each hit is on the terrain's surface.
+    for (uint32_t i = 0; i < 6; ++i)
+    {
+        for (const double side : {-1.0, 1.0})
+            probes.push_back({.name = side < 0.0 ? "map: road edge -" : "map: road edge +", .map = true, .point = content.roadEdges[i * 2 + (side < 0.0 ? 0 : 1)], .entity = content.road, .feature = 101, .flags = rasm::PICK_HIT_FEATURE, .surface = Surface::TERRAIN});
+    }
+    // The left half of the markers' names, seen from above: a label is drawn whole when its anchor is in view (the
+    // Label Depth pass), never cut where the hills beside it rise above its anchor.
+    const char *nameProbes[3] = {"map: North Gate", "map: Harbour", "map: Old Well"};
+    const uint32_t nameMarkers[3] = {0, 2, 3};
+    for (uint32_t i = 0; i < 3; ++i)
+        probes.push_back({.name = nameProbes[i], .map = true, .point = content.markerPoints[nameMarkers[i]], .entity = content.labels, .feature = 401 + nameMarkers[i], .flags = rasm::PICK_HIT_LABEL, .pixels = 40.0, .size = 10, .shift = glm::ivec2(-20, -13)});
     uint32_t failures = 0;
     uint32_t checksLeft = check ? static_cast<uint32_t>(probes.size()) + 1 : 0;
     // The row reuse check: the destroyed building and the one made after it.
@@ -624,6 +663,13 @@ int main(int argc, char **argv)
             boxAsked = false;
         }
 
+        const uint32_t flyStart = check ? CHECK_DEADLINE : 0;
+        if (fly && frame > flyStart)
+        {
+            const double angle = glm::radians(static_cast<double>(frame - flyStart)) + std::atan2(-30.0, 78.0);
+            engine.setCameraTransform(mainCamera, lookAt(origin + glm::dvec3(FLY_RADIUS * std::sin(angle), FLY_HEIGHT, FLY_RADIUS * std::cos(angle)), origin + glm::dvec3(0.0, 0.0, 4.0)));
+        }
+
         // The scripted checks: each probe's pick at the pixel its point projects to.
         if (check && frame == CHECK_FRAME)
         {
@@ -639,6 +685,8 @@ int main(int argc, char **argv)
                     --checksLeft;
                     continue;
                 }
+                probe.pixelX = static_cast<uint32_t>(std::clamp(static_cast<int32_t>(probe.pixelX) + probe.shift.x, 0, static_cast<int32_t>(view.width) - 1));
+                probe.pixelY = static_cast<uint32_t>(std::clamp(static_cast<int32_t>(probe.pixelY) + probe.shift.y, 0, static_cast<int32_t>(view.height) - 1));
                 const uint32_t half = probe.size / 2;
                 const rasm::PickDesc desc = {.rect = {.x = probe.pixelX - std::min(probe.pixelX, half), .y = probe.pixelY - std::min(probe.pixelY, half), .width = probe.size, .height = probe.size},
                                              .minAlpha = probe.minAlpha,

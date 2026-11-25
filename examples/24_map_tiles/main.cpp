@@ -42,7 +42,8 @@
 //   them on the tile's own heights (VectorPlacement::drapeTile: cut on its grid and lifted by the rule the shader draws)
 //   and builds their meshes' data (buildVectorMesh), which the main thread only uploads; they are content of the same
 //   tile as the terrain they lie on, so the two are drawn together. Roads are 16 m wide in the ground's plane, with a
-//   casing; lakes are polygons with an island.
+//   casing, and draped at that width (LineShape::drapeWidth), so the hills beside a road never cover its edges; lakes are
+//   polygons with an island.
 // - Two views: the camera, which flies low, climbs to 6 km and dives again, and a map of the whole world in the corner,
 //   a top-down orthographic view with a red box over the camera.
 // Every frame it checks that the tiles hold no more than the budget, and after the first frames that no wanted tile is
@@ -56,6 +57,7 @@ namespace
     constexpr uint32_t HEIGHT = 720;
     constexpr double WORLD_SIZE = 32768.0;
     constexpr int32_t MAX_LEVEL = 7;
+    constexpr float ROAD_WIDTH = 16.0f;           // metres: the material's width and the width the roads are draped at
     constexpr uint32_t CELLS = 32;                // a tile's grid: 2048 triangles, drawn on getTerrainMesh's shared grid
     constexpr uint32_t HEIGHTS_WIDTH = CELLS + 3; // the grid's points and a border of one sample around them
     constexpr double HEIGHT_STEP = 1.0 / 16.0;    // metres per R16_UNORM step: a power of two, so neighbours' edges are bit-equal
@@ -406,12 +408,14 @@ namespace
         const Features &features = getFeatures();
         std::vector<glm::dvec3> points;
         std::vector<uint32_t> sizes;
-        // A coarse tile keeps one road point in 2^(5 - level): its cells are as coarse.
+        // A coarse tile keeps one road point in 2^(5 - level): its cells are as coarse. The roads within half their width
+        // of the tile, which cuts them at its edges.
         const uint32_t stride = 1u << std::max(0, 5 - data.level);
+        const glm::dvec2 margin(0.5 * ROAD_WIDTH);
         for (const std::vector<glm::dvec3> &road : features.roads)
-            clipLine(road, low, high, stride, points, sizes);
+            clipLine(road, low - margin, high + margin, stride, points, sizes);
         rasm::VectorGeometry roads;
-        rasm::addVectorLines(roads, origin, points.data(), sizes.data(), static_cast<uint32_t>(sizes.size()), {.join = rasm::LineJoin::ROUND, .cap = rasm::LineCap::BUTT}, placement);
+        rasm::addVectorLines(roads, origin, points.data(), sizes.data(), static_cast<uint32_t>(sizes.size()), {.join = rasm::LineJoin::ROUND, .cap = rasm::LineCap::BUTT, .drapeWidth = ROAD_WIDTH}, placement);
         if (!roads.indices.empty())
             data.roads = rasm::buildVectorMesh(std::move(roads));
         points.clear();
@@ -773,7 +777,7 @@ int main(int argc, char **argv)
     const rasm::MaterialHandle lakeMaterial = engine.createMaterial(rasm::MaterialType::VECTOR);
     rasm::Material roadValues = engine.getMaterial(roadMaterial);
     roadValues.vector = {.color = glm::vec4(0.95f, 0.85f, 0.55f, 1.0f),
-                         .width = 16.0f,
+                         .width = ROAD_WIDTH,
                          .widthUnit = rasm::VectorUnit::METRES,
                          .facing = rasm::VectorFacing::GROUND,
                          .outlineColor = glm::vec4(0.3f, 0.25f, 0.2f, 1.0f),

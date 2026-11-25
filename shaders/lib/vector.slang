@@ -29,6 +29,8 @@ static const uint   VECTOR_KIND_POINT   = 3;
 static const uint   VECTOR_KIND_GLYPH   = 4;    // a label's glyph: uv[0] its corner in ems from the anchor, uv[1] its atlas
                                                 // coordinates, uv[2].y 1 on a halo's quad, tangent.x the bits of its
                                                 // label's index in the mesh
+static const uint   VECTOR_KIND_BAND    = 5;    // a draped line built at its width (LineShape::drapeWidth): pos is on the
+                                                // ground already, uv[1].y the built half width in metres
 // uv[2].y: the distance to the edge, in half widths, from the offset.
 static const uint   VECTOR_METRIC_ROUND     = 0;    // its length: round caps, round joins, round points
 static const uint   VECTOR_METRIC_BOX       = 1;    // the larger of |x| and |y|: square caps, square icons
@@ -56,6 +58,7 @@ struct VectorVertex
     float   fade;           // coverage of a feature thinner than a pixel
     float   dash;           // a line's distance along it, in the unit of the dashes; 0 for the other kinds
     float   kind;           // VECTOR_KIND_*
+    float   width;          // a band's built width in the material's unit (the outline's share of it); 0: the material's
     float3  depthPoint;     // render space: the world point whose depth it takes, without the bias (picking's position)
     float3  up;             // the ground's up, in render space
 };
@@ -198,10 +201,14 @@ VectorVertex getVectorVertex(SceneData *scene, VectorData style, float4x4 world,
     output.fade             = 1.0;
     output.dash             = 0.0;
     output.kind             = float(kind);
+    output.width            = 0.0;
     output.depthPoint       = anchor;
     output.up               = up;
-    // The world point whose depth the vertex takes: the anchor, the vertex itself, or the ground under it.
+    // The world point whose depth the vertex takes: the anchor, the vertex itself, or the ground under it; and how much
+    // nearer than the bias it is drawn.
     float3 depthPoint       = anchor;
+    float lift              = 0.0;
+    bool over               = (style.flags & VECTOR_OVERLAY) != 0;
     if (kind == VECTOR_KIND_GLYPH)
     {
         // A glyph of a label: its corner in ems times the text's size, across the screen's axes, and its label's alpha
@@ -223,12 +230,42 @@ VectorVertex getVectorVertex(SceneData *scene, VectorData style, float4x4 world,
         output.dash         = halo;
         float2 base         = toPixels(scene, output.clipPosition);
         float2 pixels       = vert.uv[0] * textPixels;
-        float4 ground       = getGroundPoint(scene, viewProjection, anchor, up, base, pixels, pixelWorld);
+        // The Label Depth pass tested the anchor against the depth and put the answer in alpha, so the label is drawn
+        // over everything, whole (passes/labelDepth.slang). Without it each corner takes the ground's depth under it.
+        if (scene->labelProbesPtr != nullptr)
+            over            = true;
+        float4 ground       = over ? float4(0.0) : getGroundPoint(scene, viewProjection, anchor, up, base, pixels, pixelWorld);
         if (ground.w > 0.0 && getViewDepth(scene, ground.xyz) < getViewDepth(scene, anchor))
             depthPoint      = ground.xyz;
         output.clipPosition.xy += pixels / (float2(scene->viewportWidth, scene->viewportHeight) * 0.5) * getSafeW(scene, output.clipPosition.w);
         // Without TAA's jitter: a still label is drawn on the same pixels every frame, so the history stays sharp.
         output.clipPosition = removeJitter(scene, output.clipPosition);
+    }
+    else if (kind == VECTOR_KIND_BAND)
+    {
+        // A draped band lies on the ground as built, cut on the terrain's grid across its whole width, so the vertex is
+        // where it is drawn. It only moves out, in its own ground's plane, by the anti-aliasing pixel, and where the
+        // band is under a pixel wide by what makes it a pixel (then half a pixel each side), fading as a line does.
+        float pixelWorld    = getPixelWorld(scene, output.clipPosition.w);
+        bool metres         = (style.flags & VECTOR_METRES) != 0;
+        float builtHalf     = vert.uv[1].y;
+        float widthPixels   = 2.0 * builtHalf / pixelWorld;
+        float halfWorld     = 0.5 * max(widthPixels, 1.0) * pixelWorld;
+        output.fade         = saturate(widthPixels);
+        output.dash         = metres ? vert.uv[1].x : vert.uv[1].x / pixelWorld;
+        output.width        = metres ? 2.0 * builtHalf : widthPixels;
+        float3 across       = getAcross(along, up);
+        float4 side         = mul(viewProjection, float4(anchor + across * halfWorld, 1.0));
+        float onScreen      = side.w > 0.0 ? length(toPixels(scene, side) - toPixels(scene, output.clipPosition)) : 0.5;
+        float widen         = onScreen < 0.5 ? min(0.5 / max(onScreen, 1e-3), 64.0) : 1.0;
+        output.fade        *= saturate(onScreen / 0.5);
+        output.edge         = vert.uv[0] * (1.0 + 1.0 / max(onScreen * widen, 0.5));
+        float2 moved        = output.edge * (halfWorld * widen) - vert.uv[0] * builtHalf;
+        output.clipPosition = mul(viewProjection, float4(anchor + moved.x * along + moved.y * across, 1.0));
+        // It keeps the depth of its point on the ground, which is off by the slope times the move where it moved: drawn
+        // that much nearer, it holds on slopes up to 45 degrees, and the pieces that meet at a point still meet. The
+        // widening of a band seen edge-on is not counted, or it would be drawn far nearer than it is.
+        lift                = length(output.edge * halfWorld - vert.uv[0] * builtHalf);
     }
     else if (kind == VECTOR_KIND_LINE || kind == VECTOR_KIND_POINT)
     {
@@ -253,6 +290,11 @@ VectorVertex getVectorVertex(SceneData *scene, VectorData style, float4x4 world,
             output.edge         = vert.uv[0] * (1.0 + 1.0 / max(onScreen * widen, 0.5));
             depthPoint          = anchor + (output.edge.x * along + output.edge.y * across) * halfWorld * widen;
             output.clipPosition = mul(viewProjection, float4(depthPoint, 1.0));
+            // A width in pixels spreads in the plane under its middle, which the ground beside it may rise above: it
+            // is drawn nearer by its half width in the world, a few pixels' worth (a width in metres is draped exactly
+            // with LineShape::drapeWidth).
+            if (!metres)
+                lift            = halfWorld;
         }
         else
         {
@@ -275,6 +317,10 @@ VectorVertex getVectorVertex(SceneData *scene, VectorData style, float4x4 world,
             float4 ground       = getGroundPoint(scene, viewProjection, anchor, up, base, pixels, pixelWorld);
             if (ground.w > 0.0 && getViewDepth(scene, ground.xyz) < getViewDepth(scene, anchor))
                 depthPoint      = ground.xyz;
+            // The ground beside the anchor may also rise above its plane: a width in pixels is drawn nearer by its half
+            // width in the world, as on the ground's plane.
+            if (!metres)
+                lift            = halfPixels * pixelWorld;
             output.clipPosition.xy += pixels / (float2(scene->viewportWidth, scene->viewportHeight) * 0.5) * getSafeW(scene, output.clipPosition.w);
         }
     }
@@ -282,14 +328,14 @@ VectorVertex getVectorVertex(SceneData *scene, VectorData style, float4x4 world,
     // Reversed-Z: a larger depth is nearer. An overlay is at the near plane, so it passes every test. A tested feature
     // takes the depth of its depth point moved toward the camera by VECTOR_DEPTH_BIAS of its distance, which holds for
     // any projection: perspective, orthographic, a finite far plane.
-    if ((style.flags & VECTOR_OVERLAY) != 0)
+    if (over)
     {
         output.clipPosition.z = output.clipPosition.w;
     }
     else
     {
         float distance      = max(abs(getViewDepth(scene, depthPoint)), 1e-3);
-        float4 biased       = mul(viewProjection, float4(depthPoint + scene->view[2].xyz * (VECTOR_DEPTH_BIAS * distance), 1.0));
+        float4 biased       = mul(viewProjection, float4(depthPoint + scene->view[2].xyz * (VECTOR_DEPTH_BIAS * distance + lift), 1.0));
         if (biased.w != 0.0)
             output.clipPosition.z = biased.z / biased.w * output.clipPosition.w;
     }
@@ -332,7 +378,7 @@ float4 shadeVector(VectorData style, float4 vertexColor, float2 edge, float metr
         color           = lerp(color, style.outlineColor, 1.0 - getVectorCoverage(distance, inner));
     }
     float period        = style.dashLength + style.gapLength;
-    if (kind == VECTOR_KIND_LINE && style.dashLength > 0.0 && style.gapLength > 0.0)
+    if ((kind == VECTOR_KIND_LINE || kind == VECTOR_KIND_BAND) && style.dashLength > 0.0 && style.gapLength > 0.0)
     {
         float phase     = dash - floor(dash / period) * period;
         coverage       *= getVectorCoverage(abs(phase - 0.5 * style.dashLength), 0.5 * style.dashLength);

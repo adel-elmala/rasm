@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Text and Labels · RASM</title>
 <meta name="description" content="How a map engine draws text: glyphs stored as signed distances so they stay sharp at any size, a halo from the same distances, text laid out from a font's metrics and kerning, labels anchored in the world but sized on the screen, placed each frame by priority so they never overlap, hidden by depth, sharp under MSAA and TAA. Then how RASM does it.">
-<meta name="rasm-sources" content="include/rasm/text.h include/rasm/vector.h include/rasm/assetLoader.h include/rasm/material.h include/rasm/mesh.h src/scene/text.cpp src/scene/vector.cpp src/assets/fontLoad.cpp src/assets/meshBuild.h src/renderer/labelPlacement.h src/renderer/labelPlacement.cpp src/renderer/gpuScene.cpp shaders/lib/vector.slang shaders/passes/rasm.slang src/c/cText.cpp src/c/cVector.cpp src/c/cLoader.cpp include/rasm/rasm_c.h examples/25_vector_map/main.cpp tests/textTests.cpp tests/labelPlacementTests.cpp">
+<meta name="rasm-sources" content="include/rasm/text.h include/rasm/vector.h include/rasm/assetLoader.h include/rasm/material.h include/rasm/mesh.h src/scene/text.cpp src/scene/vector.cpp src/assets/fontLoad.cpp src/assets/meshBuild.h src/renderer/labelPlacement.h src/renderer/labelPlacement.cpp src/renderer/gpuScene.cpp shaders/lib/vector.slang shaders/passes/rasm.slang shaders/passes/labelDepth.slang src/c/cText.cpp src/c/cVector.cpp src/c/cLoader.cpp include/rasm/rasm_c.h examples/25_vector_map/main.cpp tests/textTests.cpp tests/labelPlacementTests.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -40,7 +40,7 @@
     <li>Text is laid out with a <b>pen</b>: each glyph moves it by its <b>advance</b>, and <b>kerning</b> moves pairs such as "AV" closer.</li>
     <li>A label has a <b>world anchor</b>; its glyph quads are spread around the anchor's point <b>on the screen</b>, in pixels.</li>
     <li>Each frame, each view <b>places</b> its labels: the highest priority first, each one only where no placed box is. Equal labels keep the winner of the last frame, and labels <b>fade</b> in and out.</li>
-    <li>A label takes the depth of its anchor, so the ground and nearer objects <b>hide</b> it. It moves with its anchor and has no TAA jitter, so it stays sharp.</li>
+    <li>A label is shown or <b>hidden whole</b>, by whether its anchor is in front of what the scene drew there. It moves with its anchor and has no TAA jitter, so it stays sharp.</li>
   </ul>
 </div>
 
@@ -252,23 +252,36 @@
   </div>
 </div>
 
-<h2 id="depth"><span class="n">7</span>Hidden by depth</h2>
+<h2 id="depth"><span class="n">7</span>Shown or hidden whole</h2>
 
-<p>A label takes the depth of its anchor, moved a little toward the camera so it is not cut by the ground it stands on. The depth test then hides it behind a hill or a nearer building, pixel by pixel. Below the anchor on the screen the ground is nearer than the anchor, so there a corner takes the depth of the ground under it instead, and the text is not cut at its bottom.</p>
+<p>A label must hide behind a hill or a nearer building. The first idea is the depth test: give the text the depth of its anchor and let each pixel be tested. That cuts labels apart. The text is flat on the screen, but the world behind it is not: a hill beside the anchor rises in front of part of the text, a post or a box edge crosses it, and the label is torn, a word missing its first letters. When the camera moves, the cut moves with it and the text flickers.</p>
+
+<p>So a label is tested once, at its anchor, and drawn whole or not at all. After the scene's opaque draws, and before the labels, a small pass reads the depth they left around each label's anchor. The anchor is moved toward the camera by a few pixels' size first, so the ground it stands on does not hide it, and it is tested at the 3 x 3 pixels around its own: shown when it is in front of one of them, so a thin wire or the edge of a roof right at the anchor does not make it blink. The answer fades the label in or out over a moment, as placement does, and the text is then drawn over everything.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 200" role="img" aria-label="Side view: the camera sees a label whose anchor is behind a building. The building is nearer, so the label's pixels where the building is drawn fail the depth test; the rest of the label is drawn.">
-    <line x1="20" y1="170" x2="740" y2="170" class="surface"/>
-    <circle cx="60" cy="40" r="10" class="cpu"/><text x="80" y="36" class="small">camera</text>
-    <rect x="330" y="90" width="80" height="80" class="solid"/><text x="370" y="82" class="mid small">building</text>
-    <circle cx="560" cy="170" r="6" class="hot"/><text x="560" y="194" class="mid small">anchor</text>
-    <line x1="68" y1="46" x2="556" y2="166" class="arrow dashed"/>
-    <line x1="68" y1="46" x2="600" y2="110" class="arrow dashed o-50"/>
-    <text x="600" y="100" class="small t-ok">above the roof: drawn</text>
-    <text x="440" y="194" class="end small t-bad">hidden: the building is nearer</text>
+  <svg viewBox="0 0 760 230" role="img" aria-label="Two side views. Left, tested per pixel: a post in front of the text and a hill beside the anchor cut the label into pieces. Right, tested at the anchor: the anchor is in front of the depth around it, so the whole label is drawn over the post and the hill; a label whose anchor is behind a box is hidden whole.">
+    <rect x="20" y="10" width="350" height="210" rx="8" class="zone"/>
+    <text x="195" y="32" class="mid title t-bad">per pixel: torn</text>
+    <path d="M30 190 Q 120 150 200 186 T 360 170" class="surface"/>
+    <circle cx="150" cy="172" r="6" class="hot"/><text x="150" y="208" class="mid small">anchor</text>
+    <rect x="96" y="118" width="108" height="26" rx="4" class="mem"/><text x="150" y="136" class="mid small">Mill Road</text>
+    <rect x="176" y="96" width="10" height="88" class="solid"/><text x="194" y="92" class="small">post</text>
+    <rect x="96" y="118" width="30" height="26" class="bad o-50"/>
+    <text x="40" y="112" class="small t-bad">hill in front</text>
+    <rect x="390" y="10" width="350" height="210" rx="8" class="zone"/>
+    <text x="565" y="32" class="mid title t-ok">at the anchor: whole</text>
+    <path d="M400 190 Q 490 150 570 186 T 730 170" class="surface"/>
+    <circle cx="520" cy="172" r="6" class="hot"/><text x="520" y="208" class="mid small">anchor in front: shown</text>
+    <rect x="546" y="96" width="10" height="88" class="solid"/>
+    <rect x="466" y="118" width="108" height="26" rx="4" class="mem"/><text x="520" y="136" class="mid small">Mill Road</text>
+    <rect x="640" y="120" width="60" height="62" class="solid"/>
+    <circle cx="690" cy="184" r="5" class="hot o-50"/>
+    <text x="670" y="96" class="mid small t-bad">behind a box:</text><text x="670" y="110" class="mid small t-bad">hidden whole</text>
   </svg>
-  <figcaption>The test is per pixel, so a label half behind a building shows its other half. Placement on the CPU does not know about depth: a hidden label still takes its room.</figcaption>
+  <figcaption>Left: each pixel of the text against the depth behind it. Right: one answer for the label, from its anchor, and the text drawn over everything.</figcaption>
 </figure>
+
+<p>Placement on the CPU still runs before the depth is known: a label hidden behind a building keeps its room on the screen, so it can still push a visible label out.</p>
 
 <h2 id="aa"><span class="n">8</span>Sharp under MSAA and TAA</h2>
 
@@ -286,7 +299,8 @@
   <div><dt>A letter's right side is covered by its neighbour's halo</dt><dd>Halo and fill are drawn glyph by glyph. Draw all of a label's halo quads first, then its fills.</dd></div>
   <div><dt>Labels flicker when the camera moves</dt><dd>Equal labels swap places frame to frame. Prefer last frame's winner among equals, fade, and sort with a fixed tie-break.</dd></div>
   <div><dt>Text shimmers or looks soft with TAA</dt><dd>It takes the jitter and the history blends it. Draw it without the jitter, and give it its anchor's motion.</dd></div>
-  <div><dt>Text is cut along its bottom on a tilted map</dt><dd>The quad below the anchor sinks into the ground. Give those corners the depth of the ground under them.</dd></div>
+  <div><dt>Labels are torn by hills, posts and edges</dt><dd>Each pixel of the text is tested against the depth behind it. Test the anchor once, and draw the label whole or not at all.</dd></div>
+  <div><dt>A label on a slope blinks out</dt><dd>Its anchor lies on the ground, at the ground's own depth. Move it toward the camera by a few pixels' size before the test, and test a few pixels around it.</dd></div>
   <div><dt>Names in Arabic or Devanagari look wrong</dt><dd>Those scripts need shaping: glyphs that change by their neighbours, joined, reordered. A codepoint-to-glyph layout cannot do it.</dd></div>
 </dl>
 
@@ -301,7 +315,7 @@
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 300" role="img" aria-label="On any thread: loadFont or buildFontAtlas makes a FontAtlas with stb_truetype; addVectorLabels lays the text out into a VectorGeometry with a MeshLabel per label; buildVectorMesh. On the renderer's thread: createFont uploads the atlas; each entity with labels gets a range of label slots; each shaded view projects the labels, places them with placeLabels and uploads each slot's alpha (labelsPtr). In the shaders: getVectorVertex spreads the glyph quads and collapses hidden ones; shadeGlyph turns the distance into coverage and the halo.">
+  <svg viewBox="0 0 760 300" role="img" aria-label="On any thread: loadFont or buildFontAtlas makes a FontAtlas with stb_truetype; addVectorLabels lays the text out into a VectorGeometry with a MeshLabel per label; buildVectorMesh. On the renderer's thread: createFont uploads the atlas; each entity with labels gets a range of label slots; each shaded view projects the labels, places them with placeLabels and uploads each slot's alpha (labelsPtr) and its anchor's depth test (labelProbesPtr). In the shaders: the Label Depth pass tests each anchor against the depth and multiplies the slot's alpha by its fade; getVectorVertex spreads the glyph quads over everything and collapses hidden ones; shadeGlyph turns the distance into coverage and the halo.">
     <rect x="20" y="20" width="230" height="260" rx="8" class="zone"/>
     <text x="135" y="42" class="mid title t-cpu">any thread</text>
     <rect x="36" y="58" width="198" height="54" rx="6" class="cpu"/><text x="135" y="80" class="mid small mono">loadFont / buildFontAtlas</text><text x="135" y="98" class="mid small">FontAtlas: distances, metrics</text>
@@ -313,7 +327,7 @@
     <rect x="296" y="58" width="188" height="40" rx="6" class="mem"/><text x="390" y="76" class="mid small mono">createFont</text><text x="390" y="91" class="mid small">R8_UNORM atlas, clamped</text>
     <rect x="296" y="110" width="188" height="40" rx="6" class="mem"/><text x="390" y="128" class="mid small">an entity's labels:</text><text x="390" y="143" class="mid small">a range of label slots</text>
     <rect x="296" y="162" width="188" height="56" rx="6" class="mem"/><text x="390" y="182" class="mid small">each view: project,</text><text x="390" y="198" class="mid small mono">placeLabels</text><text x="390" y="212" class="mid small">fade</text>
-    <rect x="296" y="230" width="188" height="40" rx="6" class="mem"/><text x="390" y="248" class="mid small">alpha per slot</text><text x="390" y="263" class="mid small mono">labelsPtr</text>
+    <rect x="296" y="230" width="188" height="40" rx="6" class="mem"/><text x="390" y="248" class="mid small">alpha, anchor's test</text><text x="390" y="263" class="mid small mono">labelsPtr, labelProbesPtr</text>
     <line x1="234" y1="234" x2="292" y2="130" class="arrow cpu" marker-end="url(#ah-cpu)"/>
     <line x1="234" y1="85" x2="292" y2="78" class="arrow cpu" marker-end="url(#ah-cpu)"/>
 
@@ -322,6 +336,8 @@
     <rect x="546" y="58" width="178" height="40" rx="6" class="shader"/><text x="635" y="76" class="mid small">cull: pad by</text><text x="635" y="91" class="mid small mono">VECTOR_LABEL_REACH</text>
     <rect x="546" y="110" width="178" height="56" rx="6" class="shader"/><text x="635" y="130" class="mid small mono">getVectorVertex</text><text x="635" y="146" class="mid small">spread, no jitter, alpha 0:</text><text x="635" y="160" class="mid small">collapsed</text>
     <rect x="546" y="178" width="178" height="40" rx="6" class="shader"/><text x="635" y="196" class="mid small mono">shadeGlyph</text><text x="635" y="211" class="mid small">coverage, halo</text>
+    <rect x="546" y="230" width="178" height="40" rx="6" class="shader"/><text x="635" y="248" class="mid small">Label Depth pass:</text><text x="635" y="263" class="mid small">anchor vs depth, fade</text>
+    <line x1="635" y1="230" x2="635" y2="170" class="arrow shader" marker-end="url(#ah-shader)"/>
     <line x1="484" y1="250" x2="542" y2="140" class="arrow mem dashed" marker-end="url(#ah-mem)"/>
   </svg>
   <figcaption>The atlas and the layout touch no renderer, so a map builds its tiles' labels on its own threads; the renderer only uploads them and places them each frame.</figcaption>
@@ -349,7 +365,7 @@ rasm::addVectorLabels(geometry[PLACE_NAMES], origin, *features.font, names.data(
   <tr><td>Anchor</td><td>world point, screen offsets</td><td>Every glyph vertex: <code>pos</code> the anchor, <code>uv[0]</code> the corner in ems, <code>uv[1]</code> the atlas coordinate, <code>tangent.x</code> the label's index in the mesh. The size is <code>VectorMaterial::width</code> in <code>PIXELS</code> or <code>METRES</code>; text always faces the screen.</td></tr>
   <tr><td>Placement</td><td>greedy, by priority, stable, fading</td><td><code>placeViewLabels</code> in <code>prepareSceneView</code>, for each shaded view: each label's box from its anchor in doubles (<code>MeshLabel</code>), then <code>placeLabels</code> on cells of <code>LABEL_CELL_PIXELS</code> (8). Order: <code>LabelDesc::priority</code>, then placed last frame, then slot. Fade over <code>LABEL_FADE_SECONDS</code> (0.25 s) of the frame's step; a view's first placement shows at once. Each entity with labels holds a range of the renderer's <code>MAX_LABELS</code> slots (one that finds none left draws no labels); a slot's stamp tells a view that a new label took it, which then starts hidden. The scratch vectors keep their capacity: a steady frame allocates nothing.</td></tr>
   <tr><td>To the GPU</td><td>—</td><td>A buffer per view and frame slot of one float per slot (<code>SceneData::labelsPtr</code>); the instance's first slot in <code>InstanceData::meshletVisibility</code>, free on a mesh with no meshlets. Alpha 0 collapses the quad.</td></tr>
-  <tr><td>Depth</td><td>the anchor's, per pixel</td><td>As for points: <code>VECTOR_DEPTH_BIAS</code> and <code>getGroundPoint</code>. A label hidden by depth still takes its room in placement (<code>D47</code>).</td></tr>
+  <tr><td>Depth</td><td>the anchor, whole label</td><td>The Label Depth pass (<code>shaders/passes/labelDepth.slang</code>, <code>recordLabelDepth</code>), after the view's last draw pass and before Transparent. <code>placeViewLabels</code> gives each slot its anchor's pixel and the depth it must be in front of: its own, moved toward the camera by <code>LABEL_DEPTH_PIXELS</code> (4) pixels' size (<code>SceneData::labelProbesPtr</code>). It is shown when it is in front of one of the 3 x 3 pixels around it (with MSAA, each pixel's farthest sample). The answer fades in <code>SceneData::labelFadesPtr</code>, a buffer per view kept across frames, by the placement's step, and multiplies the slot's alpha; a label that was hidden starts at the answer. The glyphs are then drawn at the near plane, over everything. An <code>OVERLAY</code> label is always shown. A label hidden by depth still takes its room in placement (<code>D47</code>). Bug <code>B36</code>: before, each glyph corner took the depth of the ground's plane under it, and hills and objects cut labels.</td></tr>
   <tr><td>MSAA, TAA</td><td>no jitter, the anchor's motion</td><td><code>removeJitter</code> on each glyph vertex; <code>toVectorOutput</code> writes the anchor's motion times coverage. Image tests <code>labels_msaa4</code> and <code>labels_taa</code>.</td></tr>
   <tr><td>Culling</td><td>pad by the reach</td><td><code>getVectorPadding</code> with <code>VECTOR_TEXT</code>: <code>VECTOR_LABEL_REACH</code> (= <code>MAX_LABEL_REACH</code>, 12 ems) times the text's size, plus the halo.</td></tr>
 </table>
@@ -363,9 +379,10 @@ rasm::addVectorLabels(geometry[PLACE_NAMES], origin, *features.font, names.data(
   <tr><td>Fonts</td><td><code>FontAtlas</code>, <code>GlyphMetrics</code>, <code>KerningPair</code>, <code>findGlyph</code>, <code>getKerning</code>, <code>decodeUtf8</code> in <code>include/rasm/text.h</code>, <code>src/scene/text.cpp</code> (with <code>Renderer::createFont</code>, <code>Renderer::destroyFont</code>); <code>buildFontAtlas</code>, <code>FontLoadOptions</code>, <code>AssetLoader::loadFont</code> in <code>src/assets/fontLoad.cpp</code> (<code>rasm::rasm</code> only)</td></tr>
   <tr><td>Labels</td><td><code>LabelDesc</code>, <code>LabelAnchor</code>, <code>addVectorLabels</code> in <code>include/rasm/vector.h</code>, <code>src/scene/vector.cpp</code>; <code>MeshLabel</code>, <code>Mesh::labels</code></td></tr>
   <tr><td>Placement</td><td><code>placeLabels</code>, <code>LabelPlacement</code>, <code>LabelCandidate</code> in <code>src/renderer/labelPlacement.cpp</code>; <code>placeViewLabels</code> and the label slots in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Depth</td><td><code>labelDepthMain</code> in <code>shaders/passes/labelDepth.slang</code>; <code>recordLabelDepth</code> and the <code>Label Depth</code> pass in <code>src/renderer/gpuScene.cpp</code>; <code>LABEL_DEPTH_PIXELS</code>, <code>LABEL_PROBE_DEPTH</code> in <code>src/renderer/labelPlacement.h</code></td></tr>
   <tr><td>Shaders</td><td><code>getVectorVertex</code> (<code>VECTOR_KIND_GLYPH</code>), <code>shadeGlyph</code>, <code>getVectorPadding</code> in <code>shaders/lib/vector.slang</code>; <code>rasm.slang</code></td></tr>
   <tr><td>The C API (1.6)</td><td><code>rasm_build_font_atlas</code>, <code>rasm_asset_loader_load_font</code>, <code>rasm_create_font</code>, <code>rasm_destroy_font</code>, <code>rasm_vector_add_labels</code>, <code>rasm_label_desc</code>, <code>rasm_material_desc</code>'s <code>font</code> in <code>src/c/cText.cpp</code>, <code>src/c/cVector.cpp</code>, <code>src/c/cLoader.cpp</code></td></tr>
-  <tr><td>Tests</td><td><code>tests/textTests.cpp</code> (UTF-8, glyphs, kerning, the layout, Roboto's atlas), <code>tests/labelPlacementTests.cpp</code>; image tests <code>labels</code>, <code>labels_msaa4</code>, <code>labels_taa</code>, <code>far_labels</code></td></tr>
+  <tr><td>Tests</td><td><code>tests/textTests.cpp</code> (UTF-8, glyphs, kerning, the layout, Roboto's atlas), <code>tests/labelPlacementTests.cpp</code>; image tests <code>labels</code>, <code>labels_msaa4</code>, <code>labels_taa</code>, <code>far_labels</code>, <code>draped</code> (names on hills, across a post, behind a box)</td></tr>
   <tr><td>Example</td><td><code>examples/25_vector_map</code>: place names beside their points and district names over the map, in both views; the font in <samp>assets/fonts</samp> (Roboto, Apache 2.0)</td></tr>
 </table>
 </div>
@@ -382,7 +399,7 @@ rasm::addVectorLabels(geometry[PLACE_NAMES], origin, *features.font, names.data(
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>Shaping for complex scripts and right-to-left text (<code>D46</code>). Labels hidden by depth still take their room, and a label half behind an object shows half (<code>D47</code>). Labels along lines (a road's name that follows its curve) and labels that rotate with the map. MSDF atlases. A font file is trusted (<code>B34</code>). Pipelines compiled on first use still stall the frame (<code>P31</code>); labels add no pipeline of their own.</p>
+  <p>Shaping for complex scripts and right-to-left text (<code>D46</code>). Labels hidden by depth still take their room (<code>D47</code>). Labels along lines (a road's name that follows its curve) and labels that rotate with the map. MSDF atlases. A font file is trusted (<code>B34</code>). Pipelines compiled on first use still stall the frame (<code>P31</code>); labels add no pipeline of their own.</p>
 </div>
 
 <h3>Further reading</h3>

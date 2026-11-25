@@ -532,6 +532,7 @@ namespace rasm
         void                        recordMeshletCulling(uint32_t view, uint32_t phase);
         bool                        createMeshletPipelines(uint32_t view, bool opaque, bool mask);
         void                        recordHiz(uint32_t view);
+        void                        recordLabelDepth(uint32_t view);
         void                        recordBlendSort(uint32_t view);
         void                        recordBlendSort(uint64_t sceneDataAddress, uint32_t capacity);
         void                        drawSceneView(uint32_t view, uint32_t phase);

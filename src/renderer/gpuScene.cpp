@@ -51,9 +51,10 @@ namespace rasm
 
     namespace
     {
-        constexpr uint32_t CULL_GROUP_SIZE = 64; // numthreads of cull.slang
-        constexpr uint32_t HIZ_GROUP_SIZE = 8;   // numthreads of hiz.slang, in x and y
-        constexpr uint32_t CULL_EARLY = 0;       // the cull phases of cull.slang
+        constexpr uint32_t CULL_GROUP_SIZE = 64;        // numthreads of cull.slang
+        constexpr uint32_t HIZ_GROUP_SIZE = 8;          // numthreads of hiz.slang, in x and y
+        constexpr uint32_t LABEL_DEPTH_GROUP_SIZE = 64; // numthreads of labelDepth.slang
+        constexpr uint32_t CULL_EARLY = 0;              // the cull phases of cull.slang
         constexpr uint32_t CULL_LATE = 1;
         constexpr uint32_t GHOST_BOX_VERTICES = 36;                  // a box's 12 triangles, debugGhosts.slang
         constexpr uint32_t MESHLET_RUN_SHIFT = 4;                    // the meshlet dispatches' argument: the phase, and the run above it (cull.slang)
@@ -1219,16 +1220,32 @@ namespace rasm
             });
         // See-through draws go over everything the draw passes and the sky left, so a shaded view ends with them. The
         // pass is there even while the scene has no blend run, since the graph is fixed and the scene is not. The
-        // culling view's ghosts come last, and read the visibility the late pass left.
+        // culling view's ghosts come last, and read the visibility the late pass left. Before it, the labels' anchors
+        // are tested against the depth the draw passes left, so each label shows or hides whole.
         auto addTransparentPass = [&]()
         {
             if (depthOnly)
                 return;
+            // A cube's faces keep the per-pixel test (the pass reads a 2D depth).
+            if (!ctx.getRenderTargetDesc(renderTarget).cube)
+                graph.addComputePass(
+                    "Label Depth",
+                    [&](PassBuilder &builder)
+                    {
+                        builder.readDepth(renderTarget);
+                        builder.read(sceneView.labelProbes);
+                        builder.write(sceneView.labelBuffers);
+                        builder.readPrevious(sceneView.labelFades);
+                        builder.write(sceneView.labelFades);
+                    },
+                    [this, view](RenderContext &)
+                    { recordLabelDepth(view); });
             graph.addPass(
                 "Transparent",
                 [&](PassBuilder &builder)
                 {
                     drawScenePass(builder);
+                    builder.read(sceneView.labelBuffers);
                     if (occlusion)
                         builder.read(sceneView.visibility);
                 },
@@ -1333,18 +1350,39 @@ namespace rasm
             }
         }
 
-        // A shaded view sorts its blend run; the buffers start at one block and grow under the same handles.
+        // A shaded view sorts its blend run and places labels; the buffers start small and grow under the same handles
+        // (placeViewLabels sizes the label buffers).
         for (uint32_t i = 0; !depthOnly && i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
             view.sortCapacity[i] = BLEND_SORT_BLOCK;
             view.sortBuffers[i] = ctx.createBuffer({.name = "Blend Sort Buffer", .usage = BufferUsage::STORAGE, .size = getBlendSortBufferSize(BLEND_SORT_BLOCK)});
-            if (!view.sortBuffers[i].isValid())
+            view.labelBuffers[i] = ctx.createBuffer({.name = "Label Visibility Buffer", .usage = BufferUsage::STORAGE, .size = sizeof(float)});
+            view.labelProbes[i] = ctx.createBuffer({.name = "Label Probe Buffer", .usage = BufferUsage::STORAGE, .size = sizeof(glm::vec4)});
+            if (!view.sortBuffers[i].isValid() || !view.labelBuffers[i].isValid() || !view.labelProbes[i].isValid())
             {
-                spdlog::error("Failed to create the blend sort buffers of a scene view.");
+                spdlog::error("Failed to create the blend sort and label buffers of a scene view.");
                 for (uint32_t j = 0; j < MAX_FRAMES_IN_FLIGHT; ++j)
                 {
                     destroyViewBuffer(ctx, view.visibleDraws[j]);
                     destroyViewBuffer(ctx, view.sortBuffers[j]);
+                    destroyViewBuffer(ctx, view.labelBuffers[j]);
+                    destroyViewBuffer(ctx, view.labelProbes[j]);
+                }
+                return UINT32_MAX;
+            }
+        }
+        if (!depthOnly)
+        {
+            view.labelFades = ctx.createBuffer({.name = "Label Fade Buffer", .usage = BufferUsage::STORAGE, .size = sizeof(float)});
+            if (!view.labelFades.isValid())
+            {
+                spdlog::error("Failed to create the label buffers of a scene view.");
+                for (uint32_t j = 0; j < MAX_FRAMES_IN_FLIGHT; ++j)
+                {
+                    destroyViewBuffer(ctx, view.visibleDraws[j]);
+                    destroyViewBuffer(ctx, view.sortBuffers[j]);
+                    destroyViewBuffer(ctx, view.labelBuffers[j]);
+                    destroyViewBuffer(ctx, view.labelProbes[j]);
                 }
                 return UINT32_MAX;
             }
@@ -1408,7 +1446,9 @@ namespace rasm
             destroyViewBuffer(ctx, view.hiz[i]);
             destroyViewBuffer(ctx, view.sortBuffers[i]);
             destroyViewBuffer(ctx, view.labelBuffers[i]);
+            destroyViewBuffer(ctx, view.labelProbes[i]);
         }
+        destroyViewBuffer(ctx, view.labelFades);
         destroyViewBuffer(ctx, view.visibility);
         destroyViewBuffer(ctx, view.meshletVisibility);
         releaseViewClusters(viewIndex);
@@ -1926,6 +1966,13 @@ namespace rasm
             sceneData.lodDepthPlane = moveRenderPlane(frozenReader->frozenLodDepthPlane, frozenReader->frozenOrigin, origin);
         }
         sceneData.debugView = static_cast<uint32_t>(view.debugView);
+        view.labelDepthSlots = 0;
+        if (!view.depthOnly && !drawList.labelEntities.empty() && !gpuScene->labelDepthPipeline.isValid())
+        {
+            gpuScene->labelDepthPipeline = createComputePipeline("labelDepth", readFile(pathFromUtf8(config.shaderDir) / "passes/labelDepth.slang"), "labelDepthMain");
+            if (!gpuScene->labelDepthPipeline.isValid())
+                spdlog::error("Failed to create the Label Depth pipeline; labels are hidden glyph by glyph by the depth.");
+        }
         if (!view.depthOnly && !drawList.labelEntities.empty())
             placeViewLabels(viewIndex, cameraProjection, worldCameraView, width, height, sceneData);
         ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), viewIndex * sizeof(gfx::SceneData));
@@ -1960,15 +2007,15 @@ namespace rasm
 
     // A shaded view's labels for this frame (src/renderer/labelPlacement.cpp): each label's box on screen from its
     // anchor (doubles, world space) and its material's text size, the greedy placement with its fade, then the slots'
-    // alpha into the view's buffer for this frame slot, which the vertex stage reads (labelsPtr). Allocates nothing once
-    // the vectors and the buffer have grown.
+    // alpha into the view's buffer for this frame slot, which the vertex stage reads (labelsPtr), and each anchor's
+    // depth test, which the Label Depth pass runs on it (recordLabelDepth). Allocates nothing once the vectors and the
+    // buffers have grown.
     void Renderer::placeViewLabels(uint32_t viewIndex, const glm::mat4 &projection, const glm::dmat4 &worldView, uint32_t width, uint32_t height, gfx::SceneData &sceneData)
     {
         ZoneScoped;
         SceneView &view = gpuScene->views[viewIndex];
         const SceneDrawList &drawList = gpuScene->drawLists[view.scene.index];
         const uint32_t frame = static_cast<uint32_t>(frameCount);
-        const glm::dmat4 worldViewProjection = glm::dmat4(projection) * worldView;
         const bool perspective = projection[3][3] == 0.0f;
         const double pixelScale = 2.0 / (std::abs(static_cast<double>(projection[1][1])) * height);
         std::vector<LabelCandidate> &candidates = view.labelCandidates;
@@ -1990,10 +2037,12 @@ namespace rasm
             if (material.type != MaterialType::VECTOR || !isLive(style.font))
                 continue;
             const glm::dmat4 model = entityRef.transform.toMatrix();
+            const bool overlay = style.depth == VectorDepth::OVERLAY;
             for (uint32_t l = 0; l < state.labelCount && l < mesh.labels.size(); ++l)
             {
                 const MeshLabel &label = mesh.labels[l];
-                const glm::dvec4 clip = worldViewProjection * (model * glm::dvec4(glm::dvec3(label.anchor), 1.0));
+                const glm::dvec4 viewPosition = worldView * (model * glm::dvec4(glm::dvec3(label.anchor), 1.0));
+                const glm::dvec4 clip = glm::dmat4(projection) * viewPosition;
                 const auto slot = static_cast<uint32_t>(state.firstLabel) + l;
                 LabelCandidate candidate{.slot = slot, .priority = label.priority};
                 if (clip.w > 0.0)
@@ -2010,6 +2059,13 @@ namespace rasm
                     candidate.low = boxCenter - halfSize;
                     candidate.high = boxCenter + halfSize;
                     candidate.inView = std::abs(ndc.x) <= 1.0 && std::abs(ndc.y) <= 1.0;
+                    // The depth the anchor must be in front of: its own, moved toward the camera by a few pixels' size
+                    // there (reversed-Z: a larger depth is nearer), for any projection. An anchor off the screen keeps
+                    // its fade.
+                    const glm::dvec4 nearer = glm::dmat4(projection) * (viewPosition + glm::dvec4(0.0, 0.0, LABEL_DEPTH_PIXELS * pixelWorld, 0.0));
+                    const float test = overlay ? LABEL_PROBE_OVERLAY : LABEL_PROBE_DEPTH;
+                    if (candidate.inView)
+                        candidate.probe = glm::vec4(center, static_cast<float>(nearer.z / nearer.w), test);
                 }
                 candidates.push_back(candidate);
                 lowSlot = std::min(lowSlot, slot);
@@ -2018,22 +2074,53 @@ namespace rasm
         }
         if (candidates.empty())
             return;
+        // The buffers hold every slot up to the highest in use and grow to twice that, under the same handles, which the
+        // frame's passes name. The fades stay in place across frames; when their buffer grows, every label starts its
+        // fade over.
+        const uint32_t needed = highSlot + 1;
+        const uint32_t capacity = std::min(std::max(needed * 2, 1024u), MAX_LABELS);
+        const bool fadesGrow = view.labelFadeCapacity < needed;
+        if (fadesGrow)
+            view.labelFadeCapacity = ctx.resizeBuffer(view.labelFades, static_cast<uint64_t>(capacity) * sizeof(float)) ? capacity : 0;
+        // A label that was hidden (or is new to the view) starts its fade by depth at its test's answer.
+        for (LabelCandidate &candidate : candidates)
+        {
+            const bool hidden = candidate.slot >= view.labels.alpha.size() || view.labels.alpha[candidate.slot] <= 0.0f || view.labels.stamps[candidate.slot] != gpuScene->labelStamps[candidate.slot];
+            if ((hidden || fadesGrow) && candidate.probe.w != LABEL_PROBE_NONE)
+                candidate.probe.w += LABEL_PROBE_RESET;
+        }
         placeLabels(view.labels, candidates.data(), static_cast<uint32_t>(candidates.size()), gpuScene->labelStamps.data(), MAX_LABELS, width, height, deltaTime / LABEL_FADE_SECONDS);
 
-        // The buffer holds every slot up to the highest in use; it grows to twice that.
-        const uint32_t needed = highSlot + 1;
         if (view.labelCapacity[frame] < needed)
         {
-            if (view.labelBuffers[frame].isValid())
-                ctx.destroyBuffer(view.labelBuffers[frame]);
-            const uint32_t capacity = std::min(std::max(needed * 2, 1024u), MAX_LABELS);
-            view.labelBuffers[frame] = ctx.createBuffer({.name = "Label Visibility Buffer", .usage = BufferUsage::STORAGE, .size = capacity * sizeof(float)});
-            view.labelCapacity[frame] = view.labelBuffers[frame].isValid() ? capacity : 0;
+            const bool grown = ctx.resizeBuffer(view.labelBuffers[frame], static_cast<uint64_t>(capacity) * sizeof(float)) &&
+                               ctx.resizeBuffer(view.labelProbes[frame], static_cast<uint64_t>(capacity) * sizeof(glm::vec4));
+            view.labelCapacity[frame] = grown ? capacity : 0;
         }
         if (view.labelCapacity[frame] < needed ||
             !ctx.fillBuffer(view.labelBuffers[frame], view.labels.alpha.data() + lowSlot, static_cast<size_t>(needed - lowSlot) * sizeof(float), static_cast<size_t>(lowSlot) * sizeof(float)))
             return;
         sceneData.labelsPtr = ctx.getBufferDeviceAddress(view.labelBuffers[frame]);
+
+        // The slots between the view's labels belong to other scenes: the pass leaves them.
+        std::vector<glm::vec4> &probes = view.labelProbeData;
+        // Labels that are all overlays, or off the screen, need no pass.
+        probes.assign(needed - lowSlot, glm::vec4(0.0f, 0.0f, 0.0f, LABEL_PROBE_NONE));
+        bool tested = false;
+        for (const LabelCandidate &candidate : candidates)
+        {
+            probes[candidate.slot - lowSlot] = candidate.probe;
+            tested = tested || candidate.probe.w == LABEL_PROBE_DEPTH || candidate.probe.w == LABEL_PROBE_DEPTH + LABEL_PROBE_RESET;
+        }
+        if (!tested || !gpuScene->labelDepthPipeline.isValid() || view.labelFadeCapacity < needed || sceneData.depthTexture == UINT32_MAX || ctx.getRenderTargetDesc(view.renderTarget).cube ||
+            !ctx.fillBuffer(view.labelProbes[frame], probes.data(), probes.size() * sizeof(glm::vec4), static_cast<size_t>(lowSlot) * sizeof(glm::vec4)))
+            return;
+        sceneData.labelProbesPtr = ctx.getBufferDeviceAddress(view.labelProbes[frame]);
+        sceneData.labelFadesPtr = ctx.getBufferDeviceAddress(view.labelFades);
+        sceneData.labelFadeStep = deltaTime / LABEL_FADE_SECONDS;
+        sceneData.labelSlotCount = needed;
+        view.labelDepthFirst = lowSlot;
+        view.labelDepthSlots = needed;
     }
 
     // countMain, then writeMain, which reads the counts and slots countMain wrote. The early phase draws what was
@@ -2156,6 +2243,22 @@ namespace rasm
             ctx.pushConstants(commandBuffer, gpuScene->hizPipeline, &pushConstants, sizeof(pushConstants), 0);
             ctx.dispatch(commandBuffer, (levelWidth + HIZ_GROUP_SIZE - 1) / HIZ_GROUP_SIZE, (levelHeight + HIZ_GROUP_SIZE - 1) / HIZ_GROUP_SIZE);
         }
+    }
+
+    // Each label slot of the view: whether its anchor is in front of the depth, as a fade kept across frames, times its
+    // placement's alpha in the slot's label buffer, which the Transparent pass reads (shaders/passes/labelDepth.slang).
+    void Renderer::recordLabelDepth(uint32_t viewIndex)
+    {
+        const SceneView &view = gpuScene->views[viewIndex];
+        if (!view.ready || view.labelDepthSlots == 0)
+            return;
+        const auto commandBuffer = frameResources[frameCount].commandBuffer;
+        // The slots from the view's first to its last, the ones placeViewLabels wrote a probe for.
+        const gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, static_cast<uint32_t>(frameCount), viewIndex), .argument = view.labelDepthFirst};
+        ctx.bindPipeline(commandBuffer, gpuScene->labelDepthPipeline);
+        ctx.bindDescriptorSet(commandBuffer, gpuScene->labelDepthPipeline, bindlessDescriptorSet, 0);
+        ctx.pushConstants(commandBuffer, gpuScene->labelDepthPipeline, &pushConstants, sizeof(pushConstants), 0);
+        ctx.dispatch(commandBuffer, (view.labelDepthSlots - view.labelDepthFirst + LABEL_DEPTH_GROUP_SIZE - 1) / LABEL_DEPTH_GROUP_SIZE);
     }
 
     // Culling packs a run's visible draws at the start of its range and counts them, so each run is one indirect

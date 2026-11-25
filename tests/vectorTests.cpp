@@ -3,6 +3,7 @@
 #include "doctest/doctest.h"
 
 #include <bit>
+#include <limits>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -11,6 +12,7 @@ namespace
 {
     constexpr float KIND_LINE = 2.0f;
     constexpr float KIND_POINT = 3.0f;
+    constexpr float KIND_BAND = 5.0f;
     constexpr float METRIC_ROUND = 0.0f;
     constexpr float METRIC_ACROSS = 2.0f;
 
@@ -222,6 +224,61 @@ TEST_CASE("draped polygons and lines lie on the drawn terrain")
         ++pieces;
     }
     CHECK(pieces >= 8);
+
+    // A band drapeWidth wide (B35): cut on the grid across its whole width, so every piece lies on one terrain triangle
+    // and its middle is on the ground, not only the line's middle. The straight one covers its width times its length
+    // seen from above.
+    const glm::dvec3 roads[5] = {line[0], line[1], origin + glm::dvec3(-15.0, 0.0, -5.0), origin + glm::dvec3(0.0, 0.0, 4.0), origin + glm::dvec3(14.0, 0.0, -3.0)};
+    const uint32_t roadSizes[2] = {2, 3};
+    rasm::VectorGeometry band;
+    rasm::addVectorLines(band, origin, roads, roadSizes, 2, {.join = rasm::LineJoin::ROUND, .cap = rasm::LineCap::BUTT, .drapeWidth = 8.0f}, placement);
+    REQUIRE(band.indices.size() > 3 * 32);
+    double straight = 0.0;
+    for (size_t t = 0; t < band.indices.size(); t += 3)
+    {
+        glm::dvec3 middle(0.0);
+        for (size_t k = 0; k < 3; ++k)
+        {
+            const rasm::Vertex &vertex = band.vertices[band.indices[t + k]];
+            CHECK(vertex.uv[2].x == KIND_BAND);
+            CHECK(vertex.uv[1].y == 4.0f);
+            const glm::dvec3 world = origin + glm::dvec3(vertex.pos);
+            CHECK(world.y == doctest::Approx(heightAt(world)).epsilon(1e-5));
+            middle += world / 3.0;
+        }
+        CHECK(middle.y == doctest::Approx(heightAt(middle)).epsilon(1e-4));
+        const glm::vec3 a = band.vertices[band.indices[t]].pos;
+        const glm::vec3 b = band.vertices[band.indices[t + 1]].pos;
+        const glm::vec3 c = band.vertices[band.indices[t + 2]].pos;
+        if (std::bit_cast<uint32_t>(band.vertices[band.indices[t]].tangent.w) == 0)
+            straight += 0.5 * std::abs((b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z));
+    }
+    CHECK(straight == doctest::Approx(8.0 * glm::length(glm::dvec2(36.0, -18.0))).epsilon(1e-4));
+
+    // A band along the tile's edge is cut there: its outer half is the neighbour's. On the tile, it is still on the
+    // ground, and covers half its width.
+    const glm::dvec3 edge[2] = {origin + glm::dvec3(-16.0, 0.0, 20.0), origin + glm::dvec3(16.0, 0.0, 20.0)};
+    rasm::VectorGeometry cut;
+    rasm::addVectorLines(cut, origin, edge, &two, 1, {.cap = rasm::LineCap::BUTT, .drapeWidth = 6.0f}, placement);
+    double onTile = 0.0;
+    for (size_t t = 0; t < cut.indices.size(); t += 3)
+    {
+        const glm::vec3 a = cut.vertices[cut.indices[t]].pos;
+        const glm::vec3 b = cut.vertices[cut.indices[t + 1]].pos;
+        const glm::vec3 c = cut.vertices[cut.indices[t + 2]].pos;
+        for (const glm::vec3 &p : {a, b, c})
+        {
+            CHECK(p.z <= 20.0f + 1e-4f);
+            CHECK(static_cast<double>(p.y) == doctest::Approx(heightAt(origin + glm::dvec3(p)) - origin.y).epsilon(1e-5));
+        }
+        onTile += 0.5 * std::abs((b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z));
+    }
+    CHECK(onTile == doctest::Approx(3.0 * 32.0).epsilon(1e-4));
+    // A width that is not finite keeps the middle's draping.
+    rasm::VectorGeometry infinite;
+    rasm::addVectorLines(infinite, origin, edge, &two, 1, {.drapeWidth = std::numeric_limits<float>::infinity()}, placement);
+    REQUIRE_FALSE(infinite.vertices.empty());
+    CHECK(infinite.vertices[0].uv[2].x == KIND_LINE);
 }
 
 TEST_CASE("points are quads of corner offsets, with an icon's corners when given")

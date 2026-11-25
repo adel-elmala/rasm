@@ -127,8 +127,14 @@ namespace rasm
         bool                            hasPrevious                                                         = false;
         LabelPlacement                  labels;                                                                     // a shaded view's labels over frames
         std::vector<LabelCandidate>     labelCandidates;                                                            // scratch, keeps its capacity
-        BufferHandle                    labelBuffers[MAX_FRAMES_IN_FLIGHT]                                  = {};   // each label slot's alpha, which the vertex stage reads
+        BufferHandle                    labelBuffers[MAX_FRAMES_IN_FLIGHT]                                  = {};   // each label slot's alpha, which the vertex stage reads; grows under the same handle
+        BufferHandle                    labelProbes[MAX_FRAMES_IN_FLIGHT]                                   = {};   // each label slot's depth test (gfx::SceneData::labelProbesPtr)
+        BufferHandle                    labelFades                                                          = {};   // each label slot's fade by depth, kept across frames like visibility
         uint32_t                        labelCapacity[MAX_FRAMES_IN_FLIGHT]                                 = {};
+        uint32_t                        labelFadeCapacity                                                   = 0;
+        uint32_t                        labelDepthFirst                                                     = 0;    // this frame's first slot for the Label Depth pass
+        uint32_t                        labelDepthSlots                                                     = 0;    // and its end; 0: it does nothing
+        std::vector<glm::vec4>          labelProbeData;                                                             // scratch, keeps its capacity
         gfx::SceneData                  sceneData                                                           = {};   // this frame's, as the GPU reads it: a pick starts from it
         glm::mat4                       projection                                                          = glm::mat4(1.0f);  // this frame's, without jitter
         glm::dvec3                      origin                                                              = glm::dvec3(0.0);  // this frame's render space
@@ -176,6 +182,7 @@ namespace rasm
         PipelineHandle                  cullCountPipeline                                                   = {};
         PipelineHandle                  cullWritePipeline                                                   = {};
         PipelineHandle                  hizPipeline                                                         = {};
+        PipelineHandle                  labelDepthPipeline                                                  = {};
         PipelineHandle                  meshletCountPipeline                                                = {};
         PipelineHandle                  meshletWritePipeline                                                = {};
         BufferHandle                    cullStats[MAX_FRAMES_IN_FLIGHT]                                     = {};

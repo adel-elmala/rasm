@@ -121,6 +121,13 @@ namespace
 
     using BuildContent = bool (*)(rasm::Engine &, const Assets &, Content &);
 
+    // A terrain tile and the samples of its heights, which vectors drape on.
+    struct DrapeTile
+    {
+        rasm::TerrainTileDesc desc;
+        std::vector<uint16_t> samples;
+    };
+
     struct ImageTest
     {
         const char *name;
@@ -511,8 +518,9 @@ namespace
     }
 
     // A terrain tile of cells x cells over [x0, x0 + size] x [z0, z0 + size]: heights on the world's grid of 1/64 m, so
-    // neighbours share bit-equal edges and border samples, and an image of rings whose colour is the tile's level.
-    void addTerrainTile(rasm::Engine &engine, Content &content, double x0, double z0, double size, uint32_t cells, const glm::vec3 &tint)
+    // neighbours share bit-equal edges and border samples, and an image of rings whose colour is the tile's level. It
+    // returns the tile and its samples, to drape vectors on.
+    DrapeTile addTerrainTile(rasm::Engine &engine, Content &content, double x0, double z0, double size, uint32_t cells, const glm::vec3 &tint)
     {
         constexpr double STEP = 1.0 / 64.0;
         const uint32_t width = cells + 3;
@@ -555,17 +563,20 @@ namespace
         }
         const rasm::TextureHandle imagery = engine.createTexture({.name = "terrain imagery", .width = IMAGE, .height = IMAGE, .format = rasm::Format::R8G8B8A8_SRGB, .usage = rasm::TextureUsage::SAMPLED});
         engine.getRenderContext().fillTexture(imagery, pixels.data());
-        const rasm::TerrainTile tile = engine.createTerrainTile({.center = glm::dvec3(x0 + 0.5 * size, 0.0, z0 + 0.5 * size),
-                                                                 .size = size,
-                                                                 .terrain = {.heights = heights,
-                                                                             .heightScale = static_cast<float>(STEP),
-                                                                             .heightOffset = static_cast<float>(static_cast<double>(lowest) * STEP),
-                                                                             .minHeight = static_cast<float>(static_cast<double>(lowest) * STEP),
-                                                                             .maxHeight = static_cast<float>(static_cast<double>(highest) * STEP),
-                                                                             .skirt = static_cast<float>(0.1 * size)},
-                                                                 .imagery = imagery});
+        DrapeTile drape = {.desc = {.center = glm::dvec3(x0 + 0.5 * size, 0.0, z0 + 0.5 * size),
+                                    .size = size,
+                                    .terrain = {.heights = heights,
+                                                .heightScale = static_cast<float>(STEP),
+                                                .heightOffset = static_cast<float>(static_cast<double>(lowest) * STEP),
+                                                .minHeight = static_cast<float>(static_cast<double>(lowest) * STEP),
+                                                .maxHeight = static_cast<float>(static_cast<double>(highest) * STEP),
+                                                .skirt = static_cast<float>(0.1 * size)},
+                                    .imagery = imagery},
+                           .samples = std::move(samples)};
+        const rasm::TerrainTile tile = engine.createTerrainTile(drape.desc);
         engine.addEntityToScene(content.scene, tile.entity);
         content.entities.push_back(tile.entity);
+        return drape;
     }
 
     // Terrain of two levels side by side: three tiles of 8 m with 16 cells, and four of 4 m in the fourth quarter, so the
@@ -733,6 +744,58 @@ namespace
         content.eye = glm::vec3(0.0f, 4.0f, 5.5f);
         content.center = glm::vec3(0.0f, 0.0f, -0.6f);
         content.fovY = 45.0f;
+        return assets.cube.isValid() && font.isValid() && addSunsetLight(engine, assets, content, 0.8f, glm::vec3(0.4f, -0.8f, -0.3f), 2.5f);
+    }
+
+    // Roads and labels on hills (B35, B36): a road 1.2 m wide on cells of 0.5 m, draped across its whole width
+    // (LineShape::drapeWidth), so no hill beside its middle covers its edges; a road 5 px wide on the ground's plane,
+    // draped along its middle; names on the slopes, which the hills beside their anchors never cut; a post across a
+    // name, which stays whole over it; and a name behind a box, hidden whole.
+    bool buildDraped(rasm::Engine &engine, const Assets &assets, Content &content)
+    {
+        const DrapeTile tile = addTerrainTile(engine, content, -4.0, -4.0, 8.0, 16, glm::vec3(0.55f, 0.75f, 0.45f));
+        const rasm::TerrainHeights heights = {.unorm16 = tile.samples.data(), .width = 19};
+        const rasm::VectorPlacement drape = {.drapeTile = &tile.desc, .drapeHeights = heights};
+        const glm::dvec3 origin(0.0);
+        auto ground = [&](double x, double z)
+        { return rasm::getTerrainPosition(tile.desc, heights, x / tile.desc.size + 0.5, z / tile.desc.size + 0.5); };
+
+        std::vector<glm::dvec3> road;
+        std::vector<glm::dvec3> lane;
+        for (int32_t k = 0; k <= 36; ++k)
+        {
+            road.push_back({-3.6 + 0.2 * k, 0.0, 0.6 + 0.9 * std::sin(0.25 * k)});
+            lane.push_back({-3.6 + 0.2 * k, 0.0, -2.4 + 0.4 * std::cos(0.3 * k)});
+        }
+        const auto count = static_cast<uint32_t>(road.size());
+        rasm::VectorGeometry roads;
+        rasm::addVectorLines(roads, origin, road.data(), &count, 1, {.drapeWidth = 1.2f}, drape);
+        addVectorEntity(engine, content, std::move(roads),
+                        createVectorMaterial(engine, {.color = glm::vec4(0.3f, 0.3f, 0.32f, 1.0f), .width = 1.2f, .widthUnit = rasm::VectorUnit::METRES, .facing = rasm::VectorFacing::GROUND, .outlineColor = glm::vec4(0.95f, 0.9f, 0.6f, 1.0f), .outlineWidth = 0.15f}));
+        rasm::VectorGeometry lanes;
+        rasm::addVectorLines(lanes, origin, lane.data(), &count, 1, {}, drape);
+        addVectorEntity(engine, content, std::move(lanes), createVectorMaterial(engine, {.color = glm::vec4(0.75f, 0.2f, 0.15f, 1.0f), .width = 5.0f, .facing = rasm::VectorFacing::GROUND}));
+
+        rasm::FontAtlas atlas;
+        if (!engine.loadFont("fonts/Roboto-Medium.ttf", atlas))
+            return false;
+        const rasm::FontHandle font = engine.createFont(atlas);
+        addEntity(engine, content, "post", assets.cube, createColorMaterial(engine, glm::vec3(0.35f, 0.3f, 0.3f), 0.6f),
+                  rasm::Transform{ground(1.7, -0.6) + glm::dvec3(0.0, 0.6, 0.0), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(0.08f, 1.2f, 0.08f)});
+        addEntity(engine, content, "box", assets.cube, createColorMaterial(engine, glm::vec3(0.5f, 0.5f, 0.55f), 0.6f),
+                  rasm::Transform{ground(-1.8, -0.7) + glm::dvec3(0.0, 0.6, 0.0), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(0.9f, 1.6f, 0.9f)});
+        const rasm::LabelDesc labels[4] = {{.position = ground(-2.6, 2.6), .text = "West Slope", .priority = 1.0f},
+                                           {.position = ground(2.6, 2.4), .text = "Ridge Road", .priority = 1.0f},
+                                           {.position = ground(1.4, -1.5), .text = "Across a post", .priority = 1.0f},
+                                           {.position = ground(-1.8, -1.4), .text = "Behind the box", .priority = 1.0f}};
+        rasm::VectorGeometry names;
+        rasm::addVectorLabels(names, origin, atlas, labels, 4);
+        addVectorEntity(engine, content, std::move(names),
+                        createVectorMaterial(engine, {.color = glm::vec4(0.12f, 0.1f, 0.08f, 1.0f), .width = 16.0f, .outlineColor = glm::vec4(1.0f), .outlineWidth = 2.0f, .drawOrder = 40, .font = font}));
+
+        content.eye = glm::vec3(-1.0f, 5.5f, 7.5f);
+        content.center = glm::vec3(0.0f, 0.0f, 0.0f);
+        content.fovY = 50.0f;
         return assets.cube.isValid() && font.isValid() && addSunsetLight(engine, assets, content, 0.8f, glm::vec3(0.4f, -0.8f, -0.3f), 2.5f);
     }
 
@@ -909,6 +972,9 @@ namespace
         {.name = "labels",        .build = buildLabels},
         {.name = "labels_msaa4",  .build = buildLabels,        .samples = 4},
         {.name = "labels_taa",    .build = buildLabels,        .taa = true, .frames = 16},
+        {.name = "draped",        .build = buildDraped},
+        {.name = "draped_msaa4",  .build = buildDraped,        .samples = 4},
+        {.name = "draped_taa",    .build = buildDraped,        .taa = true, .frames = 16},
         // Picks of the scene as drawn: with MSAA and TAA the answer is the pixel's centre without jitter, the same.
         {.name = "picking",       .build = buildPicking,       .time = 0.5, .picks = true},
         {.name = "picking_msaa4", .build = buildPicking,       .samples = 4, .time = 0.5, .picks = true},

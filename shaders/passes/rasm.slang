@@ -131,12 +131,13 @@ VSOutput getVertexOutput(InstanceData *instance, uint row, int vertexOffset, uin
     if (model->materialId == MaterialId.VECTOR)
     {
         // A line, polygon or point spread by its style (lib/vector.slang). The varyings carry what fragMain needs:
-        // uv0 the offset to the edge, uv1 an icon's coordinates, uv2 the metric and the fade, worldTangent.x the dash.
+        // uv0 the offset to the edge, uv1 an icon's coordinates, uv2 the metric and the fade, worldTangent x the dash,
+        // y the kind and z a band's width.
         VectorVertex feature        = getVectorVertex(pc.scene, model->vector, modelMat, vert, instance->meshletVisibility);
         output.clipPosition         = feature.clipPosition;
         output.worldPosition        = feature.anchor;
         output.worldNormal          = float3(0.0, 1.0, 0.0);
-        output.worldTangent         = float4(feature.dash, feature.kind, 0.0, 0.0);
+        output.worldTangent         = float4(feature.dash, feature.kind, feature.width, 0.0);
         output.color                = getVertexColor(pc.scene, instance->geometryIndex, vertexID);
         output.uv0                  = feature.edge;
         output.uv1                  = vert.uv[1];
@@ -364,6 +365,8 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     {
         VectorData style = model->vector;
         uint kind = uint(input.worldTangent.y + 0.5);
+        if (kind == VECTOR_KIND_BAND)
+            style.width = input.worldTangent.z;
         if (kind == VECTOR_KIND_GLYPH)
             return VECTOR_OUTPUT(toTarget(shadeGlyph(gTextures[style.font], style, input.color, input.uv1, input.worldTangent.x, input.uv2.y, input.uv2.x > 0.5), 1.0));
         float4 color = shadeVector(style, input.color, input.uv0, input.uv2.x, input.uv2.y, input.worldTangent.x, kind);
@@ -447,6 +450,8 @@ PickOutput pickMain(VSOutput input, bool isFrontFace : SV_IsFrontFace)
     {
         VectorData style = model->vector;
         uint kind = uint(input.worldTangent.y + 0.5);
+        if (kind == VECTOR_KIND_BAND)
+            style.width = input.worldTangent.z;
         if (kind == VECTOR_KIND_GLYPH)
         {
             alpha = shadeGlyph(gTextures[style.font], style, input.color, input.uv1, input.worldTangent.x, input.uv2.y, input.uv2.x > 0.5).a;

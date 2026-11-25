@@ -24,7 +24,7 @@
 
 // NOLINTBEGIN(readability-identifier-naming): C names, snake_case with the rasm_ prefix, as C APIs and their bindings expect
 #define RASM_C_API_VERSION_MAJOR    1
-#define RASM_C_API_VERSION_MINOR    8
+#define RASM_C_API_VERSION_MINOR    9
 #define RASM_C_API_VERSION          (((uint32_t)RASM_C_API_VERSION_MAJOR << 16) | (uint32_t)RASM_C_API_VERSION_MINOR)
 
 #if defined(_WIN32)
@@ -977,6 +977,7 @@ typedef struct rasm_line_shape
     rasm_line_join                  join;                                      /* ROUND by default */
     rasm_line_cap                   cap;
     float                           miter_limit;                               /* half widths, 1 to RASM_MAX_VECTOR_MITER */
+    float                           drape_width;                               /* 1.9: metres, a draped line's whole width built into its mesh; 0 by default */
 } rasm_line_shape;
 
 typedef struct rasm_vector_placement

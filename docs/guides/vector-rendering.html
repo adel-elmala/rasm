@@ -273,6 +273,30 @@
   <figcaption>The heights come from the same samples and the same rule the terrain shader uses, so the line and the ground agree to the bit at each cut, and a tiny depth bias is enough.</figcaption>
 </figure>
 
+<p>That holds for the line's middle. A road also has a width, and the shader spreads it in the plane of the triangle under the middle. Where the road is wider than a cell, its sides reach over the next triangles, and where the ground bends up beside the road (a valley's floor, the inside of a turn), it rises above that plane and covers the road's edges in wedges. So a road whose width is known in metres is draped whole: build its outline on the flat grid, at its full width, with its joins and caps, then cut those triangles on the grid like a polygon and lift every corner. Each corner keeps where it is across the road (its offset, for the smooth edge and the outline) and along it (for the dashes).</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="Left, a cross-section of a road on a valley floor: only its middle is draped, its flat band dips under the ground on both sides, which covers its edges. Right, the band cut on the grid across its width: every piece lies on its own terrain triangle and the whole road is on the ground.">
+    <rect x="20" y="10" width="350" height="210" rx="8" class="zone"/>
+    <text x="195" y="32" class="mid title t-bad">middle draped: edges covered</text>
+    <path d="M40,90 L110,150 L195,170 L280,150 L350,90" class="surface"/>
+    <line x1="80" y1="176" x2="310" y2="164" class="arrow gpu thick"/>
+    <circle cx="195" cy="170" r="5" class="hot"/>
+    <rect x="80" y="122" width="40" height="52" class="bad o-50"/>
+    <rect x="270" y="118" width="40" height="52" class="bad o-50"/>
+    <text x="195" y="206" class="mid small">the band's plane is under the ground at its sides</text>
+    <rect x="390" y="10" width="350" height="210" rx="8" class="zone"/>
+    <text x="565" y="32" class="mid title t-ok">whole width draped</text>
+    <path d="M410,90 L480,150 L565,170 L650,150 L720,90" class="surface"/>
+    <polyline points="450,124 480,146 565,166 650,146 680,124" class="arrow gpu thick"/>
+    <g class="hot"><circle cx="480" cy="146" r="4"/><circle cx="565" cy="166" r="4"/><circle cx="650" cy="146" r="4"/></g>
+    <text x="565" y="206" class="mid small">cut where it crosses the grid, each piece lifted</text>
+  </svg>
+  <figcaption>The width is built into the mesh, so it cannot change with the zoom. A width in pixels keeps the draped middle and is drawn nearer by its half width in the world, a few pixels' worth; so is a marker.</figcaption>
+</figure>
+
+<p>The smooth edge still reaches a pixel past the road. The shader moves each corner out by that pixel in the plane of its own triangle, and draws the road nearer by as much as it moved, so the pixel does not sink into a slope.</p>
+
 <h2 id="culling"><span class="n">10</span>Culling a width in pixels</h2>
 
 <p>A line's bounding sphere is built from its center line. A line 40 pixels wide whose center line is just off the screen still covers 20 pixels of it. A pixel is larger far away, so the pad grows with depth: pad the sphere by the widest offset in pixels times the size of a pixel at the sphere's far side, for each view. The occlusion test then uses the padded sphere too.</p>
@@ -303,6 +327,7 @@
   <div><dt>Markers and roads are cut in half on a tilted map</dt><dd>A quad facing the screen sinks into the ground below its anchor. Give each corner the depth of the ground under it.</dd></div>
   <div><dt>A see-through line is darker at its joints</dt><dd>Its quads and joins overlap on the inner side of a turn and blend twice. Draw see-through lines opaque, or as one layer with a lower alpha.</dd></div>
   <div><dt>Roads sink into hills or float over valleys</dt><dd>The line is not cut on the terrain's grid, or the terrain is drawn from other heights than the ones used to drape.</dd></div>
+  <div><dt>A wide road on hills is shredded at its edges</dt><dd>Only its middle is draped; its width is flat and the ground beside it rises above it. Drape the whole width: cut the road's outline on the grid, like a polygon.</dd></div>
   <div><dt>Layers flicker against each other</dt><dd>Same depth, no order. Draw layers in a fixed order, blended, with a depth bias against the ground only.</dd></div>
   <div><dt>Mesh simplification ruins the lines</dt><dd>LODs and meshlets are for meshes whose vertices stay where they are. Build vector meshes without them.</dd></div>
 </dl>
@@ -363,8 +388,9 @@ const rasm::EntityHandle entity = engine.createEntity("layer", mesh, roads, rasm
   <tr><td>Smooth edges</td><td>distance and <code class="lang-text">fwidth</code></td><td>The geometry reaches one pixel past the edge; <code>getVectorCoverage</code>. The minimum is one pixel, faded below (<code>fade</code>). In the ground's plane, a band seen edge-on under half a pixel widens to half a pixel and fades.</td></tr>
   <tr><td>Style</td><td>width, units, plane</td><td><code>VectorMaterial</code>: <code>color</code>, <code>width</code>, <code>widthUnit</code> (<code>PIXELS</code>, <code>METRES</code>), <code>facing</code> (<code>SCREEN</code>, <code>GROUND</code>), <code>dashLength</code>, <code>gapLength</code>, <code>outlineColor</code>, <code>outlineWidth</code>, <code>drawOrder</code>, <code>depth</code> (<code>TESTED</code>, <code>OVERLAY</code>). Dashes in pixels follow the pixel's size at each vertex, so along a line that runs into the distance they are close, not exact.</td></tr>
   <tr><td>Polygons</td><td>ear clipping</td><td>earcut (<samp>mapbox/earcut.hpp</samp>, vcpkg <samp>earcut-hpp</samp>, header-only), in the ground's plane through the origin, or across the tile when draped. No smooth edges of their own: MSAA or TAA.</td></tr>
-  <tr><td>Order and depth</td><td>layers in order, a bias, overlays</td><td>Vectors are always in the blend run. The Transparent pass sorts by (<code>VECTOR_ORDER_SCENE</code> + <code>drawOrder</code>, then far to near); the scene's see-through draws sort at order 0. A tested feature takes the depth of a point moved toward the camera by 1/4096 of its distance (<code>VECTOR_DEPTH_BIAS</code>), so the bias holds for perspective, orthographic and finite-far cameras; a screen-facing corner takes the ground's point under it when that is nearer (<code>getGroundPoint</code>); an overlay is at the near plane and never occlusion culled. The order holds while the GPU blend sort runs: with frozen culling the blend run is drawn in list order.</td></tr>
+  <tr><td>Order and depth</td><td>layers in order, a bias, overlays</td><td>Vectors are always in the blend run. The Transparent pass sorts by (<code>VECTOR_ORDER_SCENE</code> + <code>drawOrder</code>, then far to near); the scene's see-through draws sort at order 0. A tested feature takes the depth of a point moved toward the camera by 1/4096 of its distance (<code>VECTOR_DEPTH_BIAS</code>), so the bias holds for perspective, orthographic and finite-far cameras; a screen-facing corner takes the ground's point under it when that is nearer (<code>getGroundPoint</code>); a line or point whose width is in pixels is drawn nearer again by its half width in the world, since the ground beside its anchor may rise above the plane it spreads in; an overlay, and a label whose anchor the Label Depth pass found in view (<a href="text-and-labels.html#depth">Text and labels</a>), is at the near plane and never occlusion culled. The order holds while the GPU blend sort runs: with frozen culling the blend run is drawn in list order.</td></tr>
   <tr><td>Draping</td><td>cut on the grid</td><td><code>VectorPlacement::drapeTile</code> and <code>drapeHeights</code>: cut at x = k, z = k and x + z = k (the grid's split), lifted by <code>getTerrainPosition</code>, with the triangle's normal as the ground's up.</td></tr>
+  <tr><td>A road's whole width</td><td>the outline cut on the grid</td><td><code>LineShape::drapeWidth</code> (metres, 0 by default): a draped line is built that wide on the flat grid by the same joins and caps (<code>pushLine</code>), then each triangle is cut on the grid and each corner lifted (<code>pushDrapedLine</code>, on a lattice of 2<sup>-20</sup> cells, so pieces that meet lift a point the same). What reaches past the tile is cut at its edge: give each tile the lines within half the width of it, and the neighbour draws the rest. Its vertices are <code>VECTOR_KIND_BAND</code>: <code>pos</code> on the ground, <code>uv[0]</code> the offset interpolated in its triangle, <code>uv[1]</code> the distance along and the built half width. The shader moves a corner only by its smooth edge's pixel (or up to a pixel's width when the band is thinner), in its own ground's plane, and draws it nearer by that pixel's move (not by the widening of a band seen edge-on); it draws the built width whatever the material's <code>width</code>, <code>widthUnit</code> and <code>facing</code> (the outline and the dashes keep the material's unit), so a new width takes a rebuild. Bug <code>B35</code>: a road wider than a cell, draped by its middle only, was covered at its edges where the ground bends up.</td></tr>
   <tr><td>Culling</td><td>pad per view</td><td><code>getWorldSphere</code> adds <code>getVectorPadding</code> for a <code>VECTOR</code> material: 2 half widths and 3 pixels at the sphere's far side (in metres for a metre width), in the view's own pixel size, so the frustum test, the Hi-Z test, the blend sort and the culling debug view all see it. Shadow maps leave vectors out (<code>VIEW_DEPTH_ONLY</code>); vector draws are drawn whole, never by meshlets.</td></tr>
   <tr><td>Motion</td><td>the anchor's, by coverage</td><td><code>toVectorOutput</code> writes the anchor's motion times alpha; the premultiplied blend keeps the rest of what is behind.</td></tr>
 </table>
@@ -386,8 +412,8 @@ const rasm::EntityHandle entity = engine.createEntity("layer", mesh, roads, rasm
   <tr><td>Meshes off the main thread</td><td><code>buildMesh</code>, <code>MeshBuild</code>, <code>MeshBuildOptions</code> (<code>include/rasm/mesh.h</code>), <code>Renderer::createMesh(MeshBuild&amp;&amp;)</code> in <code>src/assets/mesh.cpp</code></td></tr>
   <tr><td>Shaders</td><td><code>shaders/lib/vector.slang</code> (<code>getVectorVertex</code>, <code>shadeVector</code>, <code>getVectorPadding</code>, <code>getBlendOrder</code>); <code>rasm.slang</code>; <code>frustumCulling.slang</code>, <code>cull.slang</code>, <code>sort.slang</code></td></tr>
   <tr><td>The C API (1.5)</td><td><code>rasm_build_mesh</code>, <code>rasm_create_mesh_from_build</code>, <code>rasm_vector_*</code>, <code>rasm_vector_material</code> in <code>src/c/cVector.cpp</code></td></tr>
-  <tr><td>Tests</td><td><code>tests/vectorTests.cpp</code> (offsets, joins, caps, sides, holes, draping on the drawn ground, points); image tests <code>vectors</code>, <code>vectors_msaa4</code>, <code>vectors_taa</code> (with a line just off screen that culling's pad keeps)</td></tr>
-  <tr><td>Examples</td><td><code>examples/25_vector_map</code> (a city's vector tiles, <code>--culling</code> for the culling debug view); <code>examples/24_map_tiles</code> (roads and lakes draped on the terrain)</td></tr>
+  <tr><td>Tests</td><td><code>tests/vectorTests.cpp</code> (offsets, joins, caps, sides, holes, draping on the drawn ground, a road draped across its width, points); image tests <code>vectors</code>, <code>vectors_msaa4</code>, <code>vectors_taa</code> (with a line just off screen that culling's pad keeps), <code>draped</code>, <code>draped_msaa4</code>, <code>draped_taa</code> (a road draped across its width and one in pixels on hills)</td></tr>
+  <tr><td>Examples</td><td><code>examples/25_vector_map</code> (a city's vector tiles, <code>--culling</code> for the culling debug view); <code>examples/24_map_tiles</code> (roads and lakes draped on the terrain); <code>examples/26_picking</code> (a road draped across its width, whose edges it picks from above; <code>--fly</code>, <code>--no-aa</code>)</td></tr>
 </table>
 </div>
 

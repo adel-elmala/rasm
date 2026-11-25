@@ -288,6 +288,10 @@ struct SceneData
     float4              environmentOrientation; // quaternion (x, y, z, w): the environment's frame in the world (environment.slang)
     float*              labelsPtr;              // a shaded view's label slots' alpha (lib/vector.slang); null: every label shown
     GridData            grid;                   // the camera's grid, levelCount 0 without one
+    float4*             labelProbesPtr;         // per label slot: its anchor's pixel, the depth it must be in front of, its test (LABEL_PROBE_*)
+    float*              labelFadesPtr;          // the view's label slots' fade by depth, kept across frames (passes/labelDepth.slang)
+    float               labelFadeStep;          // the fade's change this frame
+    uint32_t            labelSlotCount;         // slots the Label Depth pass tests: 0 to this
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.
