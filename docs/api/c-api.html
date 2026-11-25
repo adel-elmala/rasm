@@ -159,24 +159,24 @@ lib.rasm_renderer_create((1 &lt;&lt; 16) | 0, ctypes.byref(config), ctypes.byref
 <h2 id="rules"><span class="n">3</span>The rules of the header</h2>
 
 <h3 id="versions">Versions</h3>
-<p><code>RASM_C_API_VERSION</code> is <code>major &lt;&lt; 16 | minor</code>: <code>RASM_C_API_VERSION_MAJOR</code> and <code>RASM_C_API_VERSION_MINOR</code>, 1.1 today: 1.1 added windows, input, views, render targets, camera helpers, animation and stats to 1.0, at the end of the header. Within one major version the API only grows at its end: new functions, new enum constants, new struct fields after the last one. Nothing is renumbered, reordered or removed. <a href="#rasm_renderer_create"><code>rasm_renderer_create</code></a> and <a href="#rasm_engine_create"><code>rasm_engine_create</code></a> take your <code>RASM_C_API_VERSION</code> and fail with <code>RASM_ERROR_VERSION</code> when the major versions differ, or when your minor version is newer than the library's: a newer header may use fields or functions the library does not have.</p>
+<p><code>RASM_C_API_VERSION</code> is <code>major &lt;&lt; 16 | minor</code>: <code>RASM_C_API_VERSION_MAJOR</code> and <code>RASM_C_API_VERSION_MINOR</code>, 1.2 today: 1.1 added windows, input, views, render targets, camera helpers, animation and stats to 1.0, and 1.2 added positions in doubles (<a href="#rasm_get_transform_d">below</a>), a free-fly controller's up axis and an environment's orientation, all at the end of the header. Within one major version the API only grows at its end: new functions, new enum constants, new struct fields after the last one. Nothing is renumbered, reordered or removed. <a href="#rasm_renderer_create"><code>rasm_renderer_create</code></a> and <a href="#rasm_engine_create"><code>rasm_engine_create</code></a> take your <code>RASM_C_API_VERSION</code> and fail with <code>RASM_ERROR_VERSION</code> when the major versions differ, or when your minor version is newer than the library's: a newer header may use fields or functions the library does not have.</p>
 
 <h3 id="sized">Structs that grow</h3>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 170" role="img" aria-label="A program built against version 1.0 passes a rasm_light_desc of 60 bytes with size 60. A library of version 1.1 has a longer struct, with one new field at the end. It reads the 60 bytes, and the new field takes its default.">
-    <text x="20" y="26" class="title">Your program (header 1.0)</text>
+  <svg viewBox="0 0 760 170" role="img" aria-label="A program built against version 1.1 passes a rasm_light_desc of 60 bytes with size 60. The library of version 1.2 has a longer struct, with position_d at the end. It reads the 60 bytes, and position_d takes its default, 0.">
+    <text x="20" y="26" class="title">Your program (header 1.1)</text>
     <rect x="20"  y="36" width="70"  height="32" class="mem"/><text x="55"  y="57" class="mid mono">size=60</text>
     <rect x="90"  y="36" width="420" height="32" class="mem o-50"/><text x="300" y="57" class="mid">type, intensity, range, color, position, direction, cones</text>
     <line x1="20" y1="76" x2="510" y2="76" class="arrow hot" marker-start="url(#ah-hot)" marker-end="url(#ah-hot)"/>
     <text x="265" y="92" class="mid small t-hot">read: the first 60 bytes</text>
-    <text x="20" y="124" class="title">The library (header 1.1)</text>
+    <text x="20" y="124" class="title">The library (header 1.2)</text>
     <rect x="20"  y="134" width="70"  height="32" class="mem"/><text x="55"  y="155" class="mid mono">size</text>
     <rect x="90"  y="134" width="420" height="32" class="mem o-50"/><text x="300" y="155" class="mid">the same fields, from your struct</text>
-    <rect x="510" y="134" width="140" height="32" class="gpu"/><text x="580" y="155" class="mid">new field</text>
-    <text x="660" y="155" class="small">its default</text>
+    <rect x="510" y="134" width="140" height="32" class="gpu"/><text x="580" y="155" class="mid mono">position_d</text>
+    <text x="660" y="155" class="small">its default: 0</text>
   </svg>
-  <figcaption>The <code>size</code> field says how much of the struct your program knows. The library never reads or writes past it. The field names are an example: a 1.1 header does not exist yet.</figcaption>
+  <figcaption>The <code>size</code> field says how much of the struct your program knows. The library never reads or writes past it: a light from a 1.1 program is at its float <code>position</code> plus 0.</figcaption>
 </figure>
 
 <ul>
@@ -297,7 +297,7 @@ rasm_result      rasm_scene_environment_init(rasm_scene_environment* environment
 rasm_result      rasm_set_scene_environment(rasm_renderer* renderer, rasm_scene scene, const rasm_scene_environment* environment);
 rasm_result      rasm_destroy_environment(rasm_renderer* renderer, rasm_environment environment);</pre>
   <div class="body">
-    <p>See <a href="scene.html#createScene">scene.html</a>. <code>rasm_scene_environment</code> is <a href="scene.html#setSceneEnvironment"><code>SceneEnvironment</code></a>: <code>{size, environment, intensity, rotation, sky}</code>.</p>
+    <p>See <a href="scene.html#createScene">scene.html</a>. <code>rasm_scene_environment</code> is <a href="scene.html#setSceneEnvironment"><code>SceneEnvironment</code></a>: <code>{size, environment, intensity, rotation, sky, orientation}</code>; <code>orientation</code> (1.2, a <code>rasm_quat</code>, identity by default) turns the environment into a local frame, such as a globe's east, up and south.</p>
   </div>
 </div>
 
@@ -308,7 +308,7 @@ rasm_result      rasm_get_transform(rasm_renderer* renderer, rasm_entity entity,
 rasm_result      rasm_update_transform(rasm_renderer* renderer, rasm_entity entity, const rasm_transform* transform);</pre>
   <div class="body">
     <p>See <a href="scene.html#createEntity">scene.html</a>. A NULL <code>transform</code> is the identity: position 0, rotation <code>{0, 0, 0, 1}</code> (x, y, z, w), scale 1. A 0 material draws with the mesh's own glTF materials, or the default one.</p>
-    <p><code>rasm_transform</code>'s position is three floats, while the engine keeps doubles (<a href="../guides/large-world-precision.html">large worlds</a>): a position set from C has float precision, and <code>rasm_get_transform</code> rounds a double position to floats, so writing it back moves an entity that the C++ API placed far from the origin. The same holds for a light's <code>position</code> and the trackball's <code>track_ball_center</code>.</p>
+    <p><code>rasm_transform</code>'s position is three floats, while the engine keeps doubles: <code>rasm_get_transform</code> rounds a far position, and writing it back moves the entity. Far from the origin use <a href="#rasm_get_transform_d"><code>rasm_get_transform_d</code> and <code>rasm_update_transform_d</code></a> (1.2).</p>
   </div>
 </div>
 
@@ -347,7 +347,7 @@ rasm_result      rasm_get_light(rasm_renderer* renderer, rasm_light light, rasm_
 rasm_result      rasm_update_light(rasm_renderer* renderer, rasm_light light, const rasm_light_desc* desc);
 rasm_result      rasm_destroy_light(rasm_renderer* renderer, rasm_light light);</pre>
   <div class="body">
-    <p>See <a href="scene.html#createLight">scene.html</a>. <code>rasm_light_desc</code> is <a href="scene.html#Light"><code>Light</code></a> without its handle: <code>type</code> (<code>RASM_LIGHT_TYPE_DIRECTIONAL</code>, <code>RASM_LIGHT_TYPE_POINT</code>, <code>RASM_LIGHT_TYPE_SPOT</code>), <code>intensity</code>, <code>range</code>, <code>color</code>, <code>position</code>, <code>direction</code>, <code>inner_cone_angle</code>, <code>outer_cone_angle</code>. Its init gives a directional light.</p>
+    <p>See <a href="scene.html#createLight">scene.html</a>. <code>rasm_light_desc</code> is <a href="scene.html#Light"><code>Light</code></a> without its handle: <code>type</code> (<code>RASM_LIGHT_TYPE_DIRECTIONAL</code>, <code>RASM_LIGHT_TYPE_POINT</code>, <code>RASM_LIGHT_TYPE_SPOT</code>), <code>intensity</code>, <code>range</code>, <code>color</code>, <code>position</code>, <code>direction</code>, <code>inner_cone_angle</code>, <code>outer_cone_angle</code>, and from 1.2 <code>position_d</code>, a <code>rasm_dvec3</code> added to <code>position</code>: the light is at <code>position + position_d</code>, in doubles. <code>rasm_get_light</code> gives the float nearest to the position and the rest, so a get and an update keep it bit for bit. A 1.1 caller's update keeps the exact position when it leaves <code>position</code> as it got it, and puts the light at the float <code>position</code> otherwise. Its init gives a directional light.</p>
   </div>
 </div>
 
@@ -440,7 +440,7 @@ rasm_result      rasm_camera_input_state_take(rasm_camera_input_state* state, co
 rasm_vec2        rasm_to_input_ndc(float x, float y, const rasm_input_area* area);
 rasm_input_area  rasm_get_input_area(rasm_renderer* renderer, rasm_window window, const rasm_view_rect* rect);</pre>
   <div class="body">
-    <p>1.1. See <a href="camera.html#setCameraController">camera.html</a> and <a href="../guides/camera-controllers.html">Camera controllers and easing</a>. <code>rasm_camera_controller</code> is <code>CameraController</code> without its union, flat: <code>type</code> (<code>RASM_CAMERA_CONTROLLER_TYPE_TRACK_BALL</code>, <code>RASM_CAMERA_CONTROLLER_TYPE_FREE_FLY</code>, <code>RASM_CAMERA_CONTROLLER_TYPE_NONE</code>), <code>easing_speed</code>, the <code>track_ball_*</code> fields and the <code>free_fly_*</code> fields; only the type's own fields are read. Its init gives <code>NONE</code>, easing 12, a trackball radius of 5 and a free-fly speed of 5. Setting a controller replaces it whole: a field past your <code>size</code> takes its default.</p>
+    <p>1.1. See <a href="camera.html#setCameraController">camera.html</a> and <a href="../guides/camera-controllers.html">Camera controllers and easing</a>. <code>rasm_camera_controller</code> is <code>CameraController</code> without its union, flat: <code>type</code> (<code>RASM_CAMERA_CONTROLLER_TYPE_TRACK_BALL</code>, <code>RASM_CAMERA_CONTROLLER_TYPE_FREE_FLY</code>, <code>RASM_CAMERA_CONTROLLER_TYPE_NONE</code>), <code>easing_speed</code>, the <code>track_ball_*</code> fields and the <code>free_fly_*</code> fields; only the type's own fields are read. 1.2 added <code>track_ball_center_d</code>, a <code>rasm_dvec3</code> added to <code>track_ball_center</code> (the center is their sum, in doubles), and <code>free_fly_up</code>, the axis the free-fly controller yaws around. Its init gives <code>NONE</code>, easing 12, a trackball radius of 5, a free-fly speed of 5 and an up of (0, 1, 0). Setting a controller replaces it whole: a field past your <code>size</code> takes its default.</p>
     <p>The helpers an application drives itself, with no renderer: a <code>rasm_camera_rig</code> holds <code>CameraRig</code> (create it from a controller and a pose, update it with a frame's input, read the eased <code>transform</code> and the <code>target_transform</code>, either may be NULL), and a <code>rasm_camera_input_state</code> holds <code>CameraInputState</code> (add a frame's events for one <code>rasm_input_area</code>, then take its <code>rasm_camera_input</code>). Both are made once and reused, so a frame allocates nothing. A NULL <code>capture</code> means the UI took nothing.</p>
   </div>
 </div>
@@ -494,6 +494,28 @@ rasm_result      rasm_get_load_stats(rasm_renderer* renderer, rasm_load_stats* s
 rasm_result      rasm_asset_loader_get_load_stats(rasm_asset_loader* loader, rasm_load_stats* stats);</pre>
   <div class="body">
     <p>1.1. See <a href="engine.html#getFrameStats">engine.html</a>. Sized structs you fill with <code>size</code> set: <code>rasm_frame_stats</code> is <code>FrameStats</code> without its GPU timers and memory (<code>cpu_frame_ms</code>, <code>gpu_frame_ms</code>, <code>upload_gpu_ms</code>, the draw, triangle, LOD (<code>draws_per_lod[RASM_MAX_MESH_LODS]</code>), meshlet and light counts); <code>rasm_pool_stats</code> is <code>PoolStats</code> and <code>rasm_load_stats</code> is <code>LoadStats</code>. As in C++, the first <code>rasm_get_frame_stats</code> turns measuring on, and the numbers fill in a few frames later.</p>
+  </div>
+</div>
+
+<div class="api" id="rasm_get_transform_d">
+  <pre class="sig">typedef struct rasm_dvec3           { double x, y, z; } rasm_dvec3;
+typedef struct rasm_transform_d     { rasm_dvec3 position; rasm_quat rotation; rasm_vec3 scale; } rasm_transform_d;
+
+rasm_result      rasm_get_transform_d(rasm_renderer* renderer, rasm_entity entity, rasm_transform_d* transform);
+rasm_result      rasm_update_transform_d(rasm_renderer* renderer, rasm_entity entity, const rasm_transform_d* transform);
+rasm_result      rasm_get_camera_transform_d(rasm_renderer* renderer, rasm_camera camera, rasm_transform_d* transform);
+rasm_result      rasm_set_camera_transform_d(rasm_renderer* renderer, rasm_camera camera, const rasm_transform_d* transform);
+rasm_result      rasm_get_light_position_d(rasm_renderer* renderer, rasm_light light, rasm_dvec3* position);
+rasm_result      rasm_set_light_position_d(rasm_renderer* renderer, rasm_light light, const rasm_dvec3* position);
+rasm_camera_rig* rasm_camera_rig_create_d(const rasm_camera_controller* controller, const rasm_transform_d* transform);
+rasm_result      rasm_camera_rig_get_transform_d(const rasm_camera_rig* rig, rasm_transform_d* transform, rasm_transform_d* target_transform);
+rasm_vec3        rasm_to_render_position(rasm_dvec3 world_position, rasm_dvec3 origin);
+rasm_dvec3       rasm_to_world_position(rasm_vec3 render_position, rasm_dvec3 origin);</pre>
+  <div class="body">
+    <p>1.2. Positions in doubles, as the engine keeps them (<a href="../guides/large-world-precision.html">Large worlds</a>): an entity, a camera, a light or a rig millions of metres from the origin, in Earth-centred coordinates for example, goes in and comes out bit for bit. The 1.0 calls with a <code>rasm_transform</code> keep working and round the position to floats. <code>rasm_to_render_position</code> and <code>rasm_to_world_position</code> are <a href="camera.html#toRenderPosition"><code>toRenderPosition</code></a> and <a href="camera.html#toWorldPosition"><code>toWorldPosition</code></a>: a view's origin is its camera's position in the frame it drew.</p>
+    <pre><code>const rasm_dvec3 paris = {4197000.25, 168000.5, 4786000.75};
+const rasm_transform_d at = {paris, {0.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}};
+rasm_update_transform_d(renderer, entity, &amp;at);</code></pre>
   </div>
 </div>
 

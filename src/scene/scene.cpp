@@ -225,9 +225,12 @@ namespace rasm
             spdlog::error("Invalid environment handle for scene {}.", scene.index);
             return;
         }
-        if (!(environment.intensity >= 0.0f) || !std::isfinite(environment.intensity) || !std::isfinite(environment.rotation))
+        const glm::quat &orientation = environment.orientation;
+        const float orientationLength = glm::length(orientation);
+        if (!(environment.intensity >= 0.0f) || !std::isfinite(environment.intensity) || !std::isfinite(environment.rotation) || !(orientationLength > 0.0f) ||
+            !std::isfinite(orientationLength))
         {
-            spdlog::error("An environment needs a finite intensity of at least 0 and a finite rotation.");
+            spdlog::error("An environment needs a finite intensity of at least 0, a finite rotation and a finite, non-zero orientation.");
             return;
         }
         registry.scenes[scene.index].environment = environment;

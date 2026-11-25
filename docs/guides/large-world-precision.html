@@ -292,7 +292,7 @@
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>CPU positions</td><td>doubles</td><td><code>glm::dvec3</code> positions; rotation and scale stay floats. Mesh vertices and glTF node transforms are floats, in their mesh's space.</td></tr>
+  <tr><td>CPU positions</td><td>doubles</td><td><code>glm::dvec3</code> positions; rotation and scale stay floats. Mesh vertices and glTF node transforms are floats, in their mesh's space. The C API from 1.2 (<code>rasm_transform_d</code>, the <code>_d</code> calls, <code>position_d</code>).</td></tr>
   <tr><td>Render space</td><td>the camera at the origin</td><td>Each scene view uses its camera's position, also its shadow maps' views (they belong to the camera of <code>addShadowPasses</code>). <code>toRenderMatrix</code> moves a world-space matrix there in doubles.</td></tr>
   <tr><td>Rows</td><td>high/low</td><td><code>InstanceData</code>: three rows, w = the high part, and <code>translationLow</code> (160 B). <code>InstanceTransform</code> and <code>AnimatedEntity</code> the same. <code>gfx::Light</code> adds <code>positionLow</code> (68 B).</td></tr>
   <tr><td>Keeping the order</td><td>opaque steps</td><td><code>subtractSplit</code> in <code>shaders/lib/renderSpace.slang</code> ORs each step with <code>SceneData::zero</code> (<code>AnimatePushConstants::zero</code> in the Animate pass). Slang drops <code>precise</code>, and the NVIDIA driver regroups across <code class="lang-text">NoContraction</code>, which makes lighting fall in 0.5 m blocks.</td></tr>
@@ -335,8 +335,13 @@
 </div>
 
 <div class="callout">
-  <strong>Not done yet</strong>
-  <p>The C API (<code>rasm_c.h</code> 1.1) still takes float positions. The environment turns only around +Y, so a globe's local "up" tilts the sky, and the free-fly controller turns around +Y (<code>D42</code>). glTF node translations are floats.</p>
+  <strong>A local frame</strong>
+  <p>A globe's local up is the ellipsoid's normal, not +Y. <code>SceneEnvironment::orientation</code> turns the sky and its light into the local frame, and <code>CameraController::FreeFly::up</code> makes the free-fly camera yaw around the local up (<code>examples/23_large_world</code>). The C API has the positions in doubles from 1.2: <code>rasm_dvec3</code>, <code>rasm_transform_d</code> and the <code>_d</code> calls (<a href="../api/c-api.html#rasm_get_transform_d">C API</a>).</p>
+</div>
+
+<div class="callout">
+  <strong>Not done</strong>
+  <p>glTF node translations are floats, in their mesh's space: a file whose nodes sit millions of metres from its own origin (3D Tiles without a centre of its own) loses precision. Place such a mesh with the entity's double position instead.</p>
 </div>
 
 <h3>Further reading</h3>
