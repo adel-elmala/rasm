@@ -1,6 +1,8 @@
 #include "rasm/cameraController.h"
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace rasm
 {
@@ -122,8 +124,12 @@ namespace rasm
             // Easing between (nearly) equal values still rounds by an amount that depends on deltaTime, so a
             // camera at rest would move by float noise every frame. Close enough, it snaps to the target (B24).
             const glm::quat remaining = glm::conjugate(current.rotation) * target.rotation;
-            // The position is a double, so a camera far from the origin settles within 1e-6 of a unit, like one near it.
-            const bool settled = glm::length(target.position - current.position) <= 1e-6 &&
+            // A trackball's positions are its center plus a float offset of its radius, which rounds by about radius x 1e-7,
+            // so its tolerance grows with the radius. The position itself is a double, so the tolerance does not grow with
+            // the distance from the origin, past the double's own rounding.
+            const double reach = rig.controller.type == CameraController::Type::TRACK_BALL ? std::max(1.0, static_cast<double>(rig.controller.trackBall.radius)) : 1.0;
+            const double tolerance = 1e-6 * reach + 4.0 * std::numeric_limits<double>::epsilon() * glm::length(target.position);
+            const bool settled = glm::length(target.position - current.position) <= tolerance &&
                                  glm::length(glm::vec3(remaining.x, remaining.y, remaining.z)) <= 1e-6f &&
                                  glm::length(target.scale - current.scale) <= 1e-6f;
             if (easingSpeed <= 0.0f || deltaTime <= 0.0f || settled)

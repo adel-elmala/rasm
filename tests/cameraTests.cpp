@@ -392,3 +392,23 @@ TEST_CASE("an invalid camera handle is rejected")
     CHECK(engine.getViewMatrix(rasm::CameraHandle{}) == glm::dmat4(1.0));
     CHECK(engine.getProjectionMatrix(rasm::CameraHandle{}) == glm::mat4(1.0f));
 }
+
+// After a drag stops, the eased pose reaches the target and stays there bit for bit, near the origin and far from it,
+// though a trackball's positions carry the float rounding of its radius (B24).
+TEST_CASE("a trackball at rest settles exactly, also far from the origin")
+{
+    for (const glm::dvec3 center : {glm::dvec3(0.0), glm::dvec3(4197000.0, 168000.0, 4786000.0)})
+    {
+        rasm::CameraController controller{.type = rasm::CameraController::Type::TRACK_BALL,
+                                          .trackBall = {.radius = 15.0f, .center = center, .orbitSensitivity = 1.0f}};
+        rasm::CameraRig rig = rasm::createCameraRig(controller, rasm::Transform{center + glm::dvec3(0.0, 0.0, 15.0)});
+        rasm::updateCameraRig(rig, rasm::CameraInput{.mouseStart = glm::vec2(0.0f), .mouseEnd = glm::vec2(0.3f, 0.2f), .deltaTime = 1.0f / 60.0f});
+        for (int frame = 0; frame < 600; ++frame)
+            rasm::updateCameraRig(rig, rasm::CameraInput{.deltaTime = 1.0f / 60.0f});
+        const rasm::Transform settled = rig.transform;
+        rasm::updateCameraRig(rig, rasm::CameraInput{.deltaTime = 1.0f / 60.0f});
+        CHECK(rig.transform.position == settled.position);
+        CHECK(rig.transform.position == rig.targetTransform.position);
+        CHECK(rig.transform.rotation == rig.targetTransform.rotation);
+    }
+}

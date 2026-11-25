@@ -3,6 +3,7 @@
 #include "doctest/doctest.h"
 #include "glm/gtc/matrix_transform.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace

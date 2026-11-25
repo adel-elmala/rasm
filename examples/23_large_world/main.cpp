@@ -78,7 +78,9 @@ namespace
             return glm::dquat(1.0, 0.0, 0.0, 0.0);
         const glm::dvec3 up = glm::normalize(glm::dvec3(position.x / (EQUATOR_RADIUS * EQUATOR_RADIUS), position.y / (EQUATOR_RADIUS * EQUATOR_RADIUS),
                                                         position.z / (POLAR_RADIUS * POLAR_RADIUS)));
-        const glm::dvec3 east = glm::normalize(glm::cross(glm::dvec3(0.0, 0.0, 1.0), up));
+        // At a pole the Earth's axis is up, and any east will do.
+        const glm::dvec3 axis = std::abs(up.z) > 0.9999 ? glm::dvec3(0.0, 1.0, 0.0) : glm::dvec3(0.0, 0.0, 1.0);
+        const glm::dvec3 east = glm::normalize(glm::cross(axis, up));
         const glm::dvec3 south = glm::cross(east, up);
         return glm::quat_cast(glm::dmat3(east, up, south));
     }
