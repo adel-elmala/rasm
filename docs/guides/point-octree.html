@@ -375,7 +375,7 @@
   <tr><td>The cut</td><td>The application's: example 29 wants a node's children while <code>TileStreamer::getScreenError</code> passes 1.25 pixels, and while they fade out.</td></tr>
   <tr><td>The budget</td><td><code>TileStreamer</code>: a point chunk's bytes are its share of the point pool (<code>RendererConfig::geometryPoolPoints</code>), and the pool's units are a limit of their own. <code>Mesh::pointOrder</code> (2 B a point) is in CPU memory and not counted.</td></tr>
   <tr><td>Fades</td><td><code>PointChunkLod::drawn</code>, through <code>Renderer::setPointChunkLod</code>: the cull keeps that share of the prefix the level of detail chose (<code>selectPointCount</code>). Example 29 fades over 0.35 s.</td></tr>
-  <tr><td>Adaptive size</td><td><code>PointSizeMode::ADAPTIVE</code> with <code>PointMaterial::maxSize</code>; the chunk's spacing is in its header. <code>POINT_ADAPTIVE_COVER</code> (4) is the cover near the camera.</td></tr>
+  <tr><td>Adaptive size</td><td><code>PointSizeMode::ADAPTIVE</code> with <code>PointMaterial::maxSize</code>; the chunk's spacing is in its header, times the entity's scale. <code>POINT_ADAPTIVE_COVER</code> (4) is the cover near the camera.</td></tr>
   <tr><td>Shrink per octant</td><td><code>PointChunkLod::finer</code>, per octant of the entity's space, which is the node's cube around its centre.</td></tr>
   <tr><td>LAS and LAZ</td><td><code>AssetLoader::loadPointCloud</code>: RASM's own reader for LAS 1.0 to 1.4, formats 0 to 10; LAZ through LASzip (Apache-2.0, vcpkg's <samp>laszip</samp>).</td></tr>
 </table>
@@ -386,11 +386,11 @@
 <div class="stats">
   <div><b>48 M/s</b><span>points read from LAS</span><small>8 M points in 0.16 s, one thread</small></div>
   <div><b>6.3 M/s</b><span>points built into the octree</span><small>1739 nodes in 1.27 s, one thread</small></div>
-  <div><b>48 of 92 MiB</b><span>the budget held</span><small>a peak of 48.00 MiB over 1425 frames of flight, 1219 loads, 462 drops</small></div>
-  <div><b>0.08 ms</b><span>cut and streamer update a frame</span><small>760 nodes drawn at most, 0.95 ms the longest</small></div>
+  <div><b>48 of 92 MiB</b><span>the budget held</span><small>a peak of 48.00 MiB over 1424 frames of flight, 1219 loads, 462 drops</small></div>
+  <div><b>0.11 ms</b><span>cut and streamer update a frame</span><small>760 nodes drawn at most</small></div>
 </div>
 
-<p>At 1920 × 1080 the two views draw 3.5 M points a frame in 5.4 ms on the GPU with adaptive points, 3.3 ms with fixed ones: near the camera grown points pass 2 pixels and leave the compute path for the triangles. The images show no pop as nodes come and go: the frames where nodes appear or go change no more pixels than the frames where none do.</p>
+<p>At 1920 × 1080 the two views take 5.8 ms of GPU frame with adaptive points, 3.3 ms with fixed ones, which leave the ground open: near the camera grown points pass 2 pixels and leave the compute path for the triangles (<code>P33</code>). Example 29 sets <code>PointMaterial::density</code> to 3, so the top view's random ground leaves 0.06 % of its pixels open instead of 0.2 %, for 0.4 ms. The images show no pop as nodes come and go: the frames where nodes appear or go change no more pixels than the frames where none do.</p>
 
 <h3>Code map</h3>
 <div class="table-wrap">

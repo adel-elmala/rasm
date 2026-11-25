@@ -17,6 +17,7 @@ static const uint   POINT_SCALAR            = 1 << 3;
 static const uint   POINT_LOG               = 1 << 4;
 static const uint   POINT_CLAMP             = 1 << 5;
 static const uint   POINT_ADAPTIVE          = 1 << 6;
+static const uint   POINT_MAX_SIZE_SHIFT    = 16;       // flags' high 16 bits: an adaptive point's largest diameter, in 1/16 pixels
 static const float  POINT_ADAPTIVE_COVER    = 4.0;      // times an adaptive point's chunk covers its ground (getPointDiameter)
 // PointChunkHeader::flags, and the header's size. Must match rasm::gfx::POINT_CHUNK_*.
 static const uint   POINT_CHUNK_COLORS      = 1 << 0;
@@ -64,6 +65,11 @@ PointChunk loadPointChunk(SceneData *scene, uint base)
     chunk.colorOffset   = scene->pointsPtr[base + 5].x;
     chunk.spacing       = asfloat(scene->pointsPtr[base + 5].y);
     return chunk;
+}
+
+float getPointMaxSize(PointData style)
+{
+    return float(style.flags >> POINT_MAX_SIZE_SHIFT) / 16.0;
 }
 
 float loadPointSpacing(SceneData *scene, uint base)
@@ -116,7 +122,7 @@ float getPointDiameter(SceneData *scene, PointData style, float spacing, float f
     float density       = max(style.density, 1.0);
     float covering      = spacing / pixelWorld * sqrt(density / area);
     float faster        = sqrt(max(POINT_ADAPTIVE_COVER / density, 1.0));
-    float grown         = clamp(size + faster * max(covering - size, 0.0), size, max(style.maxSize, size));
+    float grown         = clamp(size + faster * max(covering - size, 0.0), size, max(getPointMaxSize(style), size));
     return lerp(grown, size, saturate(finer));
 }
 
@@ -170,7 +176,7 @@ float getPointPadding(SceneData *scene, PointData style, float3 center, float ra
     float pixels        = metres ? 0.0 : 0.5 * style.size;
     // An adaptive point reaches up to maxSize pixels.
     if ((style.flags & POINT_ADAPTIVE) != 0)
-        pixels          = max(pixels, 0.5 * style.maxSize);
+        pixels          = max(pixels, 0.5 * getPointMaxSize(style));
     return (metres ? 0.5 * style.size : 0.0) + (pixels + 1.0) * pixelWorld;
 }
 

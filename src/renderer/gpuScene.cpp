@@ -293,6 +293,13 @@ namespace rasm
         }
 
         // A scalar range as the point shader reads it: logarithms of its ends for a log range, whose ends must be above 0.
+        // An adaptive point's largest diameter, in 1/16 pixels in the flags' high bits (PointData keeps its 40 bytes).
+        uint32_t getPointMaxSizeBits(float maxSize)
+        {
+            const float sixteenths = std::clamp(std::isfinite(maxSize) ? maxSize : 1.0f, 1.0f, 4095.0f) * 16.0f;
+            return static_cast<uint32_t>(std::lround(sixteenths)) << gfx::POINT_MAX_SIZE_SHIFT;
+        }
+
         void writeScalarRange(const ScalarRange &range, gfx::PointData &points)
         {
             const bool log = range.log && range.min > 0.0f && range.max > 0.0f;
@@ -403,10 +410,9 @@ namespace rasm
                 row.points = {.color = points.color,
                               .size = points.size,
                               .flags = (points.sizeUnit == VectorUnit::METRES ? gfx::POINT_METRES : 0u) | shapes[std::min(static_cast<uint32_t>(points.shape), 2u)] |
-                                       (points.colorMode == PointColorMode::SCALAR ? gfx::POINT_SCALAR : 0u) | (points.sizeMode == PointSizeMode::ADAPTIVE ? gfx::POINT_ADAPTIVE : 0u),
+                                       (points.colorMode == PointColorMode::SCALAR ? gfx::POINT_SCALAR : 0u) | (points.sizeMode == PointSizeMode::ADAPTIVE ? gfx::POINT_ADAPTIVE : 0u) | getPointMaxSizeBits(points.maxSize),
                               .colormap = engine.getBindlessTextureIndex(points.colormap),
-                              .density = std::max(points.density, 0.0f),
-                              .maxSize = std::max(points.maxSize, 1.0f)};
+                              .density = std::max(points.density, 0.0f)};
                 writeScalarRange(points.range, row.points);
             }
             return row;

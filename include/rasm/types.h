@@ -248,7 +248,7 @@ namespace rasm
         uint32_t     geometryPoolPoints      = 1u << 20; // point cloud chunks, 8 B each: a point takes one (1.5 with colors), 8 MiB
         uint32_t     maxInstances            = 1u << 16; // 164 B each, twice (one copy per frame slot)
         uint32_t     maxLights               = 1u << 14; // 56 B each, twice
-        uint32_t     maxMaterials            = 1u << 12; // materials alive at once, 356 B each, twice
+        uint32_t     maxMaterials            = 1u << 12; // materials alive at once, 352 B each, twice
         uint32_t     maxBindlessTextures     = 1u << 14; // sampled textures at once (slots of the bindless set), at most MAX_BINDLESS_TEXTURES and what the device allows
         uint32_t     maxAnimatedEntities     = 1u << 14; // entities that play a clip, 120 B each, twice
         uint32_t     animationPoolBytes      = 16u << 20; // the nodes, key times and values of every loaded animation
@@ -298,7 +298,7 @@ namespace rasm
         uint32_t     geometryPoolPoints      = 1u << 20; // point cloud chunks, 8 B each: a point takes one (1.5 with colors), 8 MiB
         uint32_t     maxInstances            = 1u << 16; // 164 B each, twice (one copy per frame slot)
         uint32_t     maxLights               = 1u << 14; // 56 B each, twice
-        uint32_t     maxMaterials            = 1u << 12; // materials alive at once, 356 B each, twice
+        uint32_t     maxMaterials            = 1u << 12; // materials alive at once, 352 B each, twice
         uint32_t     maxBindlessTextures     = 1u << 14; // sampled textures at once (slots of the bindless set), at most MAX_BINDLESS_TEXTURES and what the device allows
         uint32_t     maxAnimatedEntities     = 1u << 14; // entities that play a clip, 120 B each, twice
         uint32_t     animationPoolBytes      = 16u << 20; // the nodes, key times and values of every loaded animation

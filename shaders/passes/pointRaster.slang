@@ -101,6 +101,10 @@ void rasterMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
     PointData style         = (scene->materialsPtr + instance->materialIndex)->points;
     PointChunk chunk        = loadPointChunk(scene, base);
     float4x4 world          = getWorldMatrix(scene, instance);
+    bool adaptive           = (style.flags & POINT_ADAPTIVE) != 0;
+    float spacing           = adaptive ? getWorldSpacing(chunk.spacing, world) : 0.0;
+    // Read once: the atomics below keep the compiler from moving loads through the instance out of the loop.
+    int lod                 = instance->meshletVisibility;
     for (uint i = threadId.x; i < count; i += POINT_RASTER_GROUP_SIZE)
     {
         uint point          = first + i;
@@ -114,8 +118,9 @@ void rasterMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
         float3 local        = chunk.boxMin + float3(packed.x & 0xFFFF, packed.x >> 16, packed.y & 0xFFFF) * chunk.boxStep;
         float3 position     = mul(world, float4(local, 1.0)).xyz;
         float4 clip         = mul(scene->projection, mul(scene->view, float4(position, 1.0)));
-        float finer         = getPointFinerShare(instance->meshletVisibility, local);
-        rasterPoint(scene, clip, getPointDiameter(scene, style, getWorldSpacing(chunk.spacing, world), finer, clip.w), row << 16 | point, thinned);
+        // The fixed size is its own call, which compiles to the size alone.
+        float diameter      = adaptive ? getPointDiameter(scene, style, spacing, getPointFinerShare(lod, local), clip.w) : getPointDiameter(scene, style, 0.0, 0.0, clip.w);
+        rasterPoint(scene, clip, diameter, row << 16 | point, thinned);
     }
 }
 

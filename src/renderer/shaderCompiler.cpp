@@ -741,8 +741,7 @@ namespace rasm
                                      {"colormap", offsetof(gfx::PointData, colormap)},
                                      {"rangeMin", offsetof(gfx::PointData, rangeMin)},
                                      {"rangeMax", offsetof(gfx::PointData, rangeMax)},
-                                     {"density", offsetof(gfx::PointData, density)},
-                                     {"maxSize", offsetof(gfx::PointData, maxSize)}});
+                                     {"density", offsetof(gfx::PointData, density)}});
 
             valid &= validateStruct(fieldStruct(layouts, materialData, "vector"), "VectorData", sizeof(gfx::VectorData),
                                     {{"color", offsetof(gfx::VectorData, color)},

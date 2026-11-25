@@ -40,7 +40,8 @@
 //   --error P         the spacing in pixels past which a node's children come in (1.25)
 //   --fade S          seconds a node takes to fade in or out (0.35); 0: at once
 //   --speed V         the flight's speed in metres a second (14)
-//   --density D       PointMaterial::density (2): the points a far chunk keeps per point's area on screen
+//   --density D       PointMaterial::density (3): the points a far chunk keeps per point's area on screen; 3, not
+//                     the default 2, so the top view's random ground leaves 0.06% of its pixels open, not 0.2%
 //   --fixed-size      points of a fixed size (PointSizeMode::FIXED), not adaptive
 //   --swap-aa         the left view with 4x MSAA, the right one with TAA
 //   --sequence A DIR  headless: also write frames A to --frames as DIR/frame_NNNN.png
@@ -80,7 +81,7 @@ namespace
         double error = 1.25;
         double fade = 0.35;
         double speed = 14.0;
-        float density = 2.0f;
+        float density = 3.0f;
         bool fixedSize = false;
         bool swapAa = false;
         bool stats = false;

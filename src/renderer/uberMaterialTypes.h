@@ -34,7 +34,8 @@ namespace rasm::gfx
     constexpr uint32_t      POINT_SCALAR                = 1u << 3;  // the scalar through the colormap, else the point's color
     constexpr uint32_t      POINT_LOG                   = 1u << 4;  // rangeMin and rangeMax are logarithms
     constexpr uint32_t      POINT_CLAMP                 = 1u << 5;  // a scalar outside the range takes its end, else it is not drawn
-    constexpr uint32_t      POINT_ADAPTIVE              = 1u << 6;  // the size grows with the chunk's spacing on screen, up to maxSize pixels
+    constexpr uint32_t      POINT_ADAPTIVE              = 1u << 6;  // the size grows with the chunk's spacing on screen, up to its largest
+    constexpr uint32_t      POINT_MAX_SIZE_SHIFT        = 16;       // flags' high 16 bits: POINT_ADAPTIVE's largest diameter, in 1/16 pixels
 
     // A point cloud chunk in the point pool, in 32-bit words: this header, then two words per point (x | y << 16,
     // z | scalar << 16, each a 16-bit step of the box), then a word per point of RGBA8 colors at colorOffset. The
@@ -226,7 +227,6 @@ namespace rasm::gfx
         float               rangeMin;                               // the scalars the colormap spans (their logarithms with POINT_LOG)
         float               rangeMax;
         float               density;                                // points drawn per point-size square of the chunk on screen; 0: all
-        float               maxSize;                                // POINT_ADAPTIVE: the largest diameter, in pixels
     };
 
     struct PointChunkHeader
@@ -664,7 +664,7 @@ namespace rasm::gfx
     static_assert(sizeof(Material) == 84, "Material must match the shader's scalar layout");
     static_assert(sizeof(TerrainData) == 28, "TerrainData must match the shader's scalar layout");
     static_assert(sizeof(VectorData) == 64, "VectorData must match the shader's scalar layout");
-    static_assert(sizeof(PointData) == 44, "PointData must match the shader's scalar layout");
+    static_assert(sizeof(PointData) == 40, "PointData must match the shader's scalar layout");
     static_assert(sizeof(PointChunkHeader) == POINT_CHUNK_HEADER_WORDS * sizeof(uint32_t), "PointChunkHeader must match shaders/lib/points.slang");
     // loadPointChunk (shaders/lib/points.slang) reads the header as words: these are its offsets.
     static_assert(offsetof(PointChunkHeader, pointCount) == 12, "PointChunkHeader must match loadPointChunk");
@@ -675,7 +675,7 @@ namespace rasm::gfx
     static_assert(offsetof(PointChunkHeader, colorOffset) == 40, "PointChunkHeader must match loadPointChunk");
     static_assert(offsetof(PointChunkHeader, spacing) == 44, "PointChunkHeader must match loadPointChunk");
     static_assert(offsetof(MaterialData, points) == 312, "MaterialData must match the shader's scalar layout");
-    static_assert(sizeof(MaterialData) == 356, "MaterialData must match the shader's scalar layout");
+    static_assert(sizeof(MaterialData) == 352, "MaterialData must match the shader's scalar layout");
     static_assert(offsetof(MaterialData, vector) == 248, "MaterialData must match the shader's scalar layout");
     static_assert(offsetof(MaterialData, terrain) == 220, "MaterialData must match the shader's scalar layout");
     static_assert(offsetof(MaterialData, materialId) == 84, "MaterialData must match the shader's scalar layout");

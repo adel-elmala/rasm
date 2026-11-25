@@ -209,7 +209,6 @@ struct PointData
     float               rangeMin;           // the scalars the colormap spans (their logarithms with POINT_LOG)
     float               rangeMax;
     float               density;            // points drawn per point-size square of the chunk on screen; 0: all
-    float               maxSize;            // POINT_ADAPTIVE: the largest diameter, in pixels
 };
 
 // The texture transforms come after the rest, so a shader copies Material without them and reads them only for a
