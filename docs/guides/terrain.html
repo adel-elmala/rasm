@@ -434,7 +434,7 @@ streamer.setTileContent(node.tile, {.entities = entities, .entityCount = 1, .mat
   <strong>Keep these true</strong>
   <ul>
     <li><code>sampleTerrainHeight</code> and <code>getTerrainVertex</code> follow one rule: the same sample for a grid point, the same diagonal, the same float sum. A change to one changes the other, and <code>tests/terrainTests.cpp</code>.</li>
-    <li>Every pass that pulls vertices lifts a <code>TERRAIN</code> draw: the main pass and the shadow pass today; a new one (an ID pass for picking) too.</li>
+    <li>Every pass that pulls vertices lifts a <code>TERRAIN</code> draw: the main pass, the shadow pass and the pick pass (<a href="picking.html">Picking</a>), whose hit on a tile lies on the surface <code>getTerrainPosition</code> gives.</li>
     <li>The grid has no meshlets and no LODs: their bounds and cones come from the flat grid.</li>
     <li>A tile's content never lists the grid: every tile of that size shares it.</li>
   </ul>

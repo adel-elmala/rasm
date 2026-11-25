@@ -125,6 +125,7 @@ struct Handle
   <tr><td><code>FontHandle</code></td><td>a font's distance atlas on the GPU, for labels: <a href="scene.html#createFont">createFont</a></td></tr>
   <tr><td><code>TileHandle</code></td><td>a tile record of a <a href="engine.html#TileStreamer">TileStreamer</a>: <a href="engine.html#TileStreamer">createTile</a></td></tr>
   <tr><td><code>ReadbackHandle</code></td><td>a copy of an image to the CPU, done a few frames later: <a href="engine.html#readFrame">readFrame</a>, <a href="engine.html#readTexture">readTexture</a></td></tr>
+  <tr><td><code>PickHandle</code></td><td>a question about a view's pixels, answered a few frames later: <a href="engine.html#pick">pick</a>, <a href="engine.html#takePick">takePick</a></td></tr>
   <tr><td><code>DescriptorSetLayoutHandle</code></td><td>a descriptor set layout: <a href="low-level.html#createBindlessDescriptorSetLayout">createBindlessDescriptorSetLayout</a></td></tr>
   <tr><td><code>DescriptorPoolHandle</code></td><td>a descriptor pool: <a href="low-level.html#createDescriptorPool">createDescriptorPool</a></td></tr>
   <tr><td><code>DescriptorSetHandle</code></td><td>a descriptor set: <a href="low-level.html#allocateDescriptorSet">allocateDescriptorSet</a>; the engine's one from <a href="low-level.html#getBindlessDescriptorSet">getBindlessDescriptorSet</a></td></tr>
@@ -223,6 +224,7 @@ public:
     R16_UNORM,
     R32_SFLOAT,
     R8_UNORM,
+    R32G32B32A32_UINT,
 };</pre>
   <div class="body">
     <p>Texture, attachment and index formats. Each maps to the Vulkan format of the same name (<code>R8G8B8A8_UNORM</code> → <code>VK_FORMAT_R8G8B8A8_UNORM</code>), except the index types.</p>
@@ -243,6 +245,7 @@ public:
       <tr><td><code>R16G16_SFLOAT</code></td><td>a scene target's motion color (<a href="engine.html#addTaaPass"><code>MOTION_FORMAT</code></a>), for TAA</td></tr>
       <tr><td><code>R16_UNORM</code>, <code>R32_SFLOAT</code></td><td>one channel: a terrain tile's heights (<a href="materials.html#TerrainMaterial"><code>TerrainMaterial</code></a>), one level, filled with <code>fillTexture</code></td></tr>
       <tr><td><code>R8_UNORM</code></td><td>one byte: a font's distance atlas (<a href="scene.html#createFont"><code>createFont</code></a>)</td></tr>
+      <tr><td><code>R32G32B32A32_UINT</code></td><td>four 32-bit integers: the pick pass's ids and positions (<a href="engine.html#pick"><code>pick</code></a>), a color attachment that is never blended</td></tr>
       <tr><td><code>R8G8B8_UNORM</code>, <code>R32G32_SFLOAT</code>, <code>R32G32B32_SFLOAT</code>, <code>R32G32B32A32_SFLOAT</code></td><td>other texture formats; no engine path uses them.</td></tr>
       <tr><td><code>U16_UINT</code>, <code>U32_UINT</code></td><td>index types for <code>bindIndexBuffer</code> only, not texture formats</td></tr>
       <tr><td><code>UNKNOWN</code></td><td>no format (the default in descs; compute pipelines have no attachments)</td></tr>
