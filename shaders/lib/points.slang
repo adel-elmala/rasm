@@ -28,6 +28,7 @@ static const float  POINT_RASTER_MIN_DENSITY = 0.125;   // and that draws this m
 static const uint   POINT_BATCH_POINTS      = 1024;     // a group of the raster dispatch
 static const uint   POINT_RASTER_MAX_ROWS   = 1 << 16;  // a pixel's word keeps the instance row in 16 bits
 static const uint   POINT_CLEAR_GROUP_SIZE  = 256;
+static const uint   POINT_BATCH_THINNED     = 1u << 31; // a batch's second word: its chunk draws a prefix, not all its points
 static const uint   POINT_MAX_CLEAR_GROUPS  = 65535;
 
 // rasm::gfx::PointChunkHeader, read as words: boxMin 0, pointCount 12, boxStep 16, flags 28, scalarMin 32, scalarStep 36,
@@ -184,12 +185,13 @@ bool isRasterChunk(SceneData *scene, PointData style, float3 center, float radiu
     return float(count) >= POINT_RASTER_MIN_DENSITY * extent.x * extent.y;
 }
 
-// Adds a chunk's first count points to the view's batches, POINT_BATCH_POINTS a batch, and grows the rect that the
+// Adds a chunk's first count points to the view's batches, POINT_BATCH_POINTS a batch, marked POINT_BATCH_THINNED when
+// the LOD left some of its points out (count < its points), and grows the rect that the
 // clear and the resolve cover by the chunk's (an empty rect, its min past its max, runs neither). The batches are
 // taken with a compare-exchange that adds only what fits, so every batch below the final count is written; a chunk
 // that does not fit goes to the triangles. The clear runs as many groups as the largest chunk's rect needs, and its
 // threads loop over the whole rect.
-bool appendPointBatches(SceneData *scene, uint row, uint count, uint4 rect)
+bool appendPointBatches(SceneData *scene, uint row, uint count, bool thinned, uint4 rect)
 {
     PointRasterHeader *header = scene->pointRasterPtr;
     uint batches        = (count + POINT_BATCH_POINTS - 1) / POINT_BATCH_POINTS;
@@ -208,7 +210,7 @@ bool appendPointBatches(SceneData *scene, uint row, uint count, uint4 rect)
     for (uint b = 0; b < batches; ++b)
     {
         uint start      = b * POINT_BATCH_POINTS;
-        scene->pointBatchesPtr[first + b] = uint2(row, start | min(POINT_BATCH_POINTS, count - start) << 16);
+        scene->pointBatchesPtr[first + b] = uint2(row, start | min(POINT_BATCH_POINTS, count - start) << 16 | (thinned ? POINT_BATCH_THINNED : 0));
     }
     InterlockedMin(header->rectMinX, rect.x);
     InterlockedMin(header->rectMinY, rect.y);

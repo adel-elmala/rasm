@@ -164,7 +164,7 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
             // late phase sees it drawn.
             uint4 rect      = uint4(0);
             bool raster     = counted && scene->pointRasterPtr != nullptr && draw.firstInstance < POINT_RASTER_MAX_ROWS &&
-                              isRasterChunk(scene, style, sphere.center, sphere.radius, count, rect) && appendPointBatches(scene, draw.firstInstance, count, rect);
+                              isRasterChunk(scene, style, sphere.center, sphere.radius, count, rect) && appendPointBatches(scene, draw.firstInstance, count, count < total, rect);
             visible         = counted && !raster;
             packed          = raster ? CULL_RASTER : CULLED;
             lod             = count - 1;

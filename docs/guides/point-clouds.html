@@ -204,6 +204,37 @@
 
 <p>A chunk can switch paths from one frame to the next as the camera moves, so the two must agree to the pixel, or the switch would show. Both take a pixel when its centre lies in the point's square, edges included, and both place the square at the same centre: the compute path snaps it to 1/256 of a pixel, as the rasterizer snaps a triangle's corners. Under MSAA the compute path has one sample a pixel and the resolve writes it into all of the pixel's samples; in a view that also has the compute path, the triangle path covers whole pixels the same way, its triangle reaching half a pixel past the square so no sample of a covered pixel falls outside it. (A view drawn by triangles only keeps the smaller triangle, which is a fifth cheaper under MSAA; see <a href="#in-rasm">Not yet</a>.)</p>
 
+<h3>Filling the LOD's holes</h3>
+
+<p>The LOD keeps about as many points as the pixels a chunk covers, so a few pixels of a surface stay empty, and with whole pixels each shows as a single black dot (0.04 % of the top view of <code>28_point_cloud</code>). The resolve fills them: an empty pixel takes the nearest of its 8 neighbours' points when at least 6 of them hold one, their depths are within 5 % of each other, and that point's chunk was thinned by the LOD.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 170" role="img" aria-label="Three 3 by 3 groups of pixels. Left: an empty pixel inside a surface, all 8 neighbours filled at one depth: it is filled. Middle: an empty pixel just past a straight edge: 3 neighbours filled: it stays empty, so the edge does not grow. Right: an empty pixel between a near and a far surface: 8 neighbours filled, but their depths differ: it stays empty.">
+    <g>
+      <rect x="40" y="30" width="30" height="30" class="ok o-75"/><rect x="70" y="30" width="30" height="30" class="ok o-75"/><rect x="100" y="30" width="30" height="30" class="ok o-75"/>
+      <rect x="40" y="60" width="30" height="30" class="ok o-75"/><rect x="70" y="60" width="30" height="30" class="hot"/><rect x="100" y="60" width="30" height="30" class="ok o-75"/>
+      <rect x="40" y="90" width="30" height="30" class="ok o-75"/><rect x="70" y="90" width="30" height="30" class="ok o-75"/><rect x="100" y="90" width="30" height="30" class="ok o-75"/>
+      <text x="85" y="145" class="mid small">8 neighbours, one depth:</text>
+      <text x="85" y="160" class="mid small t-ok">filled</text>
+    </g>
+    <g>
+      <rect x="310" y="30" width="30" height="30" class="paper"/><rect x="340" y="30" width="30" height="30" class="paper"/><rect x="370" y="30" width="30" height="30" class="paper"/>
+      <rect x="310" y="60" width="30" height="30" class="paper"/><rect x="340" y="60" width="30" height="30" class="hot"/><rect x="370" y="60" width="30" height="30" class="paper"/>
+      <rect x="310" y="90" width="30" height="30" class="ok o-75"/><rect x="340" y="90" width="30" height="30" class="ok o-75"/><rect x="370" y="90" width="30" height="30" class="ok o-75"/>
+      <text x="355" y="145" class="mid small">past an edge, 3 neighbours:</text>
+      <text x="355" y="160" class="mid small t-bad">left empty</text>
+    </g>
+    <g>
+      <rect x="580" y="30" width="30" height="30" class="ok o-75"/><rect x="610" y="30" width="30" height="30" class="ok o-75"/><rect x="640" y="30" width="30" height="30" class="cpu o-75"/>
+      <rect x="580" y="60" width="30" height="30" class="ok o-75"/><rect x="610" y="60" width="30" height="30" class="hot"/><rect x="640" y="60" width="30" height="30" class="cpu o-75"/>
+      <rect x="580" y="90" width="30" height="30" class="ok o-75"/><rect x="610" y="90" width="30" height="30" class="cpu o-75"/><rect x="640" y="90" width="30" height="30" class="cpu o-75"/>
+      <text x="625" y="145" class="mid small">two depths (near, far):</text>
+      <text x="625" y="160" class="mid small t-bad">left empty</text>
+    </g>
+  </svg>
+  <figcaption>So a hole inside a surface closes, a silhouette does not grow, and a gap between two surfaces stays. A chunk that draws all its points shows the data's own gaps, as the triangles do. It costs 0.025 ms for the two views of <code>28_point_cloud</code>; the top view ends with no hole (main: 0.001 %, its alpha-to-coverage dimmed them), the perspective view with 0.025 % (main: 0.027 %).</figcaption>
+</figure>
+
 <div class="stats">
   <div><b>10.7×</b><span>faster per point, 1 pixel</span><small>0.087 ns against 0.93 ns by triangles, all of 33.5 M points a frame</small></div>
   <div><b>4.1×</b><span>faster per point, 2 pixels</span><small>0.29 ns against 1.18 ns by triangles</small></div>
@@ -440,7 +471,8 @@
 
 <h3>Not yet</h3>
 <ul>
-  <li>Without the compute path (no 64-bit atomics, or <code>computePoints</code> off) a small point's triangle under MSAA leaves out the samples of a pixel past the square's left, bottom and diagonal sides: 0.7 % of the pixels differ from the compute path's image in the <code>points_msaa4</code> test.</li>
+  <li>Without the compute path (no 64-bit atomics, or <code>computePoints</code> off) a small point's triangle under MSAA leaves out the samples of a pixel past the square's left, bottom and diagonal sides (0.7 % of the pixels of the <code>points_msaa4</code> test differ from the compute path's image), and nothing fills the LOD's holes: 0.04 % of the pixels of <code>28_point_cloud</code>'s top view stay black.</li>
+  <li>The hole fill is the compute path's only: a thinned chunk that switches to the triangles shows its few holes again (about 1 pixel in 2 500).</li>
   <li>Streaming a cloud bigger than memory as a tree of chunks, and reading LAS files.</li>
   <li>Points cast no shadows, and debug views draw them as they are (<code>D50</code>).</li>
 </ul>

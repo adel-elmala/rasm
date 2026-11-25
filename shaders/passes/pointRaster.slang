@@ -56,7 +56,7 @@ void clearMain(uint3 threadId : SV_DispatchThreadID)
 // included, as the triangle path's fragment test. The centre is snapped to the rasterizer's 1/256 pixel grid, where
 // the triangle's corners land (their offsets from the centre are whole multiples of half a pixel), so both paths take
 // the same pixels. At most 2 x 2 for a point of POINT_RASTER_MAX_SIZE.
-void rasterPoint(SceneData *scene, float4 clip, float diameter, uint id)
+void rasterPoint(SceneData *scene, float4 clip, float diameter, uint id, uint thinned)
 {
     if (clip.w <= 0.0)
         return;
@@ -70,7 +70,9 @@ void rasterPoint(SceneData *scene, float4 clip, float diameter, uint id)
     float reach         = 0.5 * diameter;
     float2 low          = max(ceil(center - reach - 0.5), 0.0);
     float2 high         = min(min(floor(center + reach - 0.5), low + 1.0), size - 1.0);
-    uint64_t word       = (uint64_t(asuint(depth)) << 32) | uint64_t(id);
+    // The depth's lowest bit says whether the point's chunk was thinned by the LOD, for the resolve's hole fill: a
+    // change of one unit in the last place, far below any depth two points can be told apart by.
+    uint64_t word       = (uint64_t((asuint(depth) & ~1u) | thinned) << 32) | uint64_t(id);
     for (float y = low.y; y <= high.y; y += 1.0)
     {
         for (float x = low.x; x <= high.x; x += 1.0)
@@ -92,7 +94,8 @@ void rasterMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
     uint2 batch             = scene->pointBatchesPtr[groupId.x];
     uint row                = batch.x;
     uint first              = batch.y & 0xFFFF;
-    uint count              = batch.y >> 16;
+    uint count              = (batch.y >> 16) & 0x7FFF;
+    uint thinned            = (batch.y & POINT_BATCH_THINNED) != 0 ? 1 : 0;
     InstanceData *instance  = scene->instancesPtr + row;
     uint base               = uint(scene->geometryPtr[instance->geometryIndex].vertexOffset);
     PointData style         = (scene->materialsPtr + instance->materialIndex)->points;
@@ -111,7 +114,7 @@ void rasterMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
         float3 local        = chunk.boxMin + float3(packed.x & 0xFFFF, packed.x >> 16, packed.y & 0xFFFF) * chunk.boxStep;
         float3 position     = mul(world, float4(local, 1.0)).xyz;
         float4 clip         = mul(scene->projection, mul(scene->view, float4(position, 1.0)));
-        rasterPoint(scene, clip, getPointDiameter(scene, style, clip.w), row << 16 | point);
+        rasterPoint(scene, clip, getPointDiameter(scene, style, clip.w), row << 16 | point, thinned);
     }
 }
 
@@ -148,14 +151,56 @@ struct ResolveOutput
     float depth         : SV_Depth;
 };
 
+// A pixel that no point reached, inside a surface of points: the LOD keeps about as many points as the pixels they
+// cover, so a few pixels of a surface stay empty and would show what is behind as single dots. It takes the nearest of
+// its 8 neighbours' points when at least POINT_FILL_MIN_NEIGHBOURS of them hold one, their depths are within
+// POINT_FILL_DEPTH_TOLERANCE of each other (one surface around it), and that point's chunk was thinned by the LOD (the
+// depth's lowest bit): a chunk that draws all its points shows the data's own gaps, as the triangles do. A pixel just
+// past a silhouette has at most 5 such neighbours (3 along a straight edge), and one between two surfaces fails the
+// depth test, so neither grows. Words outside the rect were not cleared this frame and count as empty.
+static const uint   POINT_FILL_MIN_NEIGHBOURS   = 6;
+static const float  POINT_FILL_DEPTH_TOLERANCE  = 0.05;
+
+uint64_t getHoleFill(SceneData *scene, uint2 pixel)
+{
+    PointRasterHeader *header = scene->pointRasterPtr;
+    int2 low                = int2(header->rectMinX, header->rectMinY);
+    int2 high               = int2(header->rectMaxX, header->rectMaxY);
+    uint64_t nearest        = 0;
+    float farthest          = 2.0;
+    uint filled             = 0;
+    for (int dy = -1; dy <= 1; ++dy)
+    {
+        for (int dx = -1; dx <= 1; ++dx)
+        {
+            int2 neighbour  = int2(pixel) + int2(dx, dy);
+            if ((dx == 0 && dy == 0) || any(neighbour < low) || any(neighbour > high))
+                continue;
+            uint64_t word   = scene->pointPixelsPtr[uint(neighbour.y) * scene->viewportWidth + uint(neighbour.x)];
+            uint depthBits  = uint(word >> 32);
+            if (depthBits == 0)
+                continue;
+            ++filled;
+            nearest         = max(nearest, word);
+            farthest        = min(farthest, asfloat(depthBits));
+        }
+    }
+    float depth             = asfloat(uint(nearest >> 32));
+    bool thinned            = (uint(nearest >> 32) & 1) != 0;
+    return thinned && filled >= POINT_FILL_MIN_NEIGHBOURS && farthest >= depth * (1.0 - POINT_FILL_DEPTH_TOLERANCE) ? nearest : 0;
+}
+
 // The pixel's point, with its color and the motion of its centre as the triangle path gives them, at the depth the
-// raster pass kept. The depth test against the opaque draws decides per sample, so a mesh in front still covers it.
+// raster pass kept (an empty pixel inside a surface takes a neighbour's: getHoleFill). The depth test against the
+// opaque draws decides per sample, so a mesh in front still covers it.
 [shader("fragment")]
 ResolveOutput resolveFrag(ResolveVertex input)
 {
     SceneData *scene        = pc.scene;
     uint2 pixel             = uint2(input.position.xy);
     uint64_t word           = scene->pointPixelsPtr[pixel.y * scene->viewportWidth + pixel.x];
+    if ((word >> 32) == 0)
+        word                = getHoleFill(scene, pixel);
     uint depthBits          = uint(word >> 32);
     if (depthBits == 0)
         discard;
@@ -183,7 +228,7 @@ ResolveOutput resolveFrag(ResolveVertex input)
     float4 previousClip     = mul(scene->previousViewProjection, float4(getPreviousWorldPosition(scene, instance, local), 1.0));
     output.motion           = float4(getMotion(currentClip, previousClip), 0.0, 0.0);
 #endif
-    output.depth            = asfloat(depthBits);
+    output.depth            = asfloat(depthBits & ~1u);
     return output;
 }
 // clang-format on
