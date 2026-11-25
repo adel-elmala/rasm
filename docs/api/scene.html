@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Scenes and Meshes · RASM</title>
 <meta name="description" content="Scenes, entities, Transform, meshes (createMesh, loadMesh, loadGLTF, Vertex, SubMesh, MeshLod), animation and morph targets, lights, adding objects to scenes, when changes reach the GPU, and the limits.">
-<meta name="rasm-sources" content="include/rasm/scene.h include/rasm/animation.h src/renderer/animation.cpp src/assets/morphImport.cpp src/assets/environment.cpp src/renderer/environmentBake.cpp include/rasm/entity.h include/rasm/mesh.h include/rasm/light.h include/rasm/transform.h include/rasm/renderer.h include/rasm/types.h src/scene/scene.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/transform.cpp src/assets/mesh.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/material.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/gpuTable.cpp src/renderer/geometryPool.cpp src/core/handle.cpp shaders/lib/pbr.slang shaders/lib/core.slang examples/00_hello_scene/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp examples/05_city/main.cpp examples/14_morph_targets/main.cpp src/assets/meshData.h">
+<meta name="rasm-sources" content="include/rasm/scene.h include/rasm/terrain.h src/scene/terrain.cpp include/rasm/animation.h src/renderer/animation.cpp src/assets/morphImport.cpp src/assets/environment.cpp src/renderer/environmentBake.cpp include/rasm/entity.h include/rasm/mesh.h include/rasm/light.h include/rasm/transform.h include/rasm/renderer.h include/rasm/types.h src/scene/scene.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/transform.cpp src/assets/mesh.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/material.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/gpuTable.cpp src/renderer/geometryPool.cpp src/core/handle.cpp shaders/lib/pbr.slang shaders/lib/core.slang examples/00_hello_scene/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp examples/05_city/main.cpp examples/14_morph_targets/main.cpp src/assets/meshData.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -587,7 +587,101 @@ constexpr uint32_t MAX_MORPH_TARGETS = 256;</pre>
 
 <p>A mesh's data on its way in, before the geometry pool (<code>ObjRaw</code> with its <code>MeshLod</code>s and <code>Meshlet</code>s) and what a glTF import hands back (<code>SubGLTFRaw</code>, <code>GLTFRaw</code>, <code>GltfImportCache</code>), are private, in <code>src/assets/meshData.h</code>: an application passes plain arrays to <a href="#createMesh"><code>createMesh</code></a>, or a path to an <a href="engine.html#AssetLoader"><code>AssetLoader</code></a>. How the LODs and meshlets are built is in <a href="../guides/mesh-simplification.html">Mesh simplification</a> and <a href="../guides/meshlets.html">Meshlets</a>.</p>
 
-<h2 id="animation"><span class="n">5</span>Animation</h2>
+<h2 id="terrain"><span class="n">5</span>Terrain</h2>
+
+<p>A terrain tile is an entity on a grid every tile of its size shares, lifted on the GPU by the tile's heights (<a href="../guides/terrain.html">Terrain from height maps</a>). The tile carries only two textures: its heights and its image. It goes through culling, shadows, TAA and MSAA like any mesh, and is a <a href="engine.html#TileStreamer"><code>TileStreamer</code></a> tile's content like any other.</p>
+
+<div class="api" id="createTerrainTile">
+  <pre class="sig">TerrainTile createTerrainTile(const TerrainTileDesc&amp; desc);</pre>
+  <div class="body">
+    <p>Makes a <code>TERRAIN</code> material from the desc (its <code>terrain</code>, the imagery as base color with <code>imageryRect</code> as its texture transform, metallic 0, the roughness) and an entity on <a href="#getTerrainMesh"><code>getTerrainMesh</code></a> with <a href="#getTerrainTransform"><code>getTerrainTransform</code></a>. The heights' width decides the cells: width − 3. The entity is in no scene yet. Both handles are invalid, with an error, when the heights are not a live <code>R16_UNORM</code> or <code>R32_SFLOAT</code> square texture of 4 to <code>MAX_TERRAIN_CELLS</code> + 3 samples a side, the size is not above 0, <code>maxHeight</code> is below <code>minHeight</code>, or a pool is full. An imagery texture without a bindless slot gets one that clamps. A texture keeps the sampler of its first slot, so an image another material used first (with repeat) bleeds its opposite edge into the tile's border: give tiles images of their own.</p>
+    <p>The entity draws once its textures are loaded. List the entity, the material and both textures in a tile's content, never the grid. To change the heights' range later, update the material's <code>terrain</code> (<a href="materials.html#updateMaterial"><code>updateMaterial</code></a>) and the entity's transform together.</p>
+    <pre><code>// examples/24_map_tiles: a tile's heights (35 x 35 steps of 1/16 m) and image came from the server.
+const rasm::TerrainTile terrain = engine.createTerrainTile({.center = tileOrigin(node.level, node.x, node.y),
+                                                            .size = size,
+                                                            .terrain = {.heights = heights,
+                                                                        .heightScale = static_cast&lt;float&gt;(HEIGHT_STEP),
+                                                                        .heightOffset = data.heightOffset,
+                                                                        .minHeight = data.minHeight,
+                                                                        .maxHeight = data.maxHeight,
+                                                                        .skirt = static_cast&lt;float&gt;(size * SKIRT)},
+                                                            .imagery = image,
+                                                            .roughness = 0.95f});</code></pre>
+  </div>
+</div>
+
+<div class="api" id="TerrainTileDesc">
+  <pre class="sig">struct TerrainTileDesc
+{
+    glm::dvec3                  center          = glm::dvec3(0.0);
+    glm::quat                   orientation     = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    double                      size            = 0.0;
+    TerrainMaterial             terrain         = {};
+    TextureHandle               imagery;
+    TextureTransform            imageryRect     = {};
+    float                       roughness       = 0.9f;
+};</pre>
+  <div class="body">
+    <dl>
+      <dt>center</dt><dd>World space, in doubles: the middle of the tile's square, at height 0 of its frame.</dd>
+      <dt>orientation</dt><dd>The frame's axes in world space: x and z across the tile, y up. On a globe, the tile's local frame at its centre (<a href="../guides/large-world-precision.html">Large worlds</a>).</dd>
+      <dt>size</dt><dd>Metres across, along x and z.</dd>
+      <dt>terrain</dt><dd>The heights and how they map to metres: <a href="materials.html#TerrainMaterial"><code>TerrainMaterial</code></a>.</dd>
+      <dt>imagery, imageryRect</dt><dd>The base color, and where the tile is in it: the identity for the tile's own image, a quarter (scale 0.5, an offset) for its parent's. Invalid: white.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="TerrainTile">
+  <pre class="sig">struct TerrainTile
+{
+    EntityHandle                entity;
+    MaterialHandle              material;
+};</pre>
+  <div class="body"><p>What <code>createTerrainTile</code> made. Add the entity to a scene, or give both to a <code>TileStreamer</code> tile.</p></div>
+</div>
+
+<div class="api" id="getTerrainMesh">
+  <pre class="sig">MeshHandle getTerrainMesh(uint32_t cells);</pre>
+  <div class="body">
+    <p>The grid every terrain tile of <code>cells</code> × <code>cells</code> shares: (cells + 1)² vertices in a unit box (x and z from −0.5 to 0.5, y = 1) and a skirt under each edge (y = 0), with no LODs and no meshlets. Made on the first call for that size and kept until the renderer goes; <a href="#destroyMesh"><code>destroyMesh</code></a> refuses it. Invalid for 0 or more than <code>MAX_TERRAIN_CELLS</code> (256), or a full geometry pool.</p>
+  </div>
+</div>
+
+<div class="api" id="getTerrainTransform">
+  <pre class="sig">Transform getTerrainTransform(const TerrainTileDesc&amp; tile);</pre>
+  <div class="body"><p>The entity transform of a tile: the grid's unit box stretched to the tile's box, from <code>minHeight</code> (lowered by the skirt, and by the curvature at the corners, d² / 2R) to <code>maxHeight</code>, at least 1 mm high. So culling sees the lifted terrain's real bounds. A free function, safe on any thread.</p></div>
+</div>
+
+<div class="api" id="TerrainHeights">
+  <pre class="sig">struct TerrainHeights
+{
+    const uint16_t*             unorm16         = nullptr;
+    const float*                floats          = nullptr;
+    uint32_t                    width           = 0;
+};</pre>
+  <div class="body"><p>A tile's samples on the CPU, as in its heights texture: <code>width</code> × <code>width</code>, row by row (row j along z), the <code>R16_UNORM</code> values or the <code>R32_SFLOAT</code> ones.</p></div>
+</div>
+
+<div class="api" id="sampleTerrainHeight">
+  <pre class="sig">double sampleTerrainHeight(const TerrainHeights&amp; heights, const TerrainMaterial&amp; terrain, double u, double v);</pre>
+  <div class="body"><p>The drawn height in metres in the tile's frame, before the curvature, at (u, v) from 0 to 1 across the tile (clamped). The shader's rule: a grid point is <code>heightOffset</code> + <code>heightScale</code> × its sample, in floats; a cell is two flat triangles split from (0, 1) to (1, 0). Use it to put objects, labels and cameras on the ground, and to check a picked point. 0 for a width under 4 or no samples. Safe on any thread.</p></div>
+</div>
+
+<div class="api" id="getTerrainPosition">
+  <pre class="sig">glm::dvec3 getTerrainPosition(const TerrainTileDesc&amp; tile, const TerrainHeights&amp; heights, double u, double v);</pre>
+  <div class="body"><p>The world position of the drawn surface at (u, v), in doubles: <code>sampleTerrainHeight</code> lowered by the curvature, put in the world by the tile's center and orientation.</p>
+    <pre><code>// The ground under a landmark at (u, v) of its tile.
+const glm::dvec3 ground = rasm::getTerrainPosition(tile, {.unorm16 = samples.data(), .width = 35}, 0.25, 0.6);</code></pre>
+  </div>
+</div>
+
+<div class="api" id="MAX_TERRAIN_CELLS">
+  <pre class="sig">constexpr uint32_t MAX_TERRAIN_CELLS = 256;</pre>
+  <div class="body"><p>The most cells per side of a terrain grid; a tile's heights have cells + 3 samples a side.</p></div>
+</div>
+
+<h2 id="animation"><span class="n">6</span>Animation</h2>
 
 <p>A glTF model's clips move its nodes, and the GPU poses them (<a href="../guides/keyframe-animation.html">Keyframe animation</a>). A skinned model's clips move its joints, and the GPU skins its vertices once per frame for every view (<a href="../guides/skinning.html">Skinning</a>); it plays the same way. A morphed model's clips move its weights too (<a href="#morph-targets">Morph targets</a>). The application owns the clock: it calls <code>setAnimationTime</code> once per frame, and starts a clip on an entity with <code>playAnimation</code>. Nothing else runs per frame on the CPU, however many entities play.</p>
 
@@ -723,7 +817,7 @@ enum class AnimationInterpolation : uint32_t { STEP, LINEAR, CUBICSPLINE };</pre
   <div class="body"><p>What the import keeps of a glTF file's animations, in <code>GLTFRaw::animation</code>. <code>nodes</code> holds only the nodes a clip can move, parents before children, with their rest pose (a node below static parents hangs below an extra node whose <code>rest</code> is their world matrix). Each sampler's values are vec4s: a quaternion x, y, z, w, or a translation or scale with w = 0; <code>CUBICSPLINE</code> stores an in-tangent, the value and an out-tangent per key. A sampler that does not parse is skipped with a warning, and its clip keeps its index. <code>joints</code> holds every skin a sub-mesh uses, one skin after another: each joint's node in <code>nodes</code> (a joint is always kept, moved or not) and its inverse bind matrix (the identity when the file has none). <code>morphWeights</code> holds the rest weights of every node that draws a morphed mesh, one node after another (the node's, else the mesh's, else 0), and <code>morphTargetNames</code> one name per weight. A glTF weights sampler becomes one sampler per target, its value in x, and one <code>AnimationPath::WEIGHTS</code> channel per weight, whose <code>node</code> is the weight's index in <code>morphWeights</code>.</p></div>
 </div>
 
-<h2 id="morph-targets"><span class="n">6</span>Morph targets</h2>
+<h2 id="morph-targets"><span class="n">7</span>Morph targets</h2>
 
 <p>A glTF mesh with morph targets has a list of weights per entity. The GPU adds each target's deltas, times its weight, to the vertices once per frame, before the skin, for every view (<a href="../guides/morph-targets.html">Morph targets</a>). A weight comes from the application when it set one, else from the playing clip's weights channel, else from the mesh's rest weights.</p>
 
@@ -793,7 +887,7 @@ engine.setMorphWeights(entity, weights.data(), static_cast&lt;uint32_t&gt;(weigh
   <p>An entity of a morphed mesh is posed every frame, with a clip or not, like a skinned one: it takes a row of the animated entity table (<code>EngineConfig::maxAnimatedEntities</code>), and its weights take rows of <code>EngineConfig::maxMorphWeights</code>. The <code>Skin</code> pass reads only the targets whose weight is not 0. The deltas take 24 B per vertex and target in the geometry pool (<code>EngineConfig::geometryPoolMorphs</code>).</p>
 </div>
 
-<h2 id="lights"><span class="n">7</span>Lights</h2>
+<h2 id="lights"><span class="n">8</span>Lights</h2>
 
 <div class="split">
   <div>
@@ -927,7 +1021,7 @@ engine.updateLight(lamp, light);</code></pre>
   <div class="body"><p>π/4: the default outer angle of a spot light's cone, glTF's default (<code>rasm/light.h</code>).</p></div>
 </div>
 
-<h2 id="environments"><span class="n">8</span>Environments</h2>
+<h2 id="environments"><span class="n">9</span>Environments</h2>
 
 <p>An <b>environment</b> is an HDR photo of the light all around a scene. It lights every <code>PBR</code> material from all directions (soft light from the sky, reflections on shiny surfaces) and shows behind the scene as the sky. The guide <a href="../guides/image-based-lighting.html">Image-based lighting</a> explains how.</p>
 
@@ -985,7 +1079,7 @@ engine.setSceneEnvironment(scene, {});</code></pre>
   </div>
 </div>
 
-<h2 id="timing"><span class="n">9</span>When changes reach the GPU</h2>
+<h2 id="timing"><span class="n">10</span>When changes reach the GPU</h2>
 
 <div class="table-wrap">
 <table>
@@ -1003,7 +1097,7 @@ engine.setSceneEnvironment(scene, {});</code></pre>
 </div>
 <p>The engine keeps one copy of each table per frame slot. A changed row is uploaded to each copy once, in that copy's own frame, so the GPU never reads a row while the CPU writes it. The guide <a href="../guides/gpu-scene.html">The GPU scene tables</a> explains the details.</p>
 
-<h2 id="limits"><span class="n">10</span>Limits</h2>
+<h2 id="limits"><span class="n">11</span>Limits</h2>
 
 <div class="table-wrap">
 <table>

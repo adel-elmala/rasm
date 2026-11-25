@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terrain from Height Maps · RASM</title>
+<meta name="description" content="How a map engine draws terrain from height map tiles: a small grid of heights per tile, one shared grid lifted on the GPU, the tile's box for culling, skirts that hide the cracks between levels, normals with a border of samples, bit-equal edges, imagery on top, and a flat tile bent onto a planet. Then how RASM does it.">
+<meta name="rasm-sources" content="include/rasm/terrain.h include/rasm/material.h src/scene/terrain.h src/scene/terrain.cpp shaders/lib/terrain.slang shaders/passes/rasm.slang shaders/passes/shadow.slang src/c/cTerrain.cpp include/rasm/rasm_c.h examples/24_map_tiles/main.cpp tests/terrainTests.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/terrain.js"></script>
+</head>
+<body data-root="../" data-page="guides/terrain.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>Terrain from height maps</h1>
+<p class="lead">A map engine's ground comes as tiles of heights: a small grid of numbers per tile, at every level of a quadtree. This page shows how to turn them into terrain on the GPU: one shared grid that each tile lifts with its own heights, a box that culling can trust, skirts that hide the cracks between levels, normals that match across tiles, imagery on top, and a flat tile bent onto a planet. The <a href="#in-rasm">last part</a> shows how RASM does it. Which tiles to load is in <a href="tile-streaming.html">Tile streaming under a memory budget</a>.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>A tile is a <b>height map</b>: (n + 1)² heights for n × n cells, plus a <b>border</b> of one sample around them. 16 bits a sample is enough.</li>
+    <li>Every tile shares <b>one grid mesh</b>. The vertex shader reads the tile's heights and lifts each vertex. No mesh per tile.</li>
+    <li>The grid is a <b>unit box</b>, and the tile's transform stretches it to the tile's size and height range. So culling sees the real bounds.</li>
+    <li>Tiles of different levels leave <b>cracks</b> along their edges. A <b>skirt</b>, a strip hanging down under each edge, hides them.</li>
+    <li>Normals come from the heights around each vertex. The border gives the edge vertices the same four neighbours in both tiles, so the light has <b>no seam</b>.</li>
+    <li>Heights stored on one shared grid of steps (a power of two) are <b>bit-equal</b> on a shared edge.</li>
+    <li>On a planet, a flat tile drops by <b>d² / 2R</b> at d from its centre: 5 cm off the true sphere at 100 km.</li>
+  </ul>
+</div>
+
+<h2 id="problem"><span class="n">1</span>The problem</h2>
+
+<p>The simple way builds a mesh for each tile on the CPU: a vertex per height, with its position, normal and texture coordinates. That is a lot of bytes for what is only a number per point, and the CPU builds and uploads it for every tile that arrives.</p>
+
+<div class="split">
+  <div class="bad">
+    <h4>A mesh per tile</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="Each tile has its own mesh of 64-byte vertices, built on the CPU and uploaded: 32 by 32 cells take about 100 KiB.">
+      <rect x="20" y="20" width="80" height="80" class="mem"/>
+      <path d="M40,20V100M60,20V100M80,20V100M20,40H100M20,60H100M20,80H100" class="grid"/>
+      <text x="60" y="120" class="mid small">tile 1 mesh</text>
+      <rect x="120" y="20" width="80" height="80" class="mem"/>
+      <path d="M140,20V100M160,20V100M180,20V100M120,40H200M120,60H200M120,80H200" class="grid"/>
+      <text x="160" y="120" class="mid small">tile 2 mesh</text>
+      <text x="215" y="50" class="small">64 B a vertex:</text>
+      <text x="215" y="66" class="small">position, normal,</text>
+      <text x="215" y="82" class="small">uv, tangent</text>
+      <text x="215" y="110" class="small t-bad">~100 KiB a tile</text>
+    </svg>
+    <p>The CPU builds every vertex, and each tile's mesh takes its own space in the vertex buffers.</p>
+  </div>
+  <div class="good">
+    <h4>Heights per tile, one shared grid</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="One grid mesh is shared; each tile only has a small texture of 16-bit heights: 35 by 35 samples take 2.4 KiB.">
+      <rect x="20" y="20" width="80" height="80" class="gpu o-50"/>
+      <path d="M40,20V100M60,20V100M80,20V100M20,40H100M20,60H100M20,80H100" class="grid"/>
+      <text x="60" y="120" class="mid small">one grid</text>
+      <rect x="130" y="30" width="36" height="36" class="mem"/>
+      <rect x="176" y="30" width="36" height="36" class="mem"/>
+      <text x="171" y="84" class="mid small">heights, 2 B each</text>
+      <text x="225" y="50" class="small">2.4 KiB</text>
+      <text x="225" y="66" class="small">a tile</text>
+      <text x="171" y="120" class="mid small t-ok">the GPU lifts the grid</text>
+    </svg>
+    <p>A tile is a small texture. The vertex shader reads it and moves each vertex of the shared grid up.</p>
+  </div>
+</div>
+
+<h2 id="heights"><span class="n">2</span>A height map</h2>
+
+<p>A height map is a grid of samples, one per point of the tile's grid. For n × n cells there are (n + 1)² points. Add one more sample around them, the <b>border</b>: it belongs to the neighbour tiles, and section 5 needs it. So a tile of n cells has (n + 3)² samples.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="A tile of 4 by 4 cells seen from above: 5 by 5 grid points in green, and a ring of border samples around them in amber. Sample (i + 1, j + 1) is grid point (i, j). On the right, a sample's 16-bit value becomes metres: offset plus scale times the value.">
+    <rect x="40" y="30" width="210" height="210" class="zone"/>
+    <rect x="72" y="62" width="146" height="146" class="paper"/>
+    <path d="M108.5,62V208M145,62V208M181.5,62V208M72,98.5H218M72,135H218M72,171.5H218" class="grid"/>
+    <g class="mem">
+      <circle cx="40" cy="30" r="5"/><circle cx="72" cy="30" r="5"/><circle cx="108.5" cy="30" r="5"/><circle cx="145" cy="30" r="5"/><circle cx="181.5" cy="30" r="5"/><circle cx="218" cy="30" r="5"/><circle cx="250" cy="30" r="5"/>
+      <circle cx="40" cy="240" r="5"/><circle cx="72" cy="240" r="5"/><circle cx="108.5" cy="240" r="5"/><circle cx="145" cy="240" r="5"/><circle cx="181.5" cy="240" r="5"/><circle cx="218" cy="240" r="5"/><circle cx="250" cy="240" r="5"/>
+      <circle cx="40" cy="62" r="5"/><circle cx="40" cy="98.5" r="5"/><circle cx="40" cy="135" r="5"/><circle cx="40" cy="171.5" r="5"/><circle cx="40" cy="208" r="5"/>
+      <circle cx="250" cy="62" r="5"/><circle cx="250" cy="98.5" r="5"/><circle cx="250" cy="135" r="5"/><circle cx="250" cy="171.5" r="5"/><circle cx="250" cy="208" r="5"/>
+    </g>
+    <g class="gpu">
+      <circle cx="72" cy="62" r="5"/><circle cx="108.5" cy="62" r="5"/><circle cx="145" cy="62" r="5"/><circle cx="181.5" cy="62" r="5"/><circle cx="218" cy="62" r="5"/>
+      <circle cx="72" cy="98.5" r="5"/><circle cx="108.5" cy="98.5" r="5"/><circle cx="145" cy="98.5" r="5"/><circle cx="181.5" cy="98.5" r="5"/><circle cx="218" cy="98.5" r="5"/>
+      <circle cx="72" cy="135" r="5"/><circle cx="108.5" cy="135" r="5"/><circle cx="145" cy="135" r="5"/><circle cx="181.5" cy="135" r="5"/><circle cx="218" cy="135" r="5"/>
+      <circle cx="72" cy="171.5" r="5"/><circle cx="108.5" cy="171.5" r="5"/><circle cx="145" cy="171.5" r="5"/><circle cx="181.5" cy="171.5" r="5"/><circle cx="218" cy="171.5" r="5"/>
+      <circle cx="72" cy="208" r="5"/><circle cx="108.5" cy="208" r="5"/><circle cx="145" cy="208" r="5"/><circle cx="181.5" cy="208" r="5"/><circle cx="218" cy="208" r="5"/>
+    </g>
+    <text x="145" y="262" class="mid small">4 × 4 cells: 5 × 5 points (green), 7 × 7 samples with the border (amber)</text>
+
+    <text x="300" y="50" class="title">One sample to metres</text>
+    <rect x="300" y="64" width="120" height="34" rx="4" class="mem"/>
+    <text x="360" y="86" class="mid mono">0x0C40</text>
+    <text x="360" y="116" class="mid small">a 16-bit value: 3136</text>
+    <line x1="424" y1="81" x2="474" y2="81" class="arrow" marker-end="url(#ah)"/>
+    <rect x="480" y="64" width="260" height="34" rx="4" class="gpu"/>
+    <text x="610" y="86" class="mid mono">offset + scale × 3136</text>
+    <text x="610" y="116" class="mid small">metres: 512 + 1/16 × 3136 = 708 m</text>
+    <text x="300" y="160" class="small">16 bits give 65 536 steps. At 1/16 m a step, one</text>
+    <text x="300" y="176" class="small">tile covers 4096 m of height: enough for any tile,</text>
+    <text x="300" y="192" class="small">since each tile has its own offset.</text>
+  </svg>
+  <figcaption>Grid point (i, j) is sample (i + 1, j + 1). A 32-bit float sample can hold metres directly; 16 bits with an offset per tile is half the size and as precise where it matters.</figcaption>
+</figure>
+
+<h2 id="grid"><span class="n">3</span>Lift a shared grid on the GPU</h2>
+
+<p>Every tile with n cells draws the same grid mesh. Its vertices know only where they are in the grid. The vertex shader reads the tile's height at that point and puts the vertex there. A big trick makes culling work too: the grid is a <b>unit box</b>, and the tile's transform stretches the box to the tile.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Left: the shared grid in its unit box, x and z from -0.5 to 0.5, y from 0 to 1. Middle: the vertex shader reads the height at the vertex's grid point and sets y to where the height falls between the tile's lowest and highest height. Right: the transform stretches the unit box to the tile's size and its height range, so the bounding sphere the GPU culls with covers the real terrain.">
+    <text x="110" y="24" class="mid title">1. the shared grid</text>
+    <path d="M30,170 L110,200 L190,170 L110,140 Z" class="paper"/>
+    <path d="M50,177.5 L130,147.5 M70,185 L150,155 M90,192.5 L170,162.5 M50,162.5 L130,192.5 M70,155 L150,185 M90,147.5 L170,177.5" class="grid"/>
+    <path d="M30,170 L110,200 L190,170 L110,140 Z M30,170 V70 M190,170 V70 M110,200 V100 M30,70 L110,100 L190,70 L110,40 Z" class="arrow dashed"/>
+    <text x="110" y="228" class="mid small">a unit box: y from 0 to 1</text>
+
+    <text x="380" y="24" class="mid title t-shader">2. vertex shader</text>
+    <rect x="280" y="40" width="200" height="150" rx="8" class="shader"/>
+    <text x="380" y="66" class="mid small">h = offset + scale × sample</text>
+    <text x="380" y="88" class="mid small">sample at grid point (i, j)</text>
+    <text x="380" y="118" class="mid small">y = (h − lowest) / range</text>
+    <text x="380" y="140" class="mid small">skirt vertex: h − skirt</text>
+    <text x="380" y="170" class="mid small">normal from 4 neighbours</text>
+    <line x1="200" y1="120" x2="274" y2="120" class="arrow" marker-end="url(#ah)"/>
+
+    <text x="630" y="24" class="mid title">3. the tile's transform</text>
+    <path d="M520,170 L620,200 L720,170 L620,140 Z" class="paper"/>
+    <path d="M520,170 Q560,120 600,150 T680,120 L720,170 L620,200 Z" class="gpu o-50"/>
+    <path d="M520,170 V95 M720,170 V95 M620,200 V125 M520,95 L620,125 L720,95 L620,65 Z" class="arrow dashed"/>
+    <line x1="490" y1="120" x2="514" y2="120" class="arrow" marker-end="url(#ah)"/>
+    <text x="724" y="133" class="small">range</text>
+    <text x="630" y="228" class="mid small">scale = (size, range, size)</text>
+  </svg>
+  <figcaption>The box runs from the tile's lowest height to its highest. Culling transforms the grid's bounding sphere with the tile's matrix, as for any mesh, and gets a sphere around the real terrain. No per-tile bounds are needed.</figcaption>
+</figure>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Each cell is two triangles, split along the same diagonal in every tile.">
+      <rect x="60" y="15" width="100" height="100" class="paper"/>
+      <path d="M60,15 H160 V115 H60 Z M60,115 L160,15" class="arrow"/>
+      <text x="85" y="55" class="mid small">1</text><text x="135" y="85" class="mid small">2</text>
+    </svg>
+    <h4>Two triangles a cell</h4>
+    <p>Split along the same diagonal everywhere. A point inside a cell is on one of the two flat triangles.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The vertex reads exact samples with a load, not a filtered sample.">
+      <rect x="40" y="30" width="40" height="40" class="mem"/><rect x="80" y="30" width="40" height="40" class="mem o-50"/>
+      <rect x="40" y="70" width="40" height="40" class="mem o-50"/><rect x="80" y="70" width="40" height="40" class="mem o-50"/>
+      <circle cx="60" cy="50" r="6" class="gpu"/>
+      <text x="140" y="56" class="small">one texel,</text><text x="140" y="72" class="small">no filtering</text>
+    </svg>
+    <h4>Exact samples</h4>
+    <p>The shader loads the texel of its grid point. Nothing is filtered, so the CPU can compute the same height.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Shadow maps and the main view lift the grid the same way.">
+      <path d="M20,100 Q70,50 120,80 T220,60" class="surface"/>
+      <line x1="200" y1="15" x2="120" y2="70" class="arrow light"/>
+      <path d="M120,80 L160,100 L220,100 L220,60 Q170,70 120,80" class="shade o-50"/>
+    </svg>
+    <h4>Every pass lifts it</h4>
+    <p>The shadow pass and the main pass run the same lifting code, so the terrain casts and receives its own shadows.</p>
+  </div>
+</div>
+
+<h2 id="skirts"><span class="n">4</span>Cracks between levels, and skirts</h2>
+
+<p>Next to a fine tile, a coarse tile has fewer points along their shared edge. The fine edge follows the hills between the coarse points; the coarse edge is a straight line there. The two edges part, and the sky shows through the gap.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="Side view along a shared edge. The fine tile's edge follows the hill through its extra points. The coarse tile's edge is a straight line between its two points. Between them is a gap where the background shows. A skirt hangs down from each edge and fills the gap.">
+    <text x="190" y="24" class="mid title">The crack</text>
+    <path d="M30,150 C60,120 85,95 110,95 S170,115 190,110 S245,82 270,85 S330,92 350,90" class="surface o-50"/>
+    <polygon points="30,150 110,95 190,110 270,85 350,90" class="bad o-50"/>
+    <polyline points="30,150 110,95 190,110 270,85 350,90" class="arrow gpu thick"/>
+    <line x1="30" y1="150" x2="350" y2="90" class="arrow cpu thick"/>
+    <circle cx="30" cy="150" r="5" class="cpu"/><circle cx="350" cy="90" r="5" class="cpu"/>
+    <circle cx="110" cy="95" r="4" class="gpu"/><circle cx="190" cy="110" r="4" class="gpu"/><circle cx="270" cy="85" r="4" class="gpu"/>
+    <text x="150" y="168" class="mid small t-cpu">coarse edge: 2 points</text>
+    <text x="230" y="64" class="mid small t-gpu">fine edge: 5 points</text>
+    <text x="190" y="208" class="mid small t-bad">the gap between them: the sky shows</text>
+
+    <text x="570" y="24" class="mid title">A skirt fills it</text>
+    <polygon points="410,150 490,95 570,110 650,85 730,90 730,135 650,130 570,155 490,140 410,195" class="gpu o-25"/>
+    <polygon points="410,150 730,90 730,135 410,195" class="cpu o-25"/>
+    <polyline points="410,150 490,95 570,110 650,85 730,90" class="arrow gpu thick"/>
+    <line x1="410" y1="150" x2="730" y2="90" class="arrow cpu thick"/>
+    <text x="570" y="208" class="mid small t-ok">a strip hangs down from each edge</text>
+  </svg>
+  <figcaption>The skirt is one more row of vertices under each edge, at the edge's height minus the skirt's length, joined to the edge by a strip. It is part of the same grid, so it costs a few triangles a tile and no extra draw.</figcaption>
+</figure>
+
+<p>The skirt must be at least as long as the largest gap. The gap grows with the hills and with the difference of levels: one level of difference leaves at most the coarse tile's own error. Try it.</p>
+
+<figure class="lab" data-lab="terrain-skirt" data-title="Close the crack">
+  <figcaption>Raise the hills until the gap shows, then lengthen the skirt until it covers the gap everywhere.</figcaption>
+</figure>
+
+<h2 id="normals"><span class="n">5</span>Normals that match across tiles</h2>
+
+<p>A vertex's normal comes from the slope of the heights around it: the difference of the samples left and right, and before and behind. At a tile's edge, one of those samples is in the neighbour tile. Without the border, the edge vertex only has a one-sided difference, and its neighbour across the edge has the other side. The light then breaks along every tile edge.</p>
+
+<div class="split">
+  <div class="bad">
+    <h4>No border: one-sided slopes</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="Without a border, the edge vertex of the left tile uses only the samples on its left, and the right tile's uses only those on its right: two different slopes at one point.">
+      <path d="M20,100 Q90,40 160,60 T300,90" class="surface o-50"/>
+      <line x1="160" y1="20" x2="160" y2="120" class="arrow dashed"/>
+      <circle cx="160" cy="60" r="5" class="hot"/>
+      <line x1="100" y1="58" x2="160" y2="60" class="arrow cpu thick"/>
+      <line x1="160" y1="60" x2="220" y2="72" class="arrow gpu thick"/>
+      <text x="80" y="128" class="mid small">left tile's slope</text>
+      <text x="245" y="128" class="mid small">right tile's slope</text>
+    </svg>
+    <p>Two normals at one point: a line of light along the edge.</p>
+  </div>
+  <div class="good">
+    <h4>A border of one sample</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="With a border, both tiles read the same sample on each side of the edge vertex, so both get the same central slope.">
+      <path d="M20,100 Q90,40 160,60 T300,90" class="surface o-50"/>
+      <line x1="160" y1="20" x2="160" y2="120" class="arrow dashed"/>
+      <circle cx="100" cy="58" r="5" class="mem"/><circle cx="220" cy="72" r="5" class="mem"/>
+      <circle cx="160" cy="60" r="5" class="hot"/>
+      <line x1="100" y1="58" x2="220" y2="72" class="arrow ok thick"/>
+      <text x="160" y="128" class="mid small">both tiles: the same two samples</text>
+    </svg>
+    <p>The border sample is the neighbour's first inner sample. Both tiles compute the same central difference.</p>
+  </div>
+</div>
+
+<div class="callout rule">
+  <strong>Bit-equal edges</strong>
+  <p>Two tiles share an edge's samples, but each stores them from its own offset. Put every height on one world grid of steps first, with a step that is a power of two (1/16 m), and give each tile an offset that is a whole number of steps. Then offset + scale × value is exact in floats, and both tiles get the same bits on the edge, on the CPU and on the GPU alike.</p>
+</div>
+
+<h2 id="imagery"><span class="n">6</span>Imagery on top</h2>
+
+<p>The color of the ground is an image per tile, draped over it by the grid's texture coordinates: (0, 0) at one corner, (1, 1) at the other. A tile does not need an image of its own level.</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A tile with its own image: texture coordinates 0 to 1.">
+      <rect x="70" y="15" width="100" height="100" class="mem o-50"/>
+      <text x="120" y="70" class="mid small">0 … 1</text>
+    </svg>
+    <h4>Its own image</h4>
+    <p>The usual case: the tile's image covers it exactly.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A child tile uses a quarter of its parent's image while its own loads.">
+      <rect x="70" y="15" width="100" height="100" class="mem o-25"/>
+      <rect x="120" y="65" width="50" height="50" class="mem"/>
+      <text x="145" y="94" class="mid small">child</text>
+    </svg>
+    <h4>A part of the parent's</h4>
+    <p>A child can show a quarter of its parent's image, by an offset and a scale, until its own arrives.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The image is clamped at its edges, so a tile never samples the other side of its image.">
+      <rect x="70" y="15" width="100" height="100" class="mem o-50"/>
+      <path d="M170,15 V115" class="arrow hot thick"/>
+      <text x="180" y="70" class="small">clamp</text>
+    </svg>
+    <h4>Clamped edges</h4>
+    <p>A repeating sampler would blend the left edge into the right one. Clamp it.</p>
+  </div>
+</div>
+
+<h2 id="curvature"><span class="n">7</span>A flat tile on a round planet</h2>
+
+<p>On a globe, each tile lives in its own local frame (east, up, north at its centre). A flat tile is tangent to the planet at its centre. Away from the centre the planet falls away below the plane, so neighbour tiles, tangent at different points, would not meet. Bend each vertex down by the drop of a sphere.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="A flat tile touches the planet at its centre. At distance d from the centre the planet is lower by about d squared over 2R. Lowering each vertex by that amount puts the tile on the sphere.">
+    <path d="M60,60 Q380,-20 700,60" class="surface"/>
+    <line x1="140" y1="18" x2="620" y2="18" class="arrow cpu thick"/>
+    <circle cx="380" cy="18" r="5" class="hot"/>
+    <line x1="560" y1="18" x2="560" y2="36" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="570" y="34" class="small t-hot">drop d² / 2R</text>
+    <line x1="380" y1="60" x2="560" y2="60" class="arrow dashed"/>
+    <text x="470" y="78" class="mid small">d</text>
+    <text x="380" y="120" class="mid small">The flat tile (blue) is tangent at its centre; the planet (thick) falls below it.</text>
+    <text x="380" y="140" class="mid small">The parabola d² / 2R is the sphere's drop to within d⁴ / 8R³.</text>
+  </svg>
+  <figcaption>The true drop of a sphere is R − √(R² − d²). Its series starts with d² / 2R; the next term, d⁴ / 8R³, is how far the parabola is from the sphere.</figcaption>
+</figure>
+
+<div class="formula">
+  <p class="eq">drop(d) = d² / 2R</p>
+  <p class="eq">sphere − parabola ≈ d⁴ / 8R³</p>
+  <dl>
+    <dt>d</dt><dd>metres from the tile's centre, across its plane</dd>
+    <dt>R</dt><dd>the planet's radius: 6 371 km for the Earth</dd>
+  </dl>
+</div>
+
+<div class="stats">
+  <div><b>7.8 m</b><span>drop 10 km from the centre</span><small>10 000² / (2 · 6 371 000)</small></div>
+  <div><b>785 m</b><span>drop 100 km from the centre</span><small>100 000² / (2 · 6 371 000)</small></div>
+  <div><b>5 µm</b><span>parabola off the sphere at 10 km</span><small>10 000⁴ / (8 · 6 371 000³)</small></div>
+  <div><b>5 cm</b><span>parabola off the sphere at 100 km</span><small>100 000⁴ / (8 · 6 371 000³)</small></div>
+</div>
+
+<p>So tiles up to a few hundred kilometres sit on the globe to a few centimetres. The roots of a whole-globe tree (a hemisphere each) need a curved grid instead: this bending is not enough there.</p>
+
+<h2 id="pitfalls"><span class="n">8</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>Holes along some tile edges, more where the hills are steep</dt><dd>The skirt is shorter than the gap between two levels. Make it at least the coarser tile's geometric error, more for steep ground.</dd></div>
+  <div><dt>A line of light along every tile edge</dt><dd>One-sided slopes at the edges: give each tile a border of one sample, from its neighbours' heights.</dd></div>
+  <div><dt>Tiles pop out of view at the screen's edge, or behind a hill</dt><dd>The bounds are the flat grid's, not the lifted terrain's. Stretch the unit box to the tile's height range, so culling sees the real bounds.</dd></div>
+  <div><dt>A thin line of the wrong color at a tile's edge</dt><dd>The imagery repeats: sample it with clamping.</dd></div>
+  <div><dt>Neighbour tiles do not meet on a globe</dt><dd>Each tile is flat in its own frame. Bend it by d² / 2R, or use smaller tiles near the roots.</dd></div>
+  <div><dt>Steps on smooth slopes</dt><dd>8-bit heights. Use 16 bits (or floats) with an offset per tile.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
+
+<p>A terrain tile is an ordinary entity: a <code>TERRAIN</code> material that holds the tile's heights, on the shared grid of <code>Renderer::getTerrainMesh</code>, with the transform of <code>getTerrainTransform</code>. So it goes through the same GPU culling, occlusion culling, shadows, TAA and MSAA as any mesh, and it is a tile's content for the <a href="tile-streaming.html">TileStreamer</a> like any other.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>the application</span>
+  <span><i class="mem"></i>textures and rows</span>
+  <span><i class="shader"></i>shaders</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 260" role="img" aria-label="The application makes a heights texture and an imagery texture, then calls createTerrainTile. That makes a TERRAIN material, whose row holds the heights' bindless index, scale, offset, lowest height, skirt and sphere radius, and an entity on the shared grid with getTerrainTransform. In the scene passes, getVertexOutput and the shadow pass's getDepthPosition call getTerrainVertex for a TERRAIN material: it loads the heights, lifts the vertex and computes its normal.">
+    <rect x="20" y="20" width="200" height="220" rx="8" class="zone"/>
+    <text x="120" y="42" class="mid title t-cpu">application</text>
+    <rect x="36" y="58" width="168" height="40" rx="6" class="cpu"/><text x="120" y="76" class="mid small">heights: R16_UNORM,</text><text x="120" y="91" class="mid small">(cells + 3)² samples</text>
+    <rect x="36" y="110" width="168" height="40" rx="6" class="cpu"/><text x="120" y="135" class="mid small">imagery: RGBA8 sRGB</text>
+    <rect x="36" y="172" width="168" height="40" rx="20" class="cpu"/><text x="120" y="197" class="mid mono small">createTerrainTile</text>
+
+    <rect x="270" y="20" width="220" height="220" rx="8" class="zone"/>
+    <text x="380" y="42" class="mid title t-mem">renderer</text>
+    <rect x="286" y="58" width="188" height="64" rx="6" class="mem"/>
+    <text x="380" y="78" class="mid small">material row: TerrainData</text>
+    <text x="380" y="94" class="mid small">heights, scale, offset,</text>
+    <text x="380" y="110" class="mid small">minHeight, skirt, radius</text>
+    <rect x="286" y="134" width="188" height="40" rx="6" class="mem"/><text x="380" y="152" class="mid small">entity on getTerrainMesh</text><text x="380" y="167" class="mid small">(cells), shared by all</text>
+    <rect x="286" y="186" width="188" height="40" rx="6" class="mem"/><text x="380" y="204" class="mid small">transform: the tile's box</text><text x="380" y="219" class="mid small">getTerrainTransform</text>
+    <line x1="204" y1="192" x2="280" y2="150" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="540" y="20" width="200" height="220" rx="8" class="zone"/>
+    <text x="640" y="42" class="mid title t-shader">shaders</text>
+    <rect x="556" y="58" width="168" height="40" rx="6" class="shader"/><text x="640" y="76" class="mid small mono">getVertexOutput</text><text x="640" y="91" class="mid small">(rasm.slang)</text>
+    <rect x="556" y="110" width="168" height="40" rx="6" class="shader"/><text x="640" y="128" class="mid small mono">getDepthPosition</text><text x="640" y="143" class="mid small">(shadow.slang)</text>
+    <rect x="556" y="172" width="168" height="52" rx="6" class="shader"/><text x="640" y="192" class="mid small mono">getTerrainVertex</text><text x="640" y="208" class="mid small">(lib/terrain.slang)</text>
+    <line x1="640" y1="98" x2="640" y2="106" class="arrow"/>
+    <line x1="640" y1="150" x2="640" y2="168" class="arrow" marker-end="url(#ah)"/>
+    <line x1="474" y1="90" x2="552" y2="196" class="arrow mem dashed" marker-end="url(#ah-mem)"/>
+  </svg>
+  <figcaption>Only a <code>TERRAIN</code> material's draws take the branch: the vertex stage reads the instance's material id, which is the same for the whole draw. The fragment stage shades the tile as <code>PBR</code>, with the lifted normal and the imagery as base color.</figcaption>
+</figure>
+
+<pre><code>// From examples/24_map_tiles/main.cpp, shortened: a tile's heights and image came from the server.
+rasm::TextureHandle heights = engine.createTexture({.name = "Tile Heights", .width = HEIGHTS_WIDTH, .height = HEIGHTS_WIDTH, .format = rasm::Format::R16_UNORM, .usage = rasm::TextureUsage::SAMPLED});
+engine.getRenderContext().fillTexture(heights, data.heights.data());
+const rasm::TerrainTile terrain = engine.createTerrainTile({.center = tileOrigin(node.level, node.x, node.y),
+                                                            .size = size,
+                                                            .terrain = {.heights = heights,
+                                                                        .heightScale = static_cast&lt;float&gt;(HEIGHT_STEP),
+                                                                        .heightOffset = data.heightOffset,
+                                                                        .minHeight = data.minHeight,
+                                                                        .maxHeight = data.maxHeight,
+                                                                        .skirt = static_cast&lt;float&gt;(size * SKIRT)},
+                                                            .imagery = image,
+                                                            .roughness = 0.95f});
+// The grid is shared, so the content lists the entity, the material and the two textures, and not the mesh.
+streamer.setTileContent(node.tile, {.entities = entities, .entityCount = 1, .materials = materials, .materialCount = 1, .textures = textures, .textureCount = 2});</code></pre>
+
+<h3>Where RASM follows this page, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Topic</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Heights</td><td>16 bits with an offset, or floats</td><td><code>R16_UNORM</code> (a sample is its integer, 0 to 65535) or <code>R32_SFLOAT</code>; metres = <code>heightOffset</code> + <code>heightScale</code> × sample (<code>TerrainMaterial</code>). The cells are the texture's width − 3, from 1 to <code>MAX_TERRAIN_CELLS</code> (256).</td></tr>
+  <tr><td>The grid</td><td>shared, a unit box</td><td><code>getTerrainMesh(cells)</code>: (cells + 1)² vertices at y = 1 and a skirt of 4 (cells + 1) at y = 0, made once per size and kept until the renderer goes. No LODs and no meshlets (their bounds would be the flat grid's). <code>destroyMesh</code> refuses it.</td></tr>
+  <tr><td>Box</td><td>lowest to highest height</td><td><code>getTerrainTransform</code>: <code>minHeight</code> lowered by the skirt and by the curvature at the corners, to <code>maxHeight</code>, so the skirts are inside it too; at least 1 mm high.</td></tr>
+  <tr><td>Skirts</td><td>at least the largest gap</td><td><code>TerrainMaterial::skirt</code>, in metres, chosen by the application (<code>24_map_tiles</code>: 5% of the tile's width).</td></tr>
+  <tr><td>Normals</td><td>central differences with a border</td><td>Per vertex, in <code>getTerrainVertex</code>, from the four samples around it, with the curvature's slope; interpolated across the triangle. The fragment stage has no normal map for terrain.</td></tr>
+  <tr><td>Imagery</td><td>its own, or a part of the parent's</td><td>The base color: <code>TerrainTileDesc::imagery</code>, with <code>imageryRect</code> as its texture transform; a slot made by <code>createTerrainTile</code> clamps.</td></tr>
+  <tr><td>Curvature</td><td>d² / 2R</td><td><code>TerrainMaterial::sphereRadius</code>; 0 is flat.</td></tr>
+  <tr><td>The CPU's height</td><td>the same rule</td><td><code>sampleTerrainHeight</code> and <code>getTerrainPosition</code>: the two triangles of a cell, split from (0, 1) to (1, 0), with corners computed in floats as the shader does; for placing objects and cameras, and to check a picked point.</td></tr>
+  <tr><td>Changes between levels</td><td>—</td><td>None: a tile swaps at once (no geomorphing between levels).</td></tr>
+</table>
+</div>
+
+<div class="stats">
+  <div><b>2.4 KiB</b><span>a tile's heights in <code>24_map_tiles</code>: 35 × 35 samples, 32 × 32 cells</span><small>the 17 × 17 mesh it had took 31 KiB for 16 × 16 cells</small></div>
+  <div><b>0.03 ms</b><span><code>update</code> on average over a 1500-frame flight, 48 MiB held</span><small>Release, headless, RTX 3060</small></div>
+  <div><b>2.6 ms</b><span>the longest frame after the first 30</span><small>4 tiles uploaded a frame</small></div>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The API</td><td><code>TerrainTileDesc</code>, <code>TerrainTile</code>, <code>TerrainHeights</code>, <code>getTerrainTransform</code>, <code>sampleTerrainHeight</code>, <code>getTerrainPosition</code> in <code>include/rasm/terrain.h</code>; <code>TerrainMaterial</code>, <code>MaterialType::TERRAIN</code> in <code>include/rasm/material.h</code>; <code>Renderer::getTerrainMesh</code>, <code>Renderer::createTerrainTile</code></td></tr>
+  <tr><td>The grid and the CPU rule</td><td><code>buildTerrainGrid</code> (<code>src/scene/terrain.h</code>) and the rest in <code>src/scene/terrain.cpp</code></td></tr>
+  <tr><td>The material row</td><td><code>gfx::TerrainData</code> in <code>MaterialData</code> (<code>src/renderer/uberMaterialTypes.h</code>, <code>shaders/lib/core.slang</code>), written by <code>toMaterialData</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Lifting the grid</td><td><code>getTerrainVertex</code> in <code>shaders/lib/terrain.slang</code>, called by <code>getVertexOutput</code> (<code>shaders/passes/rasm.slang</code>) and <code>getDepthPosition</code> (<code>shaders/passes/shadow.slang</code>)</td></tr>
+  <tr><td>The C API (1.4)</td><td><code>rasm_create_terrain_tile</code>, <code>rasm_get_terrain_mesh</code>, <code>rasm_get_terrain_transform</code>, <code>rasm_sample_terrain_height</code>, <code>rasm_get_terrain_position</code> in <code>src/c/cTerrain.cpp</code></td></tr>
+  <tr><td>Tests</td><td><code>tests/terrainTests.cpp</code> (the grid, the triangle rule, bit-equal edges, the box, the curvature); the image tests <code>terrain</code> and <code>far_terrain</code> (two levels side by side, no seam)</td></tr>
+  <tr><td>Example</td><td><code>examples/24_map_tiles</code>: a 32 km quadtree of terrain tiles made on 3 server threads, streamed under 48 MiB</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li><code>sampleTerrainHeight</code> and <code>getTerrainVertex</code> follow one rule: the same sample for a grid point, the same diagonal, the same float sum. A change to one changes the other, and <code>tests/terrainTests.cpp</code>.</li>
+    <li>Every pass that pulls vertices lifts a <code>TERRAIN</code> draw: the main pass and the shadow pass today; a new one (an ID pass for picking) too.</li>
+    <li>The grid has no meshlets and no LODs: their bounds and cones come from the flat grid.</li>
+    <li>A tile's content never lists the grid: every tile of that size shares it.</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <strong>Not done yet</strong>
+  <p>Whole-globe roots: the bending is a parabola for tiles up to a few hundred kilometres, and the roots of a globe's tree need a curved grid (<code>D44</code>). No geomorphing: a tile swaps at once when the cut changes. A heights file from disk (a 16-bit PNG) loads as 8 bits (<code>D36</code>), so the application fills the texture itself.</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Thatcher Ulrich, <i>Rendering Massive Terrains using Chunked Level of Detail Control</i>, SIGGRAPH 2002 course notes: skirts.</li>
+  <li>Patrick Cozzi and Kevin Ring, <i>3D Engine Design for Virtual Globes</i> (2011): terrain tiles, the ellipsoid, precision.</li>
+  <li>Filip Strugar, <i>Continuous Distance-Dependent Level of Detail for Rendering Heightmaps</i> (CDLOD), 2010: a shared grid lifted on the GPU, and morphing between levels.</li>
+  <li>Cesium, <i>quantized-mesh</i> and <i>heightmap-1.0</i> terrain formats: heights per tile with an offset and a scale.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

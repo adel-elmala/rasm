@@ -22,15 +22,17 @@
 #include <vector>
 
 // A map engine's terrain, streamed under a GPU memory budget by rasm::TileStreamer. The world is a quadtree of tiles
-// over 32 x 32 km: level 0 is one tile for all of it, level 7 tiles are 256 m wide. Each tile has its own height mesh
-// and its own 128 x 128 image (with mips), whose color shows its level and whose dark edge shows its border.
+// over 32 x 32 km: level 0 is one tile for all of it, level 7 tiles are 256 m wide. Each tile has its own heights (a
+// 35 x 35 R16_UNORM texture: 32 x 32 cells and a border of one sample, which the GPU turns into terrain on a grid all
+// tiles share, Renderer::createTerrainTile) and its own 128 x 128 image (with mips), whose color shows its level and
+// whose dark edge shows its border. A skirt under each tile's edges hides the cracks between levels.
 // - The application owns the tree. Each frame it walks it from the root and refines a tile whose error on screen is over
 //   REFINE_PIXELS (getScreenError, the most over both views), and merges it again under MERGE_PIXELS, a little lower,
 //   so a tile at the edge does not refine and merge on every frame. The tiles it stops at are the cut, which it
 //   passes to TileStreamer::update.
 // - The streamer decides what loads (the largest error first, so parents first), what is dropped to stay in the budget
 //   (tiles nobody wants, the oldest first), and what is drawn: a tile once it is ready, else its parent in its place.
-// - A tile the streamer hands out is asked from a server, a thread of the example's that makes its mesh and image; it
+// - A tile the streamer hands out is asked from a server, a thread of the example's that makes its heights and image; it
 //   arrives FETCH_FRAMES to FETCH_FRAMES + 5 frames later, and the main thread only uploads it then.
 // - Six tiles of level LANDMARK_LEVEL also have a glTF model, loaded with Engine::loadGLTF, under an empty child tile
 //   with ADD refinement: the streamer counts the model's tile ready only once its mesh and textures are in, destroying
@@ -48,7 +50,9 @@ namespace
     constexpr uint32_t HEIGHT = 720;
     constexpr double WORLD_SIZE = 32768.0;
     constexpr int32_t MAX_LEVEL = 7;
-    constexpr uint32_t GRID = 17; // vertices per side of a tile's mesh: 768 triangles with the skirt, under the 1024 that createMesh cuts into meshlets on the main thread
+    constexpr uint32_t CELLS = 32;                // a tile's grid: 2048 triangles, drawn on getTerrainMesh's shared grid
+    constexpr uint32_t HEIGHTS_WIDTH = CELLS + 3; // the grid's points and a border of one sample around them
+    constexpr double HEIGHT_STEP = 1.0 / 16.0;    // metres per R16_UNORM step: a power of two, so neighbours' edges are bit-equal
     constexpr uint32_t IMAGE_SIZE = 128;
     constexpr double SKIRT = 0.05; // of a tile's width: the skirt hides the cracks between levels
     constexpr double REFINE_PIXELS = 24.0;
@@ -58,10 +62,9 @@ namespace
     constexpr int32_t LANDMARK_LEVEL = 4;
     constexpr uint32_t FORGET_AFTER = 600; // frames a node is not visited before its tile record goes
     constexpr uint32_t HOLE_CHECK_AFTER = 30;
-    // What the streamer may count on before it has measured a tile: a terrain tile's vertices (its skirt too), indices
-    // and image with its mips; a glTF model, a guess.
-    constexpr uint64_t TERRAIN_TILE_BYTES = (GRID * GRID + 4 * GRID) * sizeof(rasm::Vertex) + ((GRID - 1) * (GRID - 1) * 6 + 4 * (GRID - 1) * 12) * sizeof(uint32_t) +
-                                            IMAGE_SIZE * IMAGE_SIZE * 4 * 4 / 3;
+    // What the streamer may count on before it has measured a tile: a terrain tile's heights and image with its mips (the
+    // grid is shared, and no tile's); a glTF model, a guess.
+    constexpr uint64_t TERRAIN_TILE_BYTES = HEIGHTS_WIDTH * HEIGHTS_WIDTH * sizeof(uint16_t) + IMAGE_SIZE * IMAGE_SIZE * 4 * 4 / 3;
     constexpr uint64_t LANDMARK_BYTES = 16ull << 20;
 
     struct Landmark
@@ -101,8 +104,10 @@ namespace
         int32_t level = 0;
         int32_t x = 0;
         int32_t y = 0;
-        std::vector<rasm::Vertex> vertices;
-        std::vector<uint32_t> indices;
+        std::vector<uint16_t> heights; // HEIGHTS_WIDTH^2 steps of HEIGHT_STEP above heightOffset
+        float heightOffset = 0.0f;
+        float minHeight = 0.0f;
+        float maxHeight = 0.0f;
         std::vector<uint8_t> pixels; // every mip, one after another
         std::vector<size_t> offsets; // where each mip starts
         bool done = false;
@@ -181,7 +186,7 @@ namespace
         return {.parent = parent,
                 .center = glm::dvec3(x0 + half, 0.5 * (low + high), z0 + half),
                 .radius = std::sqrt(2.0 * half * half + 0.25 * (high - low) * (high - low)),
-                .geometricError = node.level == MAX_LEVEL ? 0.0 : size / static_cast<double>(GRID - 1),
+                .geometricError = node.level == MAX_LEVEL ? 0.0 : size / static_cast<double>(CELLS),
                 .estimatedBytes = TERRAIN_TILE_BYTES};
     }
 
@@ -194,7 +199,7 @@ namespace
         return {.parent = parent,
                 .center = glm::dvec3(landmark.x, y + 50.0, landmark.z),
                 .radius = 200.0,
-                .geometricError = tileSize(LANDMARK_LEVEL) / static_cast<double>(GRID - 1),
+                .geometricError = tileSize(LANDMARK_LEVEL) / static_cast<double>(CELLS),
                 .refine = rasm::TileRefine::ADD,
                 .estimatedBytes = 1};
     }
@@ -217,65 +222,35 @@ namespace
         return {(x + 0.5) * size, 0.0, (y + 0.5) * size};
     }
 
-    // A height mesh in the tile's own frame (its centre at the origin), with a skirt hanging from its edges.
-    void buildTileMesh(TileData &data)
+    // The tile's heights on the server's thread: each sample on the world's grid of HEIGHT_STEP first, then stored as the
+    // steps above the tile's lowest one, so a sample two tiles share is the same height in both.
+    void buildTileHeights(TileData &data)
     {
         const double size = tileSize(data.level);
+        const double cell = size / static_cast<double>(CELLS);
         const double x0 = data.x * size;
         const double z0 = data.y * size;
-        const double step = size / static_cast<double>(GRID - 1);
-        const glm::dvec3 origin = tileOrigin(data.level, data.x, data.y);
-        std::vector<rasm::Vertex> &vertices = data.vertices;
-        std::vector<uint32_t> &indices = data.indices;
-        vertices.reserve(GRID * GRID + 4 * GRID);
-        auto position = [&](uint32_t i, uint32_t j, double drop)
+        std::vector<int64_t> steps(static_cast<size_t>(HEIGHTS_WIDTH) * HEIGHTS_WIDTH);
+        int64_t lowest = INT64_MAX;
+        int64_t highest = INT64_MIN;
+        for (uint32_t j = 0; j < HEIGHTS_WIDTH; ++j)
         {
-            const double x = x0 + step * i;
-            const double z = z0 + step * j;
-            return glm::vec3(glm::dvec3(x, terrainHeight(x, z) - drop, z) - origin);
-        };
-        for (uint32_t j = 0; j < GRID; ++j)
-        {
-            for (uint32_t i = 0; i < GRID; ++i)
+            for (uint32_t i = 0; i < HEIGHTS_WIDTH; ++i)
             {
-                const double x = x0 + step * i;
-                const double z = z0 + step * j;
-                const double dx = terrainHeight(x + step, z) - terrainHeight(x - step, z);
-                const double dz = terrainHeight(x, z + step) - terrainHeight(x, z - step);
-                const glm::vec3 normal = glm::normalize(glm::vec3(static_cast<float>(-dx), static_cast<float>(2.0 * step), static_cast<float>(-dz)));
-                const glm::vec2 uv(static_cast<float>(i) / (GRID - 1), static_cast<float>(j) / (GRID - 1));
-                vertices.push_back({.pos = position(i, j, 0.0), .normal = normal, .uv = {uv, uv, uv}, .tangent = glm::vec4(0.0f)});
+                const double x = x0 + (static_cast<double>(i) - 1.0) * cell;
+                const double z = z0 + (static_cast<double>(j) - 1.0) * cell;
+                const int64_t step = std::llround(terrainHeight(x, z) / HEIGHT_STEP);
+                steps[static_cast<size_t>(j) * HEIGHTS_WIDTH + i] = step;
+                lowest = std::min(lowest, step);
+                highest = std::max(highest, step);
             }
         }
-        for (uint32_t j = 0; j + 1 < GRID; ++j)
-        {
-            for (uint32_t i = 0; i + 1 < GRID; ++i)
-            {
-                const uint32_t a = j * GRID + i;
-                indices.insert(indices.end(), {a, a + GRID, a + 1, a + 1, a + GRID, a + GRID + 1});
-            }
-        }
-        // The skirt: each edge again, lower, joined to the edge by a strip facing out.
-        const uint32_t edges[4][2] = {{0, 1}, {GRID - 1, GRID}, {GRID * (GRID - 1), 1}, {0, GRID}};
-        const double drop = size * SKIRT;
-        for (uint32_t e = 0; e < 4; ++e)
-        {
-            const auto first = static_cast<uint32_t>(vertices.size());
-            for (uint32_t k = 0; k < GRID; ++k)
-            {
-                rasm::Vertex vertex = vertices[edges[e][0] + k * edges[e][1]];
-                vertex.pos.y -= static_cast<float>(drop);
-                vertices.push_back(vertex);
-            }
-            for (uint32_t k = 0; k + 1 < GRID; ++k)
-            {
-                const uint32_t top = edges[e][0] + k * edges[e][1];
-                const uint32_t nextTop = edges[e][0] + (k + 1) * edges[e][1];
-                const uint32_t bottom = first + k;
-                // Both windings: the material is double-sided, but the skirt faces either way.
-                indices.insert(indices.end(), {top, bottom, nextTop, nextTop, bottom, bottom + 1, top, nextTop, bottom, nextTop, bottom + 1, bottom});
-            }
-        }
+        data.heights.resize(steps.size());
+        for (size_t k = 0; k < steps.size(); ++k)
+            data.heights[k] = static_cast<uint16_t>(std::min<int64_t>(steps[k] - lowest, 65535));
+        data.heightOffset = static_cast<float>(static_cast<double>(lowest) * HEIGHT_STEP);
+        data.minHeight = data.heightOffset;
+        data.maxHeight = static_cast<float>(static_cast<double>(highest) * HEIGHT_STEP);
     }
 
     // Ground colors by height and slope, tinted by the tile's level, with a dark border; then its mips, by averaging.
@@ -393,7 +368,7 @@ namespace
                 const std::shared_ptr<TileData> data = queue.front();
                 queue.pop_front();
                 lock.unlock();
-                buildTileMesh(*data);
+                buildTileHeights(*data);
                 buildTileImage(*data);
                 lock.lock();
                 data->done = true;
@@ -409,11 +384,15 @@ namespace
         std::thread threads[SERVER_THREADS];
     };
 
-    // The fetch came in: the tile's mesh, image, material and entity, handed to the streamer, which owns them now.
+    // The fetch came in: the tile's heights, image, material and entity, handed to the streamer, which owns them now.
     void makeTerrainContent(rasm::Engine &engine, rasm::TileStreamer &streamer, const Node &node, TileData &data)
     {
-        const glm::dvec3 origin = tileOrigin(node.level, node.x, node.y);
-        const rasm::MeshHandle mesh = engine.createMesh(std::move(data.vertices), std::move(data.indices));
+        rasm::TextureHandle heights = engine.createTexture({.name = "Tile Heights", .width = HEIGHTS_WIDTH, .height = HEIGHTS_WIDTH, .format = rasm::Format::R16_UNORM, .usage = rasm::TextureUsage::SAMPLED});
+        if (heights.isValid() && !engine.getRenderContext().fillTexture(heights, data.heights.data()))
+        {
+            engine.destroyTexture(heights);
+            heights = {};
+        }
         rasm::TextureLevel levels[16];
         uint32_t side = IMAGE_SIZE;
         for (size_t level = 0; level < data.offsets.size(); ++level, side = std::max(side / 2, 1u))
@@ -425,22 +404,25 @@ namespace
             engine.destroyTexture(image);
             image = {};
         }
-        const rasm::MaterialHandle material = image.isValid() ? engine.createMaterial(rasm::MaterialType::PBR, {image}, true) : rasm::MaterialHandle{};
-        if (material.isValid())
-        {
-            rasm::Material values = engine.getMaterial(material);
-            values.params[static_cast<uint32_t>(rasm::PbrParam::METALLIC)] = 0.0f;
-            values.params[static_cast<uint32_t>(rasm::PbrParam::ROUGHNESS)] = 0.95f;
-            engine.updateMaterial(material, values);
-        }
-        const rasm::EntityHandle entity = mesh.isValid() && material.isValid() ? engine.createEntity("tile", mesh, material, rasm::Transform{origin, glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(1.0f)})
-                                                                               : rasm::EntityHandle{};
-        // An invalid handle (a full pool) fails the tile, and the streamer destroys what was made.
-        const rasm::EntityHandle entities[1] = {entity};
-        const rasm::MeshHandle meshes[1] = {mesh};
-        const rasm::MaterialHandle materials[1] = {material};
-        const rasm::TextureHandle textures[1] = {image};
-        streamer.setTileContent(node.tile, {.entities = entities, .entityCount = 1, .meshes = meshes, .meshCount = 1, .materials = materials, .materialCount = 1, .textures = textures, .textureCount = 1});
+        const double size = tileSize(node.level);
+        const rasm::TerrainTile terrain = heights.isValid() && image.isValid()
+                                              ? engine.createTerrainTile({.center = tileOrigin(node.level, node.x, node.y),
+                                                                          .size = size,
+                                                                          .terrain = {.heights = heights,
+                                                                                      .heightScale = static_cast<float>(HEIGHT_STEP),
+                                                                                      .heightOffset = data.heightOffset,
+                                                                                      .minHeight = data.minHeight,
+                                                                                      .maxHeight = data.maxHeight,
+                                                                                      .skirt = static_cast<float>(size * SKIRT)},
+                                                                          .imagery = image,
+                                                                          .roughness = 0.95f})
+                                              : rasm::TerrainTile{};
+        // An invalid handle (a full pool) fails the tile, and the streamer destroys what was made. The grid is shared, so
+        // the content does not list it.
+        const rasm::EntityHandle entities[1] = {terrain.entity};
+        const rasm::MaterialHandle materials[1] = {terrain.material};
+        const rasm::TextureHandle textures[2] = {heights, image};
+        streamer.setTileContent(node.tile, {.entities = entities, .entityCount = 1, .materials = materials, .materialCount = 1, .textures = textures, .textureCount = 2});
     }
 
     // A glTF tile: the mesh loads on the loader's workers. Its import's materials and textures belong to the mesh.

@@ -95,11 +95,12 @@
 <h2 id="create"><span class="n">1</span>Create a material</h2>
 
 <div class="api" id="MaterialType">
-  <pre class="sig">enum class MaterialType { PBR, UNLIT, COUNT };</pre>
+  <pre class="sig">enum class MaterialType { PBR, UNLIT, TERRAIN, COUNT };</pre>
   <div class="body">
     <dl>
       <dt>PBR</dt><dd>Lit by the scene's lights (metallic-roughness model). Reads the texture slots listed in <a href="#PbrSlot">the slot table</a>.</dd>
       <dt>UNLIT</dt><dd>Only the base color (texture × factor), not lit. It goes through the tone map like every other color (<a href="../guides/tone-mapping.html">Tone mapping</a>).</dd>
+      <dt>TERRAIN</dt><dd>A terrain tile: the shared grid lifted by <code>Material::terrain</code>'s heights, then lit as <code>PBR</code> with the albedo (the imagery) as base color. Made by <a href="scene.html#createTerrainTile"><code>createTerrainTile</code></a> (<a href="../guides/terrain.html">Terrain from height maps</a>).</dd>
       <dt>COUNT</dt><dd>Not a type; it counts the values.</dd>
     </dl>
   </div>
@@ -110,7 +111,7 @@
   <div class="body">
     <p>Creates a material with the default values below and writes its row. Each valid texture without a bindless slot gets one; a texture that already has a slot keeps it, so materials can share textures. Entities that use the material can be drawn from the next frame on.</p>
     <dl>
-      <dt>type</dt><dd><code>PBR</code> or <code>UNLIT</code>.</dd>
+      <dt>type</dt><dd><code>PBR</code>, <code>UNLIT</code> or <code>TERRAIN</code> (whose heights you then set in <code>terrain</code> with <code>updateMaterial</code>, or let <code>createTerrainTile</code> do it all).</dd>
       <dt>textures</dt><dd>In <code>PbrSlot</code> order: albedo, metallic, roughness, normal, occlusion, emissive. Leave the end out, or pass <code>{}</code> for an empty slot. Entries after the sixth are ignored. Textures that still load are fine.</dd>
       <dt>doubleSided</dt><dd>True: back faces are drawn too (no culling) and lit with the flipped normal.</dd>
     </dl>
@@ -174,6 +175,7 @@ rasm::MaterialHandle brick = engine.createMaterial(rasm::MaterialType::PBR, text
     bool             doubleSided{};
     AlphaMode        alphaMode{};
     float            alphaCutoff  = 0.5f;
+    TerrainMaterial  terrain      = {};
 };</pre>
   <div class="body">
     <dl>
@@ -187,8 +189,31 @@ rasm::MaterialHandle brick = engine.createMaterial(rasm::MaterialType::PBR, text
       <dt>doubleSided</dt><dd>Draw back faces too.</dd>
       <dt>alphaMode</dt><dd>Solid, cut-out or see-through (<a href="#AlphaMode"><code>AlphaMode</code></a>). Default <code>NONE</code>: solid.</dd>
       <dt>alphaCutoff</dt><dd>For <code>MASK</code>: no pixel where alpha is below it. Default 0.5.</dd>
+      <dt>terrain</dt><dd>For <code>TERRAIN</code> only: the tile's heights (<a href="#TerrainMaterial"><code>TerrainMaterial</code></a>). The imagery is <code>textures[ALBEDO]</code>, and its part of the image <code>textureTransforms[ALBEDO]</code>.</dd>
     </dl>
     <p>The flat <code>params</code> array is easy to index wrongly; <code>docs/code_review.md</code> plans a typed struct (<code>C9</code>).</p>
+  </div>
+</div>
+
+<div class="api" id="TerrainMaterial">
+  <pre class="sig">struct TerrainMaterial
+{
+    TextureHandle  heights;
+    float          heightScale  = 1.0f;
+    float          heightOffset = 0.0f;
+    float          minHeight    = 0.0f;
+    float          maxHeight    = 0.0f;
+    float          skirt        = 0.0f;
+    double         sphereRadius = 0.0;
+};</pre>
+  <div class="body">
+    <dl>
+      <dt>heights</dt><dd>An <code>R16_UNORM</code> or <code>R32_SFLOAT</code> texture (another format is dropped with an error) of (cells + 3)² samples, cells being those of the entity's grid: the grid's points and a border of one sample from the neighbours, so normals match across edges. A material that uses it waits for it like for any texture; <code>destroyTexture</code> takes it away (the tile is then flat).</dd>
+      <dt>heightScale, heightOffset</dt><dd>Metres = <code>heightOffset</code> + <code>heightScale</code> × sample, where an <code>R16_UNORM</code> sample is its integer (0 to 65535) and an <code>R32_SFLOAT</code> one its value. With a power-of-two scale and an offset that is a multiple of it, neighbour tiles get bit-equal edges.</dd>
+      <dt>minHeight, maxHeight</dt><dd>The lowest and highest heights in metres: the tile's box (<a href="scene.html#getTerrainTransform"><code>getTerrainTransform</code></a>). The shader uses <code>minHeight</code> too, so change it together with the entity's transform.</dd>
+      <dt>skirt</dt><dd>Metres the skirt hangs below the tile's edges, to hide cracks next to tiles of other levels. At least the coarser tile's geometric error.</dd>
+      <dt>sphereRadius</dt><dd>0: flat. Else the tile bends down by d² / 2R at d metres from its centre, to sit on a planet (6 371 000 for the Earth): 5 cm off the sphere at 100 km.</dd>
+    </dl>
   </div>
 </div>
 
@@ -458,7 +483,7 @@ ctx.pushConstants(commandBuffer, overlayPipeline, &amp;textureIndex, sizeof(text
 <div class="table-wrap">
 <table>
   <tr><th>Constant</th><th>Value</th><th>Meaning</th></tr>
-  <tr><td><code>EngineConfig::maxMaterials</code></td><td>4096</td><td>materials alive at once, the default material included; the table has one more row, 220 B each, twice</td></tr>
+  <tr><td><code>EngineConfig::maxMaterials</code></td><td>4096</td><td>materials alive at once, the default material included; the table has one more row, 248 B each, twice</td></tr>
   <tr><td><code>RendererConfig::maxBindlessTextures</code></td><td>16384</td><td>texture slots, shared by materials, glTF images, render targets and you; lowered to the device's limit</td></tr>
   <tr><td><code>MAX_TEXTURE_SLOTS</code></td><td>6</td><td>textures per material</td></tr>
   <tr><td><code>MAX_PARAM_SLOTS</code></td><td>12</td><td>floats in <code>params</code></td></tr>

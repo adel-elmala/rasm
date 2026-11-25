@@ -219,6 +219,8 @@ public:
     ETC2_R8G8B8A8_UNORM, ETC2_R8G8B8A8_SRGB,
     EAC_R11_UNORM, EAC_R11G11_UNORM,
     R16G16_SFLOAT,
+    R16_UNORM,
+    R32_SFLOAT,
 };</pre>
   <div class="body">
     <p>Texture, attachment and index formats. Each maps to the Vulkan format of the same name (<code>R8G8B8A8_UNORM</code> → <code>VK_FORMAT_R8G8B8A8_UNORM</code>), except the index types.</p>
@@ -237,6 +239,7 @@ public:
       <tr><td><code>BC4_UNORM</code>, <code>EAC_R11_UNORM</code></td><td>one channel, 8 bytes per 4 × 4</td></tr>
       <tr><td><code>R16G16B16A16_SFLOAT</code></td><td>the scene color target and environment images</td></tr>
       <tr><td><code>R16G16_SFLOAT</code></td><td>a scene target's motion color (<a href="engine.html#addTaaPass"><code>MOTION_FORMAT</code></a>), for TAA</td></tr>
+      <tr><td><code>R16_UNORM</code>, <code>R32_SFLOAT</code></td><td>one channel: a terrain tile's heights (<a href="materials.html#TerrainMaterial"><code>TerrainMaterial</code></a>), one level, filled with <code>fillTexture</code></td></tr>
       <tr><td><code>R8G8B8_UNORM</code>, <code>R32G32_SFLOAT</code>, <code>R32G32B32_SFLOAT</code>, <code>R32G32B32A32_SFLOAT</code></td><td>other texture formats; no engine path uses them.</td></tr>
       <tr><td><code>U16_UINT</code>, <code>U32_UINT</code></td><td>index types for <code>bindIndexBuffer</code> only, not texture formats</td></tr>
       <tr><td><code>UNKNOWN</code></td><td>no format (the default in descs; compute pipelines have no attachments)</td></tr>

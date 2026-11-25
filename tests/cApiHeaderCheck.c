@@ -27,6 +27,9 @@ int main(void)
     rasm_tile_streamer_config streamerConfig;
     rasm_tile_streamer *streamer = NULL;
     rasm_scene scene = {0};
+    rasm_terrain_tile_desc terrainDesc;
+    rasm_terrain_heights heights = {NULL, NULL, 0};
+    float samples[16] = {0.0f};
 
     if (rasm_get_version() != RASM_C_API_VERSION)
         return 1;
@@ -60,6 +63,12 @@ int main(void)
         return 11;
     if (rasm_tile_streamer_create(NULL, scene, &streamerConfig, &streamer) != RASM_ERROR_INVALID_ARGUMENT || streamer != NULL)
         return 12;
+    samples[5] = 3.0f;
+    heights.floats = samples;
+    heights.width = 4;
+    if (rasm_terrain_tile_desc_init(&terrainDesc, sizeof(terrainDesc)) != RASM_OK || terrainDesc.terrain.height_scale != 1.0f ||
+        rasm_sample_terrain_height(&heights, &terrainDesc.terrain, 0.0, 0.0) != 3.0)
+        return 13;
     printf("rasm_c.h %u.%u compiles as C (__STDC_VERSION__ %ld) and links rasm_c_renderer.\n", RASM_C_API_VERSION_MAJOR, RASM_C_API_VERSION_MINOR, (long)__STDC_VERSION__);
     return 0;
 }

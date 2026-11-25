@@ -52,6 +52,9 @@ namespace rasm
         case MaterialType::UNLIT:
             material.name = "unlit";
             break;
+        case MaterialType::TERRAIN:
+            material.name = "terrain";
+            break;
 
         default:
             spdlog::error("Unknown material template type.");
@@ -135,11 +138,25 @@ namespace rasm
                 addBindlessTexture(bindlessDescriptorSet, texture);
             texturesLoading = texturesLoading || (texture.isValid() && !isLoaded(texture));
         }
+        TextureHandle heights = values.terrain.heights;
+        if (heights.isValid())
+        {
+            const Format format = ctx.isAlive(heights) ? ctx.getTextureDesc(heights).format : Format::UNKNOWN;
+            if (format != Format::R16_UNORM && format != Format::R32_SFLOAT)
+            {
+                spdlog::error("updateMaterial: terrain heights {{{}, {}}} are not a live R16_UNORM or R32_SFLOAT texture; the material has none.", heights.index, heights.generation);
+                heights = {};
+            }
+        }
+        if (heights.isValid() && getBindlessTextureIndex(heights) == UINT32_MAX)
+            addBindlessTexture(bindlessDescriptorSet, heights, SamplerType::NEAREST_CLAMP);
+        texturesLoading = texturesLoading || (heights.isValid() && !isLoaded(heights));
 
         Material &materialRef = registry.materials[material.index];
         const bool runChanged = materialRef.doubleSided != values.doubleSided || materialRef.alphaMode != values.alphaMode;
         materialRef = values;
         materialRef.handle = material;
+        materialRef.terrain.heights = heights;
         writeMaterialRow(material);
 
         // doubleSided and alphaMode pick the draw run of the material's instances, and an entity with a texture that

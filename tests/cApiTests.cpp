@@ -3,6 +3,7 @@
 #include "rasm/scene.h"
 #include "rasm/input.h"
 #include "rasm/types.h"
+#include "rasm/terrain.h"
 #include "rasm/tileStreamer.h"
 
 #include "doctest/doctest.h"
@@ -562,6 +563,63 @@ TEST_CASE("the 1.3 structs start from the C++ defaults")
     CHECK(content.entities == nullptr);
     CHECK(content.entity_count == 0);
     CHECK(content.texture_count == 0);
+}
+
+TEST_CASE("the 1.4 terrain structs start from the C++ defaults, and the helpers follow the C++ ones")
+{
+    const rasm::TerrainTileDesc defaults;
+    rasm_terrain_tile_desc desc;
+    REQUIRE(rasm_terrain_tile_desc_init(&desc, sizeof(desc)) == RASM_OK);
+    CHECK(desc.size == sizeof(desc));
+    CHECK(desc.tile_size == defaults.size);
+    CHECK(desc.orientation.w == 1.0f);
+    CHECK(desc.terrain.height_scale == defaults.terrain.heightScale);
+    CHECK(desc.terrain.sphere_radius == 0.0);
+    CHECK(desc.imagery_rect.scale.x == 1.0f);
+    CHECK(desc.roughness == defaults.roughness);
+
+    rasm_material_desc material;
+    material.size = sizeof(material);
+    CHECK(rasm_get_material(nullptr, rasm_material{}, &material) == RASM_ERROR_INVALID_ARGUMENT);
+
+    // A 4 x 4 tile of one cell, one point raised: the C helpers give the C++ ones' numbers.
+    std::vector<uint16_t> samples(16, 0);
+    samples[1 * 4 + 1] = 40;
+    const rasm_terrain_heights heights{.unorm16 = samples.data(), .width = 4};
+    desc.tile_size = 100.0;
+    desc.center = {10.0, 20.0, 30.0};
+    desc.terrain.height_scale = 0.25f;
+    desc.terrain.height_offset = 5.0f;
+    desc.terrain.min_height = 5.0f;
+    desc.terrain.max_height = 15.0f;
+    desc.terrain.sphere_radius = 6.371e6;
+    // The point (0, 0) is 5 + 0.25 * 40 = 15 m, the others 5 m; (0.3, 0.2) is on the first triangle of the cell.
+    const double radius = 6.371e6;
+    CHECK(rasm_sample_terrain_height(&heights, &desc.terrain, 0.0, 0.0) == 15.0);
+    CHECK(rasm_sample_terrain_height(&heights, &desc.terrain, 0.3, 0.2) == doctest::Approx(15.0 + 0.3 * (5.0 - 15.0) + 0.2 * (5.0 - 15.0)));
+    rasm_dvec3 position;
+    REQUIRE(rasm_get_terrain_position(&desc, &heights, 0.3, 0.2, &position) == RASM_OK);
+    CHECK(position.x == doctest::Approx(10.0 - 20.0));
+    CHECK(position.y == doctest::Approx(20.0 + 10.0 - (20.0 * 20.0 + 30.0 * 30.0) / (2.0 * radius)).epsilon(1e-12));
+    CHECK(position.z == doctest::Approx(30.0 - 30.0));
+    rasm_transform_d transform;
+    REQUIRE(rasm_get_terrain_transform(&desc, &transform) == RASM_OK);
+    const double floor = 5.0 - 2.0 * 50.0 * 50.0 / (2.0 * radius);
+    CHECK(transform.position.y == doctest::Approx(20.0 + floor).epsilon(1e-12));
+    CHECK(transform.scale.x == 100.0f);
+    CHECK(transform.scale.y == doctest::Approx(15.0 - floor));
+
+    // Bad arguments.
+    const rasm_terrain_heights both{.unorm16 = samples.data(), .floats = reinterpret_cast<const float *>(samples.data()), .width = 4};
+    CHECK(rasm_sample_terrain_height(&both, &desc.terrain, 0.0, 0.0) == 0.0);
+    CHECK(contains(rasm_get_last_error(), "one of unorm16 and floats"));
+    const rasm_terrain_heights narrow{.unorm16 = samples.data(), .width = 3};
+    CHECK(rasm_get_terrain_position(&desc, &narrow, 0.0, 0.0, &position) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(rasm_get_terrain_transform(nullptr, &transform) == RASM_ERROR_INVALID_ARGUMENT);
+    rasm_entity entity;
+    rasm_material made;
+    CHECK(rasm_create_terrain_tile(nullptr, &desc, &entity, &made) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(rasm_get_terrain_mesh(nullptr, 32).id == 0);
 }
 
 TEST_CASE("a tile streamer call with a bad argument gives a code and a last error")

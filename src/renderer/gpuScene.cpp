@@ -274,11 +274,14 @@ namespace rasm
         {
             for (const auto &subMesh : mesh.subMeshes)
             {
-                for (auto texture : getSubMeshMaterial(engine, entity, subMesh).textures)
+                const Material &material = getSubMeshMaterial(engine, entity, subMesh);
+                for (auto texture : material.textures)
                 {
                     if (texture.isValid() && !engine.isLoaded(texture))
                         return false;
                 }
+                if (material.terrain.heights.isValid() && !engine.isLoaded(material.terrain.heights))
+                    return false;
             }
             return true;
         }
@@ -289,6 +292,8 @@ namespace rasm
             {
             case MaterialType::UNLIT:
                 return gfx::MaterialId::UNLIT;
+            case MaterialType::TERRAIN:
+                return gfx::MaterialId::TERRAIN;
             default:
                 return gfx::MaterialId::PBR;
             }
@@ -355,7 +360,7 @@ namespace rasm
         }
 
         // Most materials have no texture transform, so their shading skips the transforms and does not load them.
-        gfx::MaterialData toMaterialData(Renderer &engine, const Material &mat, Format normalMapFormat)
+        gfx::MaterialData toMaterialData(Renderer &engine, const Material &mat, Format normalMapFormat, Format heightsFormat)
         {
             gfx::MaterialData row{.material = convertToGfxMaterial(engine, mat),
                                   .materialId = getGfxMaterialId(mat.type),
@@ -374,6 +379,17 @@ namespace rasm
             // updateMaterial replaces sets it again.
             if (normalMapFormat == Format::BC5_UNORM || normalMapFormat == Format::EAC_R11G11_UNORM)
                 row.flags |= gfx::MATERIAL_NORMAL_XY;
+            if (mat.type == MaterialType::TERRAIN)
+            {
+                const TerrainMaterial &terrain = mat.terrain;
+                row.terrain = {.heights = engine.getBindlessTextureIndex(terrain.heights),
+                               .heightKind = heightsFormat == Format::R32_SFLOAT ? gfx::TERRAIN_HEIGHTS_FLOAT : gfx::TERRAIN_HEIGHTS_UNORM16,
+                               .heightScale = terrain.heightScale,
+                               .heightOffset = terrain.heightOffset,
+                               .minHeight = terrain.minHeight,
+                               .skirt = terrain.skirt,
+                               .sphereRadius = static_cast<float>(terrain.sphereRadius)};
+            }
             return row;
         }
     }
@@ -681,7 +697,9 @@ namespace rasm
         const Material &materialRef = registry.materials[material.index];
         const TextureHandle normalMap = materialRef.textures[static_cast<uint32_t>(PbrSlot::NORMAL)];
         const Format normalMapFormat = normalMap.isValid() ? ctx.getTextureDesc(normalMap).format : Format::UNKNOWN;
-        const gfx::MaterialData row = toMaterialData(*this, materialRef, normalMapFormat);
+        const TextureHandle heights = materialRef.terrain.heights;
+        const Format heightsFormat = heights.isValid() ? ctx.getTextureDesc(heights).format : Format::UNKNOWN;
+        const gfx::MaterialData row = toMaterialData(*this, materialRef, normalMapFormat, heightsFormat);
         gpuScene->materials.setRow(static_cast<uint32_t>(material.index), &row);
     }
 

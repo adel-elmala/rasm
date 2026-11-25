@@ -25,7 +25,11 @@ namespace rasm::gfx
     constexpr uint32_t      MATERIAL_NORMAL_XY          = 1u << 2;  // the normal map has x and y only (BC5, EAC RG11): z is rebuilt
 
     // Selects how the uber shader's fragMain shades a model. Must match shaders/lib/core.slang.
-    enum class MaterialId : uint32_t { PBR, UNLIT };
+    enum class MaterialId : uint32_t { PBR, UNLIT, TERRAIN };
+
+    // TerrainData::heightKind. Must match shaders/lib/terrain.slang.
+    constexpr uint32_t      TERRAIN_HEIGHTS_UNORM16     = 0;        // a sample is its integer, 0 to 65535
+    constexpr uint32_t      TERRAIN_HEIGHTS_FLOAT       = 1;
 
     // Must match rasm::Vertex (static asserted in scene.cpp) and shaders/lib/core.slang.
     struct VertexFull       { glm::vec3 pos; glm::vec3 normal; glm::vec2 uv[MAX_VERTEX_UV_SETS]; glm::vec4 tangent; };
@@ -122,6 +126,18 @@ namespace rasm::gfx
         EmissiveMaterial            emissive;           // emissiveFactor holds KHR_materials_emissive_strength too
     };
 
+    // A TERRAIN material's heights (rasm::TerrainMaterial); zero for the others.
+    struct TerrainData
+    {
+        uint32_t            heights;                                // bindless index
+        uint32_t            heightKind;                             // TERRAIN_HEIGHTS_*
+        float               heightScale;
+        float               heightOffset;
+        float               minHeight;
+        float               skirt;
+        float               sphereRadius;                           // 0: flat
+    };
+
     struct MaterialData
     {
         Material            material;
@@ -130,6 +146,7 @@ namespace rasm::gfx
         float               alphaCutoff;
         uint32_t            flags;
         TextureTransform    textureTransforms[TEXTURE_TRANSFORMS];  // read only with MATERIAL_TEXTURE_TRANSFORM
+        TerrainData         terrain;
     };
 
     struct InstanceData
@@ -507,7 +524,9 @@ namespace rasm::gfx
     static_assert(sizeof(MetallicRoughnessMaterial) == 40, "MetallicRoughnessMaterial must match the shader's scalar layout");
     static_assert(sizeof(TextureTransform) == 24, "TextureTransform must match the shader's scalar layout");
     static_assert(sizeof(Material) == 84, "Material must match the shader's scalar layout");
-    static_assert(sizeof(MaterialData) == 220, "MaterialData must match the shader's scalar layout");
+    static_assert(sizeof(TerrainData) == 28, "TerrainData must match the shader's scalar layout");
+    static_assert(sizeof(MaterialData) == 248, "MaterialData must match the shader's scalar layout");
+    static_assert(offsetof(MaterialData, terrain) == 220, "MaterialData must match the shader's scalar layout");
     static_assert(offsetof(MaterialData, materialId) == 84, "MaterialData must match the shader's scalar layout");
     static_assert(offsetof(MaterialData, alphaMode) == 88, "MaterialData must match the shader's scalar layout");
     static_assert(offsetof(MaterialData, flags) == 96, "MaterialData must match the shader's scalar layout");

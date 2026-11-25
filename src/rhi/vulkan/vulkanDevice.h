@@ -96,7 +96,7 @@ namespace rasm::rhi
         Pipeline*                       createRasterPipeline(const PipelineDesc& desc, const VkPipelineShaderStageCreateInfo* stages, uint32_t stageCount, DescriptorSetLayout* layout);
         const uint32_t*                 getImageFamilies(const TextureDesc& desc, bool hostCopy, uint32_t& count) const;
 
-        static constexpr uint32_t       FORMAT_COUNT        = static_cast<uint32_t>(Format::R16G16_SFLOAT) + 1;
+        static constexpr uint32_t       FORMAT_COUNT        = static_cast<uint32_t>(Format::R32_SFLOAT) + 1;
 
         FormatSupport                   formatSupport[FORMAT_COUNT] = {};
         VmaAllocator                    allocator           = nullptr;

@@ -59,6 +59,7 @@ target_sources(rasm_renderer PRIVATE
     "scene/cameraController.cpp"
     "scene/light.cpp"
     "scene/transform.cpp"
+    "scene/terrain.cpp"
     "scene/tileResidency.cpp"
     "scene/tileStreamer.cpp"
     "renderer/blendSort.cpp"
@@ -193,7 +194,7 @@ if (RASM_C_API)
     # Linked into the shared libraries, so their code must be position independent where that is not the default.
     set_target_properties(rasm_renderer rasm PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-    add_library(rasm_c_objects OBJECT "c/cApi.cpp" "c/cRenderer.cpp" "c/cScene.cpp" "c/cInput.cpp" "c/cViews.cpp" "c/cAnimation.cpp" "c/cTiles.cpp")
+    add_library(rasm_c_objects OBJECT "c/cApi.cpp" "c/cRenderer.cpp" "c/cScene.cpp" "c/cInput.cpp" "c/cViews.cpp" "c/cAnimation.cpp" "c/cTiles.cpp" "c/cTerrain.cpp")
     target_link_libraries(rasm_c_objects PRIVATE rasm_renderer spdlog::spdlog)
 
     add_library(rasm_c_renderer SHARED)

@@ -24,7 +24,7 @@
 
 // NOLINTBEGIN(readability-identifier-naming): C names, snake_case with the rasm_ prefix, as C APIs and their bindings expect
 #define RASM_C_API_VERSION_MAJOR    1
-#define RASM_C_API_VERSION_MINOR    3
+#define RASM_C_API_VERSION_MINOR    4
 #define RASM_C_API_VERSION          (((uint32_t)RASM_C_API_VERSION_MAJOR << 16) | (uint32_t)RASM_C_API_VERSION_MINOR)
 
 #if defined(_WIN32)
@@ -130,6 +130,8 @@ enum
     RASM_FORMAT_EAC_R11_UNORM       = 23,
     RASM_FORMAT_EAC_R11G11_UNORM    = 24,
     RASM_FORMAT_R16G16_SFLOAT       = 25,
+    RASM_FORMAT_R16_UNORM           = 26,       /* 1.4: a terrain tile's heights */
+    RASM_FORMAT_R32_SFLOAT          = 27,       /* 1.4: a terrain tile's heights */
 };
 
 typedef uint32_t                    rasm_anti_aliasing;
@@ -157,6 +159,7 @@ enum
 {
     RASM_MATERIAL_TYPE_PBR          = 0,
     RASM_MATERIAL_TYPE_UNLIT        = 1,
+    RASM_MATERIAL_TYPE_TERRAIN      = 2,        /* 1.4: a terrain tile (rasm_create_terrain_tile) */
 };
 
 typedef uint32_t                    rasm_pbr_slot;
@@ -215,6 +218,7 @@ enum
 #define RASM_MAX_VERTEX_UV_SETS     3
 #define RASM_MAX_TEXTURE_SLOTS      6
 #define RASM_MAX_PARAM_SLOTS        12
+#define RASM_MAX_TERRAIN_CELLS      256         /* 1.4 */
 
 typedef struct rasm_renderer        rasm_renderer;
 typedef struct rasm_engine          rasm_engine;
@@ -339,6 +343,20 @@ typedef struct rasm_texture_transform
     rasm_vec2                       scale;
 } rasm_texture_transform;
 
+/* 1.4: a TERRAIN material's heights. A height in metres is height_offset + height_scale * sample: an R16_UNORM sample is its
+ * integer (0 to 65535), an R32_SFLOAT sample its value. A power-of-two height_scale and an offset that is a multiple of
+ * it give neighbouring tiles bit-equal heights on their shared edge. */
+typedef struct rasm_terrain_material
+{
+    rasm_texture                    heights;                                   /* R16_UNORM or R32_SFLOAT, (cells + 3)^2 samples: the grid's points and a border of one */
+    float                           height_scale;
+    float                           height_offset;
+    float                           min_height;                                /* metres: the tile's box */
+    float                           max_height;
+    float                           skirt;                                     /* metres the skirt hangs below the edges */
+    double                          sphere_radius;                             /* 0: flat; else the tile bends down by d^2 / 2R */
+} rasm_terrain_material;
+
 typedef struct rasm_material_desc
 {
     uint32_t                        size;
@@ -350,6 +368,7 @@ typedef struct rasm_material_desc
     rasm_bool                       double_sided;
     rasm_alpha_mode                 alpha_mode;
     float                           alpha_cutoff;
+    rasm_terrain_material           terrain;                                   /* 1.4: TERRAIN only; textures[ALBEDO] is the imagery */
 } rasm_material_desc;
 
 typedef struct rasm_texture_desc
@@ -844,6 +863,27 @@ typedef struct rasm_tile_streamer_stats
     uint64_t                        total_drops;
 } rasm_tile_streamer_stats;
 
+/* 1.4: a terrain tile, a square of its own frame (x and z across, y up) lifted by its heights. */
+typedef struct rasm_terrain_tile_desc
+{
+    uint32_t                        size;
+    rasm_dvec3                      center;                                    /* world space: the square's middle, at height 0 of its frame */
+    rasm_quat                       orientation;                               /* the frame's axes in world space */
+    double                          tile_size;                                 /* metres across */
+    rasm_terrain_material           terrain;
+    rasm_texture                    imagery;                                   /* the base color; 0: white */
+    rasm_texture_transform          imagery_rect;                              /* where the tile is in the imagery */
+    float                           roughness;
+} rasm_terrain_tile_desc;
+
+/* 1.4: a tile's height samples on the CPU, width x width, row by row, the same as its heights texture. */
+typedef struct rasm_terrain_heights
+{
+    const uint16_t*                 unorm16;                                   /* R16_UNORM samples, or */
+    const float*                    floats;                                    /* R32_SFLOAT samples */
+    uint32_t                        width;                                     /* cells + 3 */
+} rasm_terrain_heights;
+
 typedef void (RASM_CALL* rasm_log_callback)(void* user_data, rasm_log_level level, const char* message);
 
 /* The library */
@@ -1053,6 +1093,16 @@ RASM_C_API rasm_result      RASM_CALL rasm_tile_streamer_set_tile_content(rasm_t
 RASM_C_API rasm_tile_state  RASM_CALL rasm_tile_streamer_get_tile_state(rasm_tile_streamer* streamer, rasm_tile tile);
 RASM_C_API rasm_bool        RASM_CALL rasm_tile_streamer_is_tile_drawn(rasm_tile_streamer* streamer, rasm_tile tile);
 RASM_C_API rasm_result      RASM_CALL rasm_tile_streamer_get_stats(rasm_tile_streamer* streamer, rasm_tile_streamer_stats* stats);
+
+/* Added in 1.4: terrain from height map tiles. rasm_create_terrain_tile makes a TERRAIN material and an entity (not in a
+ * scene) on the grid every tile of its cells shares (rasm_get_terrain_mesh, which a tile's content does not list). The
+ * CPU helpers follow the rule the shader draws: to put objects and cameras on the ground, and to check a picked point. */
+RASM_C_API rasm_result      RASM_CALL rasm_terrain_tile_desc_init(rasm_terrain_tile_desc* desc, uint32_t size);
+RASM_C_API rasm_mesh        RASM_CALL rasm_get_terrain_mesh(rasm_renderer* renderer, uint32_t cells);
+RASM_C_API rasm_result      RASM_CALL rasm_create_terrain_tile(rasm_renderer* renderer, const rasm_terrain_tile_desc* desc, rasm_entity* entity, rasm_material* material);
+RASM_C_API rasm_result      RASM_CALL rasm_get_terrain_transform(const rasm_terrain_tile_desc* desc, rasm_transform_d* transform);
+RASM_C_API double           RASM_CALL rasm_sample_terrain_height(const rasm_terrain_heights* heights, const rasm_terrain_material* terrain, double u, double v);
+RASM_C_API rasm_result      RASM_CALL rasm_get_terrain_position(const rasm_terrain_tile_desc* desc, const rasm_terrain_heights* heights, double u, double v, rasm_dvec3* position);
 
 #ifdef __cplusplus
 }
