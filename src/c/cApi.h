@@ -19,6 +19,16 @@ struct rasm_image
     rasm::ReadbackImage                 image;
 };
 
+struct rasm_camera_rig
+{
+    rasm::CameraRig                     rig;
+};
+
+struct rasm_camera_input_state
+{
+    rasm::CameraInputState              state;
+};
+
 namespace rasm::c
 {
 
@@ -70,6 +80,8 @@ namespace rasm::c
     inline CameraHandle     toCpp(rasm_camera h)            { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
     inline EnvironmentHandle toCpp(rasm_environment h)      { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
     inline ReadbackHandle   toCpp(rasm_readback h)          { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
+    inline WindowHandle     toCpp(rasm_window h)            { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
+    inline RenderTargetHandle toCpp(rasm_render_target h)   { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
 
     inline rasm_scene       toC(SceneHandle h)              { return {packHandle(h.index, h.generation)}; }
     inline rasm_entity      toC(EntityHandle h)             { return {packHandle(h.index, h.generation)}; }
@@ -80,6 +92,8 @@ namespace rasm::c
     inline rasm_camera      toC(CameraHandle h)             { return {packHandle(h.index, h.generation)}; }
     inline rasm_environment toC(EnvironmentHandle h)        { return {packHandle(h.index, h.generation)}; }
     inline rasm_readback    toC(ReadbackHandle h)           { return {packHandle(h.index, h.generation)}; }
+    inline rasm_window      toC(WindowHandle h)             { return {packHandle(h.index, h.generation)}; }
+    inline rasm_render_target toC(RenderTargetHandle h)     { return {packHandle(h.index, h.generation)}; }
 
     inline glm::vec2        toCpp(const rasm_vec2& v)       { return {v.x, v.y}; }
     inline glm::vec3        toCpp(const rasm_vec3& v)       { return {v.x, v.y, v.z}; }
@@ -103,11 +117,39 @@ namespace rasm::c
     rasm_material_desc      toC(const Material& material);
     SceneEnvironment        toCpp(const rasm_scene_environment& environment);
     rasm_scene_environment  toC(const SceneEnvironment& environment);
+    InputEvent              toCpp(const rasm_input_event& event);
+    rasm_input_event        toC(const InputEvent& event);
+    CameraInput             toCpp(const rasm_camera_input& input);
+    rasm_camera_input       toC(const CameraInput& input);
+    CameraController        toCpp(const rasm_camera_controller& controller);
+    rasm_camera_controller  toC(const CameraController& controller);
+    ViewRect                toCpp(const rasm_view_rect& rect);
+    InputArea               toCpp(const rasm_input_area& area);
+    rasm_input_area         toC(const InputArea& area);
+    UiInputCapture          toCpp(const rasm_ui_input_capture& capture);
+    rasm_ui_input_capture   toC(const UiInputCapture& capture);
+    View                    toCpp(const rasm_view& view);
+    rasm_view               toC(const View& view);
+    rasm_window_info        toC(const Window& window);
+    AnimationPlay           toCpp(const rasm_animation_play& play);
+    rasm_animation_play     toC(const AnimationPlay& play);
+    rasm_frame_stats        toC(const FrameStats& stats);
+    rasm_pool_stats         toC(const PoolStats& stats);
+    rasm_load_stats         toC(const LoadStats& stats);
+
+    // An orbit 5 units out for a trackball, 5 units a second for a free-fly camera; NONE until the caller picks one.
+    rasm_camera_controller  getControllerDefaults();
+    // The enum fields of an input event, a camera controller and a view.
+    bool                    checkInputEvent(const rasm_input_event& event, const char* function);
+    bool                    checkCameraController(const rasm_camera_controller& controller, const char* function);
+    bool                    checkView(const rasm_view& view, const char* function);
 
     // An enum value from the caller: false, with an error, when it is past the last constant.
     bool                    checkEnum(uint32_t value, uint32_t count, const char* function, const char* name);
     // The config's enum fields.
     bool                    checkRendererConfig(const rasm_renderer_config& config, const char* function);
+    // A pointer the call needs: false, with an error, for NULL.
+    bool                    checkPointer(const void* pointer, const char* function, const char* name);
     // A handle the call acts on: false, with an error, for 0, which names no object.
     bool                    checkHandle(uint64_t id, const char* function, const char* name);
 
@@ -120,6 +162,18 @@ namespace rasm::c
     constexpr size_t        LIGHT_DESC_SIZE_1_0             = offsetof(rasm_light_desc, outer_cone_angle) + sizeof(float);
     constexpr size_t        SCENE_ENVIRONMENT_SIZE_1_0      = offsetof(rasm_scene_environment, sky) + sizeof(rasm_bool);
     constexpr size_t        CAMERA_PROJECTION_SIZE_1_0      = offsetof(rasm_camera_projection, top) + sizeof(float);
+    // The structs of version 1.1.
+    constexpr size_t        WINDOW_DESC_SIZE_1_1            = offsetof(rasm_window_desc, hidden) + sizeof(rasm_bool);
+    constexpr size_t        WINDOW_INFO_SIZE_1_1            = offsetof(rasm_window_info, minimized) + sizeof(rasm_bool);
+    constexpr size_t        INPUT_EVENT_SIZE_1_1            = offsetof(rasm_input_event, codepoint) + sizeof(uint32_t);
+    constexpr size_t        CAMERA_INPUT_SIZE_1_1           = offsetof(rasm_camera_input, right) + sizeof(rasm_bool);
+    constexpr size_t        CAMERA_CONTROLLER_SIZE_1_1      = offsetof(rasm_camera_controller, free_fly_look_sensitivity) + sizeof(float);
+    constexpr size_t        VIEW_SIZE_1_1                   = offsetof(rasm_view, anti_aliasing) + sizeof(rasm_anti_aliasing);
+    constexpr size_t        RENDER_TARGET_DESC_SIZE_1_1     = offsetof(rasm_render_target_desc, readable) + sizeof(rasm_bool);
+    constexpr size_t        ANIMATION_PLAY_SIZE_1_1         = offsetof(rasm_animation_play, loop) + sizeof(rasm_bool);
+    constexpr size_t        FRAME_STATS_SIZE_1_1            = offsetof(rasm_frame_stats, lights_dropped) + sizeof(uint32_t);
+    constexpr size_t        POOL_STATS_SIZE_1_1             = offsetof(rasm_pool_stats, releases_waiting) + sizeof(uint32_t);
+    constexpr size_t        LOAD_STATS_SIZE_1_1             = offsetof(rasm_load_stats, peak_decoded_bytes) + sizeof(uint64_t);
 
 }
 

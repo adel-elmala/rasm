@@ -12,14 +12,6 @@ using namespace rasm;
 
 namespace
 {
-    bool checkPointer(const void *pointer, const char *function, const char *name)
-    {
-        if (pointer != nullptr)
-            return true;
-        c::reportError(function, (std::string(name) + " is NULL.").c_str());
-        return false;
-    }
-
     // A perspective of 45 degrees with an infinite far plane, and a 2 x 2 orthographic box.
     rasm_camera_projection getProjectionDefaults()
     {
@@ -187,7 +179,7 @@ rasm_result RASM_CALL rasm_get_transform(rasm_renderer *renderer, rasm_entity en
 try
 {
     Renderer *r = c::getRenderer(renderer, __func__);
-    if (r == nullptr || !c::checkHandle(entity.id, __func__, "entity") || !checkPointer(transform, __func__, "transform"))
+    if (r == nullptr || !c::checkHandle(entity.id, __func__, "entity") || !c::checkPointer(transform, __func__, "transform"))
         return RASM_ERROR_INVALID_ARGUMENT;
     const c::CallErrors errors;
     *transform = c::toC(r->getTransform(c::toCpp(entity)));
@@ -199,7 +191,7 @@ rasm_result RASM_CALL rasm_update_transform(rasm_renderer *renderer, rasm_entity
 try
 {
     Renderer *r = c::getRenderer(renderer, __func__);
-    if (r == nullptr || !c::checkHandle(entity.id, __func__, "entity") || !checkPointer(transform, __func__, "transform"))
+    if (r == nullptr || !c::checkHandle(entity.id, __func__, "entity") || !c::checkPointer(transform, __func__, "transform"))
         return RASM_ERROR_INVALID_ARGUMENT;
     const c::CallErrors errors;
     r->updateTransform(c::toCpp(entity), c::toCpp(*transform));
@@ -211,7 +203,7 @@ rasm_mesh RASM_CALL rasm_create_mesh(rasm_renderer *renderer, const rasm_vertex 
 try
 {
     Renderer *r = c::getRenderer(renderer, __func__);
-    if (r == nullptr || (vertex_count > 0 && !checkPointer(vertices, __func__, "vertices")) || (index_count > 0 && !checkPointer(indices, __func__, "indices")))
+    if (r == nullptr || (vertex_count > 0 && !c::checkPointer(vertices, __func__, "vertices")) || (index_count > 0 && !c::checkPointer(indices, __func__, "indices")))
         return {};
     // The vectors createMesh takes, as a C++ caller builds them: rasm_vertex has Vertex's layout.
     std::vector<Vertex> meshVertices(vertex_count);
@@ -256,7 +248,7 @@ rasm_material RASM_CALL rasm_create_material(rasm_renderer *renderer, rasm_mater
 try
 {
     Renderer *r = c::getRenderer(renderer, __func__);
-    if (r == nullptr || !c::checkEnum(type, RASM_MATERIAL_TYPE_UNLIT + 1, __func__, "type") || (texture_count > 0 && !checkPointer(textures, __func__, "textures")))
+    if (r == nullptr || !c::checkEnum(type, RASM_MATERIAL_TYPE_UNLIT + 1, __func__, "type") || (texture_count > 0 && !c::checkPointer(textures, __func__, "textures")))
         return {};
     std::vector<TextureHandle> slots(texture_count);
     for (uint32_t i = 0; i < texture_count; ++i)
@@ -316,7 +308,7 @@ try
 {
     Renderer *r = c::getRenderer(renderer, __func__);
     rasm_texture_desc values = {.format = RASM_FORMAT_R8G8B8A8_SRGB};
-    if (r == nullptr || !c::readSized(desc, c::TEXTURE_DESC_SIZE_1_0, &values, sizeof(values), __func__, "desc") || !checkPointer(pixels, __func__, "pixels"))
+    if (r == nullptr || !c::readSized(desc, c::TEXTURE_DESC_SIZE_1_0, &values, sizeof(values), __func__, "desc") || !c::checkPointer(pixels, __func__, "pixels"))
         return {};
     if (values.format != RASM_FORMAT_R8G8B8A8_SRGB && values.format != RASM_FORMAT_R8G8B8A8_UNORM)
     {
@@ -441,7 +433,7 @@ rasm_result RASM_CALL rasm_get_camera_transform(rasm_renderer *renderer, rasm_ca
 try
 {
     Renderer *r = c::getRenderer(renderer, __func__);
-    if (r == nullptr || !c::checkHandle(camera.id, __func__, "camera") || !checkPointer(transform, __func__, "transform"))
+    if (r == nullptr || !c::checkHandle(camera.id, __func__, "camera") || !c::checkPointer(transform, __func__, "transform"))
         return RASM_ERROR_INVALID_ARGUMENT;
     const c::CallErrors errors;
     *transform = c::toC(r->getCameraTransform(c::toCpp(camera)));
@@ -453,7 +445,7 @@ rasm_result RASM_CALL rasm_set_camera_transform(rasm_renderer *renderer, rasm_ca
 try
 {
     Renderer *r = c::getRenderer(renderer, __func__);
-    if (r == nullptr || !c::checkHandle(camera.id, __func__, "camera") || !checkPointer(transform, __func__, "transform"))
+    if (r == nullptr || !c::checkHandle(camera.id, __func__, "camera") || !c::checkPointer(transform, __func__, "transform"))
         return RASM_ERROR_INVALID_ARGUMENT;
     const c::CallErrors errors;
     r->setCameraTransform(c::toCpp(camera), c::toCpp(*transform));
@@ -550,7 +542,7 @@ rasm_result RASM_CALL rasm_get_view_matrix(rasm_renderer *renderer, rasm_camera 
 try
 {
     Renderer *r = c::getRenderer(renderer, __func__);
-    if (r == nullptr || !c::checkHandle(camera.id, __func__, "camera") || !checkPointer(matrix, __func__, "matrix"))
+    if (r == nullptr || !c::checkHandle(camera.id, __func__, "camera") || !c::checkPointer(matrix, __func__, "matrix"))
         return RASM_ERROR_INVALID_ARGUMENT;
     const c::CallErrors errors;
     *matrix = c::toC(r->getViewMatrix(c::toCpp(camera)));
@@ -563,7 +555,7 @@ rasm_result RASM_CALL rasm_get_projection_matrix(rasm_renderer *renderer, rasm_c
 try
 {
     Renderer *r = c::getRenderer(renderer, __func__);
-    if (r == nullptr || !c::checkHandle(camera.id, __func__, "camera") || !checkPointer(matrix, __func__, "matrix"))
+    if (r == nullptr || !c::checkHandle(camera.id, __func__, "camera") || !c::checkPointer(matrix, __func__, "matrix"))
         return RASM_ERROR_INVALID_ARGUMENT;
     const c::CallErrors errors;
     *matrix = c::toC(aspect > 0.0f ? r->getProjectionMatrix(c::toCpp(camera), aspect) : r->getProjectionMatrix(c::toCpp(camera)));

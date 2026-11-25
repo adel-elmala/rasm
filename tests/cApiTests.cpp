@@ -1,6 +1,7 @@
 #include "rasm/rasm_c.h"
 #include "rasm/light.h"
 #include "rasm/scene.h"
+#include "rasm/input.h"
 #include "rasm/types.h"
 
 #include "doctest/doctest.h"
@@ -314,4 +315,106 @@ TEST_CASE("the base path is absolute")
     std::vector<char> path(rasm_get_base_path(nullptr, 0) + 1);
     rasm_get_base_path(path.data(), static_cast<uint32_t>(path.size()));
     CHECK(std::filesystem::path(reinterpret_cast<const char8_t *>(path.data())).is_absolute());
+}
+
+TEST_CASE("the 1.1 structs start from the C++ defaults")
+{
+    rasm_view view;
+    REQUIRE(rasm_view_init(&view, sizeof(view)) == RASM_OK);
+    CHECK(view.rect.width == 1.0f);
+    CHECK(view.rect.height == 1.0f);
+    CHECK(view.target.id == 0);
+    CHECK(view.window.id == 0);
+    CHECK(view.bloom == RASM_VIEW_TOGGLE_DEFAULT);
+    CHECK(view.anti_aliasing == RASM_ANTI_ALIASING_DEFAULT);
+
+    rasm_input_event event;
+    REQUIRE(rasm_input_event_init(&event, sizeof(event)) == RASM_OK);
+    CHECK(event.type == RASM_INPUT_EVENT_TYPE_NONE);
+    CHECK(event.key == RASM_KEY_NONE);
+
+    rasm_camera_controller controller;
+    REQUIRE(rasm_camera_controller_init(&controller, sizeof(controller)) == RASM_OK);
+    CHECK(controller.type == RASM_CAMERA_CONTROLLER_TYPE_NONE);
+    CHECK(controller.easing_speed == 12.0f);
+
+    rasm_render_target_desc target;
+    REQUIRE(rasm_render_target_desc_init(&target, sizeof(target)) == RASM_OK);
+    CHECK(target.format == RASM_FORMAT_R8G8B8A8_SRGB);
+    CHECK(target.clear_color.w == 1.0f);
+
+    rasm_animation_play play;
+    REQUIRE(rasm_animation_play_init(&play, sizeof(play)) == RASM_OK);
+    CHECK(play.speed == 1.0f);
+    CHECK(play.loop == RASM_TRUE);
+
+    rasm_window_desc window;
+    REQUIRE(rasm_window_desc_init(&window, sizeof(window)) == RASM_OK);
+    CHECK(window.title == nullptr);
+    CHECK(window.native.content_scale == 1.0f);
+
+    rasm_camera_input input;
+    REQUIRE(rasm_camera_input_init(&input, sizeof(input)) == RASM_OK);
+    CHECK(input.forward == RASM_FALSE);
+}
+
+TEST_CASE("the key constants are the C++ keys")
+{
+    CHECK(RASM_KEY_A == static_cast<uint32_t>(rasm::Key::A));
+    CHECK(RASM_KEY_W == static_cast<uint32_t>(rasm::Key::W));
+    CHECK(RASM_KEY_KEYPAD_EQUAL == static_cast<uint32_t>(rasm::Key::KEYPAD_EQUAL));
+    CHECK(RASM_KEY_COUNT == static_cast<uint32_t>(rasm::Key::COUNT));
+}
+
+TEST_CASE("a free-fly rig moves forward while W is held")
+{
+    rasm_camera_controller controller;
+    rasm_camera_controller_init(&controller, sizeof(controller));
+    controller.type = RASM_CAMERA_CONTROLLER_TYPE_FREE_FLY;
+    controller.easing_speed = 0.0f;
+    rasm_camera_rig *rig = rasm_camera_rig_create(&controller, nullptr);
+    REQUIRE(rig != nullptr);
+
+    rasm_camera_input_state *state = rasm_camera_input_state_create();
+    REQUIRE(state != nullptr);
+    const rasm_input_area area = {0.0f, 0.0f, 640.0f, 480.0f};
+    rasm_input_event press;
+    rasm_input_event_init(&press, sizeof(press));
+    press.type = RASM_INPUT_EVENT_TYPE_KEY;
+    press.key = RASM_KEY_W;
+    press.down = RASM_TRUE;
+    REQUIRE(rasm_camera_input_state_add_event(state, &press, &area, nullptr) == RASM_OK);
+    rasm_camera_input input;
+    input.size = sizeof(input);
+    REQUIRE(rasm_camera_input_state_take(state, nullptr, 0.5f, &input) == RASM_OK);
+    CHECK(input.forward == RASM_TRUE);
+    CHECK(input.delta_time == 0.5f);
+
+    REQUIRE(rasm_camera_rig_update(rig, &input) == RASM_OK);
+    rasm_transform transform;
+    rasm_transform target;
+    REQUIRE(rasm_camera_rig_get_transform(rig, &transform, &target) == RASM_OK);
+    // The default speed, 5 units a second, for half a second down -Z.
+    CHECK(target.position.z == doctest::Approx(-2.5f));
+    CHECK(transform.position.z == doctest::Approx(-2.5f));
+
+    press.key = RASM_KEY_COUNT;
+    CHECK(rasm_camera_input_state_add_event(state, &press, &area, nullptr) == RASM_ERROR_INVALID_ARGUMENT);
+    rasm_camera_input_state_destroy(state);
+    rasm_camera_rig_destroy(rig);
+}
+
+TEST_CASE("view rects and input areas map as in C++")
+{
+    const rasm_view_rect half = {0.5f, 0.0f, 0.5f, 1.0f};
+    const rasm_view_pixels pixels = rasm_get_view_pixels(&half, 1280, 720);
+    CHECK(pixels.x == 640);
+    CHECK(pixels.width == 640);
+    CHECK(pixels.height == 720);
+
+    const rasm_input_area area = {0.0f, 0.0f, 200.0f, 100.0f};
+    const rasm_vec2 center = rasm_to_input_ndc(100.0f, 50.0f, &area);
+    CHECK(center.x == doctest::Approx(0.0f));
+    CHECK(center.y == doctest::Approx(0.0f));
+    CHECK(rasm_render_views(nullptr, nullptr, 0) == RASM_ERROR_INVALID_ARGUMENT);
 }

@@ -224,4 +224,15 @@ try
     return c::copyString(l->resolveAssetPath(path), buffer, capacity);
 }
 RASM_C_CATCH(0)
+
+rasm_result RASM_CALL rasm_asset_loader_get_load_stats(rasm_asset_loader *loader, rasm_load_stats *stats)
+try
+{
+    AssetLoader *l = getLoader(loader, __func__);
+    if (l == nullptr)
+        return RASM_ERROR_INVALID_ARGUMENT;
+    const rasm_load_stats values = c::toC(l->getLoadStats());
+    return c::writeSized(stats, c::LOAD_STATS_SIZE_1_1, &values, sizeof(values), __func__, "stats") ? RASM_OK : RASM_ERROR_INVALID_ARGUMENT;
+}
+RASM_C_CATCH_RESULT
 // NOLINTEND(readability-identifier-naming)
