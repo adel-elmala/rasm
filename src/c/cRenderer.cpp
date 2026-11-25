@@ -177,4 +177,38 @@ try
     return RASM_OK;
 }
 RASM_C_CATCH_RESULT
+
+// The first call turns measuring on, as in C++: the numbers fill in a few frames later.
+rasm_result RASM_CALL rasm_get_frame_stats(rasm_renderer *renderer, rasm_frame_stats *stats)
+try
+{
+    Renderer *r = c::getRenderer(renderer, __func__);
+    if (r == nullptr)
+        return RASM_ERROR_INVALID_ARGUMENT;
+    const rasm_frame_stats values = c::toC(r->getFrameStats());
+    return c::writeSized(stats, c::FRAME_STATS_SIZE_1_1, &values, sizeof(values), __func__, "stats") ? RASM_OK : RASM_ERROR_INVALID_ARGUMENT;
+}
+RASM_C_CATCH_RESULT
+
+rasm_result RASM_CALL rasm_get_pool_stats(rasm_renderer *renderer, rasm_pool_stats *stats)
+try
+{
+    Renderer *r = c::getRenderer(renderer, __func__);
+    if (r == nullptr)
+        return RASM_ERROR_INVALID_ARGUMENT;
+    const rasm_pool_stats values = c::toC(r->getPoolStats());
+    return c::writeSized(stats, c::POOL_STATS_SIZE_1_1, &values, sizeof(values), __func__, "stats") ? RASM_OK : RASM_ERROR_INVALID_ARGUMENT;
+}
+RASM_C_CATCH_RESULT
+
+rasm_result RASM_CALL rasm_get_load_stats(rasm_renderer *renderer, rasm_load_stats *stats)
+try
+{
+    Renderer *r = c::getRenderer(renderer, __func__);
+    if (r == nullptr)
+        return RASM_ERROR_INVALID_ARGUMENT;
+    const rasm_load_stats values = c::toC(r->getLoadStats());
+    return c::writeSized(stats, c::LOAD_STATS_SIZE_1_1, &values, sizeof(values), __func__, "stats") ? RASM_OK : RASM_ERROR_INVALID_ARGUMENT;
+}
+RASM_C_CATCH_RESULT
 // NOLINTEND(readability-identifier-naming)

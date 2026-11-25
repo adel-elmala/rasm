@@ -11,7 +11,12 @@
  * It makes an engine (an SDL window, or offscreen images with --headless) and builds a scene from both kinds of
  * source: the DamagedHelmet from a glTF file and a sunset environment from an HDR file, both loaded by the engine's
  * asset loader, and a ground square with a checker texture, both made here in memory. A sun and a warm point light
- * light it. The camera circles the helmet by frame, not by clock, so frame N is the same on every run.
+ * light it.
+ *
+ * Three views draw each frame: a top-down map into a view texture (a render target), which a board in the scene shows;
+ * the main camera into the window; and the map again into a corner of the window. The main camera has a trackball
+ * controller, which a script drives with synthetic mouse events (rasm_add_input_event), the way an application with its
+ * own event loop feeds RASM, so frame N is the same on every run. At the end it prints the frame and pool stats.
  *
  * Flags, as the C++ examples take them: --headless, --frames N (60), --out <file.png> (frame.png), --fixed-step,
  * --wait-for-loads, --no-cache, --transfer-queue on|off. A headless run copies frame N back into a rasm_image, writes
@@ -21,6 +26,8 @@
 #define WIDTH 1280
 #define HEIGHT 720
 #define CHECKER_SIZE 256
+#define MAP_SIZE 256
+#define MAP_HALF_EXTENT 4.0f
 
 typedef struct ExampleArgs
 {
@@ -201,6 +208,56 @@ static rasm_material createGroundMaterial(rasm_renderer *renderer, rasm_texture 
     return material;
 }
 
+/* A 1 x 1 square in the XY plane, facing +Z, for the board that shows the map. */
+static rasm_mesh createBoard(rasm_renderer *renderer)
+{
+    static const float corners[4][2] = {{-0.5f, -0.5f}, {0.5f, -0.5f}, {0.5f, 0.5f}, {-0.5f, 0.5f}};
+    static const uint32_t indices[6] = {0, 1, 2, 0, 2, 3};
+    rasm_vertex vertices[4];
+    int i, set;
+    memset(vertices, 0, sizeof(vertices));
+    for (i = 0; i < 4; ++i)
+    {
+        vertices[i].position = vec3(corners[i][0], corners[i][1], 0.0f);
+        vertices[i].normal = vec3(0.0f, 0.0f, 1.0f);
+        for (set = 0; set < RASM_MAX_VERTEX_UV_SETS; ++set)
+        {
+            vertices[i].uv[set].x = corners[i][0] + 0.5f;
+            vertices[i].uv[set].y = 0.5f - corners[i][1];
+        }
+    }
+    return rasm_create_mesh(renderer, vertices, 4, indices, 6, NULL);
+}
+
+/* One mouse event in the main window, as an application's event loop would send it. */
+static void sendMouse(rasm_renderer *renderer, rasm_input_event_type type, float x, float y, int down)
+{
+    rasm_input_event event;
+    rasm_input_event_init(&event, sizeof(event));
+    event.type = type;
+    event.button = RASM_MOUSE_BUTTON_LEFT;
+    event.down = down ? RASM_TRUE : RASM_FALSE;
+    event.x = x;
+    event.y = y;
+    rasm_add_input_event(renderer, &event);
+}
+
+/* The script: press in the middle on frame 1, drag right, let go 5 frames before the last. */
+static void sendScriptedOrbit(rasm_renderer *renderer, unsigned frame, unsigned frames)
+{
+    const float x = 0.5f * WIDTH + 5.0f * (float)(frame - 1);
+    const float y = 0.5f * HEIGHT;
+    if (frame == 1)
+    {
+        sendMouse(renderer, RASM_INPUT_EVENT_TYPE_MOUSE_MOVE, x, y, 0);
+        sendMouse(renderer, RASM_INPUT_EVENT_TYPE_MOUSE_BUTTON, x, y, 1);
+    }
+    else if (frame + 5 < frames)
+        sendMouse(renderer, RASM_INPUT_EVENT_TYPE_MOUSE_MOVE, x, y, 0);
+    else if (frame + 5 == frames)
+        sendMouse(renderer, RASM_INPUT_EVENT_TYPE_MOUSE_BUTTON, x, y, 0);
+}
+
 static int fail(const char *what)
 {
     fprintf(stderr, "error: %s: %s\n", what, rasm_get_last_error());
@@ -223,7 +280,13 @@ int main(int argc, char **argv)
     rasm_scene_environment environment;
     rasm_light_desc light;
     rasm_camera_projection projection;
-    rasm_camera camera;
+    rasm_camera camera, map;
+    rasm_camera_controller controller;
+    rasm_render_target_desc mapDesc;
+    rasm_render_target mapTarget;
+    rasm_view views[3];
+    rasm_frame_stats frameStats;
+    rasm_pool_stats poolStats;
     rasm_readback readback = {0};
     rasm_image *image;
     int written = 0;
@@ -296,28 +359,92 @@ int main(int argc, char **argv)
     light.range = 6.0f;
     rasm_add_light_to_scene(renderer, scene, rasm_create_light(renderer, &light));
 
-    /* 4. The camera. It has no controller: the loop below places it every frame. */
+    /* 4. The main camera, with a trackball around the helmet: the script below turns it. */
     rasm_camera_projection_init(&projection, sizeof(projection));
     projection.type = RASM_PROJECTION_TYPE_PERSPECTIVE;
     projection.fov_y = 40.0f;
     projection.aspect = (float)WIDTH / (float)HEIGHT;
     projection.near_z = 0.1f;
-    camera = rasm_create_camera(renderer, &projection, NULL);
+    {
+        const rasm_transform eye = lookAt(vec3(1.8f, 0.4f, 3.1f), vec3(0.0f, 0.0f, 0.0f));
+        camera = rasm_create_camera(renderer, &projection, &eye);
+    }
+    rasm_camera_controller_init(&controller, sizeof(controller));
+    controller.type = RASM_CAMERA_CONTROLLER_TYPE_TRACK_BALL;
+    controller.track_ball_radius = sqrtf(1.8f * 1.8f + 0.4f * 0.4f + 3.1f * 3.1f);
+    controller.track_ball_center = vec3(0.0f, 0.0f, 0.0f);
+    rasm_set_camera_controller(renderer, camera, &controller);
     rasm_add_camera_to_scene(renderer, scene, camera);
+
+    /* 5. A top-down map camera, drawn into a view texture that a board behind the helmet shows. */
+    rasm_camera_projection_init(&projection, sizeof(projection));
+    projection.type = RASM_PROJECTION_TYPE_ORTHOGRAPHIC;
+    projection.left = -MAP_HALF_EXTENT;
+    projection.right = MAP_HALF_EXTENT;
+    projection.bottom = -MAP_HALF_EXTENT;
+    projection.top = MAP_HALF_EXTENT;
+    projection.near_z = 0.1f;
+    projection.far_z = 30.0f;
+    {
+        /* -90 degrees around X: it looks straight down. */
+        rasm_transform above = placed(vec3(0.0f, 10.0f, 0.0f), 0.0f);
+        above.rotation.x = -0.70710678f;
+        above.rotation.w = 0.70710678f;
+        map = rasm_create_camera(renderer, &projection, &above);
+    }
+    rasm_add_camera_to_scene(renderer, scene, map);
+    rasm_render_target_desc_init(&mapDesc, sizeof(mapDesc));
+    mapDesc.name = "map";
+    mapDesc.width = MAP_SIZE;
+    mapDesc.height = MAP_SIZE;
+    mapTarget = rasm_create_render_target(renderer, &mapDesc);
+    if (map.id == 0 || mapTarget.id == 0)
+    {
+        fail("the map");
+        rasm_engine_destroy(engine);
+        return 1;
+    }
+    {
+        const rasm_texture mapTexture = rasm_get_render_target_texture(renderer, mapTarget);
+        const rasm_material board = rasm_create_material(renderer, RASM_MATERIAL_TYPE_UNLIT, &mapTexture, 1, RASM_FALSE);
+        rasm_transform at = placed(vec3(0.0f, 0.4f, -2.4f), 0.0f);
+        at.scale = vec3(1.6f, 1.6f, 1.0f);
+        rasm_add_entity_to_scene(renderer, scene, rasm_create_entity(renderer, "board", createBoard(renderer), board, &at));
+    }
+
+    /* The views, in drawing order: the map texture first, so the board shows this frame's map, then the window's. */
+    rasm_view_init(&views[0], sizeof(views[0]));
+    views[0].scene = scene;
+    views[0].camera = map;
+    views[0].target = mapTarget;
+    views[0].bloom = RASM_VIEW_TOGGLE_OFF;
+    views[0].anti_aliasing = RASM_ANTI_ALIASING_NONE;
+    rasm_view_init(&views[1], sizeof(views[1]));
+    views[1].scene = scene;
+    views[1].camera = camera;
+    views[2] = views[0];
+    views[2].target.id = 0;
+    views[2].rect.height = 0.32f;
+    views[2].rect.width = 0.32f * (float)HEIGHT / (float)WIDTH;
+    views[2].rect.x = 0.98f - views[2].rect.width;
+    views[2].rect.y = 0.03f;
 
     if (args.waitForLoads)
         rasm_wait_for_loads(renderer);
 
-    /* 5. The frame loop. Headless, frame N's copy is asked for before it starts and taken once it is drawn. */
+    /* The first call turns the frame stats on; they fill in a few frames later. */
+    frameStats.size = sizeof(frameStats);
+    rasm_get_frame_stats(renderer, &frameStats);
+
+    /* 6. The frame loop. Headless, frame N's copy is asked for before it starts and taken once it is drawn. */
     image = rasm_image_create();
     for (frame = 1; rasm_running(renderer); ++frame)
     {
-        const float angle = 0.5f + 0.01f * (float)frame;
-        const rasm_transform at = lookAt(vec3(3.6f * sinf(angle), 0.4f, 3.6f * cosf(angle)), vec3(0.0f, 0.0f, 0.0f));
-        rasm_set_camera_transform(renderer, camera, &at);
+        if (frame < args.frames)
+            sendScriptedOrbit(renderer, frame, args.frames);
         if (args.headless && frame == args.frames)
             readback = rasm_read_frame(renderer, RASM_READBACK_FORMAT_RGBA8_SRGB);
-        rasm_render(renderer, scene, camera);
+        rasm_render_views(renderer, views, 3);
         if (args.headless && frame == args.frames)
         {
             written = rasm_take_readback(renderer, readback, image) == RASM_OK && rasm_image_write_png(image, args.out) == RASM_OK;
@@ -329,6 +456,10 @@ int main(int argc, char **argv)
             break;
         }
     }
+
+    poolStats.size = sizeof(poolStats);
+    if (rasm_get_frame_stats(renderer, &frameStats) == RASM_OK && rasm_get_pool_stats(renderer, &poolStats) == RASM_OK)
+        printf("%u entities, %u meshes, %u materials; %u draws, %u visible.\n", poolStats.entities, poolStats.meshes, poolStats.materials, frameStats.draws, frameStats.draws_visible);
 
     rasm_image_destroy(image);
     rasm_engine_destroy(engine);

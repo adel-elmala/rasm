@@ -74,6 +74,11 @@ namespace rasm::c
         constexpr uint32_t asNumber(CameraProjection::Type value) { return static_cast<uint32_t>(value); }
         constexpr uint32_t asNumber(ReadbackFormat value) { return static_cast<uint32_t>(value); }
         constexpr uint32_t asNumber(spdlog::level::level_enum value) { return static_cast<uint32_t>(value); }
+        constexpr uint32_t asNumber(Key value) { return static_cast<uint32_t>(value); }
+        constexpr uint32_t asNumber(MouseButton value) { return static_cast<uint32_t>(value); }
+        constexpr uint32_t asNumber(InputEventType value) { return static_cast<uint32_t>(value); }
+        constexpr uint32_t asNumber(ViewToggle value) { return static_cast<uint32_t>(value); }
+        constexpr uint32_t asNumber(CameraController::Type value) { return static_cast<uint32_t>(value); }
 
         static_assert(RASM_FORMAT_UNKNOWN == asNumber(Format::UNKNOWN));
         static_assert(RASM_FORMAT_R8G8B8A8_UNORM == asNumber(Format::R8G8B8A8_UNORM));
@@ -152,6 +157,131 @@ namespace rasm::c
         static_assert(RASM_LOG_LEVEL_TRACE == asNumber(spdlog::level::trace) && RASM_LOG_LEVEL_DEBUG == asNumber(spdlog::level::debug) && RASM_LOG_LEVEL_INFO == asNumber(spdlog::level::info));
         static_assert(RASM_LOG_LEVEL_WARN == asNumber(spdlog::level::warn) && RASM_LOG_LEVEL_ERROR == asNumber(spdlog::level::err) && RASM_LOG_LEVEL_CRITICAL == asNumber(spdlog::level::critical));
         static_assert(RASM_MAX_VERTEX_UV_SETS == MAX_VERTEX_UV_SETS && RASM_MAX_TEXTURE_SLOTS == MAX_TEXTURE_SLOTS && RASM_MAX_PARAM_SLOTS == MAX_PARAM_SLOTS);
+
+        static_assert(RASM_KEY_COUNT == asNumber(Key::COUNT));
+        static_assert(RASM_KEY_NONE == asNumber(Key::NONE));
+        static_assert(RASM_KEY_A == asNumber(Key::A));
+        static_assert(RASM_KEY_B == asNumber(Key::B));
+        static_assert(RASM_KEY_C == asNumber(Key::C));
+        static_assert(RASM_KEY_D == asNumber(Key::D));
+        static_assert(RASM_KEY_E == asNumber(Key::E));
+        static_assert(RASM_KEY_F == asNumber(Key::F));
+        static_assert(RASM_KEY_G == asNumber(Key::G));
+        static_assert(RASM_KEY_H == asNumber(Key::H));
+        static_assert(RASM_KEY_I == asNumber(Key::I));
+        static_assert(RASM_KEY_J == asNumber(Key::J));
+        static_assert(RASM_KEY_K == asNumber(Key::K));
+        static_assert(RASM_KEY_L == asNumber(Key::L));
+        static_assert(RASM_KEY_M == asNumber(Key::M));
+        static_assert(RASM_KEY_N == asNumber(Key::N));
+        static_assert(RASM_KEY_O == asNumber(Key::O));
+        static_assert(RASM_KEY_P == asNumber(Key::P));
+        static_assert(RASM_KEY_Q == asNumber(Key::Q));
+        static_assert(RASM_KEY_R == asNumber(Key::R));
+        static_assert(RASM_KEY_S == asNumber(Key::S));
+        static_assert(RASM_KEY_T == asNumber(Key::T));
+        static_assert(RASM_KEY_U == asNumber(Key::U));
+        static_assert(RASM_KEY_V == asNumber(Key::V));
+        static_assert(RASM_KEY_W == asNumber(Key::W));
+        static_assert(RASM_KEY_X == asNumber(Key::X));
+        static_assert(RASM_KEY_Y == asNumber(Key::Y));
+        static_assert(RASM_KEY_Z == asNumber(Key::Z));
+        static_assert(RASM_KEY_DIGIT_0 == asNumber(Key::DIGIT_0));
+        static_assert(RASM_KEY_DIGIT_1 == asNumber(Key::DIGIT_1));
+        static_assert(RASM_KEY_DIGIT_2 == asNumber(Key::DIGIT_2));
+        static_assert(RASM_KEY_DIGIT_3 == asNumber(Key::DIGIT_3));
+        static_assert(RASM_KEY_DIGIT_4 == asNumber(Key::DIGIT_4));
+        static_assert(RASM_KEY_DIGIT_5 == asNumber(Key::DIGIT_5));
+        static_assert(RASM_KEY_DIGIT_6 == asNumber(Key::DIGIT_6));
+        static_assert(RASM_KEY_DIGIT_7 == asNumber(Key::DIGIT_7));
+        static_assert(RASM_KEY_DIGIT_8 == asNumber(Key::DIGIT_8));
+        static_assert(RASM_KEY_DIGIT_9 == asNumber(Key::DIGIT_9));
+        static_assert(RASM_KEY_F1 == asNumber(Key::F1));
+        static_assert(RASM_KEY_F2 == asNumber(Key::F2));
+        static_assert(RASM_KEY_F3 == asNumber(Key::F3));
+        static_assert(RASM_KEY_F4 == asNumber(Key::F4));
+        static_assert(RASM_KEY_F5 == asNumber(Key::F5));
+        static_assert(RASM_KEY_F6 == asNumber(Key::F6));
+        static_assert(RASM_KEY_F7 == asNumber(Key::F7));
+        static_assert(RASM_KEY_F8 == asNumber(Key::F8));
+        static_assert(RASM_KEY_F9 == asNumber(Key::F9));
+        static_assert(RASM_KEY_F10 == asNumber(Key::F10));
+        static_assert(RASM_KEY_F11 == asNumber(Key::F11));
+        static_assert(RASM_KEY_F12 == asNumber(Key::F12));
+        static_assert(RASM_KEY_ESCAPE == asNumber(Key::ESCAPE));
+        static_assert(RASM_KEY_ENTER == asNumber(Key::ENTER));
+        static_assert(RASM_KEY_TAB == asNumber(Key::TAB));
+        static_assert(RASM_KEY_BACKSPACE == asNumber(Key::BACKSPACE));
+        static_assert(RASM_KEY_SPACE == asNumber(Key::SPACE));
+        static_assert(RASM_KEY_INSERT == asNumber(Key::INSERT));
+        static_assert(RASM_KEY_DEL == asNumber(Key::DEL));
+        static_assert(RASM_KEY_HOME == asNumber(Key::HOME));
+        static_assert(RASM_KEY_END == asNumber(Key::END));
+        static_assert(RASM_KEY_PAGE_UP == asNumber(Key::PAGE_UP));
+        static_assert(RASM_KEY_PAGE_DOWN == asNumber(Key::PAGE_DOWN));
+        static_assert(RASM_KEY_LEFT == asNumber(Key::LEFT));
+        static_assert(RASM_KEY_RIGHT == asNumber(Key::RIGHT));
+        static_assert(RASM_KEY_UP == asNumber(Key::UP));
+        static_assert(RASM_KEY_DOWN == asNumber(Key::DOWN));
+        static_assert(RASM_KEY_LEFT_SHIFT == asNumber(Key::LEFT_SHIFT));
+        static_assert(RASM_KEY_RIGHT_SHIFT == asNumber(Key::RIGHT_SHIFT));
+        static_assert(RASM_KEY_LEFT_CTRL == asNumber(Key::LEFT_CTRL));
+        static_assert(RASM_KEY_RIGHT_CTRL == asNumber(Key::RIGHT_CTRL));
+        static_assert(RASM_KEY_LEFT_ALT == asNumber(Key::LEFT_ALT));
+        static_assert(RASM_KEY_RIGHT_ALT == asNumber(Key::RIGHT_ALT));
+        static_assert(RASM_KEY_LEFT_SUPER == asNumber(Key::LEFT_SUPER));
+        static_assert(RASM_KEY_RIGHT_SUPER == asNumber(Key::RIGHT_SUPER));
+        static_assert(RASM_KEY_MENU == asNumber(Key::MENU));
+        static_assert(RASM_KEY_APOSTROPHE == asNumber(Key::APOSTROPHE));
+        static_assert(RASM_KEY_COMMA == asNumber(Key::COMMA));
+        static_assert(RASM_KEY_MINUS == asNumber(Key::MINUS));
+        static_assert(RASM_KEY_PERIOD == asNumber(Key::PERIOD));
+        static_assert(RASM_KEY_SLASH == asNumber(Key::SLASH));
+        static_assert(RASM_KEY_SEMICOLON == asNumber(Key::SEMICOLON));
+        static_assert(RASM_KEY_EQUAL == asNumber(Key::EQUAL));
+        static_assert(RASM_KEY_LEFT_BRACKET == asNumber(Key::LEFT_BRACKET));
+        static_assert(RASM_KEY_BACKSLASH == asNumber(Key::BACKSLASH));
+        static_assert(RASM_KEY_RIGHT_BRACKET == asNumber(Key::RIGHT_BRACKET));
+        static_assert(RASM_KEY_GRAVE == asNumber(Key::GRAVE));
+        static_assert(RASM_KEY_CAPS_LOCK == asNumber(Key::CAPS_LOCK));
+        static_assert(RASM_KEY_SCROLL_LOCK == asNumber(Key::SCROLL_LOCK));
+        static_assert(RASM_KEY_NUM_LOCK == asNumber(Key::NUM_LOCK));
+        static_assert(RASM_KEY_PRINT_SCREEN == asNumber(Key::PRINT_SCREEN));
+        static_assert(RASM_KEY_PAUSE == asNumber(Key::PAUSE));
+        static_assert(RASM_KEY_KEYPAD_0 == asNumber(Key::KEYPAD_0));
+        static_assert(RASM_KEY_KEYPAD_1 == asNumber(Key::KEYPAD_1));
+        static_assert(RASM_KEY_KEYPAD_2 == asNumber(Key::KEYPAD_2));
+        static_assert(RASM_KEY_KEYPAD_3 == asNumber(Key::KEYPAD_3));
+        static_assert(RASM_KEY_KEYPAD_4 == asNumber(Key::KEYPAD_4));
+        static_assert(RASM_KEY_KEYPAD_5 == asNumber(Key::KEYPAD_5));
+        static_assert(RASM_KEY_KEYPAD_6 == asNumber(Key::KEYPAD_6));
+        static_assert(RASM_KEY_KEYPAD_7 == asNumber(Key::KEYPAD_7));
+        static_assert(RASM_KEY_KEYPAD_8 == asNumber(Key::KEYPAD_8));
+        static_assert(RASM_KEY_KEYPAD_9 == asNumber(Key::KEYPAD_9));
+        static_assert(RASM_KEY_KEYPAD_DECIMAL == asNumber(Key::KEYPAD_DECIMAL));
+        static_assert(RASM_KEY_KEYPAD_DIVIDE == asNumber(Key::KEYPAD_DIVIDE));
+        static_assert(RASM_KEY_KEYPAD_MULTIPLY == asNumber(Key::KEYPAD_MULTIPLY));
+        static_assert(RASM_KEY_KEYPAD_SUBTRACT == asNumber(Key::KEYPAD_SUBTRACT));
+        static_assert(RASM_KEY_KEYPAD_ADD == asNumber(Key::KEYPAD_ADD));
+        static_assert(RASM_KEY_KEYPAD_ENTER == asNumber(Key::KEYPAD_ENTER));
+        static_assert(RASM_KEY_KEYPAD_EQUAL == asNumber(Key::KEYPAD_EQUAL));
+        static_assert(RASM_MOUSE_BUTTON_LEFT == asNumber(MouseButton::LEFT) && RASM_MOUSE_BUTTON_RIGHT == asNumber(MouseButton::RIGHT) && RASM_MOUSE_BUTTON_MIDDLE == asNumber(MouseButton::MIDDLE));
+        static_assert(RASM_MOUSE_BUTTON_BACK == asNumber(MouseButton::BACK) && RASM_MOUSE_BUTTON_FORWARD == asNumber(MouseButton::FORWARD));
+        static_assert(RASM_INPUT_EVENT_TYPE_NONE == asNumber(InputEventType::NONE));
+        static_assert(RASM_INPUT_EVENT_TYPE_KEY == asNumber(InputEventType::KEY));
+        static_assert(RASM_INPUT_EVENT_TYPE_MOUSE_BUTTON == asNumber(InputEventType::MOUSE_BUTTON));
+        static_assert(RASM_INPUT_EVENT_TYPE_MOUSE_MOVE == asNumber(InputEventType::MOUSE_MOVE));
+        static_assert(RASM_INPUT_EVENT_TYPE_MOUSE_WHEEL == asNumber(InputEventType::MOUSE_WHEEL));
+        static_assert(RASM_INPUT_EVENT_TYPE_MOUSE_LEAVE == asNumber(InputEventType::MOUSE_LEAVE));
+        static_assert(RASM_INPUT_EVENT_TYPE_TEXT == asNumber(InputEventType::TEXT));
+        static_assert(RASM_INPUT_EVENT_TYPE_FOCUS == asNumber(InputEventType::FOCUS));
+        static_assert(RASM_INPUT_EVENT_TYPE_WINDOW_CLOSE == asNumber(InputEventType::WINDOW_CLOSE));
+        static_assert(RASM_KEY_MOD_SHIFT == KEY_MOD_SHIFT && RASM_KEY_MOD_CTRL == KEY_MOD_CTRL && RASM_KEY_MOD_ALT == KEY_MOD_ALT && RASM_KEY_MOD_SUPER == KEY_MOD_SUPER);
+        static_assert(RASM_VIEW_TOGGLE_DEFAULT == asNumber(ViewToggle::DEFAULT) && RASM_VIEW_TOGGLE_OFF == asNumber(ViewToggle::OFF) && RASM_VIEW_TOGGLE_ON == asNumber(ViewToggle::ON));
+        static_assert(RASM_CAMERA_CONTROLLER_TYPE_TRACK_BALL == asNumber(CameraController::Type::TRACK_BALL));
+        static_assert(RASM_CAMERA_CONTROLLER_TYPE_FREE_FLY == asNumber(CameraController::Type::FREE_FLY));
+        static_assert(RASM_CAMERA_CONTROLLER_TYPE_NONE == asNumber(CameraController::Type::NONE));
+        static_assert(RASM_MAX_MESH_LODS == MAX_MESH_LODS && RASM_ALL_ANIMATION_CLIPS == ALL_ANIMATION_CLIPS && RASM_MAX_VIEWS == MAX_SCENE_VIEWS);
 
         // rasm_create_mesh copies the caller's vertices as they are.
         static_assert(sizeof(rasm_vertex) == sizeof(Vertex));
@@ -330,6 +460,14 @@ namespace rasm::c
                checkEnum(config.preferred_backend, RASM_BACKEND_WEBGPU + 1, function, "config->preferred_backend") &&
                checkEnum(config.meshlet_path, RASM_MESHLET_PATH_AUTO + 1, function, "config->meshlet_path") &&
                checkEnum(config.anti_aliasing, RASM_ANTI_ALIASING_DEFAULT + 1, function, "config->anti_aliasing");
+    }
+
+    bool checkPointer(const void *pointer, const char *function, const char *name)
+    {
+        if (pointer != nullptr)
+            return true;
+        reportError(function, (std::string(name) + " is NULL.").c_str());
+        return false;
     }
 
     bool checkHandle(uint64_t id, const char *function, const char *name)
@@ -572,6 +710,229 @@ namespace rasm::c
                 .intensity = environment.intensity,
                 .rotation = environment.rotation,
                 .sky = environment.sky ? RASM_TRUE : RASM_FALSE};
+    }
+    bool checkInputEvent(const rasm_input_event &event, const char *function)
+    {
+        return checkEnum(event.type, RASM_INPUT_EVENT_TYPE_WINDOW_CLOSE + 1, function, "event->type") && checkEnum(event.key, RASM_KEY_COUNT, function, "event->key") &&
+               checkEnum(event.physical_key, RASM_KEY_COUNT, function, "event->physical_key") && checkEnum(event.button, RASM_MOUSE_BUTTON_FORWARD + 1, function, "event->button") &&
+               checkEnum(event.modifiers, (RASM_KEY_MOD_SUPER << 1), function, "event->modifiers");
+    }
+
+    bool checkCameraController(const rasm_camera_controller &controller, const char *function)
+    {
+        return checkEnum(controller.type, RASM_CAMERA_CONTROLLER_TYPE_NONE + 1, function, "controller->type");
+    }
+
+    bool checkView(const rasm_view &view, const char *function)
+    {
+        return checkEnum(view.bloom, RASM_VIEW_TOGGLE_ON + 1, function, "view->bloom") && checkEnum(view.anti_aliasing, RASM_ANTI_ALIASING_DEFAULT + 1, function, "view->anti_aliasing");
+    }
+
+    InputEvent toCpp(const rasm_input_event &event)
+    {
+        return {.type = static_cast<InputEventType>(event.type),
+                .window = toCpp(event.window),
+                .key = static_cast<Key>(event.key),
+                .physicalKey = static_cast<Key>(event.physical_key),
+                .down = event.down != 0,
+                .repeat = event.repeat != 0,
+                .modifiers = static_cast<uint8_t>(event.modifiers),
+                .button = static_cast<MouseButton>(event.button),
+                .x = event.x,
+                .y = event.y,
+                .codepoint = event.codepoint};
+    }
+
+    rasm_input_event toC(const InputEvent &event)
+    {
+        return {.size = sizeof(rasm_input_event),
+                .type = asNumber(event.type),
+                .window = toC(event.window),
+                .key = asNumber(event.key),
+                .physical_key = asNumber(event.physicalKey),
+                .down = event.down ? RASM_TRUE : RASM_FALSE,
+                .repeat = event.repeat ? RASM_TRUE : RASM_FALSE,
+                .modifiers = event.modifiers,
+                .button = asNumber(event.button),
+                .x = event.x,
+                .y = event.y,
+                .codepoint = event.codepoint};
+    }
+
+    CameraInput toCpp(const rasm_camera_input &input)
+    {
+        return {.mouseStart = toCpp(input.mouse_start),
+                .mouseEnd = toCpp(input.mouse_end),
+                .wheelDelta = input.wheel_delta,
+                .deltaTime = input.delta_time,
+                .forward = input.forward != 0,
+                .backward = input.backward != 0,
+                .left = input.left != 0,
+                .right = input.right != 0};
+    }
+
+    rasm_camera_input toC(const CameraInput &input)
+    {
+        return {.size = sizeof(rasm_camera_input),
+                .mouse_start = toC(input.mouseStart),
+                .mouse_end = toC(input.mouseEnd),
+                .wheel_delta = input.wheelDelta,
+                .delta_time = input.deltaTime,
+                .forward = input.forward ? RASM_TRUE : RASM_FALSE,
+                .backward = input.backward ? RASM_TRUE : RASM_FALSE,
+                .left = input.left ? RASM_TRUE : RASM_FALSE,
+                .right = input.right ? RASM_TRUE : RASM_FALSE};
+    }
+
+    // The C struct is flat: only the fields of its type reach the union.
+    CameraController toCpp(const rasm_camera_controller &controller)
+    {
+        CameraController result = {.type = static_cast<CameraController::Type>(controller.type), .easingSpeed = controller.easing_speed};
+        if (result.type == CameraController::Type::TRACK_BALL)
+            result.trackBall = {.radius = controller.track_ball_radius, .center = toCpp(controller.track_ball_center), .orbitSensitivity = controller.track_ball_orbit_sensitivity};
+        else if (result.type == CameraController::Type::FREE_FLY)
+            result.freeFly = {.yaw = controller.free_fly_yaw, .pitch = controller.free_fly_pitch, .speed = controller.free_fly_speed, .lookSensitivity = controller.free_fly_look_sensitivity};
+        return result;
+    }
+
+    rasm_camera_controller toC(const CameraController &controller)
+    {
+        rasm_camera_controller result = {.size = sizeof(rasm_camera_controller), .type = asNumber(controller.type), .easing_speed = controller.easingSpeed};
+        if (controller.type == CameraController::Type::TRACK_BALL)
+        {
+            result.track_ball_radius = controller.trackBall.radius;
+            result.track_ball_center = toC(controller.trackBall.center);
+            result.track_ball_orbit_sensitivity = controller.trackBall.orbitSensitivity;
+        }
+        else if (controller.type == CameraController::Type::FREE_FLY)
+        {
+            result.free_fly_yaw = controller.freeFly.yaw;
+            result.free_fly_pitch = controller.freeFly.pitch;
+            result.free_fly_speed = controller.freeFly.speed;
+            result.free_fly_look_sensitivity = controller.freeFly.lookSensitivity;
+        }
+        return result;
+    }
+
+    ViewRect toCpp(const rasm_view_rect &rect)
+    {
+        return {.x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height};
+    }
+
+    InputArea toCpp(const rasm_input_area &area)
+    {
+        return {.x = area.x, .y = area.y, .width = area.width, .height = area.height};
+    }
+
+    rasm_input_area toC(const InputArea &area)
+    {
+        return {.x = area.x, .y = area.y, .width = area.width, .height = area.height};
+    }
+
+    UiInputCapture toCpp(const rasm_ui_input_capture &capture)
+    {
+        return {.mouse = capture.mouse != 0, .keyboard = capture.keyboard != 0, .text = capture.text != 0};
+    }
+
+    rasm_ui_input_capture toC(const UiInputCapture &capture)
+    {
+        return {.mouse = capture.mouse ? RASM_TRUE : RASM_FALSE, .keyboard = capture.keyboard ? RASM_TRUE : RASM_FALSE, .text = capture.text ? RASM_TRUE : RASM_FALSE};
+    }
+
+    View toCpp(const rasm_view &view)
+    {
+        return {.scene = toCpp(view.scene),
+                .camera = toCpp(view.camera),
+                .output = {.rect = toCpp(view.rect), .target = toCpp(view.target), .window = toCpp(view.window)},
+                .bloom = static_cast<ViewToggle>(view.bloom),
+                .antiAliasing = static_cast<AntiAliasing>(view.anti_aliasing)};
+    }
+
+    rasm_view toC(const View &view)
+    {
+        return {.size = sizeof(rasm_view),
+                .scene = toC(view.scene),
+                .camera = toC(view.camera),
+                .rect = {.x = view.output.rect.x, .y = view.output.rect.y, .width = view.output.rect.width, .height = view.output.rect.height},
+                .target = toC(view.output.target),
+                .window = toC(view.output.window),
+                .bloom = asNumber(view.bloom),
+                .anti_aliasing = asNumber(view.antiAliasing)};
+    }
+
+    rasm_window_info toC(const Window &window)
+    {
+        return {.size = sizeof(rasm_window_info),
+                .window = toC(window.handle),
+                .platform_window = window.platformWindow,
+                .native = toC(window.native),
+                .width = window.width,
+                .height = window.height,
+                .pixel_width = window.pixelWidth,
+                .pixel_height = window.pixelHeight,
+                .content_scale = window.contentScale,
+                .resized = window.resized ? RASM_TRUE : RASM_FALSE,
+                .minimized = window.minimized ? RASM_TRUE : RASM_FALSE};
+    }
+
+    AnimationPlay toCpp(const rasm_animation_play &play)
+    {
+        return {.clip = play.clip, .startTime = play.start_time, .clipTime = play.clip_time, .speed = play.speed, .loop = play.loop != 0};
+    }
+
+    rasm_animation_play toC(const AnimationPlay &play)
+    {
+        return {.size = sizeof(rasm_animation_play), .clip = play.clip, .start_time = play.startTime, .clip_time = play.clipTime, .speed = play.speed, .loop = play.loop ? RASM_TRUE : RASM_FALSE};
+    }
+
+    rasm_frame_stats toC(const FrameStats &stats)
+    {
+        rasm_frame_stats result = {.size = sizeof(rasm_frame_stats),
+                                   .cpu_frame_ms = stats.cpuFrameMs,
+                                   .gpu_frame_ms = stats.gpuFrameMs,
+                                   .upload_gpu_ms = stats.uploadGpuMs,
+                                   .draws = stats.draws,
+                                   .draws_visible = stats.drawsVisible,
+                                   .triangles = stats.triangles,
+                                   .triangles_visible = stats.trianglesVisible,
+                                   .triangles_visible_lod0 = stats.trianglesVisibleLod0,
+                                   .triangles_visible_lod = stats.trianglesVisibleLod,
+                                   .meshlets_visible = stats.meshletsVisible,
+                                   .meshlets_culled = stats.meshletsCulled,
+                                   .meshlet_draws_whole = stats.meshletDrawsWhole,
+                                   .lights_global = stats.lightsGlobal,
+                                   .lights_visible = stats.lightsVisible,
+                                   .lights_dropped = stats.lightsDropped};
+        std::copy(std::begin(stats.drawsPerLod), std::end(stats.drawsPerLod), std::begin(result.draws_per_lod));
+        return result;
+    }
+
+    rasm_pool_stats toC(const PoolStats &stats)
+    {
+        return {.size = sizeof(rasm_pool_stats),
+                .entities = stats.entities,
+                .meshes = stats.meshes,
+                .materials = stats.materials,
+                .lights = stats.lights,
+                .textures = stats.textures,
+                .bindless_textures = stats.bindlessTextures,
+                .vertices = stats.vertices,
+                .indices = stats.indices,
+                .sub_meshes = stats.subMeshes,
+                .meshlets = stats.meshlets,
+                .instances = stats.instances,
+                .animation_pool_bytes = stats.animationPoolBytes,
+                .releases_waiting = stats.releasesWaiting};
+    }
+
+    rasm_load_stats toC(const LoadStats &stats)
+    {
+        return {.size = sizeof(rasm_load_stats),
+                .workers = stats.workers,
+                .queued = stats.queued,
+                .running = stats.running,
+                .decoded_bytes = stats.decodedBytes,
+                .peak_decoded_bytes = stats.peakDecodedBytes};
     }
 }
 

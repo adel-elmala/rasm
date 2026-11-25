@@ -24,7 +24,7 @@
 
 // NOLINTBEGIN(readability-identifier-naming): C names, snake_case with the rasm_ prefix, as C APIs and their bindings expect
 #define RASM_C_API_VERSION_MAJOR    1
-#define RASM_C_API_VERSION_MINOR    0
+#define RASM_C_API_VERSION_MINOR    1
 #define RASM_C_API_VERSION          (((uint32_t)RASM_C_API_VERSION_MAJOR << 16) | (uint32_t)RASM_C_API_VERSION_MINOR)
 
 #if defined(_WIN32)
@@ -396,6 +396,356 @@ typedef struct rasm_image_data
     uint64_t                        byte_size;
 } rasm_image_data;
 
+/* Added in 1.1: windows, input, views, render targets, camera helpers, animation, stats. */
+
+#define RASM_MAX_MESH_LODS          8
+#define RASM_ALL_ANIMATION_CLIPS    0xFFFFFFFEu
+#define RASM_MAX_VIEWS              32
+
+typedef uint32_t                    rasm_key;
+enum
+{
+    RASM_KEY_NONE                    = 0,
+    RASM_KEY_A                       = 1,
+    RASM_KEY_B                       = 2,
+    RASM_KEY_C                       = 3,
+    RASM_KEY_D                       = 4,
+    RASM_KEY_E                       = 5,
+    RASM_KEY_F                       = 6,
+    RASM_KEY_G                       = 7,
+    RASM_KEY_H                       = 8,
+    RASM_KEY_I                       = 9,
+    RASM_KEY_J                       = 10,
+    RASM_KEY_K                       = 11,
+    RASM_KEY_L                       = 12,
+    RASM_KEY_M                       = 13,
+    RASM_KEY_N                       = 14,
+    RASM_KEY_O                       = 15,
+    RASM_KEY_P                       = 16,
+    RASM_KEY_Q                       = 17,
+    RASM_KEY_R                       = 18,
+    RASM_KEY_S                       = 19,
+    RASM_KEY_T                       = 20,
+    RASM_KEY_U                       = 21,
+    RASM_KEY_V                       = 22,
+    RASM_KEY_W                       = 23,
+    RASM_KEY_X                       = 24,
+    RASM_KEY_Y                       = 25,
+    RASM_KEY_Z                       = 26,
+    RASM_KEY_DIGIT_0                 = 27,
+    RASM_KEY_DIGIT_1                 = 28,
+    RASM_KEY_DIGIT_2                 = 29,
+    RASM_KEY_DIGIT_3                 = 30,
+    RASM_KEY_DIGIT_4                 = 31,
+    RASM_KEY_DIGIT_5                 = 32,
+    RASM_KEY_DIGIT_6                 = 33,
+    RASM_KEY_DIGIT_7                 = 34,
+    RASM_KEY_DIGIT_8                 = 35,
+    RASM_KEY_DIGIT_9                 = 36,
+    RASM_KEY_F1                      = 37,
+    RASM_KEY_F2                      = 38,
+    RASM_KEY_F3                      = 39,
+    RASM_KEY_F4                      = 40,
+    RASM_KEY_F5                      = 41,
+    RASM_KEY_F6                      = 42,
+    RASM_KEY_F7                      = 43,
+    RASM_KEY_F8                      = 44,
+    RASM_KEY_F9                      = 45,
+    RASM_KEY_F10                     = 46,
+    RASM_KEY_F11                     = 47,
+    RASM_KEY_F12                     = 48,
+    RASM_KEY_ESCAPE                  = 49,
+    RASM_KEY_ENTER                   = 50,
+    RASM_KEY_TAB                     = 51,
+    RASM_KEY_BACKSPACE               = 52,
+    RASM_KEY_SPACE                   = 53,
+    RASM_KEY_INSERT                  = 54,
+    RASM_KEY_DEL                     = 55,
+    RASM_KEY_HOME                    = 56,
+    RASM_KEY_END                     = 57,
+    RASM_KEY_PAGE_UP                 = 58,
+    RASM_KEY_PAGE_DOWN               = 59,
+    RASM_KEY_LEFT                    = 60,
+    RASM_KEY_RIGHT                   = 61,
+    RASM_KEY_UP                      = 62,
+    RASM_KEY_DOWN                    = 63,
+    RASM_KEY_LEFT_SHIFT              = 64,
+    RASM_KEY_RIGHT_SHIFT             = 65,
+    RASM_KEY_LEFT_CTRL               = 66,
+    RASM_KEY_RIGHT_CTRL              = 67,
+    RASM_KEY_LEFT_ALT                = 68,
+    RASM_KEY_RIGHT_ALT               = 69,
+    RASM_KEY_LEFT_SUPER              = 70,
+    RASM_KEY_RIGHT_SUPER             = 71,
+    RASM_KEY_MENU                    = 72,
+    RASM_KEY_APOSTROPHE              = 73,
+    RASM_KEY_COMMA                   = 74,
+    RASM_KEY_MINUS                   = 75,
+    RASM_KEY_PERIOD                  = 76,
+    RASM_KEY_SLASH                   = 77,
+    RASM_KEY_SEMICOLON               = 78,
+    RASM_KEY_EQUAL                   = 79,
+    RASM_KEY_LEFT_BRACKET            = 80,
+    RASM_KEY_BACKSLASH               = 81,
+    RASM_KEY_RIGHT_BRACKET           = 82,
+    RASM_KEY_GRAVE                   = 83,
+    RASM_KEY_CAPS_LOCK               = 84,
+    RASM_KEY_SCROLL_LOCK             = 85,
+    RASM_KEY_NUM_LOCK                = 86,
+    RASM_KEY_PRINT_SCREEN            = 87,
+    RASM_KEY_PAUSE                   = 88,
+    RASM_KEY_KEYPAD_0                = 89,
+    RASM_KEY_KEYPAD_1                = 90,
+    RASM_KEY_KEYPAD_2                = 91,
+    RASM_KEY_KEYPAD_3                = 92,
+    RASM_KEY_KEYPAD_4                = 93,
+    RASM_KEY_KEYPAD_5                = 94,
+    RASM_KEY_KEYPAD_6                = 95,
+    RASM_KEY_KEYPAD_7                = 96,
+    RASM_KEY_KEYPAD_8                = 97,
+    RASM_KEY_KEYPAD_9                = 98,
+    RASM_KEY_KEYPAD_DECIMAL          = 99,
+    RASM_KEY_KEYPAD_DIVIDE           = 100,
+    RASM_KEY_KEYPAD_MULTIPLY         = 101,
+    RASM_KEY_KEYPAD_SUBTRACT         = 102,
+    RASM_KEY_KEYPAD_ADD              = 103,
+    RASM_KEY_KEYPAD_ENTER            = 104,
+    RASM_KEY_KEYPAD_EQUAL            = 105,
+    RASM_KEY_COUNT                  = 106,
+};
+
+typedef uint32_t                    rasm_mouse_button;
+enum
+{
+    RASM_MOUSE_BUTTON_LEFT          = 0,
+    RASM_MOUSE_BUTTON_RIGHT         = 1,
+    RASM_MOUSE_BUTTON_MIDDLE        = 2,
+    RASM_MOUSE_BUTTON_BACK          = 3,
+    RASM_MOUSE_BUTTON_FORWARD       = 4,
+};
+
+typedef uint32_t                    rasm_input_event_type;
+enum
+{
+    RASM_INPUT_EVENT_TYPE_NONE         = 0,
+    RASM_INPUT_EVENT_TYPE_KEY          = 1,
+    RASM_INPUT_EVENT_TYPE_MOUSE_BUTTON = 2,
+    RASM_INPUT_EVENT_TYPE_MOUSE_MOVE   = 3,
+    RASM_INPUT_EVENT_TYPE_MOUSE_WHEEL  = 4,
+    RASM_INPUT_EVENT_TYPE_MOUSE_LEAVE  = 5,
+    RASM_INPUT_EVENT_TYPE_TEXT         = 6,
+    RASM_INPUT_EVENT_TYPE_FOCUS        = 7,
+    RASM_INPUT_EVENT_TYPE_WINDOW_CLOSE = 8,
+};
+
+#define RASM_KEY_MOD_SHIFT          1u
+#define RASM_KEY_MOD_CTRL           2u
+#define RASM_KEY_MOD_ALT            4u
+#define RASM_KEY_MOD_SUPER          8u
+
+typedef uint32_t                    rasm_view_toggle;
+enum
+{
+    RASM_VIEW_TOGGLE_DEFAULT        = 0,
+    RASM_VIEW_TOGGLE_OFF            = 1,
+    RASM_VIEW_TOGGLE_ON             = 2,
+};
+
+typedef uint32_t                    rasm_camera_controller_type;
+enum
+{
+    RASM_CAMERA_CONTROLLER_TYPE_TRACK_BALL = 0,
+    RASM_CAMERA_CONTROLLER_TYPE_FREE_FLY   = 1,
+    RASM_CAMERA_CONTROLLER_TYPE_NONE       = 2,
+};
+
+typedef struct rasm_camera_rig          rasm_camera_rig;
+typedef struct rasm_camera_input_state  rasm_camera_input_state;
+
+typedef struct rasm_window          { uint64_t id; } rasm_window;
+typedef struct rasm_render_target   { uint64_t id; } rasm_render_target;
+
+typedef struct rasm_view_rect                                                  /* fractions of the output, from its top-left corner */
+{
+    float                           x;
+    float                           y;
+    float                           width;
+    float                           height;
+} rasm_view_rect;
+
+typedef struct rasm_view_pixels
+{
+    uint32_t                        x;
+    uint32_t                        y;
+    uint32_t                        width;
+    uint32_t                        height;
+} rasm_view_pixels;
+
+typedef struct rasm_input_area                                                 /* window points */
+{
+    float                           x;
+    float                           y;
+    float                           width;
+    float                           height;
+} rasm_input_area;
+
+typedef struct rasm_ui_input_capture
+{
+    rasm_bool                       mouse;
+    rasm_bool                       keyboard;
+    rasm_bool                       text;
+} rasm_ui_input_capture;
+
+typedef struct rasm_window_desc
+{
+    uint32_t                        size;
+    const char*                     title;
+    uint32_t                        width;
+    uint32_t                        height;
+    rasm_native_window              native;
+    rasm_bool                       hidden;
+} rasm_window_desc;
+
+typedef struct rasm_window_info
+{
+    uint32_t                        size;
+    rasm_window                     window;
+    void*                           platform_window;                           /* the SDL platform's SDL_Window */
+    rasm_native_window              native;
+    uint32_t                        width;
+    uint32_t                        height;
+    uint32_t                        pixel_width;
+    uint32_t                        pixel_height;
+    float                           content_scale;
+    rasm_bool                       resized;
+    rasm_bool                       minimized;
+} rasm_window_info;
+
+typedef struct rasm_input_event
+{
+    uint32_t                        size;
+    rasm_input_event_type           type;
+    rasm_window                     window;                                    /* 0: the main window */
+    rasm_key                        key;
+    rasm_key                        physical_key;
+    rasm_bool                       down;
+    rasm_bool                       repeat;
+    uint32_t                        modifiers;                                 /* RASM_KEY_MOD_* */
+    rasm_mouse_button               button;
+    float                           x;
+    float                           y;
+    uint32_t                        codepoint;
+} rasm_input_event;
+
+typedef struct rasm_camera_input
+{
+    uint32_t                        size;
+    rasm_vec2                       mouse_start;
+    rasm_vec2                       mouse_end;
+    float                           wheel_delta;
+    float                           delta_time;
+    rasm_bool                       forward;
+    rasm_bool                       backward;
+    rasm_bool                       left;
+    rasm_bool                       right;
+} rasm_camera_input;
+
+typedef struct rasm_camera_controller
+{
+    uint32_t                        size;
+    rasm_camera_controller_type     type;
+    float                           easing_speed;
+    float                           track_ball_radius;
+    rasm_vec3                       track_ball_center;
+    float                           track_ball_orbit_sensitivity;
+    float                           free_fly_yaw;
+    float                           free_fly_pitch;
+    float                           free_fly_speed;
+    float                           free_fly_look_sensitivity;
+} rasm_camera_controller;
+
+typedef struct rasm_view
+{
+    uint32_t                        size;
+    rasm_scene                      scene;
+    rasm_camera                     camera;
+    rasm_view_rect                  rect;
+    rasm_render_target              target;                                    /* set: into this view texture */
+    rasm_window                     window;                                    /* without a target: this window; 0: the main one */
+    rasm_view_toggle                bloom;
+    rasm_anti_aliasing              anti_aliasing;
+} rasm_view;
+
+typedef struct rasm_render_target_desc
+{
+    uint32_t                        size;
+    const char*                     name;
+    uint32_t                        width;
+    uint32_t                        height;
+    rasm_format                     format;
+    rasm_vec4                       clear_color;
+    rasm_bool                       readable;
+} rasm_render_target_desc;
+
+typedef struct rasm_animation_play
+{
+    uint32_t                        size;
+    uint32_t                        clip;                                      /* an index, or RASM_ALL_ANIMATION_CLIPS */
+    double                          start_time;
+    float                           clip_time;
+    float                           speed;
+    rasm_bool                       loop;
+} rasm_animation_play;
+
+typedef struct rasm_frame_stats
+{
+    uint32_t                        size;
+    float                           cpu_frame_ms;
+    float                           gpu_frame_ms;
+    float                           upload_gpu_ms;
+    uint32_t                        draws;
+    uint32_t                        draws_visible;
+    uint64_t                        triangles;
+    uint64_t                        triangles_visible;
+    uint64_t                        triangles_visible_lod0;
+    uint64_t                        triangles_visible_lod;
+    uint32_t                        draws_per_lod[RASM_MAX_MESH_LODS];
+    uint32_t                        meshlets_visible;
+    uint32_t                        meshlets_culled;
+    uint32_t                        meshlet_draws_whole;
+    uint32_t                        lights_global;
+    uint32_t                        lights_visible;
+    uint32_t                        lights_dropped;
+} rasm_frame_stats;
+
+typedef struct rasm_pool_stats
+{
+    uint32_t                        size;
+    uint32_t                        entities;
+    uint32_t                        meshes;
+    uint32_t                        materials;
+    uint32_t                        lights;
+    uint32_t                        textures;
+    uint32_t                        bindless_textures;
+    uint64_t                        vertices;
+    uint64_t                        indices;
+    uint64_t                        sub_meshes;
+    uint64_t                        meshlets;
+    uint64_t                        instances;
+    uint64_t                        animation_pool_bytes;
+    uint32_t                        releases_waiting;
+} rasm_pool_stats;
+
+typedef struct rasm_load_stats
+{
+    uint32_t                        size;
+    uint32_t                        workers;
+    uint32_t                        queued;
+    uint32_t                        running;
+    uint64_t                        decoded_bytes;
+    uint64_t                        peak_decoded_bytes;
+} rasm_load_stats;
+
 typedef void (RASM_CALL* rasm_log_callback)(void* user_data, rasm_log_level level, const char* message);
 
 /* The library */
@@ -502,6 +852,75 @@ RASM_C_API void             RASM_CALL rasm_image_destroy(rasm_image* image);
 RASM_C_API rasm_image_data  RASM_CALL rasm_image_get(const rasm_image* image);
 RASM_C_API rasm_result      RASM_CALL rasm_image_write_png(const rasm_image* image, const char* path);
 RASM_C_API rasm_result      RASM_CALL rasm_image_read_png(rasm_image* image, const char* path);
+
+/* Added in 1.1: defaults of the new sized structs */
+RASM_C_API rasm_result      RASM_CALL rasm_window_desc_init(rasm_window_desc* desc, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_input_event_init(rasm_input_event* event, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_camera_input_init(rasm_camera_input* input, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_camera_controller_init(rasm_camera_controller* controller, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_view_init(rasm_view* view, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_render_target_desc_init(rasm_render_target_desc* desc, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_animation_play_init(rasm_animation_play* play, uint32_t size);
+
+/* Windows */
+RASM_C_API rasm_window      RASM_CALL rasm_get_main_window(rasm_renderer* renderer);
+RASM_C_API rasm_window      RASM_CALL rasm_add_window(rasm_renderer* renderer, const rasm_window_desc* desc);
+RASM_C_API rasm_result      RASM_CALL rasm_remove_window(rasm_renderer* renderer, rasm_window window);
+RASM_C_API rasm_result      RASM_CALL rasm_get_window(rasm_renderer* renderer, rasm_window window, rasm_window_info* info);
+RASM_C_API rasm_result      RASM_CALL rasm_set_window_size(rasm_renderer* renderer, rasm_window window, uint32_t width, uint32_t height, uint32_t pixel_width, uint32_t pixel_height);
+RASM_C_API rasm_result      RASM_CALL rasm_set_window_content_scale(rasm_renderer* renderer, rasm_window window, float scale);
+RASM_C_API rasm_readback    RASM_CALL rasm_read_window_frame(rasm_renderer* renderer, rasm_window window, rasm_readback_format format);
+
+/* Input */
+RASM_C_API void             RASM_CALL rasm_poll_events(rasm_renderer* renderer);
+RASM_C_API rasm_result      RASM_CALL rasm_add_input_event(rasm_renderer* renderer, const rasm_input_event* event);
+RASM_C_API uint32_t         RASM_CALL rasm_get_input_event_count(rasm_renderer* renderer);
+RASM_C_API rasm_result      RASM_CALL rasm_get_input_event(rasm_renderer* renderer, uint32_t index, rasm_input_event* event);
+RASM_C_API rasm_result      RASM_CALL rasm_get_camera_input(rasm_renderer* renderer, rasm_camera_input* input);
+RASM_C_API rasm_ui_input_capture RASM_CALL rasm_get_ui_input_capture(rasm_renderer* renderer);
+RASM_C_API float            RASM_CALL rasm_get_delta_time(rasm_renderer* renderer);
+
+/* Camera controllers and their input */
+RASM_C_API rasm_result      RASM_CALL rasm_get_camera_controller(rasm_renderer* renderer, rasm_camera camera, rasm_camera_controller* controller);
+RASM_C_API rasm_result      RASM_CALL rasm_set_camera_controller(rasm_renderer* renderer, rasm_camera camera, const rasm_camera_controller* controller);
+RASM_C_API rasm_result      RASM_CALL rasm_update_camera(rasm_renderer* renderer, rasm_camera camera, const rasm_camera_input* input);
+RASM_C_API rasm_camera_rig* RASM_CALL rasm_camera_rig_create(const rasm_camera_controller* controller, const rasm_transform* transform);
+RASM_C_API void             RASM_CALL rasm_camera_rig_destroy(rasm_camera_rig* rig);
+RASM_C_API rasm_result      RASM_CALL rasm_camera_rig_update(rasm_camera_rig* rig, const rasm_camera_input* input);
+RASM_C_API rasm_result      RASM_CALL rasm_camera_rig_get_transform(const rasm_camera_rig* rig, rasm_transform* transform, rasm_transform* target_transform);
+RASM_C_API rasm_camera_input_state* RASM_CALL rasm_camera_input_state_create(void);
+RASM_C_API void             RASM_CALL rasm_camera_input_state_destroy(rasm_camera_input_state* state);
+RASM_C_API rasm_result      RASM_CALL rasm_camera_input_state_add_event(rasm_camera_input_state* state, const rasm_input_event* event, const rasm_input_area* area, const rasm_ui_input_capture* capture);
+RASM_C_API rasm_result      RASM_CALL rasm_camera_input_state_take(rasm_camera_input_state* state, const rasm_ui_input_capture* capture, float delta_time, rasm_camera_input* input);
+RASM_C_API rasm_vec2        RASM_CALL rasm_to_input_ndc(float x, float y, const rasm_input_area* area);
+RASM_C_API rasm_input_area  RASM_CALL rasm_get_input_area(rasm_renderer* renderer, rasm_window window, const rasm_view_rect* rect);
+
+/* Views and render targets */
+RASM_C_API rasm_result      RASM_CALL rasm_render_views(rasm_renderer* renderer, const rasm_view* views, uint32_t view_count);
+RASM_C_API rasm_view_pixels RASM_CALL rasm_get_view_pixels(const rasm_view_rect* rect, uint32_t width, uint32_t height);
+RASM_C_API rasm_render_target RASM_CALL rasm_create_render_target(rasm_renderer* renderer, const rasm_render_target_desc* desc);
+RASM_C_API rasm_result      RASM_CALL rasm_resize_render_target(rasm_renderer* renderer, rasm_render_target target, uint32_t width, uint32_t height);
+RASM_C_API rasm_result      RASM_CALL rasm_destroy_render_target(rasm_renderer* renderer, rasm_render_target target);
+RASM_C_API rasm_texture     RASM_CALL rasm_get_render_target_texture(rasm_renderer* renderer, rasm_render_target target);
+
+/* Animation */
+RASM_C_API void             RASM_CALL rasm_set_animation_time(rasm_renderer* renderer, double seconds);
+RASM_C_API rasm_result      RASM_CALL rasm_play_animation(rasm_renderer* renderer, rasm_entity entity, const rasm_animation_play* play);
+RASM_C_API rasm_result      RASM_CALL rasm_stop_animation(rasm_renderer* renderer, rasm_entity entity);
+RASM_C_API uint32_t         RASM_CALL rasm_get_animation_count(rasm_renderer* renderer, rasm_mesh mesh);
+RASM_C_API uint32_t         RASM_CALL rasm_get_animation_name(rasm_renderer* renderer, rasm_mesh mesh, uint32_t index, char* buffer, uint32_t capacity);
+RASM_C_API float            RASM_CALL rasm_get_animation_duration(rasm_renderer* renderer, rasm_mesh mesh, uint32_t index);
+RASM_C_API int32_t          RASM_CALL rasm_find_animation(rasm_renderer* renderer, rasm_mesh mesh, const char* name);
+RASM_C_API rasm_result      RASM_CALL rasm_set_morph_weights(rasm_renderer* renderer, rasm_entity entity, const float* weights, uint32_t count);
+RASM_C_API rasm_result      RASM_CALL rasm_clear_morph_weights(rasm_renderer* renderer, rasm_entity entity);
+RASM_C_API uint32_t         RASM_CALL rasm_get_morph_target_count(rasm_renderer* renderer, rasm_mesh mesh);
+RASM_C_API uint32_t         RASM_CALL rasm_get_morph_target_name(rasm_renderer* renderer, rasm_mesh mesh, uint32_t index, char* buffer, uint32_t capacity);
+
+/* Stats */
+RASM_C_API rasm_result      RASM_CALL rasm_get_frame_stats(rasm_renderer* renderer, rasm_frame_stats* stats);
+RASM_C_API rasm_result      RASM_CALL rasm_get_pool_stats(rasm_renderer* renderer, rasm_pool_stats* stats);
+RASM_C_API rasm_result      RASM_CALL rasm_get_load_stats(rasm_renderer* renderer, rasm_load_stats* stats);
+RASM_C_API rasm_result      RASM_CALL rasm_asset_loader_get_load_stats(rasm_asset_loader* loader, rasm_load_stats* stats);
 
 #ifdef __cplusplus
 }
