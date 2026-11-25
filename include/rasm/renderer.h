@@ -139,7 +139,11 @@ namespace rasm
         void                        setMorphWeights(EntityHandle entity, const float* weights, uint32_t count);
         void                        clearMorphWeights(EntityHandle entity);
         std::vector<std::string>    getMorphTargetNames(MeshHandle mesh) const;
+        // buildMesh, with LODs as RendererConfig::meshLods says, then createMesh(MeshBuild), on this thread.
         MeshHandle                  createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices, std::vector<uint32_t> colors = {});
+        // Uploads what buildMesh made on any thread, and takes it: no LOD or meshlet is built here. Invalid for a build
+        // that is not valid, or a full pool.
+        MeshHandle                  createMesh(MeshBuild&& build);
         // The grid every terrain tile of cells x cells shares, made on first use and kept until the renderer goes (not
         // listed in a tile's content, and destroyMesh refuses it). Invalid for 0 or more than MAX_TERRAIN_CELLS.
         MeshHandle                  getTerrainMesh(uint32_t cells);

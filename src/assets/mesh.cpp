@@ -37,32 +37,70 @@ namespace rasm
         return toUnorm8(encodeSrgb(linearColor.r)) | toUnorm8(encodeSrgb(linearColor.g)) << 8 | toUnorm8(encodeSrgb(linearColor.b)) << 16 | toUnorm8(linearColor.a) << 24;
     }
 
-    MeshHandle Renderer::createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices, std::vector<uint32_t> colors)
+    struct MeshBuild::Data
     {
+        ObjRaw raw;
+    };
+
+    MeshBuild::MeshBuild() = default;
+    MeshBuild::~MeshBuild() = default;
+    MeshBuild::MeshBuild(MeshBuild &&other) noexcept = default;
+    MeshBuild &MeshBuild::operator=(MeshBuild &&other) noexcept = default;
+
+    bool MeshBuild::isValid() const
+    {
+        return data != nullptr;
+    }
+
+    MeshBuild buildMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices, std::vector<uint32_t> colors, const MeshBuildOptions &options)
+    {
+        MeshBuild build;
         if (!colors.empty() && colors.size() != vertices.size())
         {
-            spdlog::error("createMesh: {} colors for {} vertices; give one per vertex, or none.", colors.size(), vertices.size());
-            return {};
+            spdlog::error("buildMesh: {} colors for {} vertices; give one per vertex, or none.", colors.size(), vertices.size());
+            return build;
         }
         // The importers check their indices; the application's are checked here, before the LOD builder reads them.
         if (indices.size() % 3 != 0)
         {
-            spdlog::error("createMesh: {} indices is not a whole number of triangles.", indices.size());
-            return {};
+            spdlog::error("buildMesh: {} indices is not a whole number of triangles.", indices.size());
+            return build;
         }
         for (uint32_t index : indices)
         {
             if (index >= vertices.size())
             {
-                spdlog::error("createMesh: index {} is out of range for {} vertices.", index, vertices.size());
-                return {};
+                spdlog::error("buildMesh: index {} is out of range for {} vertices.", index, vertices.size());
+                return build;
             }
         }
-
-        ObjRaw raw{.vertices = std::move(vertices), .indices = std::move(indices), .colors = std::move(colors)};
-        if (config.meshLods)
+        build.data = std::make_unique<MeshBuild::Data>();
+        ObjRaw &raw = build.data->raw;
+        raw = ObjRaw{.vertices = std::move(vertices), .indices = std::move(indices), .colors = std::move(colors)};
+        if (options.lods)
             buildMeshLods(raw);
-        buildMeshlets(raw);
+        if (options.meshlets)
+            buildMeshlets(raw);
+        return build;
+    }
+
+    MeshHandle Renderer::createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices, std::vector<uint32_t> colors)
+    {
+        MeshBuild build = buildMesh(std::move(vertices), std::move(indices), std::move(colors), {.lods = config.meshLods, .meshlets = true});
+        if (!build.isValid())
+            return {};
+        return createMesh(std::move(build));
+    }
+
+    MeshHandle Renderer::createMesh(MeshBuild &&build)
+    {
+        if (!build.isValid())
+        {
+            spdlog::error("createMesh: the mesh build is not valid (buildMesh refused its data, or a createMesh took it).");
+            return {};
+        }
+        const std::unique_ptr<MeshBuild::Data> data = std::move(build.data);
+        const ObjRaw &raw = data->raw;
 
         // The handle is taken once the geometry is in the pool, so a mesh that does not fit uses no index.
         Mesh mesh{.state = MeshState::READY, .subMeshes = {SubMesh{.transform = glm::mat4(1.0f)}}};
