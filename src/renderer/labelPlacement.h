@@ -18,6 +18,7 @@ namespace rasm
         glm::vec2                   low                 = glm::vec2(0.0f);
         glm::vec2                   high                = glm::vec2(0.0f);
         bool                        inView              = false;
+        glm::vec4                   probe               = glm::vec4(0.0f);  // its anchor's test in the Label Depth pass (gfx::SceneData::labelProbesPtr)
     };
 
     // A view's labels over frames, by slot: their fade and whether they were placed in the last frame. Its vectors
@@ -35,6 +36,14 @@ namespace rasm
     constexpr float                 LABEL_CELL_PIXELS   = 8.0f;
     // Seconds a label takes to fade in or out.
     constexpr float                 LABEL_FADE_SECONDS  = 0.25f;
+    // A label shows while its anchor is in front of the depth at one of the 3 x 3 pixels around it, within this many
+    // pixels' size at the anchor: the ground it stands on never hides it, a thing in front of it does, whole.
+    constexpr double                LABEL_DEPTH_PIXELS  = 4.0;
+    // LabelCandidate::probe.w, the Label Depth pass's test of a slot. Must match shaders/passes/labelDepth.slang.
+    constexpr float                 LABEL_PROBE_NONE    = 0.0f;     // not in the view: the slot is left as it is
+    constexpr float                 LABEL_PROBE_DEPTH   = 1.0f;     // tested against the depth
+    constexpr float                 LABEL_PROBE_OVERLAY = 2.0f;     // an overlay's: always shown
+    constexpr float                 LABEL_PROBE_RESET   = 4.0f;     // added when the label was hidden: its fade starts at its test's answer
 
     // Places the candidates greedily on a width x height screen: the higher priority first, then among equals the labels
     // placed last frame, then by slot, so equal labels keep the same winner and nothing flickers. A label is placed when

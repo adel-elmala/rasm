@@ -464,6 +464,10 @@ namespace rasm::gfx
         glm::vec4        environmentOrientation;    // quaternion (x, y, z, w): SceneEnvironment::orientation
         uint64_t         labelsPtr;                 // a shaded view's label slots' alpha (placeViewLabels); 0: every label shown
         GridData         grid;                      // the camera's grid, levelCount 0 without one
+        uint64_t         labelProbesPtr;            // vec4 per label slot: its anchor's pixel, the depth it must be in front of, its test (LABEL_PROBE_*)
+        uint64_t         labelFadesPtr;             // the view's label slots' fade by depth, kept across frames (Label Depth pass)
+        float            labelFadeStep;             // the fade's change this frame
+        uint32_t         labelSlotCount;            // slots the Label Depth pass tests: 0 to this
     };
 
     struct PushConstants
@@ -615,12 +619,14 @@ namespace rasm::gfx
     static_assert(offsetof(SceneData, environmentOrientation) == 2032, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, labelsPtr) == 2048, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, grid) == 2056, "SceneData must match the shader's scalar layout");
-    static_assert(sizeof(SceneData) == 2224, "SceneData must match the shader's scalar layout");
     static_assert(sizeof(GridData) == 168, "GridData must match the shader's scalar layout");
     static_assert(offsetof(GridData, residueX) == 48, "GridData must match the shader's scalar layout");
     static_assert(offsetof(GridData, minorColor) == 80, "GridData must match the shader's scalar layout");
     static_assert(offsetof(GridData, lineWidth) == 144, "GridData must match the shader's scalar layout");
     static_assert(offsetof(GridData, zero) == 164, "GridData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, labelProbesPtr) == 2224, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, labelSlotCount) == 2244, "SceneData must match the shader's scalar layout");
+    static_assert(sizeof(SceneData) == 2248, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, meshletDataPtr) == 2008, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, originLow) == 2016, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, previousSkinnedVertsPtr) == 1816, "SceneData must match the shader's scalar layout");

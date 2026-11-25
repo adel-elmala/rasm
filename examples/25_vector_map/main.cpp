@@ -32,8 +32,8 @@
 //   orthographic, in the corner.
 // - Names: each place's beside its point and each district's over its middle, laid out with a font atlas built from a
 //   TrueType file (Engine::loadFont, Renderer::createFont) on the server threads (addVectorLabels). Each view places them
-//   every frame: the higher priority first, never overlapping, fading in and out, hidden where the ground or a nearer
-//   object covers them.
+//   every frame: the higher priority first, never overlapping, fading in and out, and each shown or hidden whole by
+//   whether the ground or a nearer object covers its anchor (the Label Depth pass).
 // Every frame it checks the budget and, after the first frames, that no wanted tile is a hole; a headless run that
 // broke a check exits with 1.
 //   --culling        DebugView::CULLING: drawn draws green or yellow, culled ones as ghosts (their padded spheres)

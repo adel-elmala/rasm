@@ -21,6 +21,7 @@ namespace rasm
             LINE = 2,
             POINT = 3,
             GLYPH = 4,
+            BAND = 5,
         };
 
         enum class Metric : uint32_t
@@ -358,6 +359,87 @@ namespace rasm
             }
         }
 
+        // ---- Draped bands ----
+
+        // A grid point on a lattice of 2^-20 cells: the pieces that meet at a point lift it to the same ground and up.
+        glm::dvec2 snapToGrid(const glm::dvec2 &grid)
+        {
+            constexpr double STEPS = 1048576.0;
+            return glm::round(grid * STEPS) / STEPS;
+        }
+
+        // A draped line shape.drapeWidth wide: built as on flat ground across the tile (metres along the grid's x and z),
+        // then each triangle cut on the grid and each piece's corners lifted onto the drawn ground, so every piece lies
+        // on one terrain triangle. A corner keeps its offset and distance (interpolated in its triangle) and carries the
+        // built half width in uv[1].y; the shader only adds the anti-aliasing pixel, in the ground's plane.
+        void pushDrapedLine(VectorGeometry &geometry, const glm::dvec3 &origin, const VectorPlacement &placement, const glm::dvec3 *points, uint32_t count, const LineShape &shape,
+                            uint32_t featureId)
+        {
+            const TerrainTileDesc &tile = *placement.drapeTile;
+            const double cell = tile.size / getCells(placement);
+            const double half = 0.5 * static_cast<double>(shape.drapeWidth);
+            const glm::dvec3 flatUp(0.0, 1.0, 0.0);
+            std::vector<GroundPoint> flat;
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                const glm::dvec2 at = toGrid(placement, points[i]) * cell;
+                const glm::dvec3 position(at.x, 0.0, at.y);
+                if (flat.empty() || glm::length(position - flat.back().position) > 1e-9)
+                    flat.push_back({.position = position, .up = flatUp});
+            }
+            if (flat.size() < 2)
+                return;
+            VectorGeometry band;
+            pushLine(band, flat[0].position, flat, shape, featureId);
+
+            const glm::dquat orientation(tile.orientation);
+            std::vector<Polygon2> pieces;
+            for (size_t t = 0; t + 2 < band.indices.size(); t += 3)
+            {
+                const Vertex *corners[3] = {&band.vertices[band.indices[t]], &band.vertices[band.indices[t + 1]], &band.vertices[band.indices[t + 2]]};
+                // A triangle's corners share its frame: the direction its offsets are measured from.
+                const glm::dvec3 along(glm::vec3(corners[0]->tangent));
+                const glm::dvec3 across = getAcross(along, flatUp);
+                glm::dvec2 at[3];
+                for (uint32_t k = 0; k < 3; ++k)
+                {
+                    const glm::dvec2 offset(corners[k]->uv[0]);
+                    const glm::dvec3 ground = flat[0].position + glm::dvec3(corners[k]->pos) + (offset.x * along + offset.y * across) * half;
+                    at[k] = glm::dvec2(ground.x, ground.z) / cell;
+                }
+                const glm::dvec2 ab = at[1] - at[0];
+                const glm::dvec2 ac = at[2] - at[0];
+                const double area = ab.x * ac.y - ab.y * ac.x;
+                if (std::abs(area) < 1e-14)
+                    continue;
+                const glm::dvec3 alongTile = orientation * along;
+                const float metric = corners[0]->uv[2].y;
+                cutTriangle(at[0], at[1], at[2], pieces);
+                for (const Polygon2 &piece : pieces)
+                {
+                    const auto first = static_cast<uint32_t>(geometry.vertices.size());
+                    for (const glm::dvec2 &p : piece)
+                    {
+                        // The corner's weights in its triangle.
+                        const glm::dvec2 ap = p - at[0];
+                        const double w1 = (ap.x * ac.y - ap.y * ac.x) / area;
+                        const double w2 = (ab.x * ap.y - ab.y * ap.x) / area;
+                        const double w0 = 1.0 - w1 - w2;
+                        const glm::vec2 offset = static_cast<float>(w0) * corners[0]->uv[0] + static_cast<float>(w1) * corners[1]->uv[0] + static_cast<float>(w2) * corners[2]->uv[0];
+                        const float distance = static_cast<float>(w0 * corners[0]->uv[1].x + w1 * corners[1]->uv[1].x + w2 * corners[2]->uv[1].x);
+                        const GroundPoint ground = liftOnGrid(placement, snapToGrid(p));
+                        const glm::dvec3 alongGround = normalizeOr(alongTile - ground.up * glm::dot(alongTile, ground.up), getGroundAxis(ground.up));
+                        geometry.vertices.push_back({.pos = glm::vec3(ground.position - origin),
+                                                     .normal = glm::vec3(ground.up),
+                                                     .uv = {offset, glm::vec2(distance, static_cast<float>(half)), glm::vec2(static_cast<float>(Kind::BAND), metric)},
+                                                     .tangent = glm::vec4(glm::vec3(alongGround), std::bit_cast<float>(featureId))});
+                    }
+                    for (uint32_t k = 1; k + 1 < piece.size(); ++k)
+                        pushTriangle(geometry, first, first + k, first + k + 1);
+                }
+            }
+        }
+
         void pushFillVertex(VectorGeometry &geometry, const glm::dvec3 &origin, const GroundPoint &point, uint32_t featureId)
         {
             pushVertex(geometry, origin, point, getGroundAxis(point.up), glm::dvec2(0.0), glm::vec2(0.0f), Kind::FILL, Metric::FILL, featureId);
@@ -419,10 +501,17 @@ namespace rasm
         size_t first = 0;
         for (uint32_t i = 0; i < lineCount; ++i)
         {
+            const uint32_t featureId = featureIds != nullptr ? featureIds[i] : i;
+            if (shape.drapeWidth > 0.0f && isDraped(placement))
+            {
+                pushDrapedLine(geometry, origin, placement, points + first, lineSizes[i], shape, featureId);
+                first += lineSizes[i];
+                continue;
+            }
             placeLine(placement, points + first, lineSizes[i], line);
             first += lineSizes[i];
             if (line.size() >= 2)
-                pushLine(geometry, origin, line, shape, featureIds != nullptr ? featureIds[i] : i);
+                pushLine(geometry, origin, line, shape, featureId);
         }
     }
 

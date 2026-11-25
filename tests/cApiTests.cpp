@@ -640,6 +640,7 @@ TEST_CASE("the 1.5 structs start from the C++ defaults")
     CHECK(shape.join == RASM_LINE_JOIN_ROUND);
     CHECK(shape.cap == RASM_LINE_CAP_BUTT);
     CHECK(shape.miter_limit == RASM_MAX_VECTOR_MITER);
+    CHECK(shape.drape_width == 0.0f);
     rasm_vector_placement placement;
     REQUIRE(rasm_vector_placement_init(&placement, sizeof(placement)) == RASM_OK);
     CHECK(placement.up.y == 1.0f);

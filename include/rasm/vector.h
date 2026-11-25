@@ -35,6 +35,7 @@ namespace rasm
         LineJoin                    join            = LineJoin::ROUND;
         LineCap                     cap             = LineCap::BUTT;
         float                       miterLimit      = MAX_VECTOR_MITER; // half widths, 1 to MAX_VECTOR_MITER
+        float                       drapeWidth      = 0.0f;             // metres: a draped line's whole width, built into its mesh
     };
 
     // Where features sit. Without a drape, at the heights of their points, on a ground whose up is up. Draped, on a
@@ -80,7 +81,12 @@ namespace rasm
     // origin: the world position of the entity that will draw the mesh (no rotation, scale 1); the vertices are offsets
     // from it in floats, so a map far from the world's origin keeps its precision. points: every line's points, one line
     // after another, lineSizes[i] of them for line i (a line of fewer than 2 distinct points is skipped). featureIds:
-    // one per line (the picking id), or null for the line's number.
+    // one per line (the picking id), or null for the line's number. Draped, a line's middle is cut on the tile's grid and
+    // lies on the drawn ground, but its width spreads in the plane of the triangle under the middle, so a band wider
+    // than a cell sinks into the ground beside it where the ground bends. With shape.drapeWidth > 0 a draped line is
+    // built that wide (metres), cut on the grid across its whole width: all of it lies on the drawn ground. It is then
+    // drawn that wide in the ground's plane whatever the material's width and facing say (the outline and the dashes
+    // still follow the material), and a new width takes a rebuild.
     void                            addVectorLines(VectorGeometry& geometry, const glm::dvec3& origin, const glm::dvec3* points, const uint32_t* lineSizes, uint32_t lineCount, const LineShape& shape = {},
                                                    const VectorPlacement& placement = {}, const uint32_t* featureIds = nullptr);
     // Polygons with holes: points holds every ring, one after another, ringSizes[r] points for ring r; polygon i has

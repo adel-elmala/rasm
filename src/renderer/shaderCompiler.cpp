@@ -607,7 +607,11 @@ namespace rasm
                                      {"zero", offsetof(gfx::SceneData, zero)},
                                      {"environmentOrientation", offsetof(gfx::SceneData, environmentOrientation)},
                                      {"labelsPtr", offsetof(gfx::SceneData, labelsPtr)},
-                                     {"grid", offsetof(gfx::SceneData, grid)}});
+                                     {"grid", offsetof(gfx::SceneData, grid)},
+                                     {"labelProbesPtr", offsetof(gfx::SceneData, labelProbesPtr)},
+                                     {"labelFadesPtr", offsetof(gfx::SceneData, labelFadesPtr)},
+                                     {"labelFadeStep", offsetof(gfx::SceneData, labelFadeStep)},
+                                     {"labelSlotCount", offsetof(gfx::SceneData, labelSlotCount)}});
 
             valid &= validateStruct(fieldStruct(layouts, scene, "meshletsPtr"), "GeometryMeshlet", sizeof(gfx::GeometryMeshlet),
                                     {{"center", offsetof(gfx::GeometryMeshlet, center)},
