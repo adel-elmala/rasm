@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>C API · RASM</title>
 <meta name="description" content="RASM from C and from other languages: the rasm_c and rasm_c_renderer shared libraries, rasm_c.h, its ABI rules (versions, sized structs, handles, errors, memory, threads), every function, and the map from the C++ API.">
-<meta name="rasm-sources" content="include/rasm/rasm_c.h src/c/cApi.h src/c/cApi.cpp src/c/cRenderer.cpp src/c/cScene.cpp src/c/cLoader.cpp src/CMakeLists.txt cmake/RasmInstall.cmake cmake/rasmConfig.cmake.in examples/22_c_api/main.c tests/cApiTests.cpp tests/c_api/ctypes_smoke.py tests/consumer/CMakeLists.txt tools/check_install.py src/platform/paths.cpp include/rasm/handle.h">
+<meta name="rasm-sources" content="include/rasm/rasm_c.h src/c/cApi.h src/c/cApi.cpp src/c/cRenderer.cpp src/c/cScene.cpp src/c/cInput.cpp src/c/cViews.cpp src/c/cAnimation.cpp src/c/cLoader.cpp src/CMakeLists.txt cmake/RasmInstall.cmake cmake/rasmConfig.cmake.in examples/22_c_api/main.c tests/cApiTests.cpp tests/c_api/ctypes_smoke.py tests/consumer/CMakeLists.txt tools/check_install.py src/platform/paths.cpp include/rasm/handle.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -38,7 +38,7 @@
     <li>A struct that starts with <code>size</code> can grow: fill it with its <samp>_init</samp> function, which sets <code>size = sizeof</code>.</li>
     <li>A call that can fail returns a <code>rasm_result</code> (<code>RASM_OK</code> is 0), or a 0 handle. <code>rasm_get_last_error</code> says why, for this thread.</li>
     <li>No exception, no C++ type and no allocator crosses the boundary. Your memory stays yours; the library's stays the library's.</li>
-    <li>Not in C yet: the render graph, <code>RenderContext</code>, custom passes and the UI (C++ only).</li>
+    <li>Not in C: the render graph, <code>RenderContext</code>, custom passes, shadow passes and the UI (<a href="#map">C++ only</a>).</li>
   </ul>
 </div>
 
@@ -159,7 +159,7 @@ lib.rasm_renderer_create((1 &lt;&lt; 16) | 0, ctypes.byref(config), ctypes.byref
 <h2 id="rules"><span class="n">3</span>The rules of the header</h2>
 
 <h3 id="versions">Versions</h3>
-<p><code>RASM_C_API_VERSION</code> is <code>major &lt;&lt; 16 | minor</code>: <code>RASM_C_API_VERSION_MAJOR</code> and <code>RASM_C_API_VERSION_MINOR</code>, 1.0 today. Within one major version the API only grows at its end: new functions, new enum constants, new struct fields after the last one. Nothing is renumbered, reordered or removed. <a href="#rasm_renderer_create"><code>rasm_renderer_create</code></a> and <a href="#rasm_engine_create"><code>rasm_engine_create</code></a> take your <code>RASM_C_API_VERSION</code> and fail with <code>RASM_ERROR_VERSION</code> when the major versions differ, or when your minor version is newer than the library's: a newer header may use fields or functions the library does not have.</p>
+<p><code>RASM_C_API_VERSION</code> is <code>major &lt;&lt; 16 | minor</code>: <code>RASM_C_API_VERSION_MAJOR</code> and <code>RASM_C_API_VERSION_MINOR</code>, 1.1 today: 1.1 added windows, input, views, render targets, camera helpers, animation and stats to 1.0, at the end of the header. Within one major version the API only grows at its end: new functions, new enum constants, new struct fields after the last one. Nothing is renumbered, reordered or removed. <a href="#rasm_renderer_create"><code>rasm_renderer_create</code></a> and <a href="#rasm_engine_create"><code>rasm_engine_create</code></a> take your <code>RASM_C_API_VERSION</code> and fail with <code>RASM_ERROR_VERSION</code> when the major versions differ, or when your minor version is newer than the library's: a newer header may use fields or functions the library does not have.</p>
 
 <h3 id="sized">Structs that grow</h3>
 
@@ -184,14 +184,14 @@ lib.rasm_renderer_create((1 &lt;&lt; 16) | 0, ctypes.byref(config), ctypes.byref
   <li><b>Create</b> (<code>rasm_create_light</code>, <code>rasm_renderer_create</code>): a field past your <code>size</code> takes its default. <b>Update</b> (<code>rasm_update_light</code>, <code>rasm_update_material</code>): it keeps its current value. <b>Get</b> (<code>rasm_get_light</code>, <code>rasm_get_material</code>): set <code>size</code> before the call; the library writes only that much.</li>
   <li>A <code>size</code> below the struct's 1.0 size fails with <code>RASM_ERROR_INVALID_ARGUMENT</code>.</li>
   <li>In an array of sized structs, every element must have the <code>size</code> of the first one: the library steps through the array by it.</li>
-  <li>Small value structs have no <code>size</code>: <code>rasm_vec2</code>, <code>rasm_vec3</code>, <code>rasm_vec4</code>, <code>rasm_quat</code>, <code>rasm_mat4</code> (column-major), <code>rasm_transform</code>, <code>rasm_native_window</code>, <code>rasm_vertex</code>, <code>rasm_texture_transform</code>, <code>rasm_image_data</code>. A change to one of them would be a new struct and new functions.</li>
+  <li>Small value structs have no <code>size</code>: <code>rasm_vec2</code>, <code>rasm_vec3</code>, <code>rasm_vec4</code>, <code>rasm_quat</code>, <code>rasm_mat4</code> (column-major), <code>rasm_transform</code>, <code>rasm_native_window</code>, <code>rasm_vertex</code>, <code>rasm_texture_transform</code>, <code>rasm_image_data</code>, <code>rasm_view_rect</code>, <code>rasm_view_pixels</code>, <code>rasm_input_area</code>, <code>rasm_ui_input_capture</code>. A change to one of them would be a new struct and new functions.</li>
 </ul>
 
 <h3 id="types">Types and handles</h3>
 <ul>
   <li>Fixed sizes only: <code>uint32_t</code>, <code>int32_t</code>, <code>uint64_t</code>, <code>float</code>, <code>double</code>, pointers. An enum is a <code>typedef uint32_t</code> (<code>rasm_format</code>, <code>rasm_light_type</code>, ...) with <code>RASM_*</code> constants of fixed values, because a C <code>enum</code> has no fixed size. A boolean is <code>rasm_bool</code>, a <code>uint32_t</code> with <code>RASM_TRUE</code> and <code>RASM_FALSE</code>.</li>
-  <li>Opaque objects: <code>rasm_renderer</code>, <code>rasm_engine</code>, <code>rasm_asset_loader</code>, <code>rasm_image</code>. You hold pointers; their layout is the library's.</li>
-  <li>Handles: <code>rasm_scene</code>, <code>rasm_entity</code>, <code>rasm_mesh</code>, <code>rasm_material</code>, <code>rasm_texture</code>, <code>rasm_light</code>, <code>rasm_camera</code>, <code>rasm_environment</code>, <code>rasm_readback</code>. Each is <code>{ uint64_t id; }</code>: a distinct type in C, a plain 64-bit integer for a binding. The id is the C++ handle's <code>generation &lt;&lt; 32 | index</code> (<a href="../guides/generational-handles.html">Generational handles</a>); a generation starts at 1 and stops at <code>MAX_HANDLE_GENERATION</code>, so a valid handle is never 0 and always fits. <code>(rasm_material){0}</code> is "no material", as an invalid C++ handle is.</li>
+  <li>Opaque objects: <code>rasm_renderer</code>, <code>rasm_engine</code>, <code>rasm_asset_loader</code>, <code>rasm_image</code>, <code>rasm_camera_rig</code>, <code>rasm_camera_input_state</code>. You hold pointers; their layout is the library's.</li>
+  <li>Handles: <code>rasm_scene</code>, <code>rasm_entity</code>, <code>rasm_mesh</code>, <code>rasm_material</code>, <code>rasm_texture</code>, <code>rasm_light</code>, <code>rasm_camera</code>, <code>rasm_environment</code>, <code>rasm_readback</code>, <code>rasm_window</code>, <code>rasm_render_target</code>. Each is <code>{ uint64_t id; }</code>: a distinct type in C, a plain 64-bit integer for a binding. The id is the C++ handle's <code>generation &lt;&lt; 32 | index</code> (<a href="../guides/generational-handles.html">Generational handles</a>); a generation starts at 1 and stops at <code>MAX_HANDLE_GENERATION</code>, so a valid handle is never 0 and always fits. <code>(rasm_material){0}</code> is "no material", as an invalid C++ handle is.</li>
   <li>Every function is <code>RASM_C_API</code> (exported) and <code>RASM_CALL</code>: <code>__cdecl</code> on 32-bit Windows, the platform's C convention elsewhere. A binding declares the same; <code>rasm_log_callback</code> uses it too.</li>
 </ul>
 
@@ -384,6 +384,118 @@ rasm_result      rasm_image_read_png(rasm_image* image, const char* path);</pre>
   </div>
 </div>
 
+<div class="api" id="rasm_add_window">
+  <pre class="sig">rasm_result      rasm_window_desc_init(rasm_window_desc* desc, uint32_t size);
+rasm_window      rasm_get_main_window(rasm_renderer* renderer);
+rasm_window      rasm_add_window(rasm_renderer* renderer, const rasm_window_desc* desc);
+rasm_result      rasm_remove_window(rasm_renderer* renderer, rasm_window window);
+rasm_result      rasm_get_window(rasm_renderer* renderer, rasm_window window, rasm_window_info* info);
+rasm_result      rasm_set_window_size(rasm_renderer* renderer, rasm_window window, uint32_t width, uint32_t height, uint32_t pixel_width, uint32_t pixel_height);
+rasm_result      rasm_set_window_content_scale(rasm_renderer* renderer, rasm_window window, float scale);
+rasm_readback    rasm_read_window_frame(rasm_renderer* renderer, rasm_window window, rasm_readback_format format);</pre>
+  <div class="body">
+    <p>1.1. See <a href="engine.html#addWindow">engine.html</a>. <code>rasm_window_desc</code> is <code>WindowDesc</code>: <code>{size, title, width, height, native, hidden}</code>, a NULL <code>title</code> for the default; what it opens depends on the platform, as in C++: an SDL window, your <code>native</code> window, or an offscreen image headless. <code>rasm_window_info</code> is <code>Window</code>: <code>window</code>, <code>platform_window</code>, <code>native</code>, the sizes in points and pixels, <code>content_scale</code>, <code>resized</code>, <code>minimized</code>. The window 0 is the main one everywhere, as an invalid C++ handle is; <code>rasm_get_window</code> fails for a removed window. <code>rasm_set_window_size</code> and <code>rasm_set_window_content_scale</code> are for your own windows and headless ones: the SDL platform reads its own.</p>
+  </div>
+</div>
+
+<div class="api" id="rasm_add_input_event">
+  <pre class="sig">rasm_result      rasm_input_event_init(rasm_input_event* event, uint32_t size);
+void             rasm_poll_events(rasm_renderer* renderer);
+rasm_result      rasm_add_input_event(rasm_renderer* renderer, const rasm_input_event* event);
+uint32_t         rasm_get_input_event_count(rasm_renderer* renderer);
+rasm_result      rasm_get_input_event(rasm_renderer* renderer, uint32_t index, rasm_input_event* event);
+rasm_result      rasm_get_camera_input(rasm_renderer* renderer, rasm_camera_input* input);
+rasm_ui_input_capture rasm_get_ui_input_capture(rasm_renderer* renderer);
+float            rasm_get_delta_time(rasm_renderer* renderer);</pre>
+  <div class="body">
+    <p>1.1. See <a href="camera.html#getInputEvents">camera.html</a> and <a href="../guides/platform-layer.html">The platform layer</a>. <code>rasm_input_event</code> is <code>InputEvent</code>: <code>type</code> (<code>RASM_INPUT_EVENT_TYPE_KEY</code>, <code>RASM_INPUT_EVENT_TYPE_MOUSE_BUTTON</code>, <code>RASM_INPUT_EVENT_TYPE_MOUSE_MOVE</code>, ...), <code>window</code> (0: the main one), <code>key</code> and <code>physical_key</code> (<code>rasm_key</code>: <code>RASM_KEY_A</code> to <code>RASM_KEY_KEYPAD_EQUAL</code>, <code>RASM_KEY_COUNT</code> of them), <code>down</code>, <code>repeat</code>, <code>modifiers</code> (<code>RASM_KEY_MOD_SHIFT</code>, <code>RASM_KEY_MOD_CTRL</code>, <code>RASM_KEY_MOD_ALT</code>, <code>RASM_KEY_MOD_SUPER</code>), <code>button</code> (<code>rasm_mouse_button</code>), <code>x</code>, <code>y</code> in window points, <code>codepoint</code>. A value past its constants is refused.</p>
+    <p>The frame's events are read one at a time, <code>rasm_get_input_event(renderer, i, &amp;event)</code> for <code>i</code> below the count, so a binding never steps through an array of a size it does not know. They are valid until the next frame polls. <code>rasm_camera_input</code> is <code>CameraInput</code>, a sized struct: <code>mouse_start</code>, <code>mouse_end</code> (NDC), <code>wheel_delta</code>, <code>delta_time</code>, <code>forward</code>, <code>backward</code>, <code>left</code>, <code>right</code>. <code>rasm_ui_input_capture</code> is <code>{mouse, keyboard, text}</code>.</p>
+    <pre><code>// A drag that turns the main camera, sent as an application's event loop would.
+rasm_input_event event;
+rasm_input_event_init(&amp;event, sizeof(event));
+event.type = RASM_INPUT_EVENT_TYPE_MOUSE_BUTTON;
+event.button = RASM_MOUSE_BUTTON_LEFT;
+event.down = RASM_TRUE;
+event.x = 640.0f;
+event.y = 360.0f;
+rasm_add_input_event(renderer, &amp;event);</code></pre>
+  </div>
+</div>
+
+<div class="api" id="rasm_set_camera_controller">
+  <pre class="sig">rasm_result      rasm_camera_controller_init(rasm_camera_controller* controller, uint32_t size);
+rasm_result      rasm_camera_input_init(rasm_camera_input* input, uint32_t size);
+rasm_result      rasm_get_camera_controller(rasm_renderer* renderer, rasm_camera camera, rasm_camera_controller* controller);
+rasm_result      rasm_set_camera_controller(rasm_renderer* renderer, rasm_camera camera, const rasm_camera_controller* controller);
+rasm_result      rasm_update_camera(rasm_renderer* renderer, rasm_camera camera, const rasm_camera_input* input);
+rasm_camera_rig* rasm_camera_rig_create(const rasm_camera_controller* controller, const rasm_transform* transform);
+void             rasm_camera_rig_destroy(rasm_camera_rig* rig);
+rasm_result      rasm_camera_rig_update(rasm_camera_rig* rig, const rasm_camera_input* input);
+rasm_result      rasm_camera_rig_get_transform(const rasm_camera_rig* rig, rasm_transform* transform, rasm_transform* target_transform);
+rasm_camera_input_state* rasm_camera_input_state_create(void);
+void             rasm_camera_input_state_destroy(rasm_camera_input_state* state);
+rasm_result      rasm_camera_input_state_add_event(rasm_camera_input_state* state, const rasm_input_event* event, const rasm_input_area* area, const rasm_ui_input_capture* capture);
+rasm_result      rasm_camera_input_state_take(rasm_camera_input_state* state, const rasm_ui_input_capture* capture, float delta_time, rasm_camera_input* input);
+rasm_vec2        rasm_to_input_ndc(float x, float y, const rasm_input_area* area);
+rasm_input_area  rasm_get_input_area(rasm_renderer* renderer, rasm_window window, const rasm_view_rect* rect);</pre>
+  <div class="body">
+    <p>1.1. See <a href="camera.html#setCameraController">camera.html</a> and <a href="../guides/camera-controllers.html">Camera controllers and easing</a>. <code>rasm_camera_controller</code> is <code>CameraController</code> without its union, flat: <code>type</code> (<code>RASM_CAMERA_CONTROLLER_TYPE_TRACK_BALL</code>, <code>RASM_CAMERA_CONTROLLER_TYPE_FREE_FLY</code>, <code>RASM_CAMERA_CONTROLLER_TYPE_NONE</code>), <code>easing_speed</code>, the <code>track_ball_*</code> fields and the <code>free_fly_*</code> fields; only the type's own fields are read. Its init gives <code>NONE</code>, easing 12, a trackball radius of 5 and a free-fly speed of 5. Setting a controller replaces it whole: a field past your <code>size</code> takes its default.</p>
+    <p>The helpers an application drives itself, with no renderer: a <code>rasm_camera_rig</code> holds <code>CameraRig</code> (create it from a controller and a pose, update it with a frame's input, read the eased <code>transform</code> and the <code>target_transform</code>, either may be NULL), and a <code>rasm_camera_input_state</code> holds <code>CameraInputState</code> (add a frame's events for one <code>rasm_input_area</code>, then take its <code>rasm_camera_input</code>). Both are made once and reused, so a frame allocates nothing. A NULL <code>capture</code> means the UI took nothing.</p>
+  </div>
+</div>
+
+<div class="api" id="rasm_render_views">
+  <pre class="sig">rasm_result      rasm_view_init(rasm_view* view, uint32_t size);
+rasm_result      rasm_render_views(rasm_renderer* renderer, const rasm_view* views, uint32_t view_count);
+rasm_view_pixels rasm_get_view_pixels(const rasm_view_rect* rect, uint32_t width, uint32_t height);
+rasm_result      rasm_render_target_desc_init(rasm_render_target_desc* desc, uint32_t size);
+rasm_render_target rasm_create_render_target(rasm_renderer* renderer, const rasm_render_target_desc* desc);
+rasm_result      rasm_resize_render_target(rasm_renderer* renderer, rasm_render_target target, uint32_t width, uint32_t height);
+rasm_result      rasm_destroy_render_target(rasm_renderer* renderer, rasm_render_target target);
+rasm_texture     rasm_get_render_target_texture(rasm_renderer* renderer, rasm_render_target target);</pre>
+  <div class="body">
+    <p>1.1. <a href="engine.html#render-views"><code>render(views, count)</code></a> and <a href="../guides/multiple-views.html">Many views of one scene</a>. <code>rasm_view</code> is <code>View</code>, flat: <code>scene</code>, <code>camera</code>, <code>rect</code> (a <code>rasm_view_rect</code>, fractions from the top-left corner), <code>target</code> (a view texture), <code>window</code> (0: the main one), <code>bloom</code> (<code>RASM_VIEW_TOGGLE_DEFAULT</code>, <code>RASM_VIEW_TOGGLE_OFF</code>, <code>RASM_VIEW_TOGGLE_ON</code>) and <code>anti_aliasing</code>. Its init is the whole main window with the config's settings. Every element of <code>views</code> has the first one's <code>size</code>; there are at most <code>RASM_MAX_VIEWS</code>. The library turns them into C++ views in an array on its stack, so a frame allocates nothing.</p>
+    <p>A view texture is a <code>rasm_render_target</code>: <code>rasm_render_target_desc</code> is <code>{size, name, width, height, format, clear_color, readable}</code>, one color and no depth, <code>RASM_FORMAT_R8G8B8A8_SRGB</code> by default (a picture), cleared to opaque black. Its <code>rasm_get_render_target_texture</code> is one texture handle for its whole life, kept across a resize: give it to a material.</p>
+    <pre><code>rasm_view views[2];
+rasm_view_init(&amp;views[0], sizeof(views[0]));
+views[0].scene = scene;
+views[0].camera = map;
+views[0].target = mapTarget;
+rasm_view_init(&amp;views[1], sizeof(views[1]));
+views[1].scene = scene;
+views[1].camera = camera;
+rasm_render_views(renderer, views, 2);</code></pre>
+  </div>
+</div>
+
+<div class="api" id="rasm_play_animation">
+  <pre class="sig">rasm_result      rasm_animation_play_init(rasm_animation_play* play, uint32_t size);
+void             rasm_set_animation_time(rasm_renderer* renderer, double seconds);
+rasm_result      rasm_play_animation(rasm_renderer* renderer, rasm_entity entity, const rasm_animation_play* play);
+rasm_result      rasm_stop_animation(rasm_renderer* renderer, rasm_entity entity);
+uint32_t         rasm_get_animation_count(rasm_renderer* renderer, rasm_mesh mesh);
+uint32_t         rasm_get_animation_name(rasm_renderer* renderer, rasm_mesh mesh, uint32_t index, char* buffer, uint32_t capacity);
+float            rasm_get_animation_duration(rasm_renderer* renderer, rasm_mesh mesh, uint32_t index);
+int32_t          rasm_find_animation(rasm_renderer* renderer, rasm_mesh mesh, const char* name);
+rasm_result      rasm_set_morph_weights(rasm_renderer* renderer, rasm_entity entity, const float* weights, uint32_t count);
+rasm_result      rasm_clear_morph_weights(rasm_renderer* renderer, rasm_entity entity);
+uint32_t         rasm_get_morph_target_count(rasm_renderer* renderer, rasm_mesh mesh);
+uint32_t         rasm_get_morph_target_name(rasm_renderer* renderer, rasm_mesh mesh, uint32_t index, char* buffer, uint32_t capacity);</pre>
+  <div class="body">
+    <p>1.1. See <a href="scene.html#animation">scene.html</a>. <code>rasm_animation_play</code> is <code>AnimationPlay</code>: <code>{size, clip, start_time, clip_time, speed, loop}</code>, with <code>clip</code> an index or <code>RASM_ALL_ANIMATION_CLIPS</code>. <code>getAnimations</code> is a count, a name and a duration by index; <code>rasm_find_animation</code> gives -1 for an unknown name.</p>
+  </div>
+</div>
+
+<div class="api" id="rasm_get_frame_stats">
+  <pre class="sig">rasm_result      rasm_get_frame_stats(rasm_renderer* renderer, rasm_frame_stats* stats);
+rasm_result      rasm_get_pool_stats(rasm_renderer* renderer, rasm_pool_stats* stats);
+rasm_result      rasm_get_load_stats(rasm_renderer* renderer, rasm_load_stats* stats);
+rasm_result      rasm_asset_loader_get_load_stats(rasm_asset_loader* loader, rasm_load_stats* stats);</pre>
+  <div class="body">
+    <p>1.1. See <a href="engine.html#getFrameStats">engine.html</a>. Sized structs you fill with <code>size</code> set: <code>rasm_frame_stats</code> is <code>FrameStats</code> without its GPU timers and memory (<code>cpu_frame_ms</code>, <code>gpu_frame_ms</code>, <code>upload_gpu_ms</code>, the draw, triangle, LOD (<code>draws_per_lod[RASM_MAX_MESH_LODS]</code>), meshlet and light counts); <code>rasm_pool_stats</code> is <code>PoolStats</code> and <code>rasm_load_stats</code> is <code>LoadStats</code>. As in C++, the first <code>rasm_get_frame_stats</code> turns measuring on, and the numbers fill in a few frames later.</p>
+  </div>
+</div>
+
 <h2 id="map"><span class="n">5</span>From C++ to C</h2>
 
 <div class="table-wrap">
@@ -398,11 +510,14 @@ rasm_result      rasm_image_read_png(rasm_image* image, const char* path);</pre>
   <tr><td><code>createTexture(desc)</code> + <code>RenderContext::fillTexture</code></td><td><code>rasm_create_texture(renderer, &amp;desc, pixels)</code></td></tr>
   <tr><td><code>ReadbackImage</code>, <code>writePng</code>, <code>readPng</code></td><td><code>rasm_image</code>, <code>rasm_image_write_png</code>, <code>rasm_image_read_png</code></td></tr>
   <tr><td><code>MeshHandle{}</code> (invalid)</td><td><code>(rasm_mesh){0}</code></td></tr>
+  <tr><td><code>render(views, count)</code> with a <code>View</code> list</td><td><code>rasm_render_views(renderer, views, count)</code> with a <code>rasm_view</code> array</td></tr>
+  <tr><td><code>getInputEvents(count)</code></td><td><code>rasm_get_input_event_count</code>, then <code>rasm_get_input_event</code> by index</td></tr>
+  <tr><td><code>CameraRig</code>, <code>CameraInputState</code></td><td><code>rasm_camera_rig</code>, <code>rasm_camera_input_state</code>: objects with create and destroy</td></tr>
   <tr><td><code>std::string</code>, <code>std::vector</code></td><td><code>const char*</code>; a pointer and a count</td></tr>
 </table>
 </div>
 
-<p>C++ only, for now: the render graph and custom passes (<a href="render-graph.html">render-graph.html</a>), <code>RenderContext</code> and buffers (<a href="low-level.html">low-level.html</a>), shadow passes, Dear ImGui and <code>setUiCallback</code>, the buffer inspector and GPU timers. They are callbacks into command recording, which need a callback ABI of their own. Windows, input events, views, render targets, camera controllers, animation and stats come next to the C API.</p>
+<p>C++ only, for now: the render graph and custom passes (<a href="render-graph.html">render-graph.html</a>), <code>RenderContext</code> and buffers (<a href="low-level.html">low-level.html</a>), shadow passes (<code>rasm_render_views</code> draws no shadows, as <code>render(views, count)</code> does not), Dear ImGui and <code>setUiCallback</code>, the buffer inspector, GPU timers and the debug views. They are callbacks into command recording, or C++ UI code, which need a callback ABI of their own; the development plan keeps them as an open item.</p>
 
 </main>
 </div>
