@@ -43,6 +43,11 @@ int main(void)
     rasm_point_cloud_chunk_desc chunk;
     rasm_vec3 points[2] = {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}};
     rasm_material_desc material;
+    rasm_point_chunk_lod lod;
+    rasm_point_cloud_octree_desc octreeDesc;
+    rasm_point_cloud_octree *octree = NULL;
+    rasm_point_cloud_node node;
+    rasm_dvec3 cloud[3] = {{4197000.0, 168000.0, 4786000.0}, {4197001.0, 168000.0, 4786000.0}, {4197000.0, 168001.0, 4786000.5}};
 
     if (rasm_get_version() != RASM_C_API_VERSION)
         return 1;
@@ -98,6 +103,8 @@ int main(void)
         return 17;
     material.points.shape = RASM_POINT_SHAPE_SPHERE;
     material.points.range.log = RASM_FALSE;
+    material.points.size_mode = RASM_POINT_SIZE_MODE_ADAPTIVE;
+    material.points.max_size = 8.0f;
     if (rasm_point_cloud_chunk_desc_init(&chunk, sizeof(chunk)) != RASM_OK || chunk.count != 0)
         return 18;
     chunk.positions = points;
@@ -109,6 +116,19 @@ int main(void)
         return 20;
     if (rasm_set_compute_points(NULL, RASM_FALSE) != RASM_ERROR_INVALID_ARGUMENT || rasm_get_compute_points(NULL) != RASM_FALSE)
         return 21;
+    if (rasm_point_chunk_lod_init(&lod, sizeof(lod)) != RASM_OK || lod.drawn != 1.0f || lod.finer[7] != 0.0f || rasm_set_point_chunk_lod(NULL, entity, &lod) != RASM_ERROR_INVALID_ARGUMENT)
+        return 22;
+    if (rasm_point_cloud_octree_desc_init(&octreeDesc, sizeof(octreeDesc)) != RASM_OK || octreeDesc.cells != 128)
+        return 23;
+    octreeDesc.positions = cloud;
+    octreeDesc.count = 3;
+    if (rasm_build_point_cloud_octree(&octreeDesc, &octree) != RASM_OK || rasm_get_point_cloud_node_count(octree) != 1)
+        return 24;
+    node.size = sizeof(node);
+    if (rasm_get_point_cloud_node(octree, 0, &node) != RASM_OK || node.parent != RASM_POINT_NODE_NONE || node.point_count != 3 ||
+        rasm_get_point_cloud_node_chunk(octree, 0, &chunk) != RASM_OK || chunk.count != 3)
+        return 25;
+    rasm_point_cloud_octree_destroy(octree);
     printf("rasm_c.h %u.%u compiles as C (__STDC_VERSION__ %ld) and links rasm_c_renderer.\n", RASM_C_API_VERSION_MAJOR, RASM_C_API_VERSION_MINOR, (long)__STDC_VERSION__);
     return 0;
 }

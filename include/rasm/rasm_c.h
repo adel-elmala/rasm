@@ -24,7 +24,7 @@
 
 // NOLINTBEGIN(readability-identifier-naming): C names, snake_case with the rasm_ prefix, as C APIs and their bindings expect
 #define RASM_C_API_VERSION_MAJOR    1
-#define RASM_C_API_VERSION_MINOR    11
+#define RASM_C_API_VERSION_MINOR    12
 #define RASM_C_API_VERSION          (((uint32_t)RASM_C_API_VERSION_MAJOR << 16) | (uint32_t)RASM_C_API_VERSION_MINOR)
 
 #if defined(_WIN32)
@@ -424,6 +424,13 @@ enum
     RASM_POINT_SHAPE_SPHERE         = 2,        /* round, with the depth of a sphere */
 };
 
+typedef uint32_t                    rasm_point_size_mode;
+enum
+{
+    RASM_POINT_SIZE_MODE_FIXED      = 0,        /* 1.12: size in size_unit */
+    RASM_POINT_SIZE_MODE_ADAPTIVE   = 1,        /* 1.12: from size, grown where the chunk's spacing on screen leaves gaps, up to max_size pixels */
+};
+
 typedef uint32_t                    rasm_point_color_mode;
 enum
 {
@@ -449,6 +456,8 @@ typedef struct rasm_point_material
     rasm_texture                    colormap;                                  /* rasm_create_colormap */
     rasm_scalar_range               range;                                     /* 0 to 1, clamped, by default */
     float                           density;                                   /* points drawn per point-size square of the chunk on screen; 2 by default, 0: all */
+    rasm_point_size_mode            size_mode;                                 /* 1.12: FIXED by default */
+    float                           max_size;                                  /* 1.12: ADAPTIVE: the largest diameter in pixels; 8 by default */
 } rasm_point_material;
 
 typedef struct rasm_material_desc
@@ -878,6 +887,7 @@ typedef struct rasm_pool_stats
     uint64_t                        instances;
     uint64_t                        animation_pool_bytes;
     uint32_t                        releases_waiting;
+    uint64_t                        points;                                    /* 1.12: 8 B units of geometry_pool_points */
 } rasm_pool_stats;
 
 typedef struct rasm_load_stats
@@ -1183,7 +1193,86 @@ typedef struct rasm_point_cloud_chunk_desc
     const uint32_t*                 colors;
     const float*                    scalars;
     uint32_t                        count;
+    float                           spacing;                                   /* 1.12: between neighbouring points, for an ADAPTIVE size; 0: measured */
 } rasm_point_cloud_chunk_desc;
+
+/* 1.12: a chunk entity's share of its points drawn (a fade), and over each octant of its entity's space (x >= 0: 1,
+ * y >= 0: 2, z >= 0: 4) the drawn share of a finer chunk there, which takes an ADAPTIVE size back to the material's. */
+typedef struct rasm_point_chunk_lod
+{
+    uint32_t                        size;
+    float                           drawn;                                     /* 1 by default */
+    float                           finer[8];                                  /* 0 by default */
+} rasm_point_chunk_lod;
+
+/* 1.12: Potree's octree of a point cloud in doubles (rasm_build_point_cloud_octree), its nodes chunks for a tile streamer. */
+#define RASM_POINT_NODE_NONE        0xFFFFFFFFu
+
+typedef struct rasm_point_cloud_octree rasm_point_cloud_octree;
+
+typedef struct rasm_point_cloud_octree_desc
+{
+    uint32_t                        size;
+    const rasm_dvec3*               positions;
+    const uint32_t*                 colors;                                    /* as a chunk's; NULL: none */
+    const float*                    scalars;                                   /* NULL: none */
+    uint32_t                        count;
+    uint32_t                        cells;                                     /* a node keeps a point of each cell of a cells^3 grid over its cube; 128 by default, a power of two */
+    uint32_t                        max_node_points;                           /* a node with no more points left is a leaf with them all; 16384 by default */
+} rasm_point_cloud_octree_desc;
+
+typedef struct rasm_point_cloud_node
+{
+    uint32_t                        size;
+    rasm_dvec3                      center;                                    /* its cube's centre: its points are offsets from it */
+    double                          half_size;
+    rasm_dvec3                      bounds_center;                             /* a sphere around its points and its children's: a tile's */
+    double                          bounds_radius;
+    float                           spacing;
+    float                           geometric_error;                           /* its spacing, 0 for a leaf */
+    uint32_t                        parent;                                    /* RASM_POINT_NODE_NONE: the root */
+    uint32_t                        children[8];                               /* by octant; RASM_POINT_NODE_NONE: none */
+    uint32_t                        first_point;
+    uint32_t                        point_count;
+    uint32_t                        level;
+} rasm_point_cloud_node;
+
+/* 1.12: a LAS or LAZ file's points (rasm_asset_loader_load_point_cloud), with the rasm_c library only. */
+typedef struct rasm_point_cloud     rasm_point_cloud;
+
+typedef uint32_t                    rasm_point_cloud_scalar;
+enum
+{
+    RASM_POINT_CLOUD_SCALAR_NONE            = 0,
+    RASM_POINT_CLOUD_SCALAR_INTENSITY       = 1,
+    RASM_POINT_CLOUD_SCALAR_CLASSIFICATION  = 2,
+    RASM_POINT_CLOUD_SCALAR_ELEVATION       = 3,
+    RASM_POINT_CLOUD_SCALAR_GPS_TIME        = 4,
+    RASM_POINT_CLOUD_SCALAR_RETURN_NUMBER   = 5,
+};
+
+typedef struct rasm_point_cloud_load_options
+{
+    uint32_t                        size;
+    rasm_point_cloud_scalar         scalar;                                    /* INTENSITY by default */
+    rasm_bool                       z_up_to_y_up;                              /* (x, y, z) to (x, z, -y) */
+} rasm_point_cloud_load_options;
+
+/* What a loaded cloud holds; the pointers stay valid until rasm_point_cloud_destroy. */
+typedef struct rasm_point_cloud_info
+{
+    uint32_t                        size;
+    const rasm_dvec3*               positions;                                 /* as stored: ECEF, or a projection's metres */
+    const uint32_t*                 colors;                                    /* RGBA8 sRGB; NULL for a point format without color */
+    const float*                    scalars;                                   /* NULL for SCALAR_NONE */
+    uint32_t                        count;
+    rasm_dvec3                      bounds_min;
+    rasm_dvec3                      bounds_max;
+    const char*                     coordinate_system;                         /* OGC WKT, "" without */
+    uint32_t                        point_format;
+    uint32_t                        version_minor;
+    rasm_bool                       compressed;                                /* LAZ */
+} rasm_point_cloud_info;
 
 typedef void (RASM_CALL* rasm_log_callback)(void* user_data, rasm_log_level level, const char* message);
 
@@ -1490,6 +1579,28 @@ RASM_C_API rasm_result      RASM_CALL rasm_build_point_cloud_chunk(const rasm_po
  * the GPU has them; the two take the same pixels. Off: every point by triangles. */
 RASM_C_API rasm_result      RASM_CALL rasm_set_compute_points(rasm_renderer* renderer, rasm_bool on);
 RASM_C_API rasm_bool        RASM_CALL rasm_get_compute_points(rasm_renderer* renderer);
+
+/* Added in 1.12: point cloud streaming. rasm_build_point_cloud_octree builds Potree's octree of points in doubles on any
+ * thread: each node a sample of its cube (a point of each grid cell its points take), its children the detail it lacks.
+ * Make each node a tile of a rasm_tile_streamer with RASM_TILE_REFINE_ADD and, when it is handed out, a chunk of
+ * rasm_get_point_cloud_node_chunk (its arrays are the octree's, which must outlive the build) on an entity at the node's
+ * centre. rasm_set_point_chunk_lod fades a chunk in and out by its prefix and lets an ADAPTIVE parent shrink as a finer
+ * chunk fills its place. rasm_asset_loader_load_point_cloud reads a LAS file (1.0 to 1.4, point formats 0 to 10) with
+ * RASM's own reader, or a LAZ file through LASzip, on the calling thread. A pick's feature on a node's entity is the
+ * point's index in its chunk: the octree's indices[first_point + feature] is its index in the desc's arrays. */
+RASM_C_API rasm_result      RASM_CALL rasm_point_chunk_lod_init(rasm_point_chunk_lod* lod, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_set_point_chunk_lod(rasm_renderer* renderer, rasm_entity entity, const rasm_point_chunk_lod* lod);
+RASM_C_API rasm_result      RASM_CALL rasm_point_cloud_octree_desc_init(rasm_point_cloud_octree_desc* desc, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_build_point_cloud_octree(const rasm_point_cloud_octree_desc* desc, rasm_point_cloud_octree** octree);
+RASM_C_API void             RASM_CALL rasm_point_cloud_octree_destroy(rasm_point_cloud_octree* octree);
+RASM_C_API uint32_t         RASM_CALL rasm_get_point_cloud_node_count(const rasm_point_cloud_octree* octree);
+RASM_C_API rasm_result      RASM_CALL rasm_get_point_cloud_node(const rasm_point_cloud_octree* octree, uint32_t node, rasm_point_cloud_node* record);
+RASM_C_API rasm_result      RASM_CALL rasm_get_point_cloud_node_chunk(const rasm_point_cloud_octree* octree, uint32_t node, rasm_point_cloud_chunk_desc* desc);
+RASM_C_API const uint32_t*  RASM_CALL rasm_get_point_cloud_octree_indices(const rasm_point_cloud_octree* octree, uint32_t* count);
+RASM_C_API rasm_result      RASM_CALL rasm_point_cloud_load_options_init(rasm_point_cloud_load_options* options, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_asset_loader_load_point_cloud(rasm_asset_loader* loader, const char* path, const rasm_point_cloud_load_options* options, rasm_point_cloud** cloud);
+RASM_C_API rasm_result      RASM_CALL rasm_get_point_cloud_info(const rasm_point_cloud* cloud, rasm_point_cloud_info* info);
+RASM_C_API void             RASM_CALL rasm_point_cloud_destroy(rasm_point_cloud* cloud);
 
 #ifdef __cplusplus
 }

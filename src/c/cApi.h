@@ -2,6 +2,7 @@
 #pragma once
 
 #include "rasm/rasm_c.h"
+#include "rasm/pointCloudOctree.h"
 #include "rasm/renderer.h"
 
 #include <cstddef>
@@ -38,6 +39,11 @@ struct rasm_font_atlas
 struct rasm_mesh_build
 {
     rasm::MeshBuild build;
+};
+
+struct rasm_point_cloud_octree
+{
+    rasm::PointCloudOctree              octree;
 };
 
 namespace rasm::c
@@ -236,6 +242,12 @@ namespace rasm::c
     constexpr size_t        GRID_SIZE_1_8                   = offsetof(rasm_grid, fade_distance) + sizeof(float);
 
     constexpr size_t        POINT_CLOUD_CHUNK_DESC_SIZE_1_10 = offsetof(rasm_point_cloud_chunk_desc, count) + sizeof(uint32_t);
+
+    constexpr size_t        POINT_CHUNK_LOD_SIZE_1_12       = offsetof(rasm_point_chunk_lod, finer) + 8 * sizeof(float);
+    constexpr size_t        POINT_CLOUD_OCTREE_DESC_SIZE_1_12 = offsetof(rasm_point_cloud_octree_desc, max_node_points) + sizeof(uint32_t);
+    constexpr size_t        POINT_CLOUD_NODE_SIZE_1_12      = offsetof(rasm_point_cloud_node, level) + sizeof(uint32_t);
+    constexpr size_t        POINT_CLOUD_LOAD_OPTIONS_SIZE_1_12 = offsetof(rasm_point_cloud_load_options, z_up_to_y_up) + sizeof(rasm_bool);
+    constexpr size_t        POINT_CLOUD_INFO_SIZE_1_12      = offsetof(rasm_point_cloud_info, compressed) + sizeof(rasm_bool);
 
 }
 

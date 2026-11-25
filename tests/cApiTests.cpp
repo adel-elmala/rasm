@@ -3,6 +3,7 @@
 #include "rasm/vector.h"
 #include "rasm/picking.h"
 #include "rasm/pointCloud.h"
+#include "rasm/pointCloudOctree.h"
 #include "rasm/grid.h"
 #include "rasm/cameraInput.h"
 #include "rasm/light.h"
@@ -1003,4 +1004,77 @@ TEST_CASE("a tile streamer call with a bad argument gives a code and a last erro
     stats.size = sizeof(stats);
     CHECK(rasm_tile_streamer_get_stats(nullptr, &stats) == RASM_ERROR_INVALID_ARGUMENT);
     rasm_tile_streamer_destroy(nullptr);
+}
+
+TEST_CASE("the 1.12 structs start from the C++ defaults, an octree builds on any thread, and its nodes are its chunks")
+{
+    const rasm::PointMaterial defaults;
+    rasm_material_desc desc = {};
+    CHECK(sizeof(desc.points) == sizeof(rasm_point_material));
+    CHECK(RASM_POINT_NODE_NONE == rasm::POINT_NODE_NONE);
+    rasm_point_chunk_lod lod;
+    REQUIRE(rasm_point_chunk_lod_init(&lod, sizeof(lod)) == RASM_OK);
+    CHECK(lod.drawn == rasm::PointChunkLod{}.drawn);
+    CHECK(lod.finer[3] == 0.0f);
+    CHECK(rasm_set_point_chunk_lod(nullptr, rasm_entity{}, &lod) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(contains(rasm_get_last_error(), "renderer is NULL"));
+    rasm_point_cloud_load_options options;
+    REQUIRE(rasm_point_cloud_load_options_init(&options, sizeof(options)) == RASM_OK);
+    CHECK(options.scalar == static_cast<uint32_t>(rasm::PointCloudLoadOptions{}.scalar));
+    CHECK(options.z_up_to_y_up == RASM_FALSE);
+    rasm_point_cloud *cloud = nullptr;
+    CHECK(rasm_asset_loader_load_point_cloud(nullptr, "scan.las", &options, &cloud) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(cloud == nullptr);
+    CHECK(rasm_get_point_cloud_info(nullptr, nullptr) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(defaults.sizeMode == rasm::PointSizeMode::FIXED);
+
+    rasm_point_cloud_octree_desc octreeDesc;
+    REQUIRE(rasm_point_cloud_octree_desc_init(&octreeDesc, sizeof(octreeDesc)) == RASM_OK);
+    CHECK(octreeDesc.cells == rasm::PointCloudOctreeDesc{}.cells);
+    CHECK(octreeDesc.max_node_points == rasm::PointCloudOctreeDesc{}.maxNodePoints);
+    std::vector<rasm_dvec3> positions;
+    for (uint32_t i = 0; i < 30000; ++i)
+        positions.push_back({4197000.0 + static_cast<double>(i % 200) * 0.25, 168000.0 + static_cast<double>(i / 200) * 0.25, 4786000.0 + 0.01 * static_cast<double>(i % 7)});
+    octreeDesc.positions = positions.data();
+    octreeDesc.count = static_cast<uint32_t>(positions.size());
+    octreeDesc.max_node_points = 4096;
+    rasm_point_cloud_octree *octree = nullptr;
+    std::thread worker([&]()
+                       { CHECK(rasm_build_point_cloud_octree(&octreeDesc, &octree) == RASM_OK); });
+    worker.join();
+    REQUIRE(octree != nullptr);
+    const uint32_t nodes = rasm_get_point_cloud_node_count(octree);
+    CHECK(nodes > 1);
+    uint32_t points = 0;
+    for (uint32_t n = 0; n < nodes; ++n)
+    {
+        rasm_point_cloud_node node;
+        node.size = sizeof(node);
+        REQUIRE(rasm_get_point_cloud_node(octree, n, &node) == RASM_OK);
+        CHECK((n == 0) == (node.parent == RASM_POINT_NODE_NONE));
+        rasm_point_cloud_chunk_desc chunk;
+        REQUIRE(rasm_point_cloud_chunk_desc_init(&chunk, sizeof(chunk)) == RASM_OK);
+        REQUIRE(rasm_get_point_cloud_node_chunk(octree, n, &chunk) == RASM_OK);
+        CHECK(chunk.count == node.point_count);
+        CHECK(chunk.spacing == node.spacing);
+        points += chunk.count;
+        rasm_mesh_build *build = nullptr;
+        CHECK(rasm_build_point_cloud_chunk(&chunk, &build) == RASM_OK);
+        rasm_mesh_build_destroy(build);
+    }
+    uint32_t indexCount = 0;
+    const uint32_t *indices = rasm_get_point_cloud_octree_indices(octree, &indexCount);
+    CHECK(indices != nullptr);
+    CHECK(indexCount == positions.size());
+    CHECK(points == positions.size());
+    rasm_point_cloud_node node;
+    node.size = sizeof(node);
+    CHECK(rasm_get_point_cloud_node(octree, nodes, &node) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(contains(rasm_get_last_error(), "past the octree"));
+    rasm_point_cloud_octree_destroy(octree);
+    octreeDesc.cells = 100;
+    CHECK(rasm_build_point_cloud_octree(&octreeDesc, &octree) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(octree == nullptr);
+    desc.points.size_mode = 7;
+    CHECK(rasm_update_material(nullptr, rasm_material{1}, &desc) == RASM_ERROR_INVALID_ARGUMENT);
 }

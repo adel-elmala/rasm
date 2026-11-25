@@ -87,6 +87,7 @@ namespace rasm::c
         constexpr uint32_t asNumber(VectorDepth value) { return static_cast<uint32_t>(value); }
         constexpr uint32_t asNumber(PointShape value) { return static_cast<uint32_t>(value); }
         constexpr uint32_t asNumber(PointColorMode value) { return static_cast<uint32_t>(value); }
+        constexpr uint32_t asNumber(PointSizeMode value) { return static_cast<uint32_t>(value); }
         constexpr uint32_t asNumber(ColormapPreset value) { return static_cast<uint32_t>(value); }
 
         static_assert(RASM_FORMAT_UNKNOWN == asNumber(Format::UNKNOWN));
@@ -152,6 +153,9 @@ namespace rasm::c
         static_assert(RASM_POINT_SHAPE_SPHERE == asNumber(PointShape::SPHERE));
         static_assert(RASM_POINT_COLOR_MODE_COLOR == asNumber(PointColorMode::COLOR));
         static_assert(RASM_POINT_COLOR_MODE_SCALAR == asNumber(PointColorMode::SCALAR));
+        static_assert(RASM_POINT_SIZE_MODE_FIXED == asNumber(PointSizeMode::FIXED));
+        static_assert(RASM_POINT_SIZE_MODE_ADAPTIVE == asNumber(PointSizeMode::ADAPTIVE));
+        static_assert(RASM_POINT_NODE_NONE == POINT_NODE_NONE);
         static_assert(RASM_COLORMAP_VIRIDIS == asNumber(ColormapPreset::VIRIDIS));
         static_assert(RASM_COLORMAP_TURBO == asNumber(ColormapPreset::TURBO));
         static_assert(RASM_COLORMAP_MAGMA == asNumber(ColormapPreset::MAGMA));
@@ -834,7 +838,9 @@ namespace rasm::c
                 .colorMode = static_cast<PointColorMode>(points.color_mode),
                 .colormap = toCpp(points.colormap),
                 .range = {.min = points.range.min, .max = points.range.max, .log = points.range.log != 0, .clamp = points.range.clamp != 0},
-                .density = points.density};
+                .density = points.density,
+                .sizeMode = static_cast<PointSizeMode>(points.size_mode),
+                .maxSize = points.max_size};
     }
 
     rasm_point_material toC(const PointMaterial &points)
@@ -846,7 +852,9 @@ namespace rasm::c
                 .color_mode = asNumber(points.colorMode),
                 .colormap = toC(points.colormap),
                 .range = {.min = points.range.min, .max = points.range.max, .log = points.range.log ? RASM_TRUE : RASM_FALSE, .clamp = points.range.clamp ? RASM_TRUE : RASM_FALSE},
-                .density = points.density};
+                .density = points.density,
+                .size_mode = asNumber(points.sizeMode),
+                .max_size = points.maxSize};
     }
 
     bool checkMaterialDesc(const rasm_material_desc &desc, const char *function)
@@ -854,7 +862,8 @@ namespace rasm::c
         return checkEnum(desc.type, RASM_MATERIAL_TYPE_POINTS + 1, function, "desc->type") &&
                checkEnum(desc.points.size_unit, RASM_VECTOR_UNIT_METRES + 1, function, "desc->points.size_unit") &&
                checkEnum(desc.points.shape, RASM_POINT_SHAPE_SPHERE + 1, function, "desc->points.shape") &&
-               checkEnum(desc.points.color_mode, RASM_POINT_COLOR_MODE_SCALAR + 1, function, "desc->points.color_mode") && checkEnum(desc.alpha_mode, RASM_ALPHA_MODE_BLEND + 1, function, "desc->alpha_mode") &&
+               checkEnum(desc.points.color_mode, RASM_POINT_COLOR_MODE_SCALAR + 1, function, "desc->points.color_mode") &&
+               checkEnum(desc.points.size_mode, RASM_POINT_SIZE_MODE_ADAPTIVE + 1, function, "desc->points.size_mode") && checkEnum(desc.alpha_mode, RASM_ALPHA_MODE_BLEND + 1, function, "desc->alpha_mode") &&
                checkEnum(desc.vector.width_unit, RASM_VECTOR_UNIT_METRES + 1, function, "desc->vector.width_unit") &&
                checkEnum(desc.vector.facing, RASM_VECTOR_FACING_GROUND + 1, function, "desc->vector.facing") &&
                checkEnum(desc.vector.depth, RASM_VECTOR_DEPTH_OVERLAY + 1, function, "desc->vector.depth");
@@ -1170,7 +1179,8 @@ namespace rasm::c
                 .meshlets = stats.meshlets,
                 .instances = stats.instances,
                 .animation_pool_bytes = stats.animationPoolBytes,
-                .releases_waiting = stats.releasesWaiting};
+                .releases_waiting = stats.releasesWaiting,
+                .points = stats.points};
     }
 
     rasm_load_stats toC(const LoadStats &stats)
