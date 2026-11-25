@@ -1,0 +1,446 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-16 -16 792 312" width="792" height="312" role="img" aria-label="The first 64 of 1024 points of a chunk in three orders: as scanned (the first two rows), shuffled at random (clumps and holes), and the Morton order read in bit-reversed steps (one point in every cell of an 8 by 8 grid)."><style>:root { --bg:           #fbfaf7;
+    --bg-soft:      #f3f1eb;
+    --bg-code:      #f0eee8;
+    --bg-raised:    #ffffff;
+    --fg:           #1d1d1b;
+    --fg-soft:      #55534d;
+    --fg-faint:     #8a877e;
+    --line:         #dcd8ce;
+    --link:         #1f5fbf;
+    --accent:       #c2410c;
+    --accent-fill:  #fde3d3;
+
+    /* the color code shared by every diagram */
+    --cpu:          #2563eb;   --cpu-fill:     #dbe7fd;
+    --gpu:          #15803d;   --gpu-fill:     #d5f0dd;
+    --mem:          #b45309;   --mem-fill:     #fbe8c8;
+    --shader:       #7c3aed;   --shader-fill:  #e9defd;
+    --muted-fill:   #ebe8e0;
+
+    /* right / wrong, light rays, shadowed areas */
+    --ok:           #0f7b6c;   --ok-fill:      #d3efe9;
+    --bad:          #b91c1c;   --bad-fill:     #fbdcdc;
+    --light:        #b8860b;   --light-fill:   #fdf0b5;
+    --shade:        rgba(29, 29, 27, 0.4);
+
+    --note:         #2563eb;
+    --warn:         #b45309;
+    --rule:         #b91c1c;
+
+    /* syntax highlighting */
+    --tok-kw:       #a626a4;
+    --tok-type:     #0e7490;
+    --tok-fn:       #1f5fbf;
+    --tok-str:      #3f7d20;
+    --tok-num:      #b45309;
+    --tok-const:    #9a5b00;
+    --tok-com:      #8a877e;
+    --tok-pre:      #c2410c;
+    --tok-ns:       #6b6860;
+
+    --shadow:       0 1px 2px rgba(40, 30, 10, 0.06), 0 6px 20px rgba(40, 30, 10, 0.06);
+    --radius:       10px;
+    --sidebar:      280px;
+    --toc:          230px;
+    --content:      860px;
+    --mono:         "JetBrains Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
+    --sans:         "Inter", "Segoe UI", system-ui, -apple-system, sans-serif; }
+@media (prefers-color-scheme: dark) { :root { --bg:           #15161a;
+        --bg-soft:      #1c1e23;
+        --bg-code:      #22252b;
+        --bg-raised:    #1f2228;
+        --fg:           #e8e6e1;
+        --fg-soft:      #b3b0a8;
+        --fg-faint:     #7f7d77;
+        --line:         #33363d;
+        --link:         #7fb0ff;
+        --accent:       #fb923c;
+        --accent-fill:  #40260f;
+        --cpu:          #7fa8ff;   --cpu-fill:     #1c2a47;
+        --gpu:          #5fd08a;   --gpu-fill:     #173326;
+        --mem:          #f0b45a;   --mem-fill:     #3a2a12;
+        --shader:       #b794ff;   --shader-fill:  #2c2147;
+        --muted-fill:   #2a2c32;
+        --ok:           #4fd1b8;   --ok-fill:      #12332e;
+        --bad:          #f87171;   --bad-fill:     #401a1a;
+        --light:        #f5cf4a;   --light-fill:   #3a3110;
+        --shade:        rgba(0, 0, 0, 0.55);
+        --note:         #7fa8ff;
+        --warn:         #f0b45a;
+        --rule:         #f87171;
+        --tok-kw:       #c678dd;
+        --tok-type:     #56b6c2;
+        --tok-fn:       #61afef;
+        --tok-str:      #98c379;
+        --tok-num:      #d19a66;
+        --tok-const:    #e5c07b;
+        --tok-com:      #7f848e;
+        --tok-pre:      #e06c75;
+        --tok-ns:       #9da5b4;
+        --shadow:       0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 20px rgba(0, 0, 0, 0.25); } }
+svg { font-family: var(--sans); }
+svg { font-family: var(--sans); font-size: 13px; }
+svg text { fill: var(--fg); }
+svg text.small { font-size: 11px; fill: var(--fg-soft); }
+svg text.title { font-weight: 700; }
+svg text.big { font-size: 16px; font-weight: 700; }
+svg text.mono { font-family: var(--mono); font-size: 12px; }
+svg text.mid { text-anchor: middle; }
+svg text.end { text-anchor: end; }
+svg text.halo { paint-order: stroke; stroke: var(--bg-raised); stroke-width: 4px; stroke-linejoin: round; }
+svg .box     { fill: var(--muted-fill);  stroke: var(--fg-faint); stroke-width: 1.5; }
+svg .cpu     { fill: var(--cpu-fill);    stroke: var(--cpu);      stroke-width: 1.5; }
+svg .gpu     { fill: var(--gpu-fill);    stroke: var(--gpu);      stroke-width: 1.5; }
+svg .mem     { fill: var(--mem-fill);    stroke: var(--mem);      stroke-width: 1.5; }
+svg .shader  { fill: var(--shader-fill); stroke: var(--shader);   stroke-width: 1.5; }
+svg .ghost   { fill: none; stroke: var(--fg-faint); stroke-width: 1.2; stroke-dasharray: 5 4; }
+svg .hot     { fill: none; stroke: var(--accent); stroke-width: 2.5; }
+svg .zone    { fill: var(--bg-soft); stroke: var(--line); stroke-width: 1; }
+svg .accent  { fill: var(--accent-fill); stroke: var(--accent);   stroke-width: 1.5; }
+svg .ok      { fill: var(--ok-fill);     stroke: var(--ok);       stroke-width: 1.5; }
+svg .bad     { fill: var(--bad-fill);    stroke: var(--bad);      stroke-width: 1.5; }
+svg .light   { fill: var(--light-fill);  stroke: var(--light);    stroke-width: 1.5; }
+svg .shade   { fill: var(--shade);       stroke: none; }
+svg .lit     { fill: var(--light-fill);  stroke: none; }
+svg .solid   { fill: var(--fg-faint);    stroke: var(--fg-soft);  stroke-width: 1.5; }
+svg .paper   { fill: var(--bg-raised);   stroke: var(--line);     stroke-width: 1; }
+svg .surface { fill: none; stroke: var(--fg); stroke-width: 3; stroke-linecap: round; }
+svg .grid    { fill: none; stroke: var(--line); stroke-width: 1; }
+svg .thick   { stroke-width: 3; }
+svg .thin    { stroke-width: 1; }
+svg .nofill  { fill: none; }
+svg .o-25    { opacity: 0.25; }
+svg .o-50    { opacity: 0.5; }
+svg .o-75    { opacity: 0.75; }
+svg .badge   { fill: var(--accent); stroke: none; }
+svg text.badge-n { fill: var(--bg-raised); font-size: 12px; font-weight: 700; text-anchor: middle; }
+svg .arrow        { fill: none; stroke: var(--fg-soft); stroke-width: 1.6; }
+svg .arrow.cpu    { stroke: var(--cpu); fill: none; }
+svg .arrow.gpu    { stroke: var(--gpu); fill: none; }
+svg .arrow.mem    { stroke: var(--mem); fill: none; }
+svg .arrow.shader { stroke: var(--shader); fill: none; }
+svg .arrow.hot    { stroke: var(--accent); fill: none; }
+svg .arrow.ok     { stroke: var(--ok); fill: none; }
+svg .arrow.bad    { stroke: var(--bad); fill: none; }
+svg .arrow.light  { stroke: var(--light); fill: none; }
+svg .arrow.thick  { stroke-width: 3; }
+svg .dashed       { stroke-dasharray: 6 4; }
+svg :where(line.dashed, path.dashed, rect.dashed, circle.dashed, polygon.dashed, polyline.dashed) { stroke: var(--fg-faint); fill: none; }
+svg .flowing { stroke-dasharray: 6 5; animation: flowing 1.2s linear infinite; }
+@keyframes flowing { to { stroke-dashoffset: -22; } }
+svg .head         { fill: var(--fg-soft); }
+svg .head.cpu     { fill: var(--cpu); stroke: none; }
+svg .head.gpu     { fill: var(--gpu); stroke: none; }
+svg .head.mem     { fill: var(--mem); stroke: none; }
+svg .head.shader  { fill: var(--shader); stroke: none; }
+svg .head.hot     { fill: var(--accent); stroke: none; }
+svg .head.ok      { fill: var(--ok); stroke: none; }
+svg .head.bad     { fill: var(--bad); stroke: none; }
+svg .head.light   { fill: var(--light); stroke: none; }
+svg .t-cpu,    svg text.t-cpu    { fill: var(--cpu); }
+svg .t-gpu,    svg text.t-gpu    { fill: var(--gpu); }
+svg .t-mem,    svg text.t-mem    { fill: var(--mem); }
+svg .t-shader, svg text.t-shader { fill: var(--shader); }
+svg .t-hot,    svg text.t-hot    { fill: var(--accent); }
+svg .t-ok,     svg text.t-ok     { fill: var(--ok); }
+svg .t-bad,    svg text.t-bad    { fill: var(--bad); }
+svg .t-light,  svg text.t-light  { fill: var(--light); }
+svg .t-faint,  svg text.t-faint  { fill: var(--fg-faint); }
+svg a:hover rect, svg a:hover circle { stroke-width: 2.5; }
+svg a:hover text { text-decoration: underline; }
+svg .handle { fill: var(--accent); stroke: var(--bg-raised); stroke-width: 2.5; cursor: grab; touch-action: none; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35)); }
+svg .handle:hover, svg .handle:focus-visible { stroke: var(--fg); outline: none; }
+svg .handle.dragging { cursor: grabbing; }
+svg .pick { cursor: pointer; }
+svg .pick:hover, svg .pick:focus-visible { stroke-width: 3; outline: none; }
+svg g.pick:hover > :is(rect, circle, polygon), svg g.pick:focus-visible > :is(rect, circle, polygon) { stroke-width: 3; }
+svg g.pick text { pointer-events: none; }
+svg .off { opacity: 0.28; }
+svg .hide { display: none; }
+.card { fill: var(--bg-raised); stroke: var(--line); stroke-width: 1; }</style><defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker><marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker><marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker><marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker><marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker><marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker><marker id="ah-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker><marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker><marker id="ah-light" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head light"/></marker></defs><rect class="card" x="-15.5" y="-15.5" width="791" height="311" rx="12"/>
+<text x="125" y="26" class="mid title">as scanned</text>
+<rect x="25" y="40" width="200" height="200" class="paper"/>
+<path d="M50,40 V240 M25,65 H225 M75,40 V240 M25,90 H225 M100,40 V240 M25,115 H225 M125,40 V240 M25,140 H225 M150,40 V240 M25,165 H225 M175,40 V240 M25,190 H225 M200,40 V240 M25,215 H225 " class="grid"/>
+<rect x="25" y="65" width="25" height="25" class="bad o-25"/>
+<rect x="25" y="90" width="25" height="25" class="bad o-25"/>
+<rect x="25" y="115" width="25" height="25" class="bad o-25"/>
+<rect x="25" y="140" width="25" height="25" class="bad o-25"/>
+<rect x="25" y="165" width="25" height="25" class="bad o-25"/>
+<rect x="25" y="190" width="25" height="25" class="bad o-25"/>
+<rect x="25" y="215" width="25" height="25" class="bad o-25"/>
+<rect x="50" y="65" width="25" height="25" class="bad o-25"/>
+<rect x="50" y="90" width="25" height="25" class="bad o-25"/>
+<rect x="50" y="115" width="25" height="25" class="bad o-25"/>
+<rect x="50" y="140" width="25" height="25" class="bad o-25"/>
+<rect x="50" y="165" width="25" height="25" class="bad o-25"/>
+<rect x="50" y="190" width="25" height="25" class="bad o-25"/>
+<rect x="50" y="215" width="25" height="25" class="bad o-25"/>
+<rect x="75" y="65" width="25" height="25" class="bad o-25"/>
+<rect x="75" y="90" width="25" height="25" class="bad o-25"/>
+<rect x="75" y="115" width="25" height="25" class="bad o-25"/>
+<rect x="75" y="140" width="25" height="25" class="bad o-25"/>
+<rect x="75" y="165" width="25" height="25" class="bad o-25"/>
+<rect x="75" y="190" width="25" height="25" class="bad o-25"/>
+<rect x="75" y="215" width="25" height="25" class="bad o-25"/>
+<rect x="100" y="65" width="25" height="25" class="bad o-25"/>
+<rect x="100" y="90" width="25" height="25" class="bad o-25"/>
+<rect x="100" y="115" width="25" height="25" class="bad o-25"/>
+<rect x="100" y="140" width="25" height="25" class="bad o-25"/>
+<rect x="100" y="165" width="25" height="25" class="bad o-25"/>
+<rect x="100" y="190" width="25" height="25" class="bad o-25"/>
+<rect x="100" y="215" width="25" height="25" class="bad o-25"/>
+<rect x="125" y="65" width="25" height="25" class="bad o-25"/>
+<rect x="125" y="90" width="25" height="25" class="bad o-25"/>
+<rect x="125" y="115" width="25" height="25" class="bad o-25"/>
+<rect x="125" y="140" width="25" height="25" class="bad o-25"/>
+<rect x="125" y="165" width="25" height="25" class="bad o-25"/>
+<rect x="125" y="190" width="25" height="25" class="bad o-25"/>
+<rect x="125" y="215" width="25" height="25" class="bad o-25"/>
+<rect x="150" y="65" width="25" height="25" class="bad o-25"/>
+<rect x="150" y="90" width="25" height="25" class="bad o-25"/>
+<rect x="150" y="115" width="25" height="25" class="bad o-25"/>
+<rect x="150" y="140" width="25" height="25" class="bad o-25"/>
+<rect x="150" y="165" width="25" height="25" class="bad o-25"/>
+<rect x="150" y="190" width="25" height="25" class="bad o-25"/>
+<rect x="150" y="215" width="25" height="25" class="bad o-25"/>
+<rect x="175" y="65" width="25" height="25" class="bad o-25"/>
+<rect x="175" y="90" width="25" height="25" class="bad o-25"/>
+<rect x="175" y="115" width="25" height="25" class="bad o-25"/>
+<rect x="175" y="140" width="25" height="25" class="bad o-25"/>
+<rect x="175" y="165" width="25" height="25" class="bad o-25"/>
+<rect x="175" y="190" width="25" height="25" class="bad o-25"/>
+<rect x="175" y="215" width="25" height="25" class="bad o-25"/>
+<rect x="200" y="65" width="25" height="25" class="bad o-25"/>
+<rect x="200" y="90" width="25" height="25" class="bad o-25"/>
+<rect x="200" y="115" width="25" height="25" class="bad o-25"/>
+<rect x="200" y="140" width="25" height="25" class="bad o-25"/>
+<rect x="200" y="165" width="25" height="25" class="bad o-25"/>
+<rect x="200" y="190" width="25" height="25" class="bad o-25"/>
+<rect x="200" y="215" width="25" height="25" class="bad o-25"/>
+<circle cx="27.4" cy="41.6" r="3" class="gpu"/>
+<circle cx="35.0" cy="41.3" r="3" class="gpu"/>
+<circle cx="40.8" cy="42.5" r="3" class="gpu"/>
+<circle cx="44.9" cy="43.2" r="3" class="gpu"/>
+<circle cx="51.1" cy="42.8" r="3" class="gpu"/>
+<circle cx="57.5" cy="41.3" r="3" class="gpu"/>
+<circle cx="65.3" cy="44.6" r="3" class="gpu"/>
+<circle cx="70.2" cy="41.9" r="3" class="gpu"/>
+<circle cx="78.7" cy="45.1" r="3" class="gpu"/>
+<circle cx="84.7" cy="42.7" r="3" class="gpu"/>
+<circle cx="92.7" cy="41.1" r="3" class="gpu"/>
+<circle cx="98.4" cy="42.2" r="3" class="gpu"/>
+<circle cx="101.6" cy="41.5" r="3" class="gpu"/>
+<circle cx="108.5" cy="44.5" r="3" class="gpu"/>
+<circle cx="114.2" cy="43.5" r="3" class="gpu"/>
+<circle cx="122.5" cy="42.6" r="3" class="gpu"/>
+<circle cx="128.3" cy="41.2" r="3" class="gpu"/>
+<circle cx="132.4" cy="41.8" r="3" class="gpu"/>
+<circle cx="141.4" cy="42.8" r="3" class="gpu"/>
+<circle cx="146.1" cy="43.5" r="3" class="gpu"/>
+<circle cx="152.9" cy="42.2" r="3" class="gpu"/>
+<circle cx="160.7" cy="44.0" r="3" class="gpu"/>
+<circle cx="164.5" cy="43.5" r="3" class="gpu"/>
+<circle cx="172.0" cy="44.8" r="3" class="gpu"/>
+<circle cx="179.1" cy="42.2" r="3" class="gpu"/>
+<circle cx="186.5" cy="41.5" r="3" class="gpu"/>
+<circle cx="190.3" cy="44.2" r="3" class="gpu"/>
+<circle cx="195.4" cy="43.1" r="3" class="gpu"/>
+<circle cx="201.1" cy="43.9" r="3" class="gpu"/>
+<circle cx="210.5" cy="43.4" r="3" class="gpu"/>
+<circle cx="217.3" cy="42.3" r="3" class="gpu"/>
+<circle cx="222.7" cy="43.5" r="3" class="gpu"/>
+<circle cx="28.5" cy="49.2" r="3" class="gpu"/>
+<circle cx="35.9" cy="51.3" r="3" class="gpu"/>
+<circle cx="40.5" cy="50.1" r="3" class="gpu"/>
+<circle cx="45.0" cy="50.3" r="3" class="gpu"/>
+<circle cx="53.8" cy="51.5" r="3" class="gpu"/>
+<circle cx="60.8" cy="48.4" r="3" class="gpu"/>
+<circle cx="65.1" cy="50.1" r="3" class="gpu"/>
+<circle cx="69.8" cy="49.2" r="3" class="gpu"/>
+<circle cx="76.7" cy="47.7" r="3" class="gpu"/>
+<circle cx="82.4" cy="50.5" r="3" class="gpu"/>
+<circle cx="89.0" cy="48.3" r="3" class="gpu"/>
+<circle cx="96.4" cy="51.0" r="3" class="gpu"/>
+<circle cx="101.3" cy="49.2" r="3" class="gpu"/>
+<circle cx="109.6" cy="51.1" r="3" class="gpu"/>
+<circle cx="117.0" cy="51.0" r="3" class="gpu"/>
+<circle cx="120.9" cy="49.0" r="3" class="gpu"/>
+<circle cx="127.5" cy="51.1" r="3" class="gpu"/>
+<circle cx="136.4" cy="47.8" r="3" class="gpu"/>
+<circle cx="139.2" cy="48.2" r="3" class="gpu"/>
+<circle cx="145.7" cy="49.3" r="3" class="gpu"/>
+<circle cx="153.5" cy="48.3" r="3" class="gpu"/>
+<circle cx="157.2" cy="49.0" r="3" class="gpu"/>
+<circle cx="165.1" cy="49.7" r="3" class="gpu"/>
+<circle cx="173.9" cy="50.2" r="3" class="gpu"/>
+<circle cx="178.2" cy="49.9" r="3" class="gpu"/>
+<circle cx="185.1" cy="47.4" r="3" class="gpu"/>
+<circle cx="192.4" cy="50.6" r="3" class="gpu"/>
+<circle cx="198.5" cy="50.7" r="3" class="gpu"/>
+<circle cx="202.7" cy="48.9" r="3" class="gpu"/>
+<circle cx="207.6" cy="50.0" r="3" class="gpu"/>
+<circle cx="213.7" cy="47.5" r="3" class="gpu"/>
+<circle cx="220.6" cy="47.9" r="3" class="gpu"/>
+<text x="125" y="262" class="mid small t-bad">as scanned: 56 of 64 cells empty</text>
+<text x="375" y="26" class="mid title">random shuffle</text>
+<rect x="275" y="40" width="200" height="200" class="paper"/>
+<path d="M300,40 V240 M275,65 H475 M325,40 V240 M275,90 H475 M350,40 V240 M275,115 H475 M375,40 V240 M275,140 H475 M400,40 V240 M275,165 H475 M425,40 V240 M275,190 H475 M450,40 V240 M275,215 H475 " class="grid"/>
+<rect x="275" y="40" width="25" height="25" class="bad o-25"/>
+<rect x="275" y="90" width="25" height="25" class="bad o-25"/>
+<rect x="275" y="115" width="25" height="25" class="bad o-25"/>
+<rect x="275" y="165" width="25" height="25" class="bad o-25"/>
+<rect x="275" y="215" width="25" height="25" class="bad o-25"/>
+<rect x="300" y="40" width="25" height="25" class="bad o-25"/>
+<rect x="300" y="115" width="25" height="25" class="bad o-25"/>
+<rect x="300" y="215" width="25" height="25" class="bad o-25"/>
+<rect x="325" y="65" width="25" height="25" class="bad o-25"/>
+<rect x="325" y="115" width="25" height="25" class="bad o-25"/>
+<rect x="325" y="165" width="25" height="25" class="bad o-25"/>
+<rect x="350" y="115" width="25" height="25" class="bad o-25"/>
+<rect x="350" y="215" width="25" height="25" class="bad o-25"/>
+<rect x="375" y="140" width="25" height="25" class="bad o-25"/>
+<rect x="375" y="165" width="25" height="25" class="bad o-25"/>
+<rect x="375" y="190" width="25" height="25" class="bad o-25"/>
+<rect x="375" y="215" width="25" height="25" class="bad o-25"/>
+<rect x="400" y="40" width="25" height="25" class="bad o-25"/>
+<rect x="400" y="65" width="25" height="25" class="bad o-25"/>
+<rect x="400" y="190" width="25" height="25" class="bad o-25"/>
+<rect x="425" y="90" width="25" height="25" class="bad o-25"/>
+<rect x="450" y="40" width="25" height="25" class="bad o-25"/>
+<rect x="450" y="65" width="25" height="25" class="bad o-25"/>
+<rect x="450" y="90" width="25" height="25" class="bad o-25"/>
+<rect x="450" y="165" width="25" height="25" class="bad o-25"/>
+<circle cx="328.7" cy="45.1" r="3" class="gpu"/>
+<circle cx="429.1" cy="42.2" r="3" class="gpu"/>
+<circle cx="351.3" cy="49.2" r="3" class="gpu"/>
+<circle cx="367.0" cy="51.0" r="3" class="gpu"/>
+<circle cx="365.8" cy="53.6" r="3" class="gpu"/>
+<circle cx="438.6" cy="54.7" r="3" class="gpu"/>
+<circle cx="392.7" cy="62.5" r="3" class="gpu"/>
+<circle cx="395.0" cy="67.0" r="3" class="gpu"/>
+<circle cx="449.0" cy="69.6" r="3" class="gpu"/>
+<circle cx="313.6" cy="75.6" r="3" class="gpu"/>
+<circle cx="376.3" cy="75.9" r="3" class="gpu"/>
+<circle cx="390.4" cy="73.7" r="3" class="gpu"/>
+<circle cx="302.4" cy="82.1" r="3" class="gpu"/>
+<circle cx="286.1" cy="87.4" r="3" class="gpu"/>
+<circle cx="303.1" cy="88.3" r="3" class="gpu"/>
+<circle cx="316.0" cy="88.6" r="3" class="gpu"/>
+<circle cx="359.3" cy="84.7" r="3" class="gpu"/>
+<circle cx="432.8" cy="85.8" r="3" class="gpu"/>
+<circle cx="441.7" cy="86.0" r="3" class="gpu"/>
+<circle cx="447.2" cy="84.7" r="3" class="gpu"/>
+<circle cx="342.0" cy="93.2" r="3" class="gpu"/>
+<circle cx="348.6" cy="94.0" r="3" class="gpu"/>
+<circle cx="317.5" cy="97.7" r="3" class="gpu"/>
+<circle cx="344.9" cy="106.9" r="3" class="gpu"/>
+<circle cx="411.4" cy="106.3" r="3" class="gpu"/>
+<circle cx="361.1" cy="113.6" r="3" class="gpu"/>
+<circle cx="376.7" cy="113.8" r="3" class="gpu"/>
+<circle cx="379.7" cy="124.2" r="3" class="gpu"/>
+<circle cx="407.8" cy="123.1" r="3" class="gpu"/>
+<circle cx="458.9" cy="124.6" r="3" class="gpu"/>
+<circle cx="392.0" cy="132.7" r="3" class="gpu"/>
+<circle cx="410.9" cy="139.0" r="3" class="gpu"/>
+<circle cx="445.0" cy="136.2" r="3" class="gpu"/>
+<circle cx="307.9" cy="144.4" r="3" class="gpu"/>
+<circle cx="313.9" cy="143.3" r="3" class="gpu"/>
+<circle cx="438.4" cy="142.5" r="3" class="gpu"/>
+<circle cx="451.9" cy="143.5" r="3" class="gpu"/>
+<circle cx="277.0" cy="147.8" r="3" class="gpu"/>
+<circle cx="364.3" cy="149.8" r="3" class="gpu"/>
+<circle cx="416.7" cy="149.2" r="3" class="gpu"/>
+<circle cx="447.8" cy="148.4" r="3" class="gpu"/>
+<circle cx="347.2" cy="154.8" r="3" class="gpu"/>
+<circle cx="428.7" cy="161.2" r="3" class="gpu"/>
+<circle cx="433.9" cy="161.4" r="3" class="gpu"/>
+<circle cx="359.5" cy="166.6" r="3" class="gpu"/>
+<circle cx="415.1" cy="166.1" r="3" class="gpu"/>
+<circle cx="352.8" cy="179.3" r="3" class="gpu"/>
+<circle cx="303.4" cy="185.8" r="3" class="gpu"/>
+<circle cx="353.8" cy="188.4" r="3" class="gpu"/>
+<circle cx="372.5" cy="187.5" r="3" class="gpu"/>
+<circle cx="448.3" cy="186.0" r="3" class="gpu"/>
+<circle cx="426.1" cy="191.5" r="3" class="gpu"/>
+<circle cx="310.3" cy="198.2" r="3" class="gpu"/>
+<circle cx="341.2" cy="200.3" r="3" class="gpu"/>
+<circle cx="283.8" cy="206.4" r="3" class="gpu"/>
+<circle cx="291.1" cy="207.4" r="3" class="gpu"/>
+<circle cx="446.3" cy="205.9" r="3" class="gpu"/>
+<circle cx="457.8" cy="203.6" r="3" class="gpu"/>
+<circle cx="367.4" cy="210.0" r="3" class="gpu"/>
+<circle cx="435.1" cy="216.9" r="3" class="gpu"/>
+<circle cx="411.2" cy="224.3" r="3" class="gpu"/>
+<circle cx="460.8" cy="226.0" r="3" class="gpu"/>
+<circle cx="471.4" cy="225.5" r="3" class="gpu"/>
+<circle cx="335.2" cy="235.9" r="3" class="gpu"/>
+<text x="375" y="262" class="mid small t-bad">random shuffle: 25 of 64 cells empty</text>
+<text x="625" y="26" class="mid title">Morton, bit-reversed</text>
+<rect x="525" y="40" width="200" height="200" class="paper"/>
+<path d="M550,40 V240 M525,65 H725 M575,40 V240 M525,90 H725 M600,40 V240 M525,115 H725 M625,40 V240 M525,140 H725 M650,40 V240 M525,165 H725 M675,40 V240 M525,190 H725 M700,40 V240 M525,215 H725 " class="grid"/>
+<circle cx="527.4" cy="41.6" r="3" class="gpu"/>
+<circle cx="551.1" cy="42.8" r="3" class="gpu"/>
+<circle cx="578.7" cy="45.1" r="3" class="gpu"/>
+<circle cx="601.6" cy="41.5" r="3" class="gpu"/>
+<circle cx="628.3" cy="41.2" r="3" class="gpu"/>
+<circle cx="652.9" cy="42.2" r="3" class="gpu"/>
+<circle cx="679.1" cy="42.2" r="3" class="gpu"/>
+<circle cx="701.1" cy="43.9" r="3" class="gpu"/>
+<circle cx="526.0" cy="69.4" r="3" class="gpu"/>
+<circle cx="553.4" cy="69.4" r="3" class="gpu"/>
+<circle cx="578.4" cy="69.3" r="3" class="gpu"/>
+<circle cx="602.9" cy="68.3" r="3" class="gpu"/>
+<circle cx="628.4" cy="70.1" r="3" class="gpu"/>
+<circle cx="651.3" cy="68.9" r="3" class="gpu"/>
+<circle cx="679.8" cy="70.2" r="3" class="gpu"/>
+<circle cx="701.6" cy="67.8" r="3" class="gpu"/>
+<circle cx="528.0" cy="91.5" r="3" class="gpu"/>
+<circle cx="554.5" cy="95.2" r="3" class="gpu"/>
+<circle cx="576.6" cy="93.2" r="3" class="gpu"/>
+<circle cx="601.9" cy="94.9" r="3" class="gpu"/>
+<circle cx="626.6" cy="92.4" r="3" class="gpu"/>
+<circle cx="655.0" cy="94.1" r="3" class="gpu"/>
+<circle cx="677.5" cy="92.8" r="3" class="gpu"/>
+<circle cx="702.0" cy="92.1" r="3" class="gpu"/>
+<circle cx="526.1" cy="116.2" r="3" class="gpu"/>
+<circle cx="555.1" cy="118.6" r="3" class="gpu"/>
+<circle cx="579.9" cy="118.7" r="3" class="gpu"/>
+<circle cx="602.6" cy="117.0" r="3" class="gpu"/>
+<circle cx="629.5" cy="119.3" r="3" class="gpu"/>
+<circle cx="651.8" cy="119.2" r="3" class="gpu"/>
+<circle cx="679.8" cy="120.3" r="3" class="gpu"/>
+<circle cx="702.0" cy="117.8" r="3" class="gpu"/>
+<circle cx="526.8" cy="142.1" r="3" class="gpu"/>
+<circle cx="553.9" cy="144.9" r="3" class="gpu"/>
+<circle cx="579.8" cy="143.4" r="3" class="gpu"/>
+<circle cx="604.4" cy="142.1" r="3" class="gpu"/>
+<circle cx="629.2" cy="141.1" r="3" class="gpu"/>
+<circle cx="652.3" cy="140.9" r="3" class="gpu"/>
+<circle cx="676.5" cy="141.9" r="3" class="gpu"/>
+<circle cx="701.9" cy="143.5" r="3" class="gpu"/>
+<circle cx="528.3" cy="169.2" r="3" class="gpu"/>
+<circle cx="553.8" cy="169.2" r="3" class="gpu"/>
+<circle cx="579.8" cy="167.0" r="3" class="gpu"/>
+<circle cx="602.0" cy="167.4" r="3" class="gpu"/>
+<circle cx="626.4" cy="170.1" r="3" class="gpu"/>
+<circle cx="651.8" cy="168.7" r="3" class="gpu"/>
+<circle cx="679.0" cy="168.1" r="3" class="gpu"/>
+<circle cx="704.9" cy="167.8" r="3" class="gpu"/>
+<circle cx="527.4" cy="192.3" r="3" class="gpu"/>
+<circle cx="554.8" cy="193.3" r="3" class="gpu"/>
+<circle cx="578.8" cy="194.4" r="3" class="gpu"/>
+<circle cx="603.9" cy="191.9" r="3" class="gpu"/>
+<circle cx="629.3" cy="194.9" r="3" class="gpu"/>
+<circle cx="652.3" cy="192.8" r="3" class="gpu"/>
+<circle cx="676.1" cy="191.5" r="3" class="gpu"/>
+<circle cx="703.5" cy="195.0" r="3" class="gpu"/>
+<circle cx="526.4" cy="217.4" r="3" class="gpu"/>
+<circle cx="553.9" cy="216.0" r="3" class="gpu"/>
+<circle cx="579.7" cy="219.8" r="3" class="gpu"/>
+<circle cx="602.9" cy="217.4" r="3" class="gpu"/>
+<circle cx="629.1" cy="218.4" r="3" class="gpu"/>
+<circle cx="654.6" cy="217.4" r="3" class="gpu"/>
+<circle cx="676.2" cy="219.9" r="3" class="gpu"/>
+<circle cx="702.5" cy="220.3" r="3" class="gpu"/>
+<text x="625" y="262" class="mid small t-ok">one point in every cell</text>
+</svg>
