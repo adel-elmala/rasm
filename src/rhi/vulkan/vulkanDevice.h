@@ -61,6 +61,7 @@ namespace rasm::rhi
         bool                        getTimestamps(QueryPool* pool, uint32_t firstQuery, uint32_t count, uint64_t* nanoseconds) override;
         bool                        supportsTextureFormat(Format format) const override;
         uint32_t                    supportedSampleCounts() const override;
+        uint32_t                    maxBindlessTextures() const override;
         bool                        fillTexture(Texture* texture, const TextureLevel* levels, uint32_t levelCount) override;
         void                        updateBindlessTexture(DescriptorSet* descriptorSet, uint32_t slot, Texture* texture, Sampler* sampler) override;
         void                        updateBindlessStorageImage(DescriptorSet* descriptorSet, uint32_t slot, Texture* texture, uint32_t mip) override;
@@ -124,6 +125,7 @@ namespace rasm::rhi
         double                          timestampPeriod     = 0.0;
         VkDeviceSize                    maxBufferSize       = 0;
         uint32_t                        maxStorageImages    = 0;    // update-after-bind storage images in a set and in a stage
+        uint32_t                        maxSampledImages    = 0;    // update-after-bind combined image samplers in a set and in a stage
         uint32_t                        sampleCounts        = VK_SAMPLE_COUNT_1_BIT;
         bool                            meshShaders         = false;    // VK_EXT_mesh_shader, with limits that hold the meshlet passes' workgroups
         VkShaderStageFlags              pushConstantStages  = PUSH_CONSTANT_STAGES;

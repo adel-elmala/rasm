@@ -76,6 +76,7 @@ namespace rasm::rhi
         uint32_t                            mipLevels           = 1;
         bool                                hostCopy            = false;    // filled on the host; otherwise copied from the staging ring
         bool                                ownershipTransfer   = false;    // exclusive to the graphics family: filled on the transfer queue, it is released there and acquired on the graphics queue
+        uint64_t                            memoryBytes         = 0;        // its own allocation's size; 0 when placed in a shared heap
     };
 
     struct TextureCopy
@@ -280,6 +281,8 @@ namespace rasm::rhi
         virtual bool                    supportsTextureFormat(Format format) const = 0;
         // The sample counts a render target can have, as bits: bit n set means 2^n samples (1, 2, 4, 8, ...).
         virtual uint32_t                supportedSampleCounts() const = 0;
+        // Slots binding 0 of the bindless set (combined image samplers, updated after bind) may have.
+        virtual uint32_t                maxBindlessTextures() const = 0;
         virtual bool                    fillTexture(Texture* texture, const TextureLevel* levels, uint32_t levelCount) = 0;
         virtual void                    updateBindlessTexture(DescriptorSet* descriptorSet, uint32_t slot, Texture* texture, Sampler* sampler) = 0;
         virtual void                    updateBindlessStorageImage(DescriptorSet* descriptorSet, uint32_t slot, Texture* texture, uint32_t mip) = 0;

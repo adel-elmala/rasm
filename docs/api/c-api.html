@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>C API · RASM</title>
 <meta name="description" content="RASM from C and from other languages: the rasm_c and rasm_c_renderer shared libraries, rasm_c.h, its ABI rules (versions, sized structs, handles, errors, memory, threads), every function, and the map from the C++ API.">
-<meta name="rasm-sources" content="include/rasm/rasm_c.h src/c/cApi.h src/c/cApi.cpp src/c/cRenderer.cpp src/c/cScene.cpp src/c/cInput.cpp src/c/cViews.cpp src/c/cAnimation.cpp src/c/cLoader.cpp src/CMakeLists.txt cmake/RasmInstall.cmake cmake/rasmConfig.cmake.in examples/22_c_api/main.c tests/cApiTests.cpp tests/c_api/ctypes_smoke.py tests/consumer/CMakeLists.txt tools/check_install.py src/platform/paths.cpp include/rasm/handle.h">
+<meta name="rasm-sources" content="include/rasm/rasm_c.h src/c/cApi.h src/c/cApi.cpp src/c/cRenderer.cpp src/c/cScene.cpp src/c/cInput.cpp src/c/cViews.cpp src/c/cAnimation.cpp src/c/cTiles.cpp src/c/cLoader.cpp src/CMakeLists.txt cmake/RasmInstall.cmake cmake/rasmConfig.cmake.in examples/22_c_api/main.c tests/cApiTests.cpp tests/c_api/ctypes_smoke.py tests/consumer/CMakeLists.txt tools/check_install.py src/platform/paths.cpp include/rasm/handle.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -95,7 +95,7 @@ target_link_libraries(my_app PRIVATE rasm::c)   # or rasm::c_renderer</code></pr
 
 <h2 id="first"><span class="n">2</span>A first program</h2>
 
-<p>A headless renderer that draws one triangle and writes it to a PNG. It needs no file but the shaders. <samp>examples/22_c_api/main.c</samp> is the bigger version: an engine with an SDL window, files from the asset loader, a mesh and a texture from memory.</p>
+<p>A headless renderer that draws one triangle and writes it to a PNG. It needs no file but the shaders. <samp>examples/22_c_api/main.c</samp> is the bigger version: an engine with an SDL window, files from the asset loader, a mesh and a texture from memory, and a ground streamed as tiles.</p>
 
 <pre><code>#include "rasm/rasm_c.h"
 
@@ -159,7 +159,7 @@ lib.rasm_renderer_create((1 &lt;&lt; 16) | 0, ctypes.byref(config), ctypes.byref
 <h2 id="rules"><span class="n">3</span>The rules of the header</h2>
 
 <h3 id="versions">Versions</h3>
-<p><code>RASM_C_API_VERSION</code> is <code>major &lt;&lt; 16 | minor</code>: <code>RASM_C_API_VERSION_MAJOR</code> and <code>RASM_C_API_VERSION_MINOR</code>, 1.2 today: 1.1 added windows, input, views, render targets, camera helpers, animation and stats to 1.0, and 1.2 added positions in doubles (<a href="#rasm_get_transform_d">below</a>), a free-fly controller's up axis and an environment's orientation, all at the end of the header. Within one major version the API only grows at its end: new functions, new enum constants, new struct fields after the last one. Nothing is renumbered, reordered or removed. <a href="#rasm_renderer_create"><code>rasm_renderer_create</code></a> and <a href="#rasm_engine_create"><code>rasm_engine_create</code></a> take your <code>RASM_C_API_VERSION</code> and fail with <code>RASM_ERROR_VERSION</code> when the major versions differ, or when your minor version is newer than the library's: a newer header may use fields or functions the library does not have.</p>
+<p><code>RASM_C_API_VERSION</code> is <code>major &lt;&lt; 16 | minor</code>: <code>RASM_C_API_VERSION_MAJOR</code> and <code>RASM_C_API_VERSION_MINOR</code>, 1.3 today: 1.1 added windows, input, views, render targets, camera helpers, animation and stats to 1.0, 1.2 added positions in doubles (<a href="#rasm_get_transform_d">below</a>), a free-fly controller's up axis and an environment's orientation, and 1.3 tile streaming (<a href="#rasm_tile_streamer_create">below</a>) and the renderer config's <code>max_bindless_textures</code>, all at the end of the header. Within one major version the API only grows at its end: new functions, new enum constants, new struct fields after the last one. Nothing is renumbered, reordered or removed. <a href="#rasm_renderer_create"><code>rasm_renderer_create</code></a> and <a href="#rasm_engine_create"><code>rasm_engine_create</code></a> take your <code>RASM_C_API_VERSION</code> and fail with <code>RASM_ERROR_VERSION</code> when the major versions differ, or when your minor version is newer than the library's: a newer header may use fields or functions the library does not have.</p>
 
 <h3 id="sized">Structs that grow</h3>
 
@@ -243,7 +243,7 @@ typedef void (RASM_CALL* rasm_log_callback)(void* user_data, rasm_log_level leve
 rasm_result      rasm_renderer_create(uint32_t api_version, const rasm_renderer_config* config, rasm_renderer** renderer);
 void             rasm_renderer_destroy(rasm_renderer* renderer);</pre>
   <div class="body">
-    <p>A <code>rasm::Renderer</code> (<a href="engine.html#Renderer">engine.html</a>). <code>rasm_renderer_config</code> has the fields of <a href="types.html#RendererConfig"><code>RendererConfig</code></a> in snake case, in the same order; its strings may be NULL for empty, and <code>cache_dir</code> starts as the library's <samp>"cache"</samp>. With <code>native_window.type</code> set it draws into your window; without, into offscreen images of <code>window_width</code> × <code>window_height</code> pixels. It fails with <code>RASM_ERROR_FAILED</code> and sets <code>*renderer</code> to NULL when the renderer did not start (no Vulkan 1.4 device, no shaders). Destroying an engine's renderer is refused.</p>
+    <p>A <code>rasm::Renderer</code> (<a href="engine.html#Renderer">engine.html</a>). <code>rasm_renderer_config</code> has the fields of <a href="types.html#RendererConfig"><code>RendererConfig</code></a> in snake case, in the same order but <code>max_bindless_textures</code> (1.3), which is last; its strings may be NULL for empty, and <code>cache_dir</code> starts as the library's <samp>"cache"</samp>. With <code>native_window.type</code> set it draws into your window; without, into offscreen images of <code>window_width</code> × <code>window_height</code> pixels. It fails with <code>RASM_ERROR_FAILED</code> and sets <code>*renderer</code> to NULL when the renderer did not start (no Vulkan 1.4 device, no shaders). Destroying an engine's renderer is refused.</p>
   </div>
 </div>
 
@@ -520,6 +520,35 @@ rasm_update_transform_d(renderer, entity, &amp;at);</code></pre>
   </div>
 </div>
 
+<div class="api" id="rasm_tile_streamer_create">
+  <pre class="sig">rasm_result      rasm_tile_streamer_config_init(rasm_tile_streamer_config* config, uint32_t size);
+rasm_result      rasm_tile_desc_init(rasm_tile_desc* desc, uint32_t size);
+rasm_result      rasm_tile_content_init(rasm_tile_content* content, uint32_t size);
+rasm_result      rasm_tile_streamer_create(rasm_renderer* renderer, rasm_scene scene, const rasm_tile_streamer_config* config, rasm_tile_streamer** streamer);
+void             rasm_tile_streamer_destroy(rasm_tile_streamer* streamer);
+rasm_tile        rasm_tile_streamer_create_tile(rasm_tile_streamer* streamer, const rasm_tile_desc* desc);
+rasm_result      rasm_tile_streamer_destroy_tile(rasm_tile_streamer* streamer, rasm_tile tile);
+rasm_result      rasm_tile_streamer_set_views(rasm_tile_streamer* streamer, const rasm_view* views, uint32_t view_count);
+double           rasm_tile_streamer_get_screen_error(rasm_tile_streamer* streamer, rasm_dvec3 center, double radius, double geometric_error);
+double           rasm_tile_streamer_get_tile_screen_error(rasm_tile_streamer* streamer, rasm_tile tile);
+rasm_result      rasm_tile_streamer_update(rasm_tile_streamer* streamer, const rasm_tile* wanted, uint32_t wanted_count);
+const rasm_tile* rasm_tile_streamer_get_tiles_to_load(rasm_tile_streamer* streamer, uint32_t* count);
+rasm_result      rasm_tile_streamer_set_tile_content(rasm_tile_streamer* streamer, rasm_tile tile, const rasm_tile_content* content);
+rasm_tile_state  rasm_tile_streamer_get_tile_state(rasm_tile_streamer* streamer, rasm_tile tile);
+rasm_bool        rasm_tile_streamer_is_tile_drawn(rasm_tile_streamer* streamer, rasm_tile tile);
+rasm_result      rasm_tile_streamer_get_stats(rasm_tile_streamer* streamer, rasm_tile_streamer_stats* stats);</pre>
+  <div class="body">
+    <p>1.3. <a href="engine.html#TileStreamer"><code>TileStreamer</code></a> and <a href="../guides/tile-streaming.html">Tile streaming under a memory budget</a>, in both libraries. <code>rasm_tile</code> is a handle; <code>rasm_tile_streamer_config</code>, <code>rasm_tile_desc</code> (<code>parent</code>, <code>center</code> a <code>rasm_dvec3</code>, <code>radius</code>, <code>geometric_error</code>, <code>refine</code>: <code>RASM_TILE_REFINE_REPLACE</code> or <code>RASM_TILE_REFINE_ADD</code>, <code>estimated_bytes</code>), <code>rasm_tile_content</code> (an array and a count of entities, meshes, materials and textures) and <code>rasm_tile_streamer_stats</code> are the C++ structs, flat and sized. A NULL config takes the defaults. The tiles to load stay valid until the next update. <code>rasm_tile_streamer_set_tile_content</code> returns <code>RASM_ERROR_FAILED</code> where C++ returns false, and the content is the streamer's either way; an argument error (a NULL streamer, a size too small, a NULL array with a count) returns <code>RASM_ERROR_INVALID_ARGUMENT</code> and takes nothing. <code>rasm_tile_state</code> is <code>RASM_TILE_STATE_EMPTY</code>, <code>RASM_TILE_STATE_REQUESTED</code>, <code>RASM_TILE_STATE_LOADING</code>, <code>RASM_TILE_STATE_READY</code> or <code>RASM_TILE_STATE_FAILED</code>. Destroy the streamer before its renderer. <code>examples/22_c_api</code> streams its ground as a root tile and its four quarters.</p>
+    <pre><code>rasm_tile_streamer *tiles = NULL;
+rasm_tile_streamer_create(renderer, scene, NULL, &amp;tiles);
+// each frame, before rasm_render_views:
+rasm_tile_streamer_set_views(tiles, views, 3);
+rasm_tile_streamer_update(tiles, wanted, wantedCount);
+uint32_t count = 0;
+const rasm_tile *toLoad = rasm_tile_streamer_get_tiles_to_load(tiles, &amp;count);</code></pre>
+  </div>
+</div>
+
 <h2 id="map"><span class="n">5</span>From C++ to C</h2>
 
 <div class="table-wrap">
@@ -536,6 +565,7 @@ rasm_update_transform_d(renderer, entity, &amp;at);</code></pre>
   <tr><td><code>MeshHandle{}</code> (invalid)</td><td><code>(rasm_mesh){0}</code></td></tr>
   <tr><td><code>render(views, count)</code> with a <code>View</code> list</td><td><code>rasm_render_views(renderer, views, count)</code> with a <code>rasm_view</code> array</td></tr>
   <tr><td><code>getInputEvents(count)</code></td><td><code>rasm_get_input_event_count</code>, then <code>rasm_get_input_event</code> by index</td></tr>
+  <tr><td><code>TileStreamer</code>, <code>TileContent</code></td><td><code>rasm_tile_streamer</code>, an object with create and destroy; <code>rasm_tile_content</code> with arrays of C handles</td></tr>
   <tr><td><code>CameraRig</code>, <code>CameraInputState</code></td><td><code>rasm_camera_rig</code>, <code>rasm_camera_input_state</code>: objects with create and destroy</td></tr>
   <tr><td><code>std::string</code>, <code>std::vector</code></td><td><code>const char*</code>; a pointer and a count</td></tr>
 </table>

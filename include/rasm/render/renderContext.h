@@ -33,6 +33,7 @@ namespace rasm
         bool                                transferQueue           = true;
         bool                                hostImageCopy           = true;
         bool                                sampledDepth            = true;     // render target depths are SAMPLED and bindless, for Hi-Z culling
+        uint32_t                            bindlessTextures        = 1u << 14; // slots of binding 0, at most MAX_BINDLESS_TEXTURES and the device's limit
         std::string                         cacheDir                = {};       // the pipeline cache's folder; "": none
     };
 
@@ -162,6 +163,13 @@ namespace rasm
         uint32_t                            getReleasesWaiting() const;
         uint32_t                            getTextureCount() const;
         uint32_t                            getBindlessTextureCount() const;
+        // The slots of binding 0: RenderContextDesc::bindlessTextures, lowered to what the device allows.
+        uint32_t                            getBindlessTextureCapacity() const;
+        // Slots a texture can take now: never used, or freed and done on the GPU (a destroyed texture's waits).
+        uint32_t                            getFreeBindlessTextureSlots() const;
+        // The bytes of the texture's own memory allocation (its alignment and padding included), 0 for a texture placed
+        // in a shared heap (a transient render target) or an invalid handle.
+        uint64_t                            getTextureMemoryBytes(const TextureHandle& texture) const;
         bool                                resizeBuffer(const BufferHandle& buffer, uint64_t size);
         void                                bindPipeline(const CommandBufferHandle& commandBuffer, const PipelineHandle& pipeline);
         void                                bindIndexBuffer(const CommandBufferHandle& commandBuffer, const BufferHandle& buffer, uint64_t offset, Format indexType);

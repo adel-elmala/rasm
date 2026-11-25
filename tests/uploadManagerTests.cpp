@@ -219,6 +219,7 @@ namespace
         bool getTimestamps(QueryPool *, uint32_t, uint32_t, uint64_t *) override { return false; }
         bool supportsTextureFormat(Format) const override { return true; }
         uint32_t supportedSampleCounts() const override { return 1; }
+        uint32_t maxBindlessTextures() const override { return 1024; }
         bool fillTexture(Texture *, const TextureLevel *, uint32_t) override { return false; }
         void updateBindlessTexture(DescriptorSet *, uint32_t, Texture *, Sampler *) override {}
         void updateBindlessStorageImage(DescriptorSet *, uint32_t, Texture *, uint32_t) override {}

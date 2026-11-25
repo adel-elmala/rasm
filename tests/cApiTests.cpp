@@ -3,6 +3,7 @@
 #include "rasm/scene.h"
 #include "rasm/input.h"
 #include "rasm/types.h"
+#include "rasm/tileStreamer.h"
 
 #include "doctest/doctest.h"
 #include "glm/gtc/quaternion.hpp"
@@ -528,4 +529,61 @@ TEST_CASE("a free-fly rig turns around its up axis")
     CHECK(rasm_camera_rig_set_free_fly_up(rig, rasm_vec3{NAN, 0.0f, 0.0f}) == RASM_ERROR_INVALID_ARGUMENT);
     CHECK(rasm_camera_rig_set_free_fly_up(nullptr, rasm_vec3{0.0f, 1.0f, 0.0f}) == RASM_ERROR_INVALID_ARGUMENT);
     rasm_camera_rig_destroy(rig);
+}
+
+TEST_CASE("the 1.3 structs start from the C++ defaults")
+{
+    rasm_renderer_config config;
+    REQUIRE(rasm_renderer_config_init(&config, sizeof(config)) == RASM_OK);
+    CHECK(config.max_bindless_textures == rasm::RendererConfig{}.maxBindlessTextures);
+
+    const rasm::TileStreamerConfig streamerDefaults;
+    rasm_tile_streamer_config streamer;
+    REQUIRE(rasm_tile_streamer_config_init(&streamer, sizeof(streamer)) == RASM_OK);
+    CHECK(streamer.size == sizeof(streamer));
+    CHECK(streamer.memory_budget == streamerDefaults.memoryBudget);
+    CHECK(streamer.device_share == streamerDefaults.deviceShare);
+    CHECK(streamer.max_tiles == streamerDefaults.maxTiles);
+    CHECK(streamer.max_loads_per_frame == streamerDefaults.maxLoadsPerFrame);
+    CHECK(streamer.max_loads_in_flight == streamerDefaults.maxLoadsInFlight);
+    CHECK(streamer.max_drops_per_frame == streamerDefaults.maxDropsPerFrame);
+    CHECK(streamer.retry_failed_after == streamerDefaults.retryFailedAfter);
+
+    rasm_tile_desc desc;
+    REQUIRE(rasm_tile_desc_init(&desc, sizeof(desc)) == RASM_OK);
+    CHECK(desc.parent.id == 0);
+    CHECK(desc.radius == 0.0);
+    CHECK(desc.refine == RASM_TILE_REFINE_REPLACE);
+    CHECK(desc.estimated_bytes == 0);
+
+    rasm_tile_content content;
+    std::memset(&content, 0xAB, sizeof(content));
+    REQUIRE(rasm_tile_content_init(&content, sizeof(content)) == RASM_OK);
+    CHECK(content.entities == nullptr);
+    CHECK(content.entity_count == 0);
+    CHECK(content.texture_count == 0);
+}
+
+TEST_CASE("a tile streamer call with a bad argument gives a code and a last error")
+{
+    rasm_tile_streamer *streamer = reinterpret_cast<rasm_tile_streamer *>(&streamer);
+    CHECK(rasm_tile_streamer_create(nullptr, rasm_scene{}, nullptr, &streamer) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(streamer == nullptr);
+    CHECK(contains(rasm_get_last_error(), "renderer is NULL"));
+    CHECK(rasm_tile_streamer_create(nullptr, rasm_scene{}, nullptr, nullptr) == RASM_ERROR_INVALID_ARGUMENT);
+
+    rasm_tile_desc desc;
+    rasm_tile_desc_init(&desc, sizeof(desc));
+    CHECK(rasm_tile_streamer_create_tile(nullptr, &desc).id == 0);
+    CHECK(contains(rasm_get_last_error(), "rasm_tile_streamer_create_tile: streamer is NULL"));
+    CHECK(rasm_tile_streamer_update(nullptr, nullptr, 0) == RASM_ERROR_INVALID_ARGUMENT);
+    uint32_t count = 7;
+    CHECK(rasm_tile_streamer_get_tiles_to_load(nullptr, &count) == nullptr);
+    CHECK(rasm_tile_streamer_get_tile_state(nullptr, rasm_tile{}) == RASM_TILE_STATE_EMPTY);
+    CHECK(rasm_tile_streamer_is_tile_drawn(nullptr, rasm_tile{}) == RASM_FALSE);
+    CHECK(rasm_tile_streamer_get_screen_error(nullptr, rasm_dvec3{}, 1.0, 1.0) == 0.0);
+    rasm_tile_streamer_stats stats;
+    stats.size = sizeof(stats);
+    CHECK(rasm_tile_streamer_get_stats(nullptr, &stats) == RASM_ERROR_INVALID_ARGUMENT);
+    rasm_tile_streamer_destroy(nullptr);
 }

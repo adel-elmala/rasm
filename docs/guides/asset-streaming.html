@@ -1034,7 +1034,7 @@
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>No priority per load: the queue is FIFO. A model's geometry and each texture are finished in one step, however big (<code>P24</code>). A 16-bit image loads as 8 bits (<code>D36</code>). A texture, mesh or environment can be destroyed while it loads: its load is dropped (a queued job never runs), and a mesh's pool ranges come back (<a href="resource-lifetime.html">deferred destruction</a>).</p>
+  <p>No priority per load: the queue is FIFO. A <a href="tile-streaming.html">tile streamer</a> ranks whole tiles instead, and keeps few loads in flight, so the FIFO matters little there. A model's geometry and each texture are finished in one step, however big (<code>P24</code>). A 16-bit image loads as 8 bits (<code>D36</code>). A texture, mesh or environment can be destroyed while it loads: its load is dropped (a queued job never runs), and a mesh's pool ranges come back (<a href="resource-lifetime.html">deferred destruction</a>).</p>
 </div>
 
 <h3>Further reading</h3>

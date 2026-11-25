@@ -24,7 +24,7 @@
 
 // NOLINTBEGIN(readability-identifier-naming): C names, snake_case with the rasm_ prefix, as C APIs and their bindings expect
 #define RASM_C_API_VERSION_MAJOR    1
-#define RASM_C_API_VERSION_MINOR    2
+#define RASM_C_API_VERSION_MINOR    3
 #define RASM_C_API_VERSION          (((uint32_t)RASM_C_API_VERSION_MAJOR << 16) | (uint32_t)RASM_C_API_VERSION_MINOR)
 
 #if defined(_WIN32)
@@ -305,6 +305,7 @@ typedef struct rasm_renderer_config
     rasm_bool                       bloom;
     rasm_bool                       ui;
     rasm_anti_aliasing              anti_aliasing;
+    uint32_t                        max_bindless_textures;                     /* 1.3: sampled textures at once, 16384 by default, lowered to the device's limit */
 } rasm_renderer_config;
 
 typedef struct rasm_asset_loader_config
@@ -759,6 +760,90 @@ typedef struct rasm_load_stats
     uint64_t                        peak_decoded_bytes;
 } rasm_load_stats;
 
+/* 1.3: tile streaming (TileStreamer in C++). */
+typedef struct rasm_tile_streamer   rasm_tile_streamer;
+typedef struct rasm_tile            { uint64_t id; } rasm_tile;
+
+typedef uint32_t                    rasm_tile_refine;
+enum
+{
+    RASM_TILE_REFINE_REPLACE        = 0,        /* the children stand in for it */
+    RASM_TILE_REFINE_ADD            = 1,        /* the children add to it: it stays drawn with them */
+};
+
+typedef uint32_t                    rasm_tile_state;
+enum
+{
+    RASM_TILE_STATE_EMPTY           = 0,
+    RASM_TILE_STATE_REQUESTED       = 1,        /* handed out: give it its content */
+    RASM_TILE_STATE_LOADING         = 2,
+    RASM_TILE_STATE_READY           = 3,
+    RASM_TILE_STATE_FAILED          = 4,
+};
+
+typedef struct rasm_tile_streamer_config
+{
+    uint32_t                        size;
+    uint64_t                        memory_budget;                             /* bytes; 0: device_share of what the device's budget leaves */
+    float                           device_share;
+    uint32_t                        max_tiles;
+    uint32_t                        max_loads_per_frame;
+    uint32_t                        max_loads_in_flight;
+    uint32_t                        max_drops_per_frame;
+    uint32_t                        retry_failed_after;                        /* updates; 0: never */
+} rasm_tile_streamer_config;
+
+typedef struct rasm_tile_desc
+{
+    uint32_t                        size;
+    rasm_tile                       parent;                                    /* 0: a root */
+    rasm_dvec3                      center;                                    /* the bounding sphere, in world space */
+    double                          radius;
+    double                          geometric_error;                           /* world units; a leaf's is 0 */
+    rasm_tile_refine                refine;
+    uint64_t                        estimated_bytes;                           /* 0: the mean of the tiles measured so far */
+} rasm_tile_desc;
+
+/* What a tile owns from rasm_tile_streamer_set_tile_content on: the streamer adds the entities to its scene while the
+ * tile is drawn, and destroys everything listed when it drops the tile, or at once when the tile does not take it
+ * (RASM_ERROR_FAILED). An argument error (a NULL streamer, a size too small, a NULL array with a count) takes nothing:
+ * the content stays the caller's. */
+typedef struct rasm_tile_content
+{
+    uint32_t                        size;
+    const rasm_entity*              entities;
+    uint32_t                        entity_count;
+    const rasm_mesh*                meshes;
+    uint32_t                        mesh_count;
+    const rasm_material*            materials;
+    uint32_t                        material_count;
+    const rasm_texture*             textures;
+    uint32_t                        texture_count;
+} rasm_tile_content;
+
+typedef struct rasm_tile_streamer_stats
+{
+    uint32_t                        size;
+    uint32_t                        tiles;
+    uint32_t                        wanted;
+    uint32_t                        ready;
+    uint32_t                        loading;
+    uint32_t                        failed;
+    uint32_t                        drawn;
+    uint32_t                        fallbacks;
+    uint32_t                        holes;
+    uint32_t                        waiting_for_budget;
+    uint32_t                        loads_started;
+    uint32_t                        dropped;
+    uint64_t                        bytes;
+    uint64_t                        peak_bytes;
+    uint64_t                        budget;
+    uint64_t                        device_budget;
+    uint64_t                        device_usage;
+    uint64_t                        total_loads;
+    uint64_t                        total_drops;
+} rasm_tile_streamer_stats;
+
 typedef void (RASM_CALL* rasm_log_callback)(void* user_data, rasm_log_level level, const char* message);
 
 /* The library */
@@ -948,6 +1033,26 @@ RASM_C_API rasm_result      RASM_CALL rasm_camera_rig_get_transform_d(const rasm
 RASM_C_API rasm_result      RASM_CALL rasm_camera_rig_set_free_fly_up(rasm_camera_rig* rig, rasm_vec3 up);
 RASM_C_API rasm_vec3        RASM_CALL rasm_to_render_position(rasm_dvec3 world_position, rasm_dvec3 origin);
 RASM_C_API rasm_dvec3       RASM_CALL rasm_to_world_position(rasm_vec3 render_position, rasm_dvec3 origin);
+
+/* Added in 1.3: tile streaming. The streamer keeps a scene's tiles in GPU memory under a byte budget: each frame set the
+ * views, walk your tree with the screen error, pass the tiles to draw to update, and give each tile it hands out its
+ * content. Destroy it before its renderer. The tiles to load stay valid until the next update. */
+RASM_C_API rasm_result      RASM_CALL rasm_tile_streamer_config_init(rasm_tile_streamer_config* config, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_tile_desc_init(rasm_tile_desc* desc, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_tile_content_init(rasm_tile_content* content, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_tile_streamer_create(rasm_renderer* renderer, rasm_scene scene, const rasm_tile_streamer_config* config, rasm_tile_streamer** streamer);
+RASM_C_API void             RASM_CALL rasm_tile_streamer_destroy(rasm_tile_streamer* streamer);
+RASM_C_API rasm_tile        RASM_CALL rasm_tile_streamer_create_tile(rasm_tile_streamer* streamer, const rasm_tile_desc* desc);
+RASM_C_API rasm_result      RASM_CALL rasm_tile_streamer_destroy_tile(rasm_tile_streamer* streamer, rasm_tile tile);
+RASM_C_API rasm_result      RASM_CALL rasm_tile_streamer_set_views(rasm_tile_streamer* streamer, const rasm_view* views, uint32_t view_count);
+RASM_C_API double           RASM_CALL rasm_tile_streamer_get_screen_error(rasm_tile_streamer* streamer, rasm_dvec3 center, double radius, double geometric_error);
+RASM_C_API double           RASM_CALL rasm_tile_streamer_get_tile_screen_error(rasm_tile_streamer* streamer, rasm_tile tile);
+RASM_C_API rasm_result      RASM_CALL rasm_tile_streamer_update(rasm_tile_streamer* streamer, const rasm_tile* wanted, uint32_t wanted_count);
+RASM_C_API const rasm_tile* RASM_CALL rasm_tile_streamer_get_tiles_to_load(rasm_tile_streamer* streamer, uint32_t* count);
+RASM_C_API rasm_result      RASM_CALL rasm_tile_streamer_set_tile_content(rasm_tile_streamer* streamer, rasm_tile tile, const rasm_tile_content* content);
+RASM_C_API rasm_tile_state  RASM_CALL rasm_tile_streamer_get_tile_state(rasm_tile_streamer* streamer, rasm_tile tile);
+RASM_C_API rasm_bool        RASM_CALL rasm_tile_streamer_is_tile_drawn(rasm_tile_streamer* streamer, rasm_tile tile);
+RASM_C_API rasm_result      RASM_CALL rasm_tile_streamer_get_stats(rasm_tile_streamer* streamer, rasm_tile_streamer_stats* stats);
 
 #ifdef __cplusplus
 }

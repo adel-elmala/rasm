@@ -13,6 +13,11 @@
  * asset loader, and a ground square with a checker texture, both made here in memory. A sun and a warm point light
  * light it.
  *
+ * The ground is streamed (1.3): a tile streamer holds it as a root tile and its four quarters, and each frame the
+ * program passes the quarters as the tiles to draw while the root's error on screen is large, the root otherwise. The
+ * streamer hands out each tile once, and the program gives it its mesh and entity then; the quarters draw the same
+ * square as the root, so the picture does not change, only who draws it.
+ *
  * Three views draw each frame: a top-down map into a view texture (a render target), which a board in the scene shows;
  * the main camera into the window; and the map again into a corner of the window. The main camera has a trackball
  * controller, which a script drives with synthetic mouse events (rasm_add_input_event), the way an application with its
@@ -28,6 +33,9 @@
 #define CHECKER_SIZE 256
 #define MAP_SIZE 256
 #define MAP_HALF_EXTENT 4.0f
+#define GROUND_HALF_SIZE 30.0f
+#define GROUND_TILES 5
+#define REFINE_PIXELS 16.0
 
 typedef struct ExampleArgs
 {
@@ -148,8 +156,9 @@ static rasm_transform placed(rasm_vec3 position, float yaw)
     return transform;
 }
 
-/* A flat square on y = 0, facing up, its UVs repeating the checker 8 times. */
-static rasm_mesh createGround(rasm_renderer *renderer, float halfSize)
+/* A flat square of the ground on y = 0, facing up: the part of half size halfSize around (centerX, centerZ). The UVs
+ * come from the position, so the whole ground repeats the checker 8 times however it is cut in parts. */
+static rasm_mesh createGround(rasm_renderer *renderer, float centerX, float centerZ, float halfSize)
 {
     static const float corners[4][2] = {{-1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, -1.0f}, {-1.0f, -1.0f}};
     static const uint32_t indices[6] = {0, 1, 2, 0, 2, 3};
@@ -158,15 +167,56 @@ static rasm_mesh createGround(rasm_renderer *renderer, float halfSize)
     memset(vertices, 0, sizeof(vertices));
     for (i = 0; i < 4; ++i)
     {
-        vertices[i].position = vec3(corners[i][0] * halfSize, 0.0f, corners[i][1] * halfSize);
+        const float x = centerX + corners[i][0] * halfSize;
+        const float z = centerZ + corners[i][1] * halfSize;
+        vertices[i].position = vec3(x, 0.0f, z);
         vertices[i].normal = vec3(0.0f, 1.0f, 0.0f);
         for (set = 0; set < RASM_MAX_VERTEX_UV_SETS; ++set)
         {
-            vertices[i].uv[set].x = (corners[i][0] * 0.5f + 0.5f) * 8.0f;
-            vertices[i].uv[set].y = (corners[i][1] * 0.5f + 0.5f) * 8.0f;
+            vertices[i].uv[set].x = (x / GROUND_HALF_SIZE * 0.5f + 0.5f) * 8.0f;
+            vertices[i].uv[set].y = (z / GROUND_HALF_SIZE * 0.5f + 0.5f) * 8.0f;
         }
     }
     return rasm_create_mesh(renderer, vertices, 4, indices, 6, NULL);
+}
+
+/* The ground's tiles: 0 is the whole square, 1 to 4 its quarters. */
+static void groundTileBounds(int tile, float *centerX, float *centerZ, float *halfSize)
+{
+    *halfSize = tile == 0 ? GROUND_HALF_SIZE : 0.5f * GROUND_HALF_SIZE;
+    *centerX = tile == 0 ? 0.0f : ((tile - 1) % 2 == 0 ? -0.5f : 0.5f) * GROUND_HALF_SIZE;
+    *centerZ = tile == 0 ? 0.0f : ((tile - 1) / 2 == 0 ? -0.5f : 0.5f) * GROUND_HALF_SIZE;
+}
+
+/* The tiles the last update handed out get their mesh and their entity, which the streamer owns from then on. */
+static void loadGroundTiles(rasm_renderer *renderer, rasm_tile_streamer *tiles, const rasm_tile *groundTiles, rasm_material material)
+{
+    uint32_t count = 0, i;
+    const rasm_tile *toLoad = rasm_tile_streamer_get_tiles_to_load(tiles, &count);
+    for (i = 0; i < count; ++i)
+    {
+        int tile;
+        for (tile = 0; tile < GROUND_TILES; ++tile)
+        {
+            if (groundTiles[tile].id == toLoad[i].id)
+            {
+                const rasm_transform at = placed(vec3(0.0f, -1.0f, 0.0f), 0.0f);
+                float centerX, centerZ, halfSize;
+                rasm_mesh mesh;
+                rasm_entity entity;
+                rasm_tile_content content;
+                groundTileBounds(tile, &centerX, &centerZ, &halfSize);
+                mesh = createGround(renderer, centerX, centerZ, halfSize);
+                entity = rasm_create_entity(renderer, "ground", mesh, material, &at);
+                rasm_tile_content_init(&content, sizeof(content));
+                content.entities = &entity;
+                content.entity_count = 1;
+                content.meshes = &mesh;
+                content.mesh_count = 1;
+                rasm_tile_streamer_set_tile_content(tiles, groundTiles[tile], &content);
+            }
+        }
+    }
 }
 
 /* Light and dark gray squares, 32 texels each: sRGB color, so the mips are made in linear light. */
@@ -275,8 +325,12 @@ int main(int argc, char **argv)
     rasm_renderer *renderer;
     rasm_asset_loader *loader;
     rasm_scene scene;
-    rasm_mesh helmet, ground;
+    rasm_mesh helmet;
     rasm_texture checker;
+    rasm_material groundMaterial;
+    rasm_tile_streamer *tiles = NULL;
+    rasm_tile groundTiles[GROUND_TILES];
+    rasm_tile_streamer_stats tileStats;
     rasm_environment sunset;
     rasm_scene_environment environment;
     rasm_light_desc light;
@@ -323,9 +377,9 @@ int main(int argc, char **argv)
     scene = rasm_create_scene(renderer);
     sunset = rasm_asset_loader_load_environment(loader, "environments/venice_sunset_2k.hdr");
     helmet = rasm_asset_loader_load_gltf(loader, "models/gltf/DamagedHelmet/DamagedHelmet.gltf");
-    ground = createGround(renderer, 30.0f);
     checker = createChecker(renderer);
-    if (sunset.id == 0 || helmet.id == 0 || ground.id == 0 || checker.id == 0)
+    groundMaterial = createGroundMaterial(renderer, checker);
+    if (sunset.id == 0 || helmet.id == 0 || checker.id == 0 || groundMaterial.id == 0)
     {
         fail("creating the scene");
         rasm_engine_destroy(engine);
@@ -338,11 +392,34 @@ int main(int argc, char **argv)
     rasm_set_scene_environment(renderer, scene, &environment);
 
     {
-        const rasm_transform groundAt = placed(vec3(0.0f, -1.0f, 0.0f), 0.0f);
         const rasm_transform helmetAt = placed(vec3(0.0f, 0.0f, 0.0f), -0.44f);
-        rasm_add_entity_to_scene(renderer, scene, rasm_create_entity(renderer, "ground", ground, createGroundMaterial(renderer, checker), &groundAt));
         /* No material: the glTF's own materials draw it. */
         rasm_add_entity_to_scene(renderer, scene, rasm_create_entity(renderer, "helmet", helmet, (rasm_material){0}, &helmetAt));
+    }
+
+    /* The ground's tiles. The material is shared, so no tile lists it: the streamer destroys only what a tile owns. */
+    if (rasm_tile_streamer_create(renderer, scene, NULL, &tiles) != RASM_OK)
+    {
+        fail("rasm_tile_streamer_create");
+        rasm_engine_destroy(engine);
+        return 1;
+    }
+    {
+        int tile;
+        for (tile = 0; tile < GROUND_TILES; ++tile)
+        {
+            rasm_tile_desc desc;
+            float centerX, centerZ, halfSize;
+            groundTileBounds(tile, &centerX, &centerZ, &halfSize);
+            rasm_tile_desc_init(&desc, sizeof(desc));
+            desc.parent = tile == 0 ? (rasm_tile){0} : groundTiles[0];
+            desc.center.x = centerX;
+            desc.center.y = -1.0;
+            desc.center.z = centerZ;
+            desc.radius = 1.415 * halfSize;
+            desc.geometric_error = tile == 0 ? 4.0 : 0.0;
+            groundTiles[tile] = rasm_tile_streamer_create_tile(tiles, &desc);
+        }
     }
 
     /* 3. A sun from high on the left, and a warm point light below the helmet's visor. */
@@ -402,6 +479,7 @@ int main(int argc, char **argv)
     if (map.id == 0 || mapTarget.id == 0)
     {
         fail("the map");
+        rasm_tile_streamer_destroy(tiles);
         rasm_engine_destroy(engine);
         return 1;
     }
@@ -442,6 +520,13 @@ int main(int argc, char **argv)
     for (frame = 1; rasm_running(renderer); ++frame)
     {
         sendScriptedOrbit(renderer, frame, args.frames);
+        /* The cut: the quarters while the root's error on screen is large, else the root. */
+        rasm_tile_streamer_set_views(tiles, views, 3);
+        if (rasm_tile_streamer_get_tile_screen_error(tiles, groundTiles[0]) > REFINE_PIXELS)
+            rasm_tile_streamer_update(tiles, groundTiles + 1, GROUND_TILES - 1);
+        else
+            rasm_tile_streamer_update(tiles, groundTiles, 1);
+        loadGroundTiles(renderer, tiles, groundTiles, groundMaterial);
         if (args.headless && frame == args.frames)
             readback = rasm_read_frame(renderer, RASM_READBACK_FORMAT_RGBA8_SRGB);
         rasm_render_views(renderer, views, 3);
@@ -461,6 +546,13 @@ int main(int argc, char **argv)
     if (rasm_get_frame_stats(renderer, &frameStats) == RASM_OK && rasm_get_pool_stats(renderer, &poolStats) == RASM_OK)
         printf("%u entities, %u meshes, %u materials; %u draws, %u visible.\n", poolStats.entities, poolStats.meshes, poolStats.materials, frameStats.draws, frameStats.draws_visible);
 
+    tileStats.size = sizeof(tileStats);
+    if (rasm_tile_streamer_get_stats(tiles, &tileStats) == RASM_OK)
+        printf("Ground tiles: %u drawn, %u ready, %llu loads, %.1f KiB of %.0f MiB.\n", tileStats.drawn, tileStats.ready, (unsigned long long)tileStats.total_loads,
+               (double)tileStats.bytes / 1024.0, (double)tileStats.budget / (1024.0 * 1024.0));
+
+    /* Before the engine: it destroys the tiles' content. */
+    rasm_tile_streamer_destroy(tiles);
     rasm_image_destroy(image);
     rasm_engine_destroy(engine);
     if (args.headless && !written)

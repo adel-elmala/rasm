@@ -37,7 +37,7 @@
     <li>Change a material: copy it with <code>getMaterial</code>, edit, <code>updateMaterial</code>. Every object that uses it changes in the next frame.</li>
     <li><code>loadTexture</code> loads in the background. Its <code>format</code> names the slot: color textures are sRGB (the default); normal, metallic-roughness and occlusion maps must be <code>R8G8B8A8_UNORM</code>. A <samp>.ktx2</samp> file stays block-compressed on the GPU (<a href="../guides/texture-compression.html">texture compression</a>).</li>
     <li>An entity waits, undrawn, until all its textures are loaded.</li>
-    <li>Limits: <code>EngineConfig::maxMaterials</code> materials alive at once (4096 by default), 1024 texture slots (<code>MAX_BINDLESS_TEXTURES</code>). A destroyed material's row and a destroyed texture's slot are reused.</li>
+    <li>Limits: <code>EngineConfig::maxMaterials</code> materials alive at once (4096 by default), <code>RendererConfig::maxBindlessTextures</code> texture slots (16384 by default, lowered to what the device allows). A destroyed material's row and a destroyed texture's slot are reused.</li>
   </ul>
 </div>
 
@@ -361,7 +361,7 @@ engine.updateMaterial(pulse, values);</code></pre>
 
 <h2 id="bindless"><span class="n">5</span>Bindless textures</h2>
 
-<p>All textures that shaders can sample sit in one descriptor set: an array of <code>MAX_BINDLESS_TEXTURES</code> (1024) slots, binding 0 of set 0, seen by every shader stage, compute included. Materials fill it for you. You need these functions only for your own shaders, like the full-screen passes of <code>examples/01_render_graph/main.cpp</code>:</p>
+<p>All textures that shaders can sample sit in one descriptor set: an array of <code>RendererConfig::maxBindlessTextures</code> slots (16384 by default), binding 0 of set 0, seen by every shader stage, compute included. Materials fill it for you. You need these functions only for your own shaders, like the full-screen passes of <code>examples/01_render_graph/main.cpp</code>:</p>
 
 <pre><code>// Slang: the array the engine binds
 [[vk::binding(0, 0)]]
@@ -395,7 +395,7 @@ ctx.pushConstants(commandBuffer, overlayPipeline, &amp;textureIndex, sizeof(text
       <dt>bindlessSet</dt><dd>Pass <a href="low-level.html#getBindlessDescriptorSet"><code>getBindlessDescriptorSet()</code></a>.</dd>
       <dt>texture</dt><dd>Any texture created as sampled.</dd>
       <dt>sampler</dt><dd>Filter and edge mode, see <a href="#SamplerType"><code>SamplerType</code></a>.</dd>
-      <dt>slot</dt><dd><code>MAX_BINDLESS_TEXTURES</code> (the default): the texture's own slot if it has one, else a free slot. A number below it: that slot, replacing what was there; the texture that held it loses it.</dd>
+      <dt>slot</dt><dd><code>MAX_BINDLESS_TEXTURES</code> (the default): the texture's own slot if it has one, else a free slot. A number below the set's slot count: that slot, replacing what was there; the texture that held it loses it.</dd>
       <dt>returns</dt><dd>The slot, or <code>UINT32_MAX</code> on error ("Failed to add bindless texture." is logged): all 1024 slots held or waiting for the GPU, a bad slot or sampler, or an unknown or destroyed texture.</dd>
     </dl>
     <p>A texture holds one slot: a second call without a slot returns it unchanged, since a frame in flight may sample it (a different sampler logs an error; make a second texture for it). The slot is freed with the texture (<a href="engine.html#destroyTexture"><code>destroyTexture</code></a>), once no frame in flight samples it, and then reused.</p>
@@ -459,7 +459,7 @@ ctx.pushConstants(commandBuffer, overlayPipeline, &amp;textureIndex, sizeof(text
 <table>
   <tr><th>Constant</th><th>Value</th><th>Meaning</th></tr>
   <tr><td><code>EngineConfig::maxMaterials</code></td><td>4096</td><td>materials alive at once, the default material included; the table has one more row, 220 B each, twice</td></tr>
-  <tr><td><code>MAX_BINDLESS_TEXTURES</code></td><td>1024</td><td>texture slots, shared by materials, glTF images, render targets and you</td></tr>
+  <tr><td><code>RendererConfig::maxBindlessTextures</code></td><td>16384</td><td>texture slots, shared by materials, glTF images, render targets and you; lowered to the device's limit</td></tr>
   <tr><td><code>MAX_TEXTURE_SLOTS</code></td><td>6</td><td>textures per material</td></tr>
   <tr><td><code>MAX_PARAM_SLOTS</code></td><td>12</td><td>floats in <code>params</code></td></tr>
   <tr><td><code>INVALID_TEXTURE_INDEX</code></td><td>0xFFFFFFFF</td><td>"no texture" in a material row</td></tr>

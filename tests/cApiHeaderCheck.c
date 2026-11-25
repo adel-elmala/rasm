@@ -23,6 +23,10 @@ int main(void)
     rasm_dvec3 world;
     rasm_transform_d pose;
     rasm_entity entity = {0};
+    rasm_tile_desc tileDesc;
+    rasm_tile_streamer_config streamerConfig;
+    rasm_tile_streamer *streamer = NULL;
+    rasm_scene scene = {0};
 
     if (rasm_get_version() != RASM_C_API_VERSION)
         return 1;
@@ -51,6 +55,11 @@ int main(void)
         return 9;
     if (rasm_get_transform_d(NULL, entity, &pose) != RASM_ERROR_INVALID_ARGUMENT)
         return 10;
+    if (rasm_tile_desc_init(&tileDesc, sizeof(tileDesc)) != RASM_OK || tileDesc.refine != RASM_TILE_REFINE_REPLACE ||
+        rasm_tile_streamer_config_init(&streamerConfig, sizeof(streamerConfig)) != RASM_OK || streamerConfig.max_loads_per_frame == 0)
+        return 11;
+    if (rasm_tile_streamer_create(NULL, scene, &streamerConfig, &streamer) != RASM_ERROR_INVALID_ARGUMENT || streamer != NULL)
+        return 12;
     printf("rasm_c.h %u.%u compiles as C (__STDC_VERSION__ %ld) and links rasm_c_renderer.\n", RASM_C_API_VERSION_MAJOR, RASM_C_API_VERSION_MINOR, (long)__STDC_VERSION__);
     return 0;
 }

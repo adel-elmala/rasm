@@ -619,6 +619,11 @@ namespace rasm::rhi
         vkGetPhysicalDeviceProperties2(physicalDevice.physical_device, &properties2);
         maxBufferSize = maintenance4.maxBufferSize;
         maxStorageImages = std::min(vulkan12.maxDescriptorSetUpdateAfterBindStorageImages, vulkan12.maxPerStageDescriptorUpdateAfterBindStorageImages);
+        // A combined image sampler counts as a sampled image and as a sampler, and with the storage images of binding 1
+        // against a stage's resources.
+        const uint32_t stageResources = vulkan12.maxPerStageUpdateAfterBindResources - std::min(vulkan12.maxPerStageUpdateAfterBindResources, MAX_BINDLESS_STORAGE_IMAGES);
+        maxSampledImages = std::min({vulkan12.maxDescriptorSetUpdateAfterBindSampledImages, vulkan12.maxPerStageDescriptorUpdateAfterBindSampledImages,
+                                     vulkan12.maxDescriptorSetUpdateAfterBindSamplers, vulkan12.maxPerStageDescriptorUpdateAfterBindSamplers, stageResources});
         // A multisampled scene target is drawn into (color and depth), and its color and depth are sampled: the resolve
         // and the Hi-Z read them sample by sample.
         const VkPhysicalDeviceLimits &limits = physicalDevice.properties.limits;
@@ -797,7 +802,9 @@ namespace rasm::rhi
             allocInfo.memoryTypeBits = hostCopy ? formatSupport[static_cast<uint32_t>(desc.format)].hostCopyTypes : 0;
             texture->hostCopy = hostCopy;
             texture->ownershipTransfer = transferQueue && familyCount == 1 && desc.usage == TextureUsage::SAMPLED && !hostCopy;
-            result = vmaCreateImage(allocator, &imageInfo, &allocInfo, &texture->image, &texture->allocation, nullptr);
+            VmaAllocationInfo allocationInfo = {};
+            result = vmaCreateImage(allocator, &imageInfo, &allocInfo, &texture->image, &texture->allocation, &allocationInfo);
+            texture->memoryBytes = result == VK_SUCCESS ? allocationInfo.size : 0;
             if (result == VK_SUCCESS || !hostCopy)
                 break;
         }
@@ -1684,6 +1691,11 @@ namespace rasm::rhi
     }
 
     // VkSampleCountFlagBits are the counts themselves (VK_SAMPLE_COUNT_4_BIT is 4), so the mask is already 2^n per bit n.
+    uint32_t VulkanDevice::maxBindlessTextures() const
+    {
+        return maxSampledImages;
+    }
+
     uint32_t VulkanDevice::supportedSampleCounts() const
     {
         return sampleCounts;

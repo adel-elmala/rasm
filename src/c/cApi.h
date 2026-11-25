@@ -82,6 +82,7 @@ namespace rasm::c
     inline ReadbackHandle   toCpp(rasm_readback h)          { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
     inline WindowHandle     toCpp(rasm_window h)            { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
     inline RenderTargetHandle toCpp(rasm_render_target h)   { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
+    inline TileHandle       toCpp(rasm_tile h)              { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
 
     inline rasm_scene       toC(SceneHandle h)              { return {packHandle(h.index, h.generation)}; }
     inline rasm_entity      toC(EntityHandle h)             { return {packHandle(h.index, h.generation)}; }
@@ -94,6 +95,7 @@ namespace rasm::c
     inline rasm_readback    toC(ReadbackHandle h)           { return {packHandle(h.index, h.generation)}; }
     inline rasm_window      toC(WindowHandle h)             { return {packHandle(h.index, h.generation)}; }
     inline rasm_render_target toC(RenderTargetHandle h)     { return {packHandle(h.index, h.generation)}; }
+    inline rasm_tile        toC(TileHandle h)               { return {packHandle(h.index, h.generation)}; }
 
     inline glm::vec2        toCpp(const rasm_vec2& v)       { return {v.x, v.y}; }
     inline glm::vec3        toCpp(const rasm_vec3& v)       { return {v.x, v.y, v.z}; }
@@ -154,6 +156,8 @@ namespace rasm::c
     bool                    checkInputEvent(const rasm_input_event& event, const char* function);
     bool                    checkCameraController(const rasm_camera_controller& controller, const char* function);
     bool                    checkView(const rasm_view& view, const char* function);
+    // A sized rasm_view array, each element the size of the first, into views (at most MAX_SCENE_VIEWS).
+    bool                    readViews(const rasm_view* views, uint32_t viewCount, View* converted, const char* function);
 
     // An enum value from the caller: false, with an error, when it is past the last constant.
     bool                    checkEnum(uint32_t value, uint32_t count, const char* function, const char* name);
@@ -187,6 +191,11 @@ namespace rasm::c
     constexpr size_t        FRAME_STATS_SIZE_1_1            = offsetof(rasm_frame_stats, lights_dropped) + sizeof(uint32_t);
     constexpr size_t        POOL_STATS_SIZE_1_1             = offsetof(rasm_pool_stats, releases_waiting) + sizeof(uint32_t);
     constexpr size_t        LOAD_STATS_SIZE_1_1             = offsetof(rasm_load_stats, peak_decoded_bytes) + sizeof(uint64_t);
+    // The structs of version 1.3.
+    constexpr size_t        TILE_STREAMER_CONFIG_SIZE_1_3   = offsetof(rasm_tile_streamer_config, retry_failed_after) + sizeof(uint32_t);
+    constexpr size_t        TILE_DESC_SIZE_1_3              = offsetof(rasm_tile_desc, estimated_bytes) + sizeof(uint64_t);
+    constexpr size_t        TILE_CONTENT_SIZE_1_3           = offsetof(rasm_tile_content, texture_count) + sizeof(uint32_t);
+    constexpr size_t        TILE_STREAMER_STATS_SIZE_1_3    = offsetof(rasm_tile_streamer_stats, total_drops) + sizeof(uint64_t);
 
 }
 

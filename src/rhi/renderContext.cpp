@@ -360,9 +360,10 @@ namespace rasm
         // is done with their last texture. slotTextures names each slot's texture, the one whose destroy frees it.
         uint32_t                                                                                                                nextBindlessTextureIndex = 0;
         std::vector<uint32_t>                                                                                                   freeBindlessSlots;
-        TextureHandle                                                                                                           slotTextures[MAX_BINDLESS_TEXTURES] = {};
-        SamplerType                                                                                                             slotSamplers[MAX_BINDLESS_TEXTURES] = {};
-        bool                                                                                                                    slotWaiting[MAX_BINDLESS_TEXTURES] = {};  // released, the GPU may still sample it
+        uint32_t                                                                                                                bindlessCapacity = 0;   // the slots, sized by initialize
+        std::vector<TextureHandle>                                                                                              slotTextures;
+        std::vector<SamplerType>                                                                                                slotSamplers;
+        std::vector<uint8_t>                                                                                                    slotWaiting;            // released, the GPU may still sample it
         // Binding 1 slots of storage render targets, from RESERVED_STORAGE_IMAGES up. A destroyed target gives its back.
         uint32_t                                                                                                                nextStorageSlot = RESERVED_STORAGE_IMAGES;
         std::vector<uint32_t>                                                                                                   freeStorageSlots;
@@ -424,17 +425,17 @@ namespace rasm
                 freeBindlessSlots.pop_back();
                 return slot;
             }
-            return nextBindlessTextureIndex < MAX_BINDLESS_TEXTURES ? nextBindlessTextureIndex++ : UINT32_MAX;
+            return nextBindlessTextureIndex < bindlessCapacity ? nextBindlessTextureIndex++ : UINT32_MAX;
         }
 
         // The frames submitted so far, and the one being recorded, may still sample the slot's old texture.
         void releaseBindlessSlot(uint32_t slot)
         {
             slotTextures[slot] = {};
-            slotWaiting[slot] = true;
+            slotWaiting[slot] = 1;
             releases.release([this, slot]()
                              {
-                                 slotWaiting[slot] = false;
+                                 slotWaiting[slot] = 0;
                                  freeBindlessSlots.push_back(slot); });
         }
 
@@ -648,9 +649,18 @@ namespace rasm
         }
 
         // The one bindless set: every sampled texture and storage image, seen by every shader stage, written after binding.
+        const uint32_t deviceSlots = impl->device->maxBindlessTextures();
+        impl->bindlessCapacity = std::min({std::max(desc.bindlessTextures, 1u), MAX_BINDLESS_TEXTURES, deviceSlots});
+        if (impl->bindlessCapacity < desc.bindlessTextures)
+            spdlog::warn("{} bindless texture slots asked for (RendererConfig::maxBindlessTextures), and this device allows {} (maxDescriptorSetUpdateAfterBindSampledImages and "
+                         "Samplers, per stage too; MAX_BINDLESS_TEXTURES {}): the set has {}.",
+                         desc.bindlessTextures, deviceSlots, MAX_BINDLESS_TEXTURES, impl->bindlessCapacity);
+        impl->slotTextures.assign(impl->bindlessCapacity, TextureHandle{});
+        impl->slotSamplers.assign(impl->bindlessCapacity, SamplerType::LINEAR_REPEAT);
+        impl->slotWaiting.assign(impl->bindlessCapacity, 0);
         impl->bindlessLayout = createBindlessDescriptorSetLayout({.name = "BindlessDescriptorSetLayout",
                                                                   .stage = ShaderType::ALL,
-                                                                  .count = MAX_BINDLESS_TEXTURES,
+                                                                  .count = impl->bindlessCapacity,
                                                                   .type = DescriptorType::COMBINED_IMAGE_SAMPLER,
                                                                   .storageImageCount = MAX_BINDLESS_STORAGE_IMAGES});
         if (!impl->bindlessLayout.isValid())
@@ -659,7 +669,7 @@ namespace rasm
             return false;
         }
         impl->bindlessPool = createDescriptorPool({.name = "BindlessDescriptorPool",
-                                                   .sizes = {{.type = DescriptorType::COMBINED_IMAGE_SAMPLER, .count = MAX_BINDLESS_TEXTURES},
+                                                   .sizes = {{.type = DescriptorType::COMBINED_IMAGE_SAMPLER, .count = impl->bindlessCapacity},
                                                              {.type = DescriptorType::STORAGE_IMAGE, .count = MAX_BINDLESS_STORAGE_IMAGES}},
                                                    .maxSets = 1});
         if (!impl->bindlessPool.isValid())
@@ -1258,7 +1268,7 @@ namespace rasm
                 for (uint32_t c = 0; c <= MAX_COLOR_ATTACHMENTS; ++c)
                 {
                     const uint32_t slot = c < MAX_COLOR_ATTACHMENTS ? colorSlots[i][c] : depthSlots[i];
-                    if (slot < MAX_BINDLESS_TEXTURES && !impl->slotTextures[slot].isValid() && std::find(released.begin(), released.end(), slot) == released.end())
+                    if (slot < impl->bindlessCapacity && !impl->slotTextures[slot].isValid() && std::find(released.begin(), released.end(), slot) == released.end())
                     {
                         released.push_back(slot);
                         impl->releaseBindlessSlot(slot);
@@ -1805,7 +1815,7 @@ namespace rasm
     uint32_t RenderContext::updateBindlessDescriptorSet(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, SamplerType sampler, uint32_t slot)
     {
         if (!checkArgument(sampler < SamplerType::COUNT, __func__, "invalid sampler type.") ||
-            !checkArgument(slot <= MAX_BINDLESS_TEXTURES, __func__, "the slot is past MAX_BINDLESS_TEXTURES."))
+            !checkArgument(slot < impl->bindlessCapacity || slot == MAX_BINDLESS_TEXTURES, __func__, "the slot is past the bindless set's slots (RendererConfig::maxBindlessTextures)."))
             return UINT32_MAX;
 
         auto *descriptorSet = lookup(impl->descriptorSets, bindlessSet, __func__);
@@ -1830,8 +1840,9 @@ namespace rasm
             targetSlot = impl->allocateBindlessSlot();
             if (targetSlot == UINT32_MAX)
             {
-                spdlog::error("All {} bindless texture slots are in use ({} more wait for the GPU to finish with them). Destroy textures that are no longer needed.",
-                              MAX_BINDLESS_TEXTURES, impl->releases.waitingCount());
+                spdlog::error("All {} bindless texture slots are in use ({} more wait for the GPU to finish with them). Destroy textures that are no longer needed, or raise "
+                              "RendererConfig::maxBindlessTextures.",
+                              impl->bindlessCapacity, impl->releases.waitingCount());
                 return UINT32_MAX;
             }
         }
@@ -1910,10 +1921,28 @@ namespace rasm
 
     uint32_t RenderContext::getBindlessTextureCount() const
     {
+        // Slots past nextBindlessTextureIndex were never handed out.
         uint32_t count = 0;
-        for (const TextureHandle &texture : impl->slotTextures)
-            count += texture.isValid() ? 1 : 0;
+        for (uint32_t slot = 0; slot < impl->nextBindlessTextureIndex; ++slot)
+            count += impl->slotTextures[slot].isValid() ? 1 : 0;
         return count;
+    }
+
+    uint32_t RenderContext::getBindlessTextureCapacity() const
+    {
+        return impl->bindlessCapacity;
+    }
+
+    uint32_t RenderContext::getFreeBindlessTextureSlots() const
+    {
+        return impl->bindlessCapacity - impl->nextBindlessTextureIndex + static_cast<uint32_t>(impl->freeBindlessSlots.size());
+    }
+
+    uint64_t RenderContext::getTextureMemoryBytes(const TextureHandle &texture) const
+    {
+        if (!impl->textures.handles.isAlive(texture.index, texture.generation) || impl->textures.objects[texture.index] == nullptr)
+            return 0;
+        return impl->textures.objects[texture.index]->memoryBytes;
     }
 
     // Frees what every queue is done with. Nothing waits: the fence values are only read.
