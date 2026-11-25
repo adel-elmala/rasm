@@ -76,6 +76,7 @@ namespace rasm
     TileResidency::TileResidency(const TileStreamerConfig &config)
         : config(config), handles(static_cast<uint64_t>(std::max(config.maxTiles, 1u)) + 1), records(1)
     {
+        this->config.maxTiles = std::max(config.maxTiles, 1u);
         this->config.maxLoadsInFlight = std::max(config.maxLoadsInFlight, 1u);
     }
 
@@ -187,11 +188,20 @@ namespace rasm
         addCost(used, cost);
     }
 
+    void TileResidency::setReal(uint32_t index, const TileCost &cost)
+    {
+        TileRecord &record = records[index];
+        subtractCost(real, record.real);
+        record.real = cost;
+        addCost(real, cost);
+    }
+
     void TileResidency::release(uint32_t index)
     {
         TileRecord &record = records[index];
         subtractCost(used, record.cost);
         record.cost = {};
+        setReal(index, {});
         const uint32_t last = held.back();
         held[record.heldAt] = last;
         records[last].heldAt = record.heldAt;
@@ -209,11 +219,11 @@ namespace rasm
     bool TileResidency::setLoading(TileHandle tile, const TileCost &known)
     {
         TileRecord *record = findRecord(tile);
-        if (record == nullptr || record->state == TileState::LOADING || record->state == TileState::READY)
+        if (record == nullptr || record->state != TileState::REQUESTED)
             return false;
         const auto index = static_cast<uint32_t>(tile.index);
-        const TileCost reserved = record->state == TileState::REQUESTED ? record->cost : estimate(*record);
-        hold(index, maxCost(reserved, known));
+        hold(index, maxCost(record->cost, known));
+        setReal(index, known);
         setState(index, TileState::LOADING);
         loading.push_back(index);
         return true;
@@ -222,8 +232,10 @@ namespace rasm
     void TileResidency::updateLoading(TileHandle tile, const TileCost &known)
     {
         TileRecord *record = findRecord(tile);
-        if (record != nullptr && record->state == TileState::LOADING)
-            hold(static_cast<uint32_t>(tile.index), maxCost(record->cost, known));
+        if (record == nullptr || record->state != TileState::LOADING)
+            return;
+        hold(static_cast<uint32_t>(tile.index), maxCost(record->cost, known));
+        setReal(static_cast<uint32_t>(tile.index), known);
     }
 
     void TileResidency::setReady(TileHandle tile, const TileCost &cost)
@@ -233,6 +245,7 @@ namespace rasm
             return;
         const auto index = static_cast<uint32_t>(tile.index);
         hold(index, cost);
+        setReal(index, cost);
         record->lastCost = cost;
         record->measured = true;
         addCost(measuredSum, cost);

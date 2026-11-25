@@ -122,7 +122,8 @@ namespace rasm
         // The tiles the last update handed out: give each its content with setTileContent, now or in a later frame.
         const TileHandle*           getTilesToLoad(uint32_t& count) const;
         // The streamer owns the content from now on, also when it returns false (it destroys it then). False for a tile
-        // that has content already (LOADING or READY), an invalid tile, or an invalid handle in the content.
+        // that is not REQUESTED (the streamer cancelled it since it handed it out, or it has content), an invalid tile, or
+        // an invalid handle in the content (the tile then fails).
         bool                        setTileContent(TileHandle tile, const TileContent& content);
         TileState                   getTileState(TileHandle tile) const;
         bool                        isTileDrawn(TileHandle tile) const;

@@ -1933,6 +1933,11 @@ namespace rasm
         return impl->bindlessCapacity;
     }
 
+    uint32_t RenderContext::getFreeBindlessTextureSlots() const
+    {
+        return impl->bindlessCapacity - impl->nextBindlessTextureIndex + static_cast<uint32_t>(impl->freeBindlessSlots.size());
+    }
+
     uint64_t RenderContext::getTextureMemoryBytes(const TextureHandle &texture) const
     {
         if (!impl->textures.handles.isAlive(texture.index, texture.generation) || impl->textures.objects[texture.index] == nullptr)

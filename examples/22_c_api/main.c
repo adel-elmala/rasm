@@ -479,6 +479,7 @@ int main(int argc, char **argv)
     if (map.id == 0 || mapTarget.id == 0)
     {
         fail("the map");
+        rasm_tile_streamer_destroy(tiles);
         rasm_engine_destroy(engine);
         return 1;
     }

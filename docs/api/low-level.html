@@ -1293,9 +1293,10 @@ uint32_t getReleasesWaiting() const;
 uint32_t getTextureCount() const;
 uint32_t getBindlessTextureCount() const;
 uint32_t getBindlessTextureCapacity() const;
+uint32_t getFreeBindlessTextureSlots() const;
 uint64_t getTextureMemoryBytes(const TextureHandle&amp; texture) const;</pre>
   <div class="body">
-    <p><code>releaseAfterGpu</code> runs <code>free</code> once the GPU has finished every frame that may still use what it frees, through the same release queue as the <code>destroy*</code> calls: for your own ranges of a buffer, for example. <code>getReleasesWaiting</code> counts what waits; <code>getTextureCount</code> the live textures; <code>getBindlessTextureCount</code> the bindless slots a texture holds; <code>getBindlessTextureCapacity</code> the slots the set has (<code>RendererConfig::maxBindlessTextures</code>, lowered to the device's limit). <code>getTextureMemoryBytes</code> is the size of a texture's own memory allocation, its alignment and padding included (0 for a transient target placed in a shared heap): what a <a href="engine.html#TileStreamer">TileStreamer</a> counts for a tile's textures.</p>
+    <p><code>releaseAfterGpu</code> runs <code>free</code> once the GPU has finished every frame that may still use what it frees, through the same release queue as the <code>destroy*</code> calls: for your own ranges of a buffer, for example. <code>getReleasesWaiting</code> counts what waits; <code>getTextureCount</code> the live textures; <code>getBindlessTextureCount</code> the bindless slots a texture holds; <code>getBindlessTextureCapacity</code> the slots the set has (<code>RendererConfig::maxBindlessTextures</code>, lowered to the device's limit); <code>getFreeBindlessTextureSlots</code> the slots a texture can take now (a destroyed texture's slot waits for the GPU first). <code>getTextureMemoryBytes</code> is the size of a texture's own memory allocation, its alignment and padding included (0 for a transient target placed in a shared heap): what a <a href="engine.html#TileStreamer">TileStreamer</a> counts for a tile's textures.</p>
   </div>
 </div>
 

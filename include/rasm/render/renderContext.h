@@ -165,6 +165,8 @@ namespace rasm
         uint32_t                            getBindlessTextureCount() const;
         // The slots of binding 0: RenderContextDesc::bindlessTextures, lowered to what the device allows.
         uint32_t                            getBindlessTextureCapacity() const;
+        // Slots a texture can take now: never used, or freed and done on the GPU (a destroyed texture's waits).
+        uint32_t                            getFreeBindlessTextureSlots() const;
         // The bytes of the texture's own memory allocation (its alignment and padding included), 0 for a texture placed
         // in a shared heap (a transient render target) or an invalid handle.
         uint64_t                            getTextureMemoryBytes(const TextureHandle& texture) const;

@@ -33,9 +33,14 @@ namespace rasm
         enum class ContentState
         {
             WAITING,
+            WAITING_FOR_ROWS, // every mesh and texture is in, an entity has no instance rows yet
             READY,
             FAILED,
         };
+
+        // Updates a loaded tile's entity may wait for its instance rows (they come in the next frame's syncGpuScene)
+        // before the tile fails: a full instance table never gives them.
+        constexpr uint32_t ROWLESS_UPDATES = 4;
     }
 
     namespace
@@ -66,15 +71,17 @@ namespace rasm
     struct TileStreamer::Impl
     {
         Impl(Renderer &renderer, SceneHandle scene, const TileStreamerConfig &config)
-            : renderer(renderer), scene(scene), config(config), residency(config)
+            : renderer(renderer), scene(scene), residency(config)
         {
+            this->config = residency.getConfig();
         }
 
         Renderer &renderer;
         SceneHandle scene;
-        TileStreamerConfig config;
         TileResidency residency;
+        TileStreamerConfig config;              // the residency's, its limits clamped
         std::vector<TileContentLists> contents; // by tile index
+        std::vector<uint32_t> rowlessUpdates;   // by tile index: updates its loaded meshes' entities got no instance rows
         TileView views[MAX_SCENE_VIEWS] = {};
         uint32_t viewCount = 0;
         std::vector<TileHandle> toLoad;
@@ -158,6 +165,7 @@ namespace rasm
                 if (!renderer.isLoaded(texture))
                     return ContentState::WAITING;
             }
+            ContentState state = ContentState::READY;
             for (const EntityHandle &entity : content.entities)
             {
                 if (!renderer.isLive(entity))
@@ -167,12 +175,15 @@ namespace rasm
                     continue;
                 if (!renderer.isLive(mesh) || renderer.registry.meshes[mesh.index].state == MeshState::FAILED)
                     return ContentState::FAILED;
+                if (!renderer.isLoaded(mesh))
+                    return ContentState::WAITING;
                 const std::vector<EntityDrawState> &states = renderer.gpuScene->entities;
-                if (renderer.registry.meshes[mesh.index].state != MeshState::READY || entity.index >= states.size() || states[entity.index].instanceCount == 0 ||
-                    states[entity.index].waitingForTextures)
+                if (entity.index >= states.size() || states[entity.index].instanceCount == 0)
+                    state = ContentState::WAITING_FOR_ROWS;
+                else if (states[entity.index].waitingForTextures)
                     return ContentState::WAITING;
             }
-            return ContentState::READY;
+            return state;
         }
 
         bool isLive(const TileContent &content) const
@@ -293,12 +304,11 @@ namespace rasm
         // What the tiles may hold: the byte budget, and of each pool what nothing else holds.
         TileCost getLimits()
         {
-            const TileCost &used = residency.getUsed();
             if (++budgetAge >= BUDGET_REFRESH)
             {
                 budgetAge = 0;
                 memory = renderer.queryMemoryStats();
-                const uint64_t tiles = used.units[static_cast<uint32_t>(TileUnit::BYTES)];
+                const uint64_t tiles = residency.getReal().units[static_cast<uint32_t>(TileUnit::BYTES)];
                 const uint64_t others = memory.vramUsage - std::min(memory.vramUsage, tiles);
                 const uint64_t left = memory.vramBudget - std::min(memory.vramBudget, others);
                 const uint64_t automatic = memory.vramBudget > 0 ? static_cast<uint64_t>(static_cast<double>(left) * static_cast<double>(config.deviceShare)) : FALLBACK_BUDGET;
@@ -315,12 +325,16 @@ namespace rasm
                                                      rendererConfig.maxInstances,
                                                      rendererConfig.maxMaterials,
                                                      renderer.ctx.getBindlessTextureCapacity()};
-            const uint64_t inUse[TILE_UNITS] = {0, pools.vertices, pools.indices, pools.subMeshes, pools.meshlets, pools.instances, pools.materials, pools.bindlessTextures};
+            // Slots a destroyed texture frees wait for the GPU, so they are not free yet.
+            const uint64_t slotsTaken = capacities[static_cast<uint32_t>(TileUnit::TEXTURES)] - std::min<uint64_t>(capacities[static_cast<uint32_t>(TileUnit::TEXTURES)], renderer.ctx.getFreeBindlessTextureSlots());
+            const uint64_t inUse[TILE_UNITS] = {0, pools.vertices, pools.indices, pools.subMeshes, pools.meshlets, pools.instances, pools.materials, slotsTaken};
+            // What the tiles' content holds now, not their reservations, which are not in the pools yet.
+            const TileCost &real = residency.getReal();
             TileCost limits;
             limits.units[0] = budget;
             for (uint32_t k = 1; k < TILE_UNITS; ++k)
             {
-                const uint64_t others = inUse[k] - std::min(inUse[k], used.units[k]);
+                const uint64_t others = inUse[k] - std::min(inUse[k], real.units[k]);
                 limits.units[k] = capacities[k] - std::min(capacities[k], others);
             }
             return limits;
@@ -392,15 +406,22 @@ namespace rasm
         impl->polled.assign(residency.getLoading().begin(), residency.getLoading().end());
         for (uint32_t index : impl->polled)
         {
-            const ContentState state = impl->poll(impl->contentOf(index));
+            ContentState state = impl->poll(impl->contentOf(index));
+            if (impl->rowlessUpdates.size() <= index)
+                impl->rowlessUpdates.resize(index + 1, 0);
+            impl->rowlessUpdates[index] = state == ContentState::WAITING_FOR_ROWS ? impl->rowlessUpdates[index] + 1 : 0;
+            if (impl->rowlessUpdates[index] > ROWLESS_UPDATES)
+                state = ContentState::FAILED;
             if (state == ContentState::READY)
                 residency.setReady(residency.handleOf(index), impl->measure(impl->contents[index]));
-            else if (state == ContentState::WAITING)
+            else if (state == ContentState::WAITING || state == ContentState::WAITING_FOR_ROWS)
                 residency.updateLoading(residency.handleOf(index), impl->measure(impl->contents[index]));
-            else if (state == ContentState::FAILED)
+            else
             {
-                spdlog::warn("Tile {} failed to load: a mesh failed, or the application destroyed a handle of its content. It is tried again in {} frames.", index,
-                             impl->config.retryFailedAfter);
+                impl->rowlessUpdates[index] = 0;
+                spdlog::warn("Tile {} failed to load: a mesh failed, an entity got no instance rows (RendererConfig::maxInstances), or the application destroyed a "
+                             "handle of its content. It is tried again in {} frames.",
+                             index, impl->config.retryFailedAfter);
                 impl->destroyContent(index);
                 residency.setFailed(residency.handleOf(index));
             }
@@ -433,13 +454,13 @@ namespace rasm
     bool TileStreamer::setTileContent(TileHandle tile, const TileContent &content)
     {
         const TileRecord *record = impl->residency.find(tile);
-        const bool accepted = record != nullptr && record->state != TileState::LOADING && record->state != TileState::READY;
+        const bool accepted = record != nullptr && record->state == TileState::REQUESTED;
         if (!accepted || !impl->isLive(content))
         {
             if (record == nullptr)
                 spdlog::error("setTileContent: invalid or destroyed tile handle; its content is destroyed.");
             else if (!accepted)
-                spdlog::error("setTileContent: tile {} has content already; the new content is destroyed.", tile.index);
+                spdlog::info("setTileContent: tile {} is not waiting for content (the streamer cancelled it, or it has content); the content is destroyed.", tile.index);
             else
                 spdlog::error("setTileContent: tile {}'s content has an invalid or destroyed handle; its content is destroyed and the tile failed.", tile.index);
             impl->destroy(content.entities, content.entityCount, content.meshes, content.meshCount, content.materials, content.materialCount, content.textures, content.textureCount);

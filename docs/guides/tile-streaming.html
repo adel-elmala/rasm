@@ -457,24 +457,24 @@ engine.render(views.data(), static_cast&lt;uint32_t&gt;(views.size()));</code></
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Tree</td><td>any tree; the application's</td><td>The application makes tile records with <code>createTile</code> (<code>TileDesc</code>: <code>parent</code>, a sphere <code>center</code> in doubles and <code>radius</code>, <code>geometricError</code>, <code>refine</code>, <code>estimatedBytes</code>) as its walk reaches new places, and <code>destroyTile</code> when it forgets them (its children become roots). At most <code>TileStreamerConfig::maxTiles</code>.</td></tr>
   <tr><td>Screen error</td><td>the largest over the views; 0 outside all of them</td><td><code>getScreenError</code> with the views of <code>setViews</code> (views of other scenes are skipped): |<var>P</var><sub>11</sub>| × the view's height in pixels / 2, over the depth of the sphere's near side, the four side planes of each view's frustum. The same rule as <code>selectLod</code> (<a href="lod-selection.html#in-rasm">LOD selection</a>).</td></tr>
-  <tr><td>The cut, hysteresis</td><td>the application's walk</td><td>The application's. <code>examples/24_map_tiles</code> refines over 24 px and merges under 0.8 × 24 px.</td></tr>
+  <tr><td>The cut, hysteresis</td><td>the application's walk</td><td>The application's. <code>examples/24_map_tiles</code> refines over 24 px and merges under 0.8 × 24 px, and hangs each glTF landmark under an empty <code>ADD</code> tile, so the terrain around it does not wait for the model.</td></tr>
   <tr><td>Stand-ins</td><td>nearest ready ancestor</td><td>The same, with <code>TileRefine::REPLACE</code> (the default) and <code>TileRefine::ADD</code> per tile. The cut's ancestors are wanted too. One drawn set per scene: every view of the scene draws it.</td></tr>
   <tr><td>Rank</td><td>the parent's error at the tile's bounds; a parent at least its children's</td><td>The same, the shallower tile first among equals.</td></tr>
   <tr><td>Bytes</td><td>what is really held</td><td>Textures: the allocation's size (<code>RenderContext::getTextureMemoryBytes</code>, VMA's). Meshes: their vertices, colors, skins, morph deltas, indices and meshlets in the geometry pools; a glTF mesh's own materials and textures count with it. Measured once the tile is ready, and while it loads.</td></tr>
-  <tr><td>Pools</td><td>each a budget</td><td>Vertices, indices, sub-meshes, meshlets, instance rows, materials and bindless slots (<code>RendererConfig::maxBindlessTextures</code>), each limited to its capacity minus what is not a tile's (<code>getPoolStats</code>).</td></tr>
+  <tr><td>Pools</td><td>each a budget</td><td>Vertices, indices, sub-meshes, meshlets, instance rows, materials and bindless slots (<code>RendererConfig::maxBindlessTextures</code>), each limited to its capacity minus what is not a tile's content (<code>getPoolStats</code>; slots that wait for the GPU, <code>getFreeBindlessTextureSlots</code>, count as taken). The reservations of tiles still loading are not in the pools yet, so they do not count as other users.</td></tr>
   <tr><td>Budget</td><td>a share of what the device leaves</td><td><code>TileStreamerConfig::memoryBudget</code> in bytes; 0: <code>deviceShare</code> (0.8) of the device-local budget left after everything that is not a tile (<code>queryMemoryStats</code>, <samp>VK_EXT_memory_budget</samp>), read every 30 updates.</td></tr>
   <tr><td>Estimate</td><td>its last cost, the application's, the mean</td><td>The same, in that order. A tile dropped while it loaded keeps what it held as its estimate.</td></tr>
   <tr><td>Order of drops</td><td>unwanted oldest first, then wanted of a lower rank</td><td>The same. First of all, a tile that alone is over a limit. A tile that cannot fit even so waits, and the next ones still try (at most 16 misses an update).</td></tr>
   <tr><td>Limits per frame</td><td>loads started, in flight, drops</td><td><code>maxLoadsPerFrame</code> (4), <code>maxLoadsInFlight</code> (16), <code>maxDropsPerFrame</code> (32). An unwanted load in flight is cancelled for a wanted one: its content is destroyed, which drops an <code>AssetLoader</code> load at once.</td></tr>
-  <tr><td>Content</td><td>the application's</td><td><code>setTileContent</code> with <code>TileContent</code> (entities, meshes, materials, textures): the streamer owns them from then on and destroys them, entities first, when it drops the tile. The entities must not be in a scene: the streamer adds them while the tile is drawn.</td></tr>
-  <tr><td>Ready</td><td>its data is in</td><td>The renderer's own state: every mesh <code>READY</code> with its import's textures filled (<code>isLoaded</code>), every texture out of the loading set, every entity with its instance rows and its textures. A mesh that <code>FAILED</code> fails the tile (<code>TileState::FAILED</code>), handed out again after <code>retryFailedAfter</code> updates.</td></tr>
+  <tr><td>Content</td><td>the application's</td><td><code>setTileContent</code> with <code>TileContent</code> (entities, meshes, materials, textures), only for a tile it handed out and still waits for: the streamer owns them from then on and destroys them, entities first, when it drops the tile, or at once when the tile was cancelled meanwhile. The entities must not be in a scene: the streamer adds them while the tile is drawn. An empty content is fine: a tile that only groups its children.</td></tr>
+  <tr><td>Ready</td><td>its data is in</td><td>The renderer's own state: every mesh <code>READY</code> with its import's textures filled (<code>isLoaded</code>), every texture out of the loading set, every entity with its instance rows and its textures. A mesh that <code>FAILED</code>, or an entity with no instance rows 4 updates after its mesh is in (a full instance table), fails the tile (<code>TileState::FAILED</code>), handed out again after <code>retryFailedAfter</code> updates.</td></tr>
 </table>
 </div>
 
 <div class="stats">
   <div><b>48 MiB</b><span>the budget of <code>examples/24_map_tiles</code>, held on every frame of a 1500-frame flight</span><small>Release, headless, RTX 3060</small></div>
-  <div><b>0.03 ms</b><span><code>update</code> on average, with up to 190 tiles drawn (0.6 ms at most)</span><small>about 230 tiles in memory, 1300 records</small></div>
-  <div><b>2.7 ms</b><span>the longest frame after the first 30, with 4 tiles uploaded per frame</span><small>the tiles' data made on 3 threads</small></div>
+  <div><b>0.04 ms</b><span><code>update</code> on average, with up to 204 tiles drawn (0.6 ms at most)</span><small>about 230 tiles in memory, 1300 records</small></div>
+  <div><b>2.6 ms</b><span>the longest frame after the first 30, with 4 tiles uploaded per frame</span><small>the tiles' data made on 3 threads</small></div>
 </div>
 
 <h3>Where it lives in code</h3>
@@ -488,7 +488,7 @@ engine.render(views.data(), static_cast&lt;uint32_t&gt;(views.size()));</code></
   <tr><td>A texture's allocation size</td><td><code>RenderContext::getTextureMemoryBytes</code>; <code>rhi::Texture::memoryBytes</code> set in <code>VulkanDevice::createTexture</code></td></tr>
   <tr><td>The C API</td><td><code>rasm_tile_streamer_*</code> in <code>include/rasm/rasm_c.h</code>, <code>src/c/cTiles.cpp</code>; <code>examples/22_c_api</code> streams its ground as five tiles</td></tr>
   <tr><td>Tests</td><td><code>tests/tileResidencyTests.cpp</code>; the image test <code>tile_streaming</code> (<code>tests/image/imageTests.cpp</code>)</td></tr>
-  <tr><td>Example</td><td><code>examples/24_map_tiles</code>: a 32 km quadtree of terrain tiles and glTF landmarks, two views</td></tr>
+  <tr><td>Example</td><td><code>examples/24_map_tiles</code>: a 32 km quadtree of terrain tiles, and glTF landmarks under empty <code>ADD</code> tiles, two views</td></tr>
 </table>
 </div>
 

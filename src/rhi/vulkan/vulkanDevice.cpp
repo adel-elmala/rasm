@@ -619,9 +619,11 @@ namespace rasm::rhi
         vkGetPhysicalDeviceProperties2(physicalDevice.physical_device, &properties2);
         maxBufferSize = maintenance4.maxBufferSize;
         maxStorageImages = std::min(vulkan12.maxDescriptorSetUpdateAfterBindStorageImages, vulkan12.maxPerStageDescriptorUpdateAfterBindStorageImages);
-        // A combined image sampler counts as a sampled image and as a sampler.
+        // A combined image sampler counts as a sampled image and as a sampler, and with the storage images of binding 1
+        // against a stage's resources.
+        const uint32_t stageResources = vulkan12.maxPerStageUpdateAfterBindResources - std::min(vulkan12.maxPerStageUpdateAfterBindResources, MAX_BINDLESS_STORAGE_IMAGES);
         maxSampledImages = std::min({vulkan12.maxDescriptorSetUpdateAfterBindSampledImages, vulkan12.maxPerStageDescriptorUpdateAfterBindSampledImages,
-                                     vulkan12.maxDescriptorSetUpdateAfterBindSamplers, vulkan12.maxPerStageDescriptorUpdateAfterBindSamplers});
+                                     vulkan12.maxDescriptorSetUpdateAfterBindSamplers, vulkan12.maxPerStageDescriptorUpdateAfterBindSamplers, stageResources});
         // A multisampled scene target is drawn into (color and depth), and its color and depth are sampled: the resolve
         // and the Hi-Z read them sample by sample.
         const VkPhysicalDeviceLimits &limits = physicalDevice.properties.limits;

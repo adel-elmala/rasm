@@ -805,7 +805,9 @@ typedef struct rasm_tile_desc
 } rasm_tile_desc;
 
 /* What a tile owns from rasm_tile_streamer_set_tile_content on: the streamer adds the entities to its scene while the
- * tile is drawn, and destroys everything listed when it drops the tile. */
+ * tile is drawn, and destroys everything listed when it drops the tile, or at once when the tile does not take it
+ * (RASM_ERROR_FAILED). An argument error (a NULL streamer, a size too small, a NULL array with a count) takes nothing:
+ * the content stays the caller's. */
 typedef struct rasm_tile_content
 {
     uint32_t                        size;

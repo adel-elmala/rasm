@@ -32,8 +32,9 @@
 //   (tiles nobody wants, the oldest first), and what is drawn: a tile once it is ready, else its parent in its place.
 // - A tile the streamer hands out is asked from a server, a thread of the example's that makes its mesh and image; it
 //   arrives FETCH_FRAMES to FETCH_FRAMES + 5 frames later, and the main thread only uploads it then.
-// - Six tiles of level LANDMARK_LEVEL also have a glTF model as a child tile, loaded with Engine::loadGLTF: the streamer
-//   counts such a tile ready only once its mesh and textures are in, and destroying it cancels its load.
+// - Six tiles of level LANDMARK_LEVEL also have a glTF model, loaded with Engine::loadGLTF, under an empty child tile
+//   with ADD refinement: the streamer counts the model's tile ready only once its mesh and textures are in, destroying
+//   it cancels its load, and the terrain around it refines without waiting for it.
 // - Two views: the camera, which flies low, climbs to 6 km and dives again, and a map of the whole world in the corner,
 //   a top-down orthographic view with a red box over the camera.
 // Every frame it checks that the tiles hold no more than the budget, and after the first frames that no wanted tile is
@@ -87,7 +88,8 @@ namespace
         int32_t level = 0;
         int32_t x = 0;
         int32_t y = 0;
-        int32_t landmark = -1; // a landmark tile: its index in LANDMARKS
+        int32_t landmark = -1; // a landmark tile or its group: its index in LANDMARKS
+        bool group = false;    // the landmark's empty ADD parent
         rasm::TileHandle tile;
         bool refined = false;
         uint32_t lastVisit = 0;
@@ -181,6 +183,20 @@ namespace
                 .radius = std::sqrt(2.0 * half * half + 0.25 * (high - low) * (high - low)),
                 .geometricError = node.level == MAX_LEVEL ? 0.0 : size / static_cast<double>(GRID - 1),
                 .estimatedBytes = TERRAIN_TILE_BYTES};
+    }
+
+    // A landmark hangs under an empty tile with ADD refinement, the child of the terrain tile it stands on: the terrain
+    // tile's REPLACE children then do not wait for the model (an empty tile is ready at once), and the model adds to
+    // what is drawn. The group's error is its terrain tile's, so the model ranks with the terrain's children.
+    rasm::TileDesc describeGroup(const Landmark &landmark, rasm::TileHandle parent)
+    {
+        const double y = terrainHeight(landmark.x, landmark.z);
+        return {.parent = parent,
+                .center = glm::dvec3(landmark.x, y + 50.0, landmark.z),
+                .radius = 200.0,
+                .geometricError = tileSize(LANDMARK_LEVEL) / static_cast<double>(GRID - 1),
+                .refine = rasm::TileRefine::ADD,
+                .estimatedBytes = 1};
     }
 
     rasm::TileDesc describeLandmark(const Landmark &landmark, rasm::TileHandle parent)
@@ -439,9 +455,9 @@ namespace
         streamer.setTileContent(node.tile, {.entities = entities, .entityCount = 1, .meshes = meshes, .meshCount = 1});
     }
 
-    Node &nodeFor(Map &map, rasm::TileStreamer &streamer, int32_t level, int32_t x, int32_t y, int32_t landmark, rasm::TileHandle parent)
+    Node &nodeFor(Map &map, rasm::TileStreamer &streamer, int32_t level, int32_t x, int32_t y, int32_t landmark, rasm::TileHandle parent, bool group = false)
     {
-        const uint64_t key = nodeKey(level, x, y, landmark);
+        const uint64_t key = nodeKey(level, x, y, group ? landmark + static_cast<int32_t>(LANDMARK_COUNT) : landmark);
         Node &node = map.nodes[key];
         if (!node.tile.isValid())
         {
@@ -449,7 +465,11 @@ namespace
             node.x = x;
             node.y = y;
             node.landmark = landmark;
-            node.tile = streamer.createTile(landmark >= 0 ? describeLandmark(LANDMARKS[landmark], parent) : describeTile(node, parent));
+            node.group = group;
+            if (landmark < 0)
+                node.tile = streamer.createTile(describeTile(node, parent));
+            else
+                node.tile = streamer.createTile(group ? describeGroup(LANDMARKS[landmark], parent) : describeLandmark(LANDMARKS[landmark], parent));
             map.nodeOfTile[node.tile.index] = key;
             ++map.tilesMade;
         }
@@ -476,8 +496,10 @@ namespace
         const double size = tileSize(level);
         for (uint32_t l = 0; l < LANDMARK_COUNT; ++l)
         {
-            if (static_cast<int32_t>(LANDMARKS[l].x / size) == x && static_cast<int32_t>(LANDMARKS[l].z / size) == y)
-                map.cut.push_back(nodeFor(map, streamer, level + 1, x, y, static_cast<int32_t>(l), tile).tile);
+            if (static_cast<int32_t>(LANDMARKS[l].x / size) != x || static_cast<int32_t>(LANDMARKS[l].z / size) != y)
+                continue;
+            const rasm::TileHandle group = nodeFor(map, streamer, level + 1, x, y, static_cast<int32_t>(l), tile, true).tile;
+            map.cut.push_back(nodeFor(map, streamer, level + 2, x, y, static_cast<int32_t>(l), group).tile);
         }
     }
 
@@ -612,7 +634,9 @@ int main(int argc, char **argv)
                 ++i;
                 continue;
             }
-            if (wanted && found->second.landmark >= 0)
+            if (wanted && found->second.group)
+                streamer.setTileContent(fetch.tile, {});
+            else if (wanted && found->second.landmark >= 0)
                 makeLandmarkContent(engine, streamer, found->second);
             else if (wanted)
             {
@@ -640,14 +664,14 @@ int main(int argc, char **argv)
             const Node &node = world.nodes[key->second];
             fetches.push_back({.tile = toLoad[i],
                                .key = key->second,
-                               .arrival = frame + (fast ? 0 : FETCH_FRAMES + (static_cast<uint32_t>(toLoad[i].index) % 6)),
+                               .arrival = frame + (fast || node.group ? 0 : FETCH_FRAMES + (static_cast<uint32_t>(toLoad[i].index) % 6)),
                                .data = node.landmark >= 0 ? nullptr : server.request(node.level, node.x, node.y)});
         }
         // A glTF tile that loaded, or that was dropped while its mesh still loaded (which cancelled the load).
         for (uint32_t l = 0; l < LANDMARK_COUNT; ++l)
         {
             const double size = tileSize(LANDMARK_LEVEL);
-            const auto found = world.nodes.find(nodeKey(LANDMARK_LEVEL + 1, static_cast<int32_t>(LANDMARKS[l].x / size), static_cast<int32_t>(LANDMARKS[l].z / size), static_cast<int32_t>(l)));
+            const auto found = world.nodes.find(nodeKey(LANDMARK_LEVEL + 2, static_cast<int32_t>(LANDMARKS[l].x / size), static_cast<int32_t>(LANDMARKS[l].z / size), static_cast<int32_t>(l)));
             const rasm::TileState state = found != world.nodes.end() ? streamer.getTileState(found->second.tile) : rasm::TileState::EMPTY;
             totals.landmarksLoaded += state == rasm::TileState::READY && landmarkStates[l] != rasm::TileState::READY ? 1 : 0;
             totals.landmarksCancelled += state == rasm::TileState::EMPTY && landmarkStates[l] == rasm::TileState::LOADING ? 1 : 0;

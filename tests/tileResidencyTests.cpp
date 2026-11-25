@@ -290,6 +290,9 @@ TEST_CASE("an unwanted load gives its place in flight up; a failed tile waits, t
     CHECK(residency.getToDrop()[0] == first.index);
     CHECK(residency.find(first)->state == TileState::EMPTY);
     CHECK(residency.handleOf(residency.getToLoad()[0]) == second);
+    // Its content comes in late: a cancelled tile takes none.
+    CHECK_FALSE(residency.setLoading(first, bytes(TILE_BYTES)));
+    CHECK(residency.getUsed().units[static_cast<uint32_t>(TileUnit::BYTES)] == 0);
 
     residency.setLoading(second, {});
     residency.setFailed(second);
@@ -355,6 +358,15 @@ TEST_CASE("a tile larger than the budget goes first and waits, without pushing o
     // Its textures are made before its pixels come: it holds them while it loads.
     residency.updateLoading(big, bytes(1000));
     CHECK(residency.getUsed().units[static_cast<uint32_t>(TileUnit::BYTES)] == 1300);
+    // What the content holds, without the reservations: the pools' own counts are compared with it.
+    CHECK(residency.getReal().units[static_cast<uint32_t>(TileUnit::BYTES)] == 1300);
+    TileResidency fresh({.maxLoadsPerFrame = 8});
+    TileDesc oneDesc = tileAt(5.0, 1.0);
+    oneDesc.estimatedBytes = 50;
+    const TileHandle one = fresh.create(oneDesc);
+    step(fresh, &one, 1, 1u << 20);
+    CHECK(fresh.getUsed().units[static_cast<uint32_t>(TileUnit::BYTES)] == 50);
+    CHECK(fresh.getReal().units[static_cast<uint32_t>(TileUnit::BYTES)] == 0);
 
     step(residency, all, 4, 4 * TILE_BYTES);
     REQUIRE(residency.getToDrop().size() == 1);
@@ -388,10 +400,10 @@ TEST_CASE("a TileStreamer on a renderer that did not start is safe")
     streamer.getTilesToLoad(count);
     CHECK(count == 0);
     CHECK(streamer.getTileState(tile) == TileState::EMPTY);
-    // Content with an invalid handle is refused, and the tile fails.
+    // Content for a tile that was not handed out is refused.
     const rasm::EntityHandle stale{1, 7};
     CHECK_FALSE(streamer.setTileContent(tile, {.entities = &stale, .entityCount = 1}));
-    CHECK(streamer.getTileState(tile) == TileState::FAILED);
+    CHECK(streamer.getTileState(tile) == TileState::EMPTY);
     streamer.destroyTile(tile);
     CHECK(streamer.getTileState(tile) == TileState::EMPTY);
     CHECK(streamer.getStats().tiles == 0);

@@ -55,6 +55,7 @@ namespace rasm
         uint32_t                    depth                   = 0;                // 0 for a root
         TileState                   state                   = TileState::EMPTY;
         TileCost                    cost;                                       // READY: measured; REQUESTED, LOADING: reserved
+        TileCost                    real;                                       // what its content holds now: READY its cost, LOADING what was made so far
         TileCost                    lastCost;                                   // the last measured cost, the estimate when it loads again
         bool                        measured                = false;
         bool                        drawn                   = false;
@@ -80,7 +81,8 @@ namespace rasm
         bool                        destroy(TileHandle tile);
         bool                        isLive(TileHandle tile) const;
         const TileRecord*           find(TileHandle tile) const;
-        // Content arrived (an EMPTY, REQUESTED or FAILED tile): it holds known, or its estimate if that is more.
+        // Content arrived for a REQUESTED tile: it holds known, or what it reserved if that is more. False for any other state
+        // (a tile the streamer cancelled meanwhile is EMPTY again).
         bool                        setLoading(TileHandle tile, const TileCost& known);
         // A LOADING tile's content so far (a texture is made before its pixels come): it holds at least that.
         void                        updateLoading(TileHandle tile, const TileCost& known);
@@ -98,6 +100,8 @@ namespace rasm
         const TileRecord&           record(uint32_t index) const    { return records[index]; }
         TileHandle                  handleOf(uint32_t index) const  { return records[index].handle; }
         const TileCost&             getUsed() const         { return used; }
+        const TileCost&             getReal() const         { return real; }        // what the tiles' content holds now, reservations left out
+        const TileStreamerConfig&   getConfig() const       { return config; }
         const TileStreamerStats&    getStats() const        { return stats; }
 
     private:
@@ -108,6 +112,7 @@ namespace rasm
         bool                        canFree(uint32_t candidate, const TileCost& cost, const TileCost& limits);
         void                        hold(uint32_t index, const TileCost& cost);
         void                        release(uint32_t index);
+        void                        setReal(uint32_t index, const TileCost& cost);
         void                        setState(uint32_t index, TileState state);
         void                        drop(uint32_t index);
         void                        sortVictims();
@@ -137,6 +142,7 @@ namespace rasm
         uint32_t                    dropsLeft               = 0;
         uint64_t                    updateCount             = 0;
         TileCost                    used;
+        TileCost                    real;
         TileCost                    measuredSum;
         uint64_t                    measuredCount           = 0;
         TileStreamerStats           stats;
