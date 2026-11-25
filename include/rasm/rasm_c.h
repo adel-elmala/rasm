@@ -24,7 +24,7 @@
 
 // NOLINTBEGIN(readability-identifier-naming): C names, snake_case with the rasm_ prefix, as C APIs and their bindings expect
 #define RASM_C_API_VERSION_MAJOR    1
-#define RASM_C_API_VERSION_MINOR    9
+#define RASM_C_API_VERSION_MINOR    10
 #define RASM_C_API_VERSION          (((uint32_t)RASM_C_API_VERSION_MAJOR << 16) | (uint32_t)RASM_C_API_VERSION_MINOR)
 
 #if defined(_WIN32)
@@ -163,6 +163,7 @@ enum
     RASM_MATERIAL_TYPE_UNLIT        = 1,
     RASM_MATERIAL_TYPE_TERRAIN      = 2,        /* 1.4: a terrain tile (rasm_create_terrain_tile) */
     RASM_MATERIAL_TYPE_VECTOR       = 3,        /* 1.5: lines, polygons and points (rasm_vector_*), styled by the desc's vector */
+    RASM_MATERIAL_TYPE_POINTS       = 4,        /* 1.10: point cloud chunks (rasm_build_point_cloud_chunk), styled by the desc's points */
 };
 
 typedef uint32_t                    rasm_pbr_slot;
@@ -314,6 +315,7 @@ typedef struct rasm_renderer_config
     rasm_bool                       ui;
     rasm_anti_aliasing              anti_aliasing;
     uint32_t                        max_bindless_textures;                     /* 1.3: sampled textures at once, 16384 by default, lowered to the device's limit */
+    uint32_t                        geometry_pool_points;                      /* 1.10: point cloud chunks, 8 B units: a point takes 1 (1.5 with colors) */
 } rasm_renderer_config;
 
 typedef struct rasm_asset_loader_config
@@ -397,6 +399,57 @@ typedef struct rasm_vector_material
     rasm_vector_depth               depth;
 } rasm_vector_material;
 
+/* 1.10: colormaps and a POINTS material's style (PointMaterial in C++). */
+#define RASM_COLORMAP_SIZE          256u        /* 1.10: entries of a colormap's texture */
+#define RASM_MAX_POINT_CHUNK_POINTS 65536u      /* 1.10 */
+
+typedef uint32_t                    rasm_colormap_preset;
+enum
+{
+    RASM_COLORMAP_VIRIDIS           = 0,
+    RASM_COLORMAP_TURBO             = 1,
+    RASM_COLORMAP_MAGMA             = 2,
+    RASM_COLORMAP_INFERNO           = 3,
+    RASM_COLORMAP_PLASMA            = 4,
+    RASM_COLORMAP_CIVIDIS           = 5,
+    RASM_COLORMAP_GRAY              = 6,
+};
+
+typedef uint32_t                    rasm_point_shape;
+enum
+{
+    RASM_POINT_SHAPE_SQUARE         = 0,
+    RASM_POINT_SHAPE_ROUND          = 1,
+    RASM_POINT_SHAPE_SPHERE         = 2,        /* round, with the depth of a sphere */
+};
+
+typedef uint32_t                    rasm_point_color_mode;
+enum
+{
+    RASM_POINT_COLOR_MODE_COLOR     = 0,        /* the points' own colors, white without them */
+    RASM_POINT_COLOR_MODE_SCALAR    = 1,        /* the points' scalars through the colormap and the range */
+};
+
+typedef struct rasm_scalar_range
+{
+    float                           min;
+    float                           max;
+    rasm_bool                       log;                                       /* both ends above 0 */
+    rasm_bool                       clamp;                                     /* RASM_FALSE: values outside are not drawn */
+} rasm_scalar_range;
+
+typedef struct rasm_point_material
+{
+    rasm_vec4                       color;                                     /* linear, times the point's color */
+    float                           size;                                      /* the diameter in size_unit, at least a pixel; 2 by default */
+    rasm_vector_unit                size_unit;
+    rasm_point_shape                shape;                                     /* ROUND by default */
+    rasm_point_color_mode           color_mode;
+    rasm_texture                    colormap;                                  /* rasm_create_colormap */
+    rasm_scalar_range               range;                                     /* 0 to 1, clamped, by default */
+    float                           density;                                   /* points drawn per point-size square of the chunk on screen; 2 by default, 0: all */
+} rasm_point_material;
+
 typedef struct rasm_material_desc
 {
     uint32_t                        size;
@@ -411,6 +464,7 @@ typedef struct rasm_material_desc
     rasm_terrain_material           terrain;                                   /* 1.4: TERRAIN only; textures[ALBEDO] is the imagery */
     rasm_vector_material            vector;                                    /* 1.5: VECTOR only; textures[ALBEDO] is the points' icon atlas */
     rasm_font                       font;                                      /* 1.6: VECTOR labels' glyphs; vector.width is the text's size, outline its halo */
+    rasm_point_material             points;                                    /* 1.10: POINTS only */
 } rasm_material_desc;
 
 typedef struct rasm_texture_desc
@@ -1040,7 +1094,8 @@ enum
     RASM_PICK_SKIP_VECTORS          = 1u << 3,  /* lines, polygons and points */
     RASM_PICK_SKIP_LABELS           = 1u << 4,
     RASM_PICK_SKIP_OVERLAYS         = 1u << 5,  /* overlay features, labels too */
-    RASM_PICK_SKIP_ALL              = (1u << 6) - 1,
+    RASM_PICK_SKIP_POINTS           = 1u << 6,  /* 1.10: point cloud chunks */
+    RASM_PICK_SKIP_ALL              = (1u << 7) - 1,
 };
 
 enum
@@ -1050,6 +1105,7 @@ enum
     RASM_PICK_HIT_OVERLAY           = 1u << 2,
     RASM_PICK_HIT_TERRAIN           = 1u << 3,
     RASM_PICK_HIT_BACK_FACE         = 1u << 4,  /* the back of a double-sided surface; the normal faces the camera */
+    RASM_PICK_HIT_POINT             = 1u << 5,  /* 1.10: a point of a point cloud chunk: feature is its index */
 };
 
 typedef struct rasm_pick_desc
@@ -1116,6 +1172,17 @@ typedef struct rasm_grid
     rasm_vec4                       z_axis_color;
     float                           fade_distance;                             /* perspective; 0: no fade */
 } rasm_grid;
+
+/* 1.10: a chunk of a point cloud, up to RASM_MAX_POINT_CHUNK_POINTS points; positions are offsets from the entity's
+ * origin, colors (RGBA8, sRGB-encoded) and scalars may be NULL. */
+typedef struct rasm_point_cloud_chunk_desc
+{
+    uint32_t                        size;
+    const rasm_vec3*                positions;
+    const uint32_t*                 colors;
+    const float*                    scalars;
+    uint32_t                        count;
+} rasm_point_cloud_chunk_desc;
 
 typedef void (RASM_CALL* rasm_log_callback)(void* user_data, rasm_log_level level, const char* message);
 
@@ -1405,6 +1472,17 @@ RASM_C_API rasm_result      RASM_CALL rasm_camera_rig_update_projection(rasm_cam
 RASM_C_API rasm_result      RASM_CALL rasm_grid_init(rasm_grid* grid, uint32_t size);
 RASM_C_API rasm_result      RASM_CALL rasm_set_camera_grid(rasm_renderer* renderer, rasm_camera camera, const rasm_grid* grid);
 RASM_C_API rasm_result      RASM_CALL rasm_get_camera_grid(rasm_renderer* renderer, rasm_camera camera, rasm_grid* grid);
+
+/* Added in 1.10: colormaps and point clouds. rasm_create_colormap makes a 256 x 1 colormap from 1 to RASM_COLORMAP_SIZE
+ * linear colors, evenly spread, or from a preset; destroy it with rasm_destroy_texture. rasm_build_point_cloud_chunk
+ * checks and builds a chunk's data on any thread (16-bit positions in the chunk's box, then a 16-bit scalar, then the
+ * colors: 8 B a point, 12 B with colors) in an order whose every prefix is an even sample, so a view draws only the first
+ * points of a chunk small on screen; rasm_create_mesh_from_build uploads it. Draw it with a RASM_MATERIAL_TYPE_POINTS
+ * material; a pick's feature is the point's index in desc's arrays. */
+RASM_C_API rasm_texture     RASM_CALL rasm_create_colormap(rasm_renderer* renderer, const rasm_vec4* colors, uint32_t count);
+RASM_C_API rasm_texture     RASM_CALL rasm_create_colormap_preset(rasm_renderer* renderer, rasm_colormap_preset preset);
+RASM_C_API rasm_result      RASM_CALL rasm_point_cloud_chunk_desc_init(rasm_point_cloud_chunk_desc* desc, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_build_point_cloud_chunk(const rasm_point_cloud_chunk_desc* desc, rasm_mesh_build** build);
 
 #ifdef __cplusplus
 }

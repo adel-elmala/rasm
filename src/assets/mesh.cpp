@@ -114,6 +114,7 @@ namespace rasm
         }
 
         mesh.labels = std::move(data->labels);
+        mesh.pointOrder = std::move(data->pointOrder);
         const HandleSlot slot = registry.meshHandles.allocate();
         const MeshHandle handle{slot.index, slot.generation};
         registry.meshes.resize(registry.meshHandles.size());

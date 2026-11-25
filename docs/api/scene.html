@@ -566,9 +566,11 @@ constexpr uint32_t MAX_MORPH_TARGETS = 256;</pre>
     std::vector&lt;std::string&gt;   morphTargetNames;
     std::vector&lt;MaterialHandle&gt; ownedMaterials;
     std::vector&lt;TextureHandle&gt;  ownedTextures;
+    std::vector&lt;MeshLabel&gt;      labels;
+    std::vector&lt;uint16_t&gt;       pointOrder;
     uint32_t                   users = 0;
 };</pre>
-  <div class="body"><p>A mesh: its load state, its sub-meshes, its clips (<a href="#getAnimations"><code>getAnimations</code></a>) and the name of each morph weight of its entities (<a href="#getMorphTargetNames"><code>getMorphTargetNames</code></a>). <code>ownedMaterials</code> and <code>ownedTextures</code> are what its glTF import made, which <a href="#destroyMesh"><code>destroyMesh</code></a> destroys with it; <code>users</code> counts the entities made with it, so destroying a mesh no entity uses searches nothing.</p></div>
+  <div class="body"><p>A mesh: its load state, its sub-meshes, its clips (<a href="#getAnimations"><code>getAnimations</code></a>) and the name of each morph weight of its entities (<a href="#getMorphTargetNames"><code>getMorphTargetNames</code></a>). <code>ownedMaterials</code> and <code>ownedTextures</code> are what its glTF import made, which <a href="#destroyMesh"><code>destroyMesh</code></a> destroys with it; <code>users</code> counts the entities made with it, so destroying a mesh no entity uses searches nothing. <code>labels</code> are a vector mesh's (<a href="#addVectorLabels"><code>addVectorLabels</code></a>); <code>pointOrder</code> is a point cloud chunk's: for each point in drawn order, its index in the <a href="#PointCloudChunkDesc"><code>PointCloudChunkDesc</code></a> (2 B a point), which picks report.</p></div>
 </div>
 
 <div class="api" id="MeshState">
@@ -596,6 +598,9 @@ constexpr uint32_t MAX_MORPH_TARGETS = 256;</pre>
     uint32_t  maxLodMeshlets   = 0;
     uint32_t  firstMeshletData = 0;
     uint32_t  meshletDataCount = 0;
+    uint32_t  firstPoint       = 0;
+    uint32_t  pointUnits       = 0;
+    uint32_t  pointCount       = 0;
     uint32_t  geometryIndex    = 0;
     glm::vec3 boundsCenter     = glm::vec3(0.0f);
     float     boundsRadius     = 0.0f;
@@ -909,7 +914,82 @@ constexpr float             MAX_LABEL_REACH         = 12.0f;</pre>
   <div class="body"><p><code>MAX_LABELS</code>: label slots of a renderer, for the labels of every entity alive at once; an entity that finds none left draws no labels (one warning). <code>MAX_LABEL_REACH</code>: the ems a label's text may reach from its anchor; culling pads a label draw by this times its size, so text farther out may vanish with its draw near the screen's edge.</p></div>
 </div>
 
-<h2 id="animation"><span class="n">7</span>Animation</h2>
+<h2 id="point-clouds"><span class="n">7</span>Point clouds</h2>
+
+<p>A point cloud is drawn in chunks of up to 65 536 points near each other: each chunk is a mesh made by <code>buildPointCloudChunk</code>, drawn by an entity with a <a href="materials.html#PointMaterial"><code>POINTS</code> material</a>, and placed by the entity's transform in doubles. Each point is a splat a few pixels or centimetres wide; a chunk small on screen draws only the first points of its order (<a href="../guides/point-clouds.html">Point clouds</a>).</p>
+
+<div class="api" id="PointCloudChunkDesc">
+  <pre class="sig">constexpr uint32_t MAX_POINT_CHUNK_POINTS = 1u &lt;&lt; 16;
+
+struct PointCloudChunkDesc
+{
+    const glm::vec3*    positions   = nullptr;
+    const uint32_t*     colors      = nullptr;
+    const float*        scalars     = nullptr;
+    uint32_t            count       = 0;
+};</pre>
+  <div class="body">
+    <dl>
+      <dt>positions</dt><dd>Offsets from the entity's origin, in metres. Keep a chunk small (tens of metres): its points are 16-bit steps of its box, and it is culled and given a level of detail as a whole.</dd>
+      <dt>colors</dt><dd>RGBA8 with RGB sRGB-encoded (<a href="#packVertexColor"><code>packVertexColor</code></a>), one per point, for <code>PointColorMode::COLOR</code>; the alpha is not read (points are opaque); null: none.</dd>
+      <dt>scalars</dt><dd>A value per point (height, intensity, ...), for a colormap (<code>PointColorMode::SCALAR</code>); null: none. Stored as 16-bit steps of the chunk's range.</dd>
+      <dt>count</dt><dd>1 to <code>MAX_POINT_CHUNK_POINTS</code>.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="buildPointCloudChunk">
+  <pre class="sig">MeshBuild           buildPointCloudChunk(const PointCloudChunkDesc&amp; desc);</pre>
+  <div class="body">
+    <p>Checks the points (a count in range, positions and scalars finite; an error and an invalid build otherwise) and builds the chunk, on any thread: the points in an order whose every prefix is an even sample (a Morton order read in bit-reversed steps), 8 B a point with no colors, 12 B with them. <a href="#createMesh"><code>createMesh</code></a> uploads it into the point pool (<code>RendererConfig::geometryPoolPoints</code>, made with the first chunk). A pick's <code>PickHit::feature</code> is the point's index in <code>desc</code>'s arrays (<code>PICK_HIT_POINT</code>), mapped through the mesh the entity drew; a mesh destroyed before the pick's answer leaves no feature (<code>PICK_HIT_FEATURE</code> cleared). An entity that draws a chunk without a <code>POINTS</code> material draws nothing, with a warning.</p>
+    <pre><code>// On a worker thread:
+rasm::MeshBuild build = rasm::buildPointCloudChunk({.positions = points.data(), .scalars = heights.data(), .count = count});
+// Later, on the renderer's thread:
+const rasm::EntityHandle chunk = renderer.createEntity("chunk", renderer.createMesh(std::move(build)), pointMaterial, rasm::Transform{tileCorner});
+renderer.addEntityToScene(scene, chunk);</code></pre>
+  </div>
+</div>
+
+<h2 id="colormaps"><span class="n">8</span>Colormaps</h2>
+
+<p>A colormap turns a value into a color: a 256 × 1 sRGB texture that a <code>POINTS</code> material reads through its <code>ScalarRange</code> (<a href="../guides/point-clouds.html#colormaps">Colormaps</a>).</p>
+
+<div class="api" id="createColormap">
+  <pre class="sig">TextureHandle               createColormap(const glm::vec4* colors, uint32_t count);
+TextureHandle               createColormap(ColormapPreset preset);</pre>
+  <div class="body"><p>Makes a texture of <code>COLORMAP_SIZE</code> entries in its own bindless slot with linear filtering: from 1 to <code>COLORMAP_SIZE</code> linear colors (with alpha), spread evenly from the first entry to the last and interpolated between them, or from a preset. Invalid for no colors or more than <code>COLORMAP_SIZE</code>. Destroy it with <a href="engine.html#destroyTexture"><code>destroyTexture</code></a>; a material that names it loses it.</p></div>
+</div>
+
+<div class="api" id="ColormapPreset">
+  <pre class="sig">constexpr uint32_t COLORMAP_SIZE = 256;
+
+enum class ColormapPreset : uint32_t
+{
+    VIRIDIS,
+    TURBO,
+    MAGMA,
+    INFERNO,
+    PLASMA,
+    CIVIDIS,
+    GRAY,
+
+    COUNT,
+};</pre>
+  <div class="body"><p>viridis, magma, inferno, plasma and cividis change lightness evenly (cividis also for color-blind viewers); turbo is a smooth rainbow; gray is lightness only. The tables are matplotlib's.</p></div>
+</div>
+
+<div class="api" id="ScalarRange">
+  <pre class="sig">struct ScalarRange
+{
+    float           min         = 0.0f;
+    float           max         = 1.0f;
+    bool            log         = false;        // both ends above 0
+    bool            clamp       = true;         // false: values outside are not drawn
+};</pre>
+  <div class="body"><p>A value becomes <var>t</var> = (value − <code>min</code>) / (<code>max</code> − <code>min</code>), or the same with the logarithms of all three when <code>log</code> is set and both ends are above 0; <var>t</var> = 0 is the colormap's first entry and 1 its last. Outside the range a value takes the nearest end with <code>clamp</code>, and its point is not drawn without it.</p></div>
+</div>
+
+<h2 id="animation"><span class="n">9</span>Animation</h2>
 
 <p>A glTF model's clips move its nodes, and the GPU poses them (<a href="../guides/keyframe-animation.html">Keyframe animation</a>). A skinned model's clips move its joints, and the GPU skins its vertices once per frame for every view (<a href="../guides/skinning.html">Skinning</a>); it plays the same way. A morphed model's clips move its weights too (<a href="#morph-targets">Morph targets</a>). The application owns the clock: it calls <code>setAnimationTime</code> once per frame, and starts a clip on an entity with <code>playAnimation</code>. Nothing else runs per frame on the CPU, however many entities play.</p>
 
@@ -1045,7 +1125,7 @@ enum class AnimationInterpolation : uint32_t { STEP, LINEAR, CUBICSPLINE };</pre
   <div class="body"><p>What the import keeps of a glTF file's animations, in <code>GLTFRaw::animation</code>. <code>nodes</code> holds only the nodes a clip can move, parents before children, with their rest pose (a node below static parents hangs below an extra node whose <code>rest</code> is their world matrix). Each sampler's values are vec4s: a quaternion x, y, z, w, or a translation or scale with w = 0; <code>CUBICSPLINE</code> stores an in-tangent, the value and an out-tangent per key. A sampler that does not parse is skipped with a warning, and its clip keeps its index. <code>joints</code> holds every skin a sub-mesh uses, one skin after another: each joint's node in <code>nodes</code> (a joint is always kept, moved or not) and its inverse bind matrix (the identity when the file has none). <code>morphWeights</code> holds the rest weights of every node that draws a morphed mesh, one node after another (the node's, else the mesh's, else 0), and <code>morphTargetNames</code> one name per weight. A glTF weights sampler becomes one sampler per target, its value in x, and one <code>AnimationPath::WEIGHTS</code> channel per weight, whose <code>node</code> is the weight's index in <code>morphWeights</code>.</p></div>
 </div>
 
-<h2 id="morph-targets"><span class="n">8</span>Morph targets</h2>
+<h2 id="morph-targets"><span class="n">10</span>Morph targets</h2>
 
 <p>A glTF mesh with morph targets has a list of weights per entity. The GPU adds each target's deltas, times its weight, to the vertices once per frame, before the skin, for every view (<a href="../guides/morph-targets.html">Morph targets</a>). A weight comes from the application when it set one, else from the playing clip's weights channel, else from the mesh's rest weights.</p>
 
@@ -1115,7 +1195,7 @@ engine.setMorphWeights(entity, weights.data(), static_cast&lt;uint32_t&gt;(weigh
   <p>An entity of a morphed mesh is posed every frame, with a clip or not, like a skinned one: it takes a row of the animated entity table (<code>EngineConfig::maxAnimatedEntities</code>), and its weights take rows of <code>EngineConfig::maxMorphWeights</code>. The <code>Skin</code> pass reads only the targets whose weight is not 0. The deltas take 24 B per vertex and target in the geometry pool (<code>EngineConfig::geometryPoolMorphs</code>).</p>
 </div>
 
-<h2 id="lights"><span class="n">9</span>Lights</h2>
+<h2 id="lights"><span class="n">11</span>Lights</h2>
 
 <div class="split">
   <div>
@@ -1249,7 +1329,7 @@ engine.updateLight(lamp, light);</code></pre>
   <div class="body"><p>π/4: the default outer angle of a spot light's cone, glTF's default (<code>rasm/light.h</code>).</p></div>
 </div>
 
-<h2 id="environments"><span class="n">10</span>Environments</h2>
+<h2 id="environments"><span class="n">12</span>Environments</h2>
 
 <p>An <b>environment</b> is an HDR photo of the light all around a scene. It lights every <code>PBR</code> material from all directions (soft light from the sky, reflections on shiny surfaces) and shows behind the scene as the sky. The guide <a href="../guides/image-based-lighting.html">Image-based lighting</a> explains how.</p>
 
@@ -1307,7 +1387,7 @@ engine.setSceneEnvironment(scene, {});</code></pre>
   </div>
 </div>
 
-<h2 id="timing"><span class="n">11</span>When changes reach the GPU</h2>
+<h2 id="timing"><span class="n">13</span>When changes reach the GPU</h2>
 
 <div class="table-wrap">
 <table>
@@ -1325,7 +1405,7 @@ engine.setSceneEnvironment(scene, {});</code></pre>
 </div>
 <p>The engine keeps one copy of each table per frame slot. A changed row is uploaded to each copy once, in that copy's own frame, so the GPU never reads a row while the CPU writes it. The guide <a href="../guides/gpu-scene.html">The GPU scene tables</a> explains the details.</p>
 
-<h2 id="limits"><span class="n">12</span>Limits</h2>
+<h2 id="limits"><span class="n">14</span>Limits</h2>
 
 <div class="table-wrap">
 <table>

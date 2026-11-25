@@ -91,12 +91,12 @@ namespace rasm
         }
     }
 
-    void InstanceOwners::assign(uint32_t first, uint32_t count, EntityHandle entity)
+    void InstanceOwners::assign(uint32_t first, uint32_t count, EntityHandle entity, MeshHandle mesh)
     {
         if (first + count > current.size())
             return;
         for (uint32_t i = 0; i < count; ++i)
-            current[first + i] = {.entityIndex = static_cast<uint32_t>(entity.index), .entityGeneration = static_cast<uint32_t>(entity.generation), .subMesh = i};
+            current[first + i] = {.entityIndex = static_cast<uint32_t>(entity.index), .entityGeneration = static_cast<uint32_t>(entity.generation), .subMesh = i, .mesh = mesh};
         for (auto &ranges : pending)
             ranges.push_back({.first = first, .count = count});
     }
@@ -357,7 +357,8 @@ namespace rasm
             return;
 
         // The pick pipelines: rasm.slang's vertex stage and pickMain, per alpha mode, made on the first pick (P31). The BLEND one
-        // tests depth but does not write it: its draws, sorted, write the ids in the order the view blends them.
+        // tests depth but does not write it: its draws, sorted, write the ids in the order the view blends them. The point
+        // run's is points.slang's, made once a picked scene has one; without it the pick sees no points.
         const char *alphaDefines[3] = {"", "#define RASM_ALPHA_MASK 1\n", "#define RASM_ALPHA_BLEND 1\n"};
         const char *names[3] = {"rasmPick", "rasmPickMask", "rasmPickBlend"};
         const Format formats[MAX_COLOR_ATTACHMENTS] = {PICK_FORMAT, PICK_FORMAT};
@@ -372,6 +373,18 @@ namespace rasm
                                                          BlendMode::NONE, i != 2);
         }
         const bool pipelines = picks->pipelines[0].isValid() && picks->pipelines[1].isValid() && picks->pipelines[2].isValid();
+        bool pointRuns = false;
+        for (uint32_t c = 0; c < chosenCount; ++c)
+        {
+            const auto &runs = gpuScene->drawLists[gpuScene->views[views[c]].scene.index].runs;
+            pointRuns = pointRuns || std::any_of(runs.begin(), runs.end(), [](const DrawRun &run)
+                                                 { return run.points; });
+        }
+        if (pipelines && pointRuns && !picks->pointPipeline.isValid())
+        {
+            const std::string pointSource = readFile(pathFromUtf8(config.shaderDir) / "passes/points.slang");
+            picks->pointPipeline = createGraphicsPipeline("pointsPick", std::string("#define RASM_PICK 1\n#line 1\n") + pointSource, formats, DEPTH_FORMAT, "vertMain", "pickMain", BlendMode::NONE, true);
+        }
 
         // The slot's targets, culling buffer and host copy grow to what the frame needs, and stay.
         bool resources = pipelines;
@@ -509,7 +522,9 @@ namespace rasm
             for (uint32_t r = 0; r < drawList.runs.size(); ++r)
             {
                 const DrawRun &run = drawList.runs[r];
-                const PipelineHandle pipeline = picks->pipelines[run.alphaMode == AlphaMode::NONE ? 0 : (run.alphaMode == AlphaMode::MASK ? 1 : 2)];
+                if (run.points && !picks->pointPipeline.isValid())
+                    continue;
+                const PipelineHandle pipeline = run.points ? picks->pointPipeline : picks->pipelines[run.alphaMode == AlphaMode::NONE ? 0 : (run.alphaMode == AlphaMode::MASK ? 1 : 2)];
                 if (pipeline != bound)
                 {
                     ctx.bindPipeline(commandBuffer, pipeline);
@@ -618,6 +633,14 @@ namespace rasm
                 hit.entity = {owner.entityIndex, owner.entityGeneration};
                 hit.subMesh = owner.subMesh;
                 hit.feature = (group.nearest.flags & PICK_HIT_FEATURE) != 0 ? group.nearest.feature : 0;
+                // A point's index in its chunk's drawn order goes back to the application's (Mesh::pointOrder), through the
+                // mesh the rows were given for. Once that mesh is destroyed the index cannot be mapped: no feature then.
+                if ((group.nearest.flags & PICK_HIT_POINT) != 0)
+                {
+                    const bool mapped = isLive(owner.mesh) && hit.feature < registry.meshes[owner.mesh.index].pointOrder.size();
+                    hit.feature = mapped ? registry.meshes[owner.mesh.index].pointOrder[hit.feature] : 0;
+                    hit.flags = mapped ? hit.flags : hit.flags & ~PICK_HIT_FEATURE;
+                }
                 hit.flags = group.nearest.flags;
                 hit.pixels = group.pixels;
                 hit.x = group.nearest.x;

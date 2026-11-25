@@ -32,6 +32,7 @@ TEST_CASE("The config conversions copy every field")
         .geometryPoolSubMeshes = 16,
         .geometryPoolMeshlets = 17,
         .geometryPoolMeshletData = 18,
+        .geometryPoolPoints = 29,
         .maxInstances = 19,
         .maxLights = 20,
         .maxMaterials = 21,
@@ -83,6 +84,7 @@ TEST_CASE("The config conversions copy every field")
     CHECK(renderer.geometryPoolSubMeshes == 16);
     CHECK(renderer.geometryPoolMeshlets == 17);
     CHECK(renderer.geometryPoolMeshletData == 18);
+    CHECK(renderer.geometryPoolPoints == 29);
     CHECK(renderer.maxInstances == 19);
     CHECK(renderer.maxLights == 20);
     CHECK(renderer.maxMaterials == 21);

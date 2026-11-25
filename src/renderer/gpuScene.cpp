@@ -280,6 +280,8 @@ namespace rasm
                 return gfx::MaterialId::TERRAIN;
             case MaterialType::VECTOR:
                 return gfx::MaterialId::VECTOR;
+            case MaterialType::POINTS:
+                return gfx::MaterialId::POINTS;
             default:
                 return gfx::MaterialId::PBR;
             }
@@ -298,10 +300,23 @@ namespace rasm
             return {.matrix = glm::vec4(c * transform.scale.x, s * transform.scale.y, -s * transform.scale.x, c * transform.scale.y), .offset = transform.offset};
         }
 
-        // The draw runs come in this order: OPAQUE then MASK, each by cull mode, then the one BLEND run.
-        uint32_t getRunKey(AlphaMode alphaMode, CullMode cullMode)
+        // The draw runs come in this order: OPAQUE then MASK, each by cull mode, then the point run, then the one BLEND run.
+        uint32_t getRunKey(AlphaMode alphaMode, CullMode cullMode, bool points)
         {
+            if (points)
+                return static_cast<uint32_t>(AlphaMode::BLEND) * gfx::MAX_DRAW_RUNS - 1;
             return static_cast<uint32_t>(alphaMode) * gfx::MAX_DRAW_RUNS + static_cast<uint32_t>(cullMode);
+        }
+
+        // A scalar range as the point shader reads it: logarithms of its ends for a log range, whose ends must be above 0.
+        void writeScalarRange(const ScalarRange &range, gfx::PointData &points)
+        {
+            const bool log = range.log && range.min > 0.0f && range.max > 0.0f;
+            if (range.log && !log)
+                spdlog::warn("A POINTS material's range is logarithmic with an end at or below 0 ({} to {}): it is drawn linear.", range.min, range.max);
+            points.rangeMin = log ? std::log(range.min) : range.min;
+            points.rangeMax = log ? std::log(range.max) : range.max;
+            points.flags |= (log ? gfx::POINT_LOG : 0u) | (range.clamp ? gfx::POINT_CLAMP : 0u);
         }
 
         gfx::Material convertToGfxMaterial(Renderer &engine, const Material &mat)
@@ -397,12 +412,24 @@ namespace rasm
                     row.vector.flags |= gfx::VECTOR_TEXT;
                 }
             }
+            if (mat.type == MaterialType::POINTS)
+            {
+                const PointMaterial &points = mat.points;
+                const uint32_t shapes[] = {0u, gfx::POINT_ROUND, gfx::POINT_SPHERE};
+                row.points = {.color = points.color,
+                              .size = points.size,
+                              .flags = (points.sizeUnit == VectorUnit::METRES ? gfx::POINT_METRES : 0u) | shapes[std::min(static_cast<uint32_t>(points.shape), 2u)] |
+                                       (points.colorMode == PointColorMode::SCALAR ? gfx::POINT_SCALAR : 0u),
+                              .colormap = engine.getBindlessTextureIndex(points.colormap),
+                              .density = std::max(points.density, 0.0f)};
+                writeScalarRange(points.range, row.points);
+            }
             return row;
         }
     }
 
     static_assert(MAX_SCENES <= 16, "EntityDrawState::scenes has one bit per scene");
-    static_assert(2 * (static_cast<uint32_t>(CullMode::BACK) + 1) + 1 == gfx::MAX_DRAW_RUNS, "a draw list has a run per cull mode for OPAQUE and MASK, and one for BLEND");
+    static_assert(2 * (static_cast<uint32_t>(CullMode::BACK) + 1) + 2 == gfx::MAX_DRAW_RUNS, "a draw list has a run per cull mode for OPAQUE and MASK, a point run and a BLEND run");
     static_assert(static_cast<uint32_t>(gfx::TextureTransformSlot::EMISSIVE) + 1 == gfx::TEXTURE_TRANSFORMS, "every texture transform slot has a row");
     static_assert(static_cast<uint32_t>(BlendSortStep::WRITE) + 1 == BLEND_SORT_STEPS, "every sort step has a pipeline");
 
@@ -449,6 +476,7 @@ namespace rasm
         gpuScene->instanceRows.reset(config.maxInstances);
         gpuScene->instanceCullModes.assign(config.maxInstances, CullMode::NONE);
         gpuScene->instanceAlphaModes.assign(config.maxInstances, AlphaMode::NONE);
+        gpuScene->instancePoints.assign(config.maxInstances, 0);
         // A word of meshlet visibility bits per instance row on average: 32 meshlets. Each view with occlusion culling
         // has this many words (createSceneView); a row that finds none left has no bits, and is only culled less.
         gpuScene->meshletWords.reset(config.maxInstances);
@@ -538,9 +566,11 @@ namespace rasm
                 {
                     for (const auto &subMesh : mesh.subMeshes)
                     {
-                        if (subMesh.geometry.vertexCount == 0 || subMesh.geometry.indexCount == 0)
+                        if ((subMesh.geometry.vertexCount == 0 && subMesh.geometry.pointCount == 0) || subMesh.geometry.indexCount == 0)
                             spdlog::warn("Skipping a mesh of entity {}: it has {} vertices and {} indices, and drawing needs both.",
                                          entity.index, subMesh.geometry.vertexCount, subMesh.geometry.indexCount);
+                        if (subMesh.geometry.pointCount > 0 && getSubMeshMaterial(*this, entityRef, subMesh).type != MaterialType::POINTS)
+                            spdlog::warn("Entity {} draws a point cloud chunk without a POINTS material: its points are not drawn.", entity.index);
                     }
 
                     // The rows go back when the entity or its mesh is destroyed (releaseEntityRows).
@@ -549,12 +579,13 @@ namespace rasm
                     EntityDrawState &state = gpuScene->entities[entity.index];
                     state.firstInstance = static_cast<uint32_t>(firstRow);
                     state.instanceCount = rowCount;
-                    picks->owners.assign(state.firstInstance, rowCount, entity);
+                    picks->owners.assign(state.firstInstance, rowCount, entity, entityRef.mesh);
                     state.waitingForTextures = !texturesLoaded(*this, entityRef, mesh);
                     for (uint32_t r = 0; r < rowCount; ++r)
                     {
                         gpuScene->instanceCullModes[firstRow + r] = CullMode::NONE;
                         gpuScene->instanceAlphaModes[firstRow + r] = AlphaMode::NONE;
+                        gpuScene->instancePoints[firstRow + r] = 0;
                         // The bits of the LOD with the most meshlets, so every LOD's fit.
                         gpuScene->instanceMeshlets[firstRow + r] = mesh.subMeshes[r].geometry.maxLodMeshlets;
                         const auto words = (mesh.subMeshes[r].geometry.maxLodMeshlets + 31) / 32;
@@ -709,9 +740,14 @@ namespace rasm
             const CullMode cullMode = getCullMode(material, entityRef.transform, subMesh.transform, animationCanMirror(entityRef.mesh, i));
             CullMode &storedCullMode = gpuScene->instanceCullModes[state.firstInstance + i];
             AlphaMode &storedAlphaMode = gpuScene->instanceAlphaModes[state.firstInstance + i];
-            changed = changed || storedCullMode != cullMode || storedAlphaMode != material.alphaMode;
-            storedCullMode = cullMode;
+            // A point cloud chunk is drawn only with a POINTS material, by the point run, which is not culled by face.
+            const auto points = static_cast<uint8_t>(subMesh.geometry.pointCount > 0 && material.type == MaterialType::POINTS ? 1 : 0);
+            const CullMode wantedCullMode = points != 0 ? CullMode::NONE : cullMode;
+            uint8_t &storedPoints = gpuScene->instancePoints[state.firstInstance + i];
+            changed = changed || storedCullMode != wantedCullMode || storedAlphaMode != material.alphaMode || storedPoints != points;
+            storedCullMode = wantedCullMode;
             storedAlphaMode = material.alphaMode;
+            storedPoints = points;
         }
 
         // An entity that waits for textures is in no draw list yet.
@@ -856,7 +892,8 @@ namespace rasm
             for (uint32_t i = 0; i < state.instanceCount; ++i)
             {
                 const MeshGeometry &geometry = mesh.subMeshes[i].geometry;
-                if (geometry.vertexCount == 0 || geometry.indexCount == 0)
+                const bool points = gpuScene->instancePoints[state.firstInstance + i] != 0;
+                if ((geometry.vertexCount == 0 && !points) || geometry.indexCount == 0)
                     continue;
                 // Indices are local to their sub-mesh; vertexOffset moves them to its place in the geometry pool.
                 drawList.draws.push_back({.indexCount = geometry.indexCount,
@@ -872,14 +909,17 @@ namespace rasm
         // drawTransparent one for the blend run, which comes last.
         const auto &cullModes = gpuScene->instanceCullModes;
         const auto &alphaModes = gpuScene->instanceAlphaModes;
+        const auto &points = gpuScene->instancePoints;
         std::stable_sort(drawList.draws.begin(), drawList.draws.end(), [&](const gfx::DrawInfo &a, const gfx::DrawInfo &b)
-                         { return getRunKey(alphaModes[a.firstInstance], cullModes[a.firstInstance]) < getRunKey(alphaModes[b.firstInstance], cullModes[b.firstInstance]); });
+                         { return getRunKey(alphaModes[a.firstInstance], cullModes[a.firstInstance], points[a.firstInstance] != 0) <
+                                  getRunKey(alphaModes[b.firstInstance], cullModes[b.firstInstance], points[b.firstInstance] != 0); });
         for (uint32_t i = 0; i < drawList.draws.size(); ++i)
         {
-            const AlphaMode alphaMode = alphaModes[drawList.draws[i].firstInstance];
+            const bool pointDraw = points[drawList.draws[i].firstInstance] != 0;
+            const AlphaMode alphaMode = pointDraw ? AlphaMode::NONE : alphaModes[drawList.draws[i].firstInstance];
             const CullMode cullMode = cullModes[drawList.draws[i].firstInstance];
-            if (drawList.runs.empty() || drawList.runs.back().alphaMode != alphaMode || drawList.runs.back().cullMode != cullMode)
-                drawList.runs.push_back({alphaMode, cullMode, i, 0});
+            if (drawList.runs.empty() || drawList.runs.back().alphaMode != alphaMode || drawList.runs.back().cullMode != cullMode || drawList.runs.back().points != pointDraw)
+                drawList.runs.push_back({.alphaMode = alphaMode, .cullMode = cullMode, .points = pointDraw, .first = i, .count = 0});
             DrawRun &run = drawList.runs.back();
             ++run.count;
             // What the run's draws could take as meshlets, at most: prepareSceneView sizes the meshlet draws by it.
@@ -1554,6 +1594,17 @@ namespace rasm
                 spdlog::error("Failed to create the depth-only MASK pipeline; cut-out and see-through materials cast no shadow.");
         }
         view.drawMask = view.depthOnly ? gpuScene->depthMaskPipeline.isValid() : shaded.maskPipeline.isValid();
+        // The point run has a pipeline of its own (passes/points.slang), made once a scene has point cloud chunks: a
+        // quad per point pulled from the point pool, alpha-to-coverage with several samples. A depth-only view draws none.
+        const bool hasPoints = std::any_of(drawList.runs.begin(), drawList.runs.end(), [](const DrawRun &run)
+                                           { return run.points; });
+        if (!view.depthOnly && hasPoints && !shaded.pointPipeline.isValid())
+        {
+            const std::string defines = getMotionDefine(ctx, view) + std::string(multisampled ? "#define RASM_ALPHA_TO_COVERAGE 1\n" : "");
+            shaded.pointPipeline = createScenePipeline("points", "passes/points.slang", defines, view.renderTarget, "vertMain", "fragMain", BlendMode::NONE, true, multisampled);
+            if (!shaded.pointPipeline.isValid())
+                spdlog::error("Failed to create the point pipeline; the scene is drawn without its point clouds.");
+        }
         // A debug view's pipelines are made the first time it is chosen, like MASK and BLEND: rasm.slang compiled with
         // RASM_DEBUG_VIEW, with its MASK cut-outs discarded rather than covered. OVERDRAW's add up their fragments, so
         // they have pipelines of their own, and the culling view also draws its ghosts.
@@ -1883,6 +1934,7 @@ namespace rasm
                 sceneData.meshletVisibilityPtr = ctx.getBufferDeviceAddress(view.meshletVisibility);
         }
         sceneData.colorsPtr = ctx.getBufferDeviceAddress(geometryPool->colorBuffer());
+        sceneData.pointsPtr = geometryPool->pointBuffer().isValid() ? ctx.getBufferDeviceAddress(geometryPool->pointBuffer()) : 0;
         sceneData.animatedTransformsPtr = ctx.getBufferDeviceAddress(gpuAnimation->transforms[frame]);
         sceneData.skinnedVertsPtr = ctx.getBufferDeviceAddress(gpuAnimation->skinnedVertices[frame]);
         sceneData.previousSkinnedVertsPtr = ctx.getBufferDeviceAddress(gpuAnimation->skinnedVertices[(frame + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT]);
@@ -1900,6 +1952,10 @@ namespace rasm
         // Culling keeps the blend run for the late phase only, and the Transparent pass draws it. A depth-only view
         // draws it like any other run, so it has no blend run.
         sceneData.blendRun = view.late || view.hizLevelCount == 0 ? view.blendRun : gfx::MAX_DRAW_RUNS;
+        // Culling cuts the point run's draws to a prefix (cull.slang), and leaves them out of a depth-only view.
+        sceneData.pointRun = gfx::MAX_DRAW_RUNS;
+        for (uint32_t i = 0; i < sceneData.runCount; ++i)
+            sceneData.pointRun = drawList.runs[i].points ? i : sceneData.pointRun;
         sceneData.hizLevelCount = view.hizLevelCount;
         sceneData.depthTexture = depthSlot;
         sceneData.depthSamples = renderTargetData.samples;
@@ -2284,13 +2340,16 @@ namespace rasm
         for (uint32_t i = 0; i < drawList.runs.size(); ++i)
         {
             const DrawRun &run = drawList.runs[i];
-            if (i == view.blendRun || (run.alphaMode != AlphaMode::NONE && !view.drawMask))
+            if (i == view.blendRun || (run.alphaMode != AlphaMode::NONE && !view.drawMask) || (run.points && (view.depthOnly || !shaded.pointPipeline.isValid())))
                 continue;
             PipelineHandle pipeline = view.depthOnly ? gpuScene->depthPipeline : shaded.pipeline;
             if (run.alphaMode != AlphaMode::NONE)
                 pipeline = view.depthOnly ? gpuScene->depthMaskPipeline : shaded.maskPipeline;
             if (view.debugView != DebugView::NONE)
                 pipeline = run.alphaMode != AlphaMode::NONE ? debug.maskPipeline : debug.pipeline;
+            // A debug view shows the points as they are.
+            if (run.points)
+                pipeline = shaded.pointPipeline;
             if (pipeline != bound)
             {
                 ctx.bindPipeline(commandBuffer, pipeline);

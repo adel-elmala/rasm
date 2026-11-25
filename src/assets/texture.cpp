@@ -36,6 +36,11 @@ namespace rasm
                 material.terrain.heights = {};
                 used = true;
             }
+            if (material.points.colormap == texture)
+            {
+                material.points.colormap = {};
+                used = true;
+            }
             if (used)
             {
                 writeMaterialRow(material.handle);

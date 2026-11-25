@@ -1,10 +1,12 @@
 #include "renderer/geometryPool.h"
 #include "rasm/render/renderContext.h"
 #include "renderer/uberMaterialTypes.h"
+#include "rasm/pointCloud.h"
 
 #include "spdlog/spdlog.h"
 
 #include <algorithm>
+#include <cstring>
 #include <vector>
 
 namespace rasm
@@ -79,6 +81,7 @@ namespace rasm
         meshletRanges.reset(config.geometryPoolMeshlets);
         // The mesh shaders read each meshlet's own vertices and triangles; without them only the index ranges are needed.
         meshletDataRanges.reset(ctx.hasMeshShaders() ? config.geometryPoolMeshletData : 0);
+        pointRanges.reset(config.geometryPoolPoints);
         subMeshRows.reset(config.geometryPoolSubMeshes);
         vertices = ctx.createBuffer({.name = "Geometry Vertex Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(config.geometryPoolVertices) * sizeof(Vertex)});
         indices = ctx.createBuffer({.name = "Geometry Index Pool", .usage = BufferUsage::INDEX, .size = static_cast<uint64_t>(config.geometryPoolIndices) * sizeof(uint32_t)});
@@ -107,6 +110,11 @@ namespace rasm
     // The streams of a sub-mesh that does not add up are refused before any range is taken.
     bool GeometryPool::check(const ObjRaw &raw) const
     {
+        if (raw.pointCount > 0 && (!raw.vertices.empty() || raw.points.size() % 2 != 0 || raw.points.size() < gfx::POINT_CHUNK_HEADER_WORDS + 2 * static_cast<size_t>(raw.pointCount)))
+        {
+            spdlog::error("A point cloud chunk of {} points has {} words and {} vertices; buildPointCloudChunk makes them.", raw.pointCount, raw.points.size(), raw.vertices.size());
+            return false;
+        }
         if (!raw.colors.empty() && raw.colors.size() != raw.vertices.size())
         {
             spdlog::error("A sub-mesh has {} colors for {} vertices.", raw.colors.size(), raw.vertices.size());
@@ -138,6 +146,8 @@ namespace rasm
     // it: Renderer::destroyMesh frees them after the GPU is done.
     bool GeometryPool::allocate(const ObjRaw &raw, MeshGeometry &geometry)
     {
+        if (raw.pointCount > 0)
+            return allocatePoints(raw, geometry);
         const size_t lodCount = getLodCount(raw);
         size_t lodIndexCount = 0;
         for (size_t i = 1; i < lodCount; ++i)
@@ -227,10 +237,53 @@ namespace rasm
         return true;
     }
 
+    // A point cloud chunk takes a range of the point pool and a row; its indices are the triangles every chunk shares, taken
+    // from the index pool with the first chunk and kept. Its sphere is the box's.
+    bool GeometryPool::allocatePoints(const ObjRaw &raw, MeshGeometry &geometry)
+    {
+        if (!pointTrianglesAllocated)
+        {
+            uint64_t first = 0;
+            if (!indexRanges.allocate(gfx::POINT_INDICES * static_cast<uint64_t>(MAX_POINT_CHUNK_POINTS), first))
+                return false;
+            pointTriangles = static_cast<uint32_t>(first);
+            pointTrianglesAllocated = true;
+        }
+        const auto units = static_cast<uint32_t>(raw.points.size() / 2);
+        uint64_t firstPoint = 0;
+        uint64_t row = 0;
+        if (!pointRanges.allocate(units, firstPoint))
+            return false;
+        if (!subMeshRows.allocate(1, row))
+        {
+            pointRanges.free(firstPoint, units);
+            return false;
+        }
+        gfx::PointChunkHeader header{};
+        std::memcpy(&header, raw.points.data(), sizeof(header));
+        const glm::vec3 size = header.boxStep * 65535.0f;
+        geometry = {.firstIndex = pointTriangles,
+                    .indexCount = gfx::POINT_INDICES * raw.pointCount,
+                    .firstPoint = static_cast<uint32_t>(firstPoint),
+                    .pointUnits = units,
+                    .pointCount = raw.pointCount,
+                    .geometryIndex = static_cast<uint32_t>(row),
+                    .allocated = true,
+                    .boundsCenter = header.boxMin + size * 0.5f,
+                    .boundsRadius = glm::length(size) * 0.5f};
+        return true;
+    }
+
     void GeometryPool::free(const MeshGeometry &geometry)
     {
         if (!geometry.allocated)
             return;
+        if (geometry.pointCount > 0)
+        {
+            pointRanges.free(geometry.firstPoint, geometry.pointUnits);
+            subMeshRows.free(geometry.geometryIndex, 1);
+            return;
+        }
         vertexRanges.free(geometry.firstVertex, geometry.vertexCount);
         indexRanges.free(geometry.firstIndex, static_cast<uint64_t>(geometry.indexCount) + geometry.lodIndexCount);
         colorRanges.free(geometry.firstColor, geometry.colorCount);
@@ -244,10 +297,10 @@ namespace rasm
     void GeometryPool::logFull(size_t subMeshCount) const
     {
         spdlog::error("The geometry pool is full: a mesh of {} sub-meshes does not fit. In use: {}/{} vertices, {}/{} indices, {}/{} colors, {}/{} skins, {}/{} "
-                      "morph deltas, {}/{} meshlets, {}/{} sub-meshes; the largest free ranges are {} vertices and {} indices. RendererConfig::geometryPoolVertices, "
-                      "geometryPoolIndices, geometryPoolColors, geometryPoolSkins, geometryPoolMorphs, geometryPoolMeshlets and geometryPoolSubMeshes set its size.",
+                      "morph deltas, {}/{} meshlets, {}/{} point units, {}/{} sub-meshes; the largest free ranges are {} vertices and {} indices. RendererConfig::geometryPoolVertices, "
+                      "geometryPoolIndices, geometryPoolColors, geometryPoolSkins, geometryPoolMorphs, geometryPoolMeshlets, geometryPoolPoints and geometryPoolSubMeshes set its size.",
                       subMeshCount, vertexRanges.used(), vertexRanges.capacity(), indexRanges.used(), indexRanges.capacity(), colorRanges.used(), colorRanges.capacity(),
-                      skinRanges.used(), skinRanges.capacity(), morphRanges.used(), morphRanges.capacity(), meshletRanges.used(), meshletRanges.capacity(), subMeshRows.used(),
+                      skinRanges.used(), skinRanges.capacity(), morphRanges.used(), morphRanges.capacity(), meshletRanges.used(), meshletRanges.capacity(), pointRanges.used(), pointRanges.capacity(), subMeshRows.used(),
                       subMeshRows.capacity(), vertexRanges.largestFree(), indexRanges.largestFree());
     }
 
@@ -256,6 +309,8 @@ namespace rasm
     // its last mesh), so one copy of the table is enough.
     bool GeometryPool::write(RenderContext &ctx, const ObjRaw &raw, const MeshGeometry &geometry)
     {
+        if (geometry.pointCount > 0)
+            return writePoints(ctx, raw, geometry);
         const size_t lodCount = getLodCount(raw);
         gfx::GeometryData row{.vertexOffset = static_cast<int32_t>(geometry.firstVertex),
                               .boundsCenter = geometry.boundsCenter,
@@ -324,6 +379,48 @@ namespace rasm
                 return false;
         }
         return ctx.fillBuffer(table, &row, sizeof(row), static_cast<size_t>(geometry.geometryIndex) * sizeof(row));
+    }
+
+    // The shared triangles (0, 1, 2, ...) go in with the first chunk. The chunk's row has one LOD, the whole chunk, which culling cuts to a
+    // prefix (cull.slang), and its vertexOffset is the chunk's first unit in the point pool.
+    bool GeometryPool::writePoints(RenderContext &ctx, const ObjRaw &raw, const MeshGeometry &geometry)
+    {
+        // The point pool is made with the first chunk, so a renderer that draws no point cloud has none.
+        if (!points.isValid())
+        {
+            points = ctx.createBuffer({.name = "Geometry Point Pool", .usage = BufferUsage::STORAGE, .size = pointRanges.capacity() * 2 * sizeof(uint32_t)});
+            if (!points.isValid())
+            {
+                spdlog::error("Failed to create the point pool of {} MiB (RendererConfig::geometryPoolPoints).", pointRanges.capacity() * 2 * sizeof(uint32_t) >> 20);
+                return false;
+            }
+        }
+        if (!pointTrianglesWritten)
+        {
+            std::vector<uint32_t> triangles(gfx::POINT_INDICES * static_cast<size_t>(MAX_POINT_CHUNK_POINTS));
+            for (size_t i = 0; i < triangles.size(); ++i)
+                triangles[i] = static_cast<uint32_t>(i);
+            if (!ctx.fillBuffer(indices, triangles.data(), triangles.size() * sizeof(uint32_t), static_cast<size_t>(pointTriangles) * sizeof(uint32_t)))
+                return false;
+            pointTrianglesWritten = true;
+        }
+        if (!ctx.fillBuffer(points, raw.points.data(), raw.points.size() * sizeof(uint32_t), static_cast<size_t>(geometry.firstPoint) * 2 * sizeof(uint32_t)))
+            return false;
+        gfx::GeometryData row{.vertexOffset = static_cast<int32_t>(geometry.firstPoint),
+                              .boundsCenter = geometry.boundsCenter,
+                              .boundsRadius = geometry.boundsRadius,
+                              .lodCount = 1,
+                              .colorOffset = -1,
+                              .skinOffset = -1,
+                              .morphOffset = -1,
+                              .morphTargetCount = 0};
+        row.lods[0] = {.firstIndex = geometry.firstIndex, .indexCount = geometry.indexCount, .error = 0.0f, .firstMeshlet = 0, .meshletCount = 0};
+        return ctx.fillBuffer(table, &row, sizeof(row), static_cast<size_t>(geometry.geometryIndex) * sizeof(row));
+    }
+
+    BufferHandle GeometryPool::pointBuffer() const
+    {
+        return points;
     }
 
     BufferHandle GeometryPool::vertexBuffer() const

@@ -2,6 +2,7 @@
 #include "rasm/assetLoader.h"
 #include "rasm/vector.h"
 #include "rasm/picking.h"
+#include "rasm/pointCloud.h"
 #include "rasm/grid.h"
 #include "rasm/cameraInput.h"
 #include "rasm/light.h"
@@ -67,6 +68,7 @@ TEST_CASE("the renderer config defaults are the C++ RendererConfig's")
     CHECK(std::string(config.cache_dir) == defaults.cacheDir);
     CHECK(config.geometry_pool_vertices == defaults.geometryPoolVertices);
     CHECK(config.geometry_pool_meshlet_data == defaults.geometryPoolMeshletData);
+    CHECK(config.geometry_pool_points == defaults.geometryPoolPoints);
     CHECK(config.max_instances == defaults.maxInstances);
     CHECK(config.max_morph_weights == defaults.maxMorphWeights);
     CHECK(config.occlusion_culling == RASM_TRUE);
@@ -810,6 +812,48 @@ TEST_CASE("the 1.8 structs start from the C++ defaults, and a grid call with a b
     CHECK(rasm_set_camera_buttons(nullptr, &buttons) == RASM_ERROR_INVALID_ARGUMENT);
     buttons.middle = 7;
     CHECK(rasm_camera_input_state_set_buttons(nullptr, &buttons) == RASM_ERROR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("the 1.10 structs start from the C++ defaults, and a point cloud chunk builds on any thread")
+{
+    const rasm::PointMaterial defaults;
+    rasm_material_desc desc = {};
+    CHECK(sizeof(desc.points) == sizeof(rasm_point_material));
+    CHECK(RASM_MAX_POINT_CHUNK_POINTS == rasm::MAX_POINT_CHUNK_POINTS);
+    CHECK(RASM_COLORMAP_SIZE == rasm::COLORMAP_SIZE);
+    CHECK(RASM_PICK_SKIP_ALL == rasm::PICK_SKIP_ALL);
+    CHECK(defaults.density == 2.0f);
+    rasm_point_cloud_chunk_desc chunk;
+    REQUIRE(rasm_point_cloud_chunk_desc_init(&chunk, sizeof(chunk)) == RASM_OK);
+    CHECK(chunk.size == sizeof(chunk));
+    CHECK(chunk.positions == nullptr);
+    CHECK(chunk.count == 0);
+
+    const rasm_vec3 positions[3] = {{0.0f, 0.0f, 0.0f}, {1.0f, 2.0f, 3.0f}, {-4.0f, 0.5f, 2.0f}};
+    const float scalars[3] = {1.0f, 2.0f, 3.0f};
+    chunk.positions = positions;
+    chunk.scalars = scalars;
+    chunk.count = 3;
+    rasm_mesh_build *build = nullptr;
+    std::thread worker([&]()
+                       { CHECK(rasm_build_point_cloud_chunk(&chunk, &build) == RASM_OK); });
+    worker.join();
+    CHECK(build != nullptr);
+    // Without a renderer the build is still taken and freed.
+    CHECK(rasm_create_mesh_from_build(nullptr, build).id == 0);
+
+    chunk.count = 0;
+    CHECK(rasm_build_point_cloud_chunk(&chunk, &build) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(build == nullptr);
+    chunk.count = 3;
+    chunk.positions = nullptr;
+    CHECK(rasm_build_point_cloud_chunk(&chunk, &build) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(contains(rasm_get_last_error(), "positions"));
+    CHECK(rasm_build_point_cloud_chunk(nullptr, &build) == RASM_ERROR_INVALID_ARGUMENT);
+    const rasm_vec4 colors[2] = {{0.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f, 1.0f}};
+    CHECK(rasm_create_colormap(nullptr, colors, 2).id == 0);
+    CHECK(contains(rasm_get_last_error(), "renderer is NULL"));
+    CHECK(rasm_create_colormap_preset(nullptr, RASM_COLORMAP_TURBO).id == 0);
 }
 
 TEST_CASE("a C rig zooms an orthographic box at the pointer, and a mapped button pans")

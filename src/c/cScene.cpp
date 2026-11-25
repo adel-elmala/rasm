@@ -328,7 +328,7 @@ rasm_material RASM_CALL rasm_create_material(rasm_renderer *renderer, rasm_mater
 try
 {
     Renderer *r = c::getRenderer(renderer, __func__);
-    if (r == nullptr || !c::checkEnum(type, RASM_MATERIAL_TYPE_VECTOR + 1, __func__, "type") || (texture_count > 0 && !c::checkPointer(textures, __func__, "textures")))
+    if (r == nullptr || !c::checkEnum(type, RASM_MATERIAL_TYPE_POINTS + 1, __func__, "type") || (texture_count > 0 && !c::checkPointer(textures, __func__, "textures")))
         return {};
     std::vector<TextureHandle> slots(texture_count);
     for (uint32_t i = 0; i < texture_count; ++i)

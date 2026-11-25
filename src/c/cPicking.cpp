@@ -19,7 +19,9 @@ namespace
     static_assert(RASM_PICK_SKIP_VECTORS == PICK_SKIP_VECTORS);
     static_assert(RASM_PICK_SKIP_LABELS == PICK_SKIP_LABELS);
     static_assert(RASM_PICK_SKIP_OVERLAYS == PICK_SKIP_OVERLAYS);
+    static_assert(RASM_PICK_SKIP_POINTS == PICK_SKIP_POINTS);
     static_assert(RASM_PICK_SKIP_ALL == PICK_SKIP_ALL);
+    static_assert(RASM_PICK_HIT_POINT == PICK_HIT_POINT);
     static_assert(RASM_PICK_HIT_FEATURE == PICK_HIT_FEATURE);
     static_assert(RASM_PICK_HIT_LABEL == PICK_HIT_LABEL);
     static_assert(RASM_PICK_HIT_OVERLAY == PICK_HIT_OVERLAY);

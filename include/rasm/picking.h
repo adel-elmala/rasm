@@ -21,7 +21,8 @@ namespace rasm
     constexpr uint32_t              PICK_SKIP_VECTORS       = 1u << 3;  // lines, polygons and points
     constexpr uint32_t              PICK_SKIP_LABELS        = 1u << 4;
     constexpr uint32_t              PICK_SKIP_OVERLAYS      = 1u << 5;  // VectorDepth::OVERLAY features, labels too
-    constexpr uint32_t              PICK_SKIP_ALL           = (1u << 6) - 1;
+    constexpr uint32_t              PICK_SKIP_POINTS        = 1u << 6;  // point cloud chunks
+    constexpr uint32_t              PICK_SKIP_ALL           = (1u << 7) - 1;
 
     // What a hit is.
     constexpr uint32_t              PICK_HIT_FEATURE        = 1u << 0;  // a vector feature (a label too): PickHit::feature is its id
@@ -29,6 +30,7 @@ namespace rasm
     constexpr uint32_t              PICK_HIT_OVERLAY        = 1u << 2;
     constexpr uint32_t              PICK_HIT_TERRAIN        = 1u << 3;
     constexpr uint32_t              PICK_HIT_BACK_FACE      = 1u << 4;  // the back of a double-sided surface; the normal faces the camera
+    constexpr uint32_t              PICK_HIT_POINT          = 1u << 5;  // a point of a point cloud chunk: PickHit::feature is its index (with PICK_HIT_FEATURE)
 
     // A question to a view: what is under these pixels (from the view's top-left corner, in its pixels)?
     struct PickDesc
@@ -43,7 +45,7 @@ namespace rasm
     {
         EntityHandle                entity;                     // the entity the frame drew, which may be destroyed since
         uint32_t                    subMesh         = 0;        // of the entity's mesh (a glTF primitive)
-        uint32_t                    feature         = 0;        // a vector feature's id (PICK_HIT_FEATURE), else 0
+        uint32_t                    feature         = 0;        // a vector feature's id or a point's index (PICK_HIT_FEATURE), else 0
         uint32_t                    flags           = 0;        // PICK_HIT_*
         uint32_t                    pixels          = 0;        // of the rect that show it
         uint32_t                    x               = 0;        // its pixel nearest the rect's centre, in the view's pixels

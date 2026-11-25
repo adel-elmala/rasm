@@ -557,6 +557,7 @@ namespace rasm
                                      {"runCount", offsetof(gfx::SceneData, runCount)},
                                      {"runFirst", offsetof(gfx::SceneData, runFirst)},
                                      {"blendRun", offsetof(gfx::SceneData, blendRun)},
+                                     {"pointRun", offsetof(gfx::SceneData, pointRun)},
                                      {"sortCapacity", offsetof(gfx::SceneData, sortCapacity)},
                                      {"hizLevelCount", offsetof(gfx::SceneData, hizLevelCount)},
                                      {"depthTexture", offsetof(gfx::SceneData, depthTexture)},
@@ -602,6 +603,7 @@ namespace rasm
                                      {"meshletRuns", offsetof(gfx::SceneData, meshletRuns)},
                                      {"coneRuns", offsetof(gfx::SceneData, coneRuns)},
                                      {"viewFlags", offsetof(gfx::SceneData, viewFlags)},
+                                     {"padding", offsetof(gfx::SceneData, padding)},
                                      {"meshletDataPtr", offsetof(gfx::SceneData, meshletDataPtr)},
                                      {"originLow", offsetof(gfx::SceneData, originLow)},
                                      {"zero", offsetof(gfx::SceneData, zero)},
@@ -611,7 +613,8 @@ namespace rasm
                                      {"labelProbesPtr", offsetof(gfx::SceneData, labelProbesPtr)},
                                      {"labelFadesPtr", offsetof(gfx::SceneData, labelFadesPtr)},
                                      {"labelFadeStep", offsetof(gfx::SceneData, labelFadeStep)},
-                                     {"labelSlotCount", offsetof(gfx::SceneData, labelSlotCount)}});
+                                     {"labelSlotCount", offsetof(gfx::SceneData, labelSlotCount)},
+                                     {"pointsPtr", offsetof(gfx::SceneData, pointsPtr)}});
 
             valid &= validateStruct(fieldStruct(layouts, scene, "meshletsPtr"), "GeometryMeshlet", sizeof(gfx::GeometryMeshlet),
                                     {{"center", offsetof(gfx::GeometryMeshlet, center)},
@@ -710,7 +713,17 @@ namespace rasm
                                      {"flags", offsetof(gfx::MaterialData, flags)},
                                      {"textureTransforms", offsetof(gfx::MaterialData, textureTransforms)},
                                      {"terrain", offsetof(gfx::MaterialData, terrain)},
-                                     {"vector", offsetof(gfx::MaterialData, vector)}});
+                                     {"vector", offsetof(gfx::MaterialData, vector)},
+                                     {"points", offsetof(gfx::MaterialData, points)}});
+
+            valid &= validateStruct(fieldStruct(layouts, materialData, "points"), "PointData", sizeof(gfx::PointData),
+                                    {{"color", offsetof(gfx::PointData, color)},
+                                     {"size", offsetof(gfx::PointData, size)},
+                                     {"flags", offsetof(gfx::PointData, flags)},
+                                     {"colormap", offsetof(gfx::PointData, colormap)},
+                                     {"rangeMin", offsetof(gfx::PointData, rangeMin)},
+                                     {"rangeMax", offsetof(gfx::PointData, rangeMax)},
+                                     {"density", offsetof(gfx::PointData, density)}});
 
             valid &= validateStruct(fieldStruct(layouts, materialData, "vector"), "VectorData", sizeof(gfx::VectorData),
                                     {{"color", offsetof(gfx::VectorData, color)},

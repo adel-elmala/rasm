@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Point Clouds · RASM</title>
+<meta name="description" content="Millions of points drawn as small splats: compact storage in a chunk's box, one triangle a point, level of detail by drawing a prefix of a well-ordered chunk, and colormaps for values. Then how RASM does it.">
+<meta name="rasm-sources" content="include/rasm/pointCloud.h include/rasm/colormap.h include/rasm/material.h include/rasm/mesh.h include/rasm/picking.h src/scene/pointCloud.cpp src/scene/colormap.cpp src/renderer/geometryPool.cpp src/renderer/gpuScene.cpp src/renderer/picking.cpp src/renderer/uberMaterialTypes.h shaders/lib/points.slang shaders/passes/points.slang shaders/passes/cull.slang shaders/lib/core.slang src/c/cPointCloud.cpp tests/pointCloudTests.cpp tests/image/imageTests.cpp examples/28_point_cloud/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/point-clouds.js"></script>
+</head>
+<body data-root="../" data-page="guides/point-clouds.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>Point clouds</h1>
+<p class="lead">A laser scanner (LiDAR) or a photo survey gives millions of points: a position each, often a color or a value such as height or intensity. There are no triangles to draw. This page explains how to draw such a cloud fast: small splats on the screen, compact storage, a cheap level of detail, and colormaps that turn values into colors. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>Each point is a <b>splat</b>: a small square, disc or sphere on the screen, a few pixels or a few centimetres wide.</li>
+    <li>Points come in <b>chunks</b> of up to 65 536 near each other. A chunk stores each position as three <b>16-bit steps of its box</b>: 8 bytes a point with a value, 12 with a color.</li>
+    <li>A point is <b>one triangle</b> around its square; the pixel stage cuts it to its shape.</li>
+    <li>The builder puts a chunk's points in an order where <b>every prefix is an even sample</b>. A chunk small on screen draws only its first points: level of detail with no extra data.</li>
+    <li>A <b>colormap</b> turns a value into a color through a range (linear or logarithmic) and a 256-entry texture.</li>
+  </ul>
+</div>
+
+<h2 id="splats"><span class="n">1</span>Splats: what a point looks like</h2>
+
+<p>A point has no size. To see it, the renderer draws a small shape at its place, a <em>splat</em>. Three shapes cover most uses.</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Square splats: many small squares, cheap, fine for 1 or 2 pixel points.">
+      <rect x="40" y="30" width="26" height="26" class="gpu"/><rect x="80" y="44" width="26" height="26" class="gpu"/><rect x="120" y="28" width="26" height="26" class="gpu"/><rect x="160" y="50" width="26" height="26" class="gpu"/>
+      <rect x="60" y="72" width="26" height="26" class="gpu"/><rect x="104" y="84" width="26" height="26" class="gpu"/><rect x="146" y="78" width="26" height="26" class="gpu"/>
+    </svg>
+    <h4>Square</h4>
+    <p>The cheapest. At 1 or 2 pixels every shape looks like this anyway.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Round splats: discs, which look like a surface of dots.">
+      <circle cx="53" cy="43" r="14" class="gpu"/><circle cx="93" cy="57" r="14" class="gpu"/><circle cx="133" cy="41" r="14" class="gpu"/><circle cx="173" cy="63" r="14" class="gpu"/>
+      <circle cx="73" cy="85" r="14" class="gpu"/><circle cx="117" cy="97" r="14" class="gpu"/><circle cx="159" cy="91" r="14" class="gpu"/>
+    </svg>
+    <h4>Round</h4>
+    <p>A disc. Its edge is smooth with several samples per pixel.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Sphere splats: discs whose depth is a sphere's, so where two overlap the nearer one wins along a curved line.">
+      <circle cx="100" cy="65" r="34" class="gpu"/><circle cx="140" cy="65" r="34" class="gpu o-75"/>
+      <path d="M120,38 Q112,65 120,92" class="arrow hot"/>
+      <text x="120" y="118" class="mid small">the overlap follows the spheres</text>
+    </svg>
+    <h4>Sphere</h4>
+    <p>A disc that writes a sphere's depth: overlapping points meet along a curve, as solid balls would.</p>
+  </div>
+</div>
+
+<p>The size is in pixels (the same on screen at every distance) or in metres (smaller when far away). A splat is never less than one pixel wide, so a far point neither vanishes nor flickers.</p>
+
+<h2 id="triangle"><span class="n">2</span>One triangle a point</h2>
+
+<p>The usual splat is a quad: two triangles, four corners. But for points of one or two pixels the cost is per point (the corners and the triangle setup), not per pixel. One triangle that holds the square costs one setup instead of two; the pixel stage cuts it back to the square or the disc.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="Left: a quad of two triangles with four corners. Right: one triangle with corners at (-1, -1), (3, -1) and (-1, 3) holds the square from -1 to 1; the pixels outside the square, or outside the disc, are cut.">
+    <text x="190" y="22" class="mid title">a quad: 2 triangles</text>
+    <rect x="120" y="40" width="140" height="140" class="gpu"/>
+    <line x1="120" y1="180" x2="260" y2="40" class="arrow"/>
+    <text x="190" y="200" class="mid small t-faint">4 corners, 2 triangle setups</text>
+    <text x="545" y="22" class="mid title">one triangle, cut to the shape</text>
+    <path d="M460,190 L620,190 L460,30 Z" class="shade"/>
+    <rect x="460" y="110" width="80" height="80" class="gpu"/>
+    <circle cx="500" cy="150" r="40" class="ok o-50"/>
+    <text x="456" y="204" class="end small mono">(-1, -1)</text>
+    <text x="624" y="204" class="small mono">(3, -1)</text>
+    <text x="456" y="34" class="end small mono">(-1, 3)</text>
+    <text x="560" y="96" class="small">cut: outside the square</text>
+    <text x="560" y="112" class="small">or the disc</text>
+    <text x="640" y="150" class="small t-faint">3 corners,</text>
+    <text x="640" y="166" class="small t-faint">1 triangle setup</text>
+  </svg>
+  <figcaption>Corner <var>c</var> of point <var>p</var> is vertex 3<var>p</var> + <var>c</var>. The shaded part of the triangle is drawn and cut; at 1 or 2 pixels that is almost nothing.</figcaption>
+</figure>
+
+<div class="stats">
+  <div><b>12–16 %</b><span>faster than a quad</span><small>3.3 M and 6.8 M points a frame, RTX 3060</small></div>
+  <div><b>1.07 ns</b><span>per point drawn</span><small>almost the same for 1 and 2 pixel points</small></div>
+  <div><b>3 %</b><span>for writing the depth</span><small>the sphere shape's cost, measured on every point</small></div>
+</div>
+
+<h2 id="storage"><span class="n">3</span>Storage: 16 bits in a chunk's box</h2>
+
+<p>Points near each other share a box. Inside it, a position needs far less than three 32-bit floats: 16 bits per axis is a step of 1/65 535 of the box, 0.5 mm for a 32 m box. A value (height, intensity, temperature) gets 16 bits too, in steps of the chunk's range of values.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 170" role="img" aria-label="The bytes of a chunk: a 48 byte header with the box's corner and step, the value's minimum and step, the count, the flags and where the colors start; then 8 bytes per point (x, y, z and the value, 16 bits each); then 4 bytes per point of RGBA8 color, only when the chunk has colors.">
+    <rect x="20" y="40" width="150" height="50" class="mem"/>
+    <text x="95" y="62" class="mid small title">header, 48 B</text>
+    <text x="95" y="78" class="mid small">box, value range, count</text>
+    <rect x="180" y="40" width="40" height="50" class="mem"/><text x="200" y="70" class="mid small mono">x</text>
+    <rect x="220" y="40" width="40" height="50" class="mem"/><text x="240" y="70" class="mid small mono">y</text>
+    <rect x="260" y="40" width="40" height="50" class="mem"/><text x="280" y="70" class="mid small mono">z</text>
+    <rect x="300" y="40" width="40" height="50" class="mem"/><text x="320" y="70" class="mid small mono">v</text>
+    <text x="260" y="108" class="mid small">8 B a point, 16 bits each</text>
+    <text x="370" y="70" class="mid">…</text>
+    <rect x="400" y="40" width="160" height="50" class="mem o-50"/>
+    <text x="480" y="62" class="mid small">RGBA8 colors</text>
+    <text x="480" y="78" class="mid small">4 B a point, if any</text>
+    <text x="620" y="56" class="small">position = corner</text>
+    <text x="620" y="72" class="small">+ step × (x, y, z)</text>
+    <text x="20" y="140" class="small t-faint">The same point as floats: 12 B for the position and 4 for the value or the color, 16 B in all.</text>
+  </svg>
+</figure>
+
+<div class="stats">
+  <div><b>8 B</b><span>a point with a value</span><small>against 16 B as floats</small></div>
+  <div><b>12 B</b><span>a point with a color</span><small>the color as RGBA8, sRGB</small></div>
+  <div><b>0.5 mm</b><span>step in a 32 m box</span><small>32 m / 65 535</small></div>
+</div>
+
+<p>The box also gives the chunk's bounding sphere, so a chunk is culled like any object: out of the view, or behind something in the depth of the frame before. The chunk is placed in the world by a transform in doubles, so a cloud far from the origin keeps its precision (<a href="large-world-precision.html">large worlds</a>).</p>
+
+<h2 id="prefix"><span class="n">4</span>Level of detail by prefix</h2>
+
+<p>A chunk far away covers few pixels, and drawing all its points would put many on the same pixel. The cheap fix: draw only its first <var>k</var> points. That works only if the first <var>k</var> points are spread over the whole chunk, for every <var>k</var>. A scanner writes points line by line, and a random shuffle clumps. The builder sorts the points along a Morton curve (a path that visits every small square before the next one), then reads that list in <em>bit-reversed</em> steps.</p>
+
+<ol class="flow">
+  <li class="mem">Quantize the positions to 16 bits in the box.</li>
+  <li class="cpu">Interleave the bits of x, y and z: the Morton code. Sort by it.</li>
+  <li class="cpu">For i = 0, 1, 2, … take sorted[reverse(i)], the bits of i reversed (0, P/2, P/4, 3P/4, …).</li>
+  <li class="gpu">The first 2<sup>j</sup> points are every P/2<sup>j</sup>-th point along the curve: one in each region.</li>
+</ol>
+
+<figure class="lab" data-lab="prefix-order" data-title="Draw a prefix of a chunk">
+  <figcaption>Slide the prefix down to 64 points in each order. Only the Morton order read in bit-reversed steps keeps a point in every cell; rows leave most of the chunk out and random points clump.</figcaption>
+</figure>
+
+<p>The level of detail costs no memory: no second copy of the points, no tree. Its limit is that a chunk is one unit: a very large chunk near the camera draws all of its points even where part of it is far. Small chunks (tens of metres) keep that error small; a tree of chunks for whole datasets is the next step.</p>
+
+<h2 id="density"><span class="n">5</span>How many points a chunk keeps</h2>
+
+<p>The chunk keeps enough points to cover its square on screen a few times. With <var>D</var> the diameter of its sphere on screen and <var>a</var> a point's area in pixels:</p>
+
+<div class="formula">
+  <p class="eq">k = min(N, ⌈density × D<sup>2</sup> / a⌉)</p>
+  <p class="eq">a = s<sup>2</sup> (square), or π/4 × s<sup>2</sup> (round, sphere)</p>
+  <dl>
+    <dt><var>D</var></dt><dd>pixels per unit at the sphere's nearest point × its diameter</dd>
+    <dt><var>s</var></dt><dd>the point's size in pixels, at least 1; a size in metres is converted at the same depth, so it cancels the distance</dd>
+    <dt>density</dt><dd>how many times the points should cover the chunk's square; 0 keeps them all</dd>
+  </dl>
+</div>
+
+<figure class="lab" data-lab="point-density" data-title="Fill a chunk with points">
+  <figcaption>Move the chunk away (a smaller <var>D</var>) and watch it keep fewer points. Set the density to 1 and to 0.5 to see holes open, and switch to one sample per pixel: a hole is a pixel whose samples no point covers.</figcaption>
+</figure>
+
+<p>Measured on a synthetic scan (4 M points, chunks of 32 m, round points of 2 pixels, a top view at 4× MSAA, RTX 3060):</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>density</th><th>points drawn a frame</th><th>scene pass</th><th>empty pixels on the ground, top view</th></tr>
+  <tr><td>0.5</td><td>1.49 M</td><td>1.63 ms</td><td>6.5 %</td></tr>
+  <tr><td>1</td><td>2.44 M</td><td>2.60 ms</td><td>0.3 %</td></tr>
+  <tr><td>2 (default)</td><td>3.76 M</td><td>3.99 ms</td><td>0 %</td></tr>
+  <tr><td>4</td><td>5.44 M</td><td>5.81 ms</td><td>0 %</td></tr>
+  <tr><td>0 (all)</td><td>7.02 M</td><td>7.65 ms</td><td>0 %</td></tr>
+</table>
+</div>
+
+<p>The π/4 matters: a disc covers less than its square. Without it, a density of 1 keeps as many points as 0.785 does with it, and leaves 1.3 % of the ground empty.</p>
+
+<h2 id="colormaps"><span class="n">6</span>Colormaps: values to colors</h2>
+
+<p>A value becomes a color in two steps: the range turns it into <var>t</var> from 0 to 1, and a 256 × 1 texture turns <var>t</var> into a color, read with linear filtering between its entries.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 150" role="img" aria-label="A value on its range from min to max becomes t from 0 to 1, linearly or by logarithms; outside the range it takes the nearest end (clamp) or is not drawn. t then reads the colormap texture of 256 texels at (t times 255 plus 0.5) over 256.">
+    <line x1="40" y1="60" x2="300" y2="60" class="surface"/>
+    <text x="40" y="44" class="mid small mono">min</text><text x="300" y="44" class="mid small mono">max</text>
+    <circle cx="210" cy="60" r="6" class="hot"/><text x="210" y="86" class="mid small">value</text>
+    <text x="170" y="120" class="mid small">t = (value − min) / (max − min)</text>
+    <text x="170" y="136" class="mid small t-faint">log: the same with ln of each</text>
+    <line x1="320" y1="60" x2="400" y2="60" class="arrow" marker-end="url(#ah)"/>
+    <rect x="420" y="40" width="300" height="40" class="mem"/>
+    <path d="M457,40 V80 M495,40 V80 M532,40 V80 M570,40 V80 M607,40 V80 M645,40 V80 M682,40 V80" class="grid"/>
+    <text x="570" y="100" class="mid small">256 texels, sRGB, read at (t × 255 + 0.5) / 256</text>
+    <text x="570" y="120" class="mid small t-faint">t = 0 and 1 are the first and last texels' centres</text>
+  </svg>
+</figure>
+
+<div class="vgrid">
+  <div class="vcard good">
+    <h4>Perceptually even</h4>
+    <p>viridis, magma, inferno, plasma and cividis change lightness evenly, so equal steps of the value look like equal steps. cividis also reads for color-blind viewers.</p>
+  </div>
+  <div class="vcard">
+    <h4>Turbo</h4>
+    <p>A smooth rainbow: more distinct hues, good for heights, but its lightness goes up and down.</p>
+  </div>
+  <div class="vcard">
+    <h4>Gray</h4>
+    <p>Lightness only, for intensity scans.</p>
+  </div>
+</div>
+
+<h2 id="aa"><span class="n">7</span>Anti-aliasing and motion</h2>
+
+<div class="split">
+  <div class="good">
+    <h4>MSAA: coverage from the distance</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="A disc's edge across a pixel with four samples: the samples inside the disc are covered, those outside are not, from the distance to the centre and its change over a pixel.">
+      <rect x="110" y="20" width="100" height="100" class="paper"/>
+      <circle cx="40" cy="70" r="120" class="gpu o-50"/>
+      <circle cx="135" cy="45" r="6" class="ok"/><circle cx="185" cy="45" r="6" class="bad"/><circle cx="135" cy="95" r="6" class="ok"/><circle cx="185" cy="95" r="6" class="bad"/>
+    </svg>
+    <p>The shader turns the distance to the disc's edge into a coverage (alpha-to-coverage): half the samples of an edge pixel, a smooth rim.</p>
+  </div>
+  <div class="good">
+    <h4>TAA: the centre's motion</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="A point moving across the screen: its centre last frame and this frame, and the motion between them, which every pixel of its splat takes.">
+      <circle cx="90" cy="80" r="14" class="gpu o-25"/><circle cx="220" cy="60" r="14" class="gpu"/>
+      <line x1="104" y1="77" x2="204" y2="62" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="160" y="120" class="mid small">the centre's motion, every pixel</text>
+    </svg>
+    <p>The projection's jitter moves the splat; every pixel of it writes the motion of the point's centre, so the history follows the point.</p>
+  </div>
+</div>
+
+<h2 id="pitfalls"><span class="n">8</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>A far chunk is a stripe or a corner of itself</dt><dd>Its points are in scan order, so a prefix is a part. Build the chunk in a Morton order read in bit-reversed steps.</dd></div>
+  <div><dt>Holes in a surface at a distance</dt><dd>Too few points for the chunk's size on screen. Raise the density, or the point size.</dd></div>
+  <div><dt>Holes close to the camera</dt><dd>The data is that sparse: every point is drawn. Use a size in metres about the points' spacing.</dd></div>
+  <div><dt>Round points vanish at 1 or 2 pixels</dt><dd>A disc that small misses the pixel centres it covers. Draw points under 3 pixels square.</dd></div>
+  <div><dt>Steps in the positions far from the origin</dt><dd>The points were floats in world space. Keep them as small offsets in their chunk, and the chunk's place in doubles.</dd></div>
+  <div><dt>Colors look washed out or too dark</dt><dd>The colormap's entries are sRGB; store them in an sRGB texture so the read gives linear color.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
+
+<p>A chunk is a mesh made by <code>buildPointCloudChunk</code>, on any thread, and uploaded by <code>Renderer::createMesh</code>. An entity draws it with a <code>MaterialType::POINTS</code> material, whose <code>PointMaterial</code> gives the size, the shape, the colors and the density. The entity's transform places the chunk; culling, render space far from the origin and picking work as for any entity.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Any thread: buildPointCloudChunk quantizes, sorts and writes the chunk's words. The renderer's thread: createMesh puts them in the point pool and a geometry row. GPU, each view: the cull pass picks the prefix count per chunk (selectPointCount) and writes the draw with 3 indices a point; the point run's pipeline, points.slang, draws one triangle a point and cuts it to its shape.">
+    <rect x="20" y="40" width="200" height="80" rx="6" class="cpu"/>
+    <text x="120" y="62" class="mid small title">any thread</text>
+    <text x="120" y="80" class="mid small mono">buildPointCloudChunk</text>
+    <text x="120" y="98" class="mid small">16-bit steps, Morton order,</text>
+    <text x="120" y="112" class="mid small">bit-reversed: a MeshBuild</text>
+    <line x1="220" y1="80" x2="268" y2="80" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="270" y="40" width="200" height="80" rx="6" class="mem"/>
+    <text x="370" y="62" class="mid small title">createMesh</text>
+    <text x="370" y="80" class="mid small">point pool: header + points</text>
+    <text x="370" y="98" class="mid small">geometry row: sphere,</text>
+    <text x="370" y="112" class="mid small">3 shared indices a point</text>
+    <line x1="470" y1="80" x2="518" y2="80" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="520" y="20" width="220" height="210" rx="6" class="zone"/>
+    <text x="532" y="38" class="small title">GPU, every view</text>
+    <rect x="536" y="50" width="190" height="70" rx="6" class="shader"/>
+    <text x="631" y="72" class="mid small">Cull: frustum, Hi-Z, then</text>
+    <text x="631" y="90" class="mid small mono">selectPointCount</text>
+    <text x="631" y="108" class="mid small">draw = 3 × k indices</text>
+    <line x1="631" y1="120" x2="631" y2="146" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="536" y="148" width="190" height="70" rx="6" class="gpu"/>
+    <text x="631" y="170" class="mid small">Scene: the point run,</text>
+    <text x="631" y="188" class="mid small mono">passes/points.slang</text>
+    <text x="631" y="206" class="mid small">a triangle a point, cut</text>
+    <text x="20" y="160" class="small">The point run comes after the opaque and MASK runs and before the</text>
+    <text x="20" y="176" class="small">blend run. It has its own pipeline per sample count; the depth-only</text>
+    <text x="20" y="192" class="small">views of shadows draw no points.</text>
+  </svg>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>This page</th><th>RASM</th></tr>
+  <tr><td>Splats</td><td><code>PointShape</code> <code>SQUARE</code>, <code>ROUND</code> (default), <code>SPHERE</code>; <code>PointMaterial::size</code> in <code>VectorUnit::PIXELS</code> or <code>METRES</code>, at least a pixel; round points under 3 pixels are drawn square. Unlit.</td></tr>
+  <tr><td>One triangle a point</td><td><code>gfx::POINT_INDICES</code> (3). The chunks share one index range 0, 1, 2, …, taken from the index pool with the first chunk. One pipeline for every shape writes its depth with <code>SV_DepthLessEqual</code>, so the early depth test still works.</td></tr>
+  <tr><td>16 bits in the box</td><td><code>gfx::PointChunkHeader</code> (48 B) in the point pool (<code>RendererConfig::geometryPoolPoints</code>, 8 B units, 8 MiB by default); the chunk's <code>GeometryData::vertexOffset</code> is its first unit.</td></tr>
+  <tr><td>Prefix LOD</td><td><code>selectPointCount</code> in <code>shaders/lib/points.slang</code>, called by the cull pass for the point run (<code>SceneData::pointRun</code>), the one place that decides what a chunk draws. <code>PointMaterial::density</code> is 2 by default. <code>lodErrorPixels</code> 0 draws every point; the forced LOD <var>k</var> (F2) draws <var>N</var> / 2<sup><var>k</var></sup>.</td></tr>
+  <tr><td>Colormaps</td><td><code>Renderer::createColormap</code> from 1 to <code>COLORMAP_SIZE</code> linear colors or a <code>ColormapPreset</code>; <code>PointColorMode::SCALAR</code> reads it through <code>PointMaterial::range</code> (<code>ScalarRange</code>); <code>COLOR</code> takes the points' own colors.</td></tr>
+  <tr><td>MSAA and TAA</td><td>Alpha-to-coverage with more than one sample; the centre's motion with TAA.</td></tr>
+  <tr><td>Picking</td><td>A pick pipeline of the point run: <code>PICK_HIT_POINT</code>, and <code>PickHit::feature</code> is the point's index in the arrays given to the builder (<code>Mesh::pointOrder</code> maps it back). <code>PICK_SKIP_POINTS</code> looks through them.</td></tr>
+</table>
+</div>
+
+<div class="stats">
+  <div><b>8 B</b><span>a point, 12 with colors</span><small>+ 48 B a chunk; 2 B a point on the CPU for picks</small></div>
+  <div><b>3.6 M</b><span>points a frame from 50 M</span><small>28_point_cloud --points 50000000, two views at 1920 × 1080</small></div>
+  <div><b>1.07 ns</b><span>per point drawn</span><small>RTX 3060, Release: 17 M points 18.2 ms</small></div>
+</div>
+
+<h3>Code map</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The API</td><td><code>PointCloudChunkDesc</code>, <code>buildPointCloudChunk</code>, <code>MAX_POINT_CHUNK_POINTS</code> in <code>include/rasm/pointCloud.h</code>; <code>PointMaterial</code> in <code>include/rasm/material.h</code>; <code>ScalarRange</code>, <code>ColormapPreset</code> in <code>include/rasm/colormap.h</code>; <code>rasm_build_point_cloud_chunk</code>, <code>rasm_create_colormap</code> in C</td></tr>
+  <tr><td>The builder</td><td><code>src/scene/pointCloud.cpp</code></td></tr>
+  <tr><td>Colormaps</td><td><code>src/scene/colormap.cpp</code>: the preset tables and <code>createColormap</code></td></tr>
+  <tr><td>Storage</td><td><code>GeometryPool::allocate</code> and <code>GeometryPool::write</code> for a chunk (<code>src/renderer/geometryPool.cpp</code>)</td></tr>
+  <tr><td>The point run</td><td><code>DrawRun::points</code>, <code>ShadedPipelines::pointPipeline</code>, <code>rebuildDrawList</code>, <code>drawSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Shaders</td><td><code>shaders/lib/points.slang</code> (header, padding, <code>selectPointCount</code>), <code>shaders/passes/points.slang</code> (the draw and the pick), <code>shaders/passes/cull.slang</code></td></tr>
+  <tr><td>Example</td><td><code>examples/28_point_cloud/main.cpp</code>: a synthetic scan 6 000 km out, colored by height, a perspective and an orthographic view</td></tr>
+  <tr><td>Tests</td><td><code>tests/pointCloudTests.cpp</code> (round trip, prefixes); image tests <code>points</code>, <code>points_msaa4</code>, <code>points_taa</code>, <code>points_ortho</code>, <code>far_points</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Rules to keep</strong>
+  <p>A chunk's order is part of its data: every prefix must stay an even sample. The cull pass decides each chunk's count in <code>selectPointCount</code> only. <code>PointData</code> and <code>PointChunkHeader</code> are kept in step on both sides (<a href="struct-layout.html">struct layout</a>).</p>
+</div>
+
+<h3>Not yet</h3>
+<ul>
+  <li>A compute rasterizer for points of about 2 pixels or less (64-bit atomics of depth and color), next to this triangle path, chosen per chunk by the cull pass (<code>P32</code>): the next step of the point cloud work.</li>
+  <li>Streaming a cloud bigger than memory as a tree of chunks, and reading LAS files.</li>
+  <li>Points cast no shadows, and debug views draw them as they are (<code>D50</code>).</li>
+</ul>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Markus Schütz, Bernhard Kerbl, Michael Wimmer, "Rendering Point Clouds with Compute Shaders and Vertex Order Optimization", 2021.</li>
+  <li>Markus Schütz, "Potree: Rendering Large Point Clouds in Web Browsers", 2016.</li>
+  <li><a href="lod-selection.html">LOD selection</a>, <a href="frustum-culling.html">frustum culling</a>, <a href="large-world-precision.html">large worlds</a>, <a href="picking.html">picking</a>.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

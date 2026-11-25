@@ -122,12 +122,14 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
     uint lod            = MAX_MESH_LODS;
     uint chunks         = 0;
     uint meshlets       = 0;
+    bool points         = group.run == scene->pointRun;
     if (drawIndex < group.endDraw)
     {
         DrawInfo draw   = scene->allDrawsPtr[drawIndex];
         Sphere sphere   = getWorldSphere(scene, draw);
         uint vector     = getVectorFlags(scene, draw);
-        bool inFrustum  = isInFrustum(scene, sphere) && !(vector != 0 && (scene->viewFlags & VIEW_DEPTH_ONLY) != 0);
+        // Vector features and point cloud chunks cast no shadow.
+        bool inFrustum  = isInFrustum(scene, sphere) && !((vector != 0 || points) && (scene->viewFlags & VIEW_DEPTH_ONLY) != 0);
         bool candidate  = false;
         uint earlyFlags = 0;                            // late phase: what the early phase drew of it
         if (scene->hizLevelCount == 0)
@@ -149,7 +151,21 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
             scene->visibilityPtr[draw.firstInstance] = seen ? 1 : 0;
             candidate       = seen;
         }
-        if (candidate)
+        if (candidate && points)
+        {
+            // A chunk keeps a prefix of its points: the count goes above CULL_LOD_SHIFT, less one, in place of a LOD
+            // (16 bits, up to MAX_POINT_CHUNK_POINTS).
+            uint total      = draw.indexCount / POINT_INDICES;
+            PointData style = (scene->materialsPtr + scene->instancesPtr[draw.firstInstance].materialIndex)->points;
+            uint count      = selectPointCount(scene, style, total, sphere.center, sphere.radius);
+            counted         = earlyFlags == 0;
+            visible         = counted;
+            lod             = count - 1;
+            triangles       = visible ? count : 0;
+            lod0Triangles   = counted ? total : 0;
+            lodTriangles    = triangles;
+        }
+        else if (candidate)
         {
             GeometryData *geometry = getDrawGeometry(scene, draw);
             lod             = selectLod(scene, geometry, sphere);
@@ -177,7 +193,7 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
     visibleTriangles[threadId.x]        = triangles;
     visibleLod0Triangles[threadId.x]    = lod0Triangles;
     visibleLodTriangles[threadId.x]     = lodTriangles;
-    visibleLods[threadId.x]             = counted ? lod : MAX_MESH_LODS;
+    visibleLods[threadId.x]             = counted ? (points ? 0 : lod) : MAX_MESH_LODS;
     groupChunks[threadId.x]             = chunks;
     groupMeshlets[threadId.x]           = meshlets;
     GroupMemoryBarrierWithGroupSync();
@@ -330,7 +346,8 @@ void writeMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
     else if (packed != CULLED)
     {
         uint slot       = packed & ((1u << CULL_LOD_SHIFT) - 1);
-        scene->drawInfoPtr[scene->runFirst[group.run] + base + slot] = getLodDraw(getDrawGeometry(scene, draw), draw, lod);
+        DrawInfo visibleDraw = group.run == scene->pointRun ? getPointDraw(draw, lod + 1) : getLodDraw(getDrawGeometry(scene, draw), draw, lod);
+        scene->drawInfoPtr[scene->runFirst[group.run] + base + slot] = visibleDraw;
     }
     if (threadId.x == 0 && groupId.x + 1 == group.runEndGroup)
     {

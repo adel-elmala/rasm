@@ -245,6 +245,7 @@ namespace rasm
         uint32_t     geometryPoolSubMeshes   = 1u << 14; // 200 B each
         uint32_t     geometryPoolMeshlets    = 1u << 17; // a meshlet's bounds and index range, 48 B each: 6 MiB
         uint32_t     geometryPoolMeshletData = 1u << 23; // with mesh shaders: meshlets' vertices and triangles, 4 B each (32 MiB, about 50k meshlets)
+        uint32_t     geometryPoolPoints      = 1u << 20; // point cloud chunks, 8 B each: a point takes one (1.5 with colors), 8 MiB
         uint32_t     maxInstances            = 1u << 16; // 164 B each, twice (one copy per frame slot)
         uint32_t     maxLights               = 1u << 14; // 56 B each, twice
         uint32_t     maxMaterials            = 1u << 12; // materials alive at once, 248 B each, twice
@@ -293,6 +294,7 @@ namespace rasm
         uint32_t     geometryPoolSubMeshes   = 1u << 14; // 200 B each
         uint32_t     geometryPoolMeshlets    = 1u << 17; // a meshlet's bounds and index range, 48 B each: 6 MiB
         uint32_t     geometryPoolMeshletData = 1u << 23; // with mesh shaders: meshlets' vertices and triangles, 4 B each (32 MiB, about 50k meshlets)
+        uint32_t     geometryPoolPoints      = 1u << 20; // point cloud chunks, 8 B each: a point takes one (1.5 with colors), 8 MiB
         uint32_t     maxInstances            = 1u << 16; // 164 B each, twice (one copy per frame slot)
         uint32_t     maxLights               = 1u << 14; // 56 B each, twice
         uint32_t     maxMaterials            = 1u << 12; // materials alive at once, 248 B each, twice
@@ -342,6 +344,7 @@ namespace rasm
             .geometryPoolSubMeshes   = config.geometryPoolSubMeshes,
             .geometryPoolMeshlets    = config.geometryPoolMeshlets,
             .geometryPoolMeshletData = config.geometryPoolMeshletData,
+            .geometryPoolPoints      = config.geometryPoolPoints,
             .maxInstances            = config.maxInstances,
             .maxLights               = config.maxLights,
             .maxMaterials            = config.maxMaterials,
@@ -391,6 +394,7 @@ namespace rasm
             .geometryPoolSubMeshes   = config.geometryPoolSubMeshes,
             .geometryPoolMeshlets    = config.geometryPoolMeshlets,
             .geometryPoolMeshletData = config.geometryPoolMeshletData,
+            .geometryPoolPoints      = config.geometryPoolPoints,
             .maxInstances            = config.maxInstances,
             .maxLights               = config.maxLights,
             .maxMaterials            = config.maxMaterials,

@@ -34,6 +34,12 @@ struct rasm_font_atlas
     rasm::FontAtlas                     atlas;
 };
 
+// A mesh's built data (rasm_build_mesh, rasm_build_vector_mesh, rasm_build_point_cloud_chunk).
+struct rasm_mesh_build
+{
+    rasm::MeshBuild build;
+};
+
 namespace rasm::c
 {
 
@@ -141,6 +147,8 @@ namespace rasm::c
     rasm_terrain_material   toC(const TerrainMaterial& terrain);
     VectorMaterial          toCpp(const rasm_vector_material& vector);
     rasm_vector_material    toC(const VectorMaterial& vector);
+    PointMaterial           toCpp(const rasm_point_material& points);
+    rasm_point_material     toC(const PointMaterial& points);
     // A material desc's enums, its vector style's included.
     bool                    checkMaterialDesc(const rasm_material_desc& desc, const char* function);
     // A sized rasm_terrain_tile_desc, its defaults past the caller's size.
@@ -226,6 +234,8 @@ namespace rasm::c
 
     constexpr size_t        CAMERA_BUTTONS_SIZE_1_8         = offsetof(rasm_camera_buttons, shift_left) + sizeof(rasm_camera_drag);
     constexpr size_t        GRID_SIZE_1_8                   = offsetof(rasm_grid, fade_distance) + sizeof(float);
+
+    constexpr size_t        POINT_CLOUD_CHUNK_DESC_SIZE_1_10 = offsetof(rasm_point_cloud_chunk_desc, count) + sizeof(uint32_t);
 
 }
 

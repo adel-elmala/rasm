@@ -915,6 +915,78 @@ namespace
         return buildGrid(engine, assets, content);
     }
 
+    rasm::MaterialHandle createPointMaterial(rasm::Engine &engine, const rasm::PointMaterial &style)
+    {
+        const rasm::MaterialHandle material = engine.createMaterial(rasm::MaterialType::POINTS);
+        rasm::Material values = engine.getMaterial(material);
+        values.points = style;
+        engine.updateMaterial(material, values);
+        return material;
+    }
+
+    // The point cloud tests' scene: a wavy sheet of 64 K points colored by height through viridis (LOD by prefix keeps
+    // part of it), a ball of RGB squares, nine spheres a few pixels wide in metres around a box, which they cut into, and
+    // a pick probe on a sphere and on the sheet's nearest corner point.
+    bool buildPoints(rasm::Engine &engine, const Assets &assets, Content &content)
+    {
+        std::vector<glm::vec3> sheet;
+        std::vector<float> heights;
+        for (int z = 0; z < 256; ++z)
+        {
+            for (int x = 0; x < 256; ++x)
+            {
+                const float px = static_cast<float>(x) / 255.0f * 6.0f - 3.0f;
+                const float pz = static_cast<float>(z) / 255.0f * 6.0f - 3.0f;
+                sheet.emplace_back(px, 0.25f * std::sin(2.0f * px) * std::cos(1.5f * pz), pz);
+                heights.push_back(sheet.back().y);
+            }
+        }
+        const rasm::TextureHandle viridis = engine.createColormap(rasm::ColormapPreset::VIRIDIS);
+        const rasm::MaterialHandle byHeight = createPointMaterial(engine, {.size = 2.0f, .colorMode = rasm::PointColorMode::SCALAR, .colormap = viridis, .range = {.min = -0.25f, .max = 0.25f}});
+        const rasm::EntityHandle sheetEntity = addEntity(engine, content, "sheet",
+                                                         engine.createMesh(rasm::buildPointCloudChunk({.positions = sheet.data(), .scalars = heights.data(), .count = static_cast<uint32_t>(sheet.size())})),
+                                                         byHeight, rasm::Transform{glm::vec3(0.0f, 0.0f, -2.0f)});
+
+        std::vector<glm::vec3> ball;
+        std::vector<uint32_t> colors;
+        for (uint32_t i = 0; i < 4000; ++i)
+        {
+            const float t = static_cast<float>(i) + 0.5f;
+            const float y = 1.0f - 2.0f * t / 4000.0f;
+            const float r = std::sqrt(1.0f - y * y);
+            const float a = t * 2.39996f;
+            ball.emplace_back(0.6f * r * std::cos(a), 0.6f * y, 0.6f * r * std::sin(a));
+            colors.push_back(rasm::packVertexColor(glm::vec4(0.5f + 0.5f * std::cos(a), 0.5f + 0.5f * y, 0.8f, 1.0f)));
+        }
+        addEntity(engine, content, "ball", engine.createMesh(rasm::buildPointCloudChunk({.positions = ball.data(), .colors = colors.data(), .count = 4000})),
+                  createPointMaterial(engine, {.size = 3.0f, .shape = rasm::PointShape::SQUARE}), rasm::Transform{glm::vec3(-1.6f, 0.9f, -1.0f)});
+
+        std::vector<glm::vec3> spheres;
+        for (int i = 0; i < 9; ++i)
+            spheres.emplace_back(static_cast<float>(i % 3) * 0.45f - 0.45f, static_cast<float>(i / 3) * 0.45f, 0.0f);
+        const rasm::EntityHandle sphereEntity =
+            addEntity(engine, content, "spheres", engine.createMesh(rasm::buildPointCloudChunk({.positions = spheres.data(), .count = 9})),
+                      createPointMaterial(engine, {.color = glm::vec4(0.95f, 0.45f, 0.15f, 1.0f), .size = 0.3f, .sizeUnit = rasm::VectorUnit::METRES, .shape = rasm::PointShape::SPHERE}),
+                      rasm::Transform{glm::vec3(1.4f, 0.4f, -0.5f)});
+        addEntity(engine, content, "box", assets.cube, createColorMaterial(engine, glm::vec3(0.3f, 0.4f, 0.65f), 0.5f),
+                  rasm::Transform{glm::vec3(1.4f, 0.6f, -0.65f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(0.9f, 0.3f, 0.3f)});
+
+        content.eye = glm::vec3(0.0f, 2.2f, 4.2f);
+        content.center = glm::vec3(0.0f, 0.0f, -1.5f);
+        content.fovY = 50.0f;
+        // The middle sphere's centre (index 4), and the sheet's point nearest the camera (index 255 * 256): a point is
+        // picked at its centre, which the hit's position is.
+        content.probes.push_back({.name = "sphere", .point = glm::dvec3(1.4, 0.85, -0.5), .entity = sphereEntity, .feature = 4, .flags = rasm::PICK_HIT_POINT | rasm::PICK_HIT_FEATURE, .metres = 1e-3});
+        content.probes.push_back({.name = "sheet corner", .point = glm::dvec3(sheet[255 * 256]) + glm::dvec3(0.0, 0.0, -2.0), .entity = sheetEntity, .feature = 255 * 256, .flags = rasm::PICK_HIT_POINT | rasm::PICK_HIT_FEATURE, .metres = 1e-3});
+        return assets.cube.isValid() && viridis.isValid() && addSunsetLight(engine, assets, content, 0.6f, glm::vec3(0.5f, -0.7f, -0.4f), 2.0f);
+    }
+
+    bool buildPointsOrtho(rasm::Engine &engine, const Assets &assets, Content &content)
+    {
+        content.orthoHeight = 6.0f;
+        return buildPoints(engine, assets, content);
+    }
+
     // The picking scene through an orthographic box from the same eye, with a bounded grid just over its ground.
     bool buildOrtho(rasm::Engine &engine, const Assets &assets, Content &content)
     {
@@ -988,6 +1060,11 @@ namespace
         {.name = "grid_ortho",    .build = buildGridOrtho},
         {.name = "grid_msaa4",    .build = buildGrid,          .samples = 4},
         {.name = "grid_taa",      .build = buildGrid,          .taa = true, .frames = 16},
+        // Point clouds: a triangle a point, cut to its shape; LOD by prefix; colormaps; picks of single points.
+        {.name = "points",        .build = buildPoints,        .picks = true},
+        {.name = "points_msaa4",  .build = buildPoints,        .samples = 4, .picks = true},
+        {.name = "points_taa",    .build = buildPoints,        .taa = true, .frames = 16, .picks = true},
+        {.name = "points_ortho",  .build = buildPointsOrtho,   .picks = true},
         // The same images drawn by meshlets: the same triangles, so the same pixels. The mesh_ tests take the mesh shaders
         // where the device has them (lavapipe and the desktop GPUs do), else vertex pulling. lavapipe's mesh shaders round a
         // few positions differently from its vertex shaders: up to 3 levels on 0.2% of the pixels after TAA, and a few edge
@@ -1009,6 +1086,7 @@ namespace
         {.name = "far_labels",    .build = buildLabels,        .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "labels"},
         {.name = "far_picking",   .build = buildPicking,       .time = 0.5, .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "picking", .picks = true},
         {.name = "far_grid",      .build = buildGrid,          .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "grid"},
+        {.name = "far_points",    .build = buildPoints,        .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "points", .picks = true},
     };
     // clang-format on
 
