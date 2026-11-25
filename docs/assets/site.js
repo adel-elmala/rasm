@@ -77,6 +77,7 @@ const SECTIONS = [
             { path: "guides/local-light-shadows.html",   title: "Shadows of spot and point lights",    blurb: "A perspective map along a cone, and a cube map of six faces." },
             { path: "guides/normal-mapping.html",        title: "Normal mapping and tangent space",    blurb: "Fine surface detail from a texture." },
             { path: "guides/coordinate-spaces.html",     title: "Coordinate spaces and the view matrix", blurb: "Object, world, view, clip, NDC, pixels." },
+            { path: "guides/large-world-precision.html", title: "Large worlds: float precision",       blurb: "Doubles on the CPU, the camera at the origin, and a high/low split: a planet-sized world with no jitter." },
             { path: "guides/camera-controllers.html",    title: "Camera controllers and easing",       blurb: "Mouse and keys become a smooth camera." },
             { path: "guides/projection-depth.html",      title: "Projection and reversed-Z depth",     blurb: "The projection matrix and where depth precision goes." },
             { path: "guides/face-culling.html",          title: "Face culling and winding order",      blurb: "Skipping triangles that face away." },

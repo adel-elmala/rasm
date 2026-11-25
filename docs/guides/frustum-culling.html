@@ -786,7 +786,7 @@
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Bounding volume</td><td>sphere or box</td><td>A sphere per sub-mesh only (<code>boundsCenter</code>, <code>boundsRadius</code>). No boxes, so no p-vertex test. A posed skinned or morphed sub-mesh uses the sphere the <code>Animate</code> pass writes from its joints and its weights (above).</td></tr>
   <tr><td>Building the sphere</td><td>box center, Ritter or Welzl</td><td>Box center, radius to the farthest vertex (<code>computeBounds</code>). Not the smallest sphere.</td></tr>
-  <tr><td>Planes</td><td>Gribb–Hartmann rows</td><td>The same, from <code>projection * view</code>, in world space, normalized (<code>getFrustumPlanes</code>).</td></tr>
+  <tr><td>Planes</td><td>Gribb–Hartmann rows</td><td>The same, from <code>projection * view</code>, in the view's render space (the world moved so that the camera is at the origin, <a href="large-world-precision.html">large worlds</a>), normalized (<code>getFrustumPlanes</code>).</td></tr>
   <tr><td>Depth convention</td><td>see the table in section 6</td><td>Vulkan's 0 to <var>q<sub>w</sub></var> range with reversed-Z. So plane 4 (<var>r</var><sub>2</sub>) is the <b>far</b> plane and plane 5 (<var>r</var><sub>3</sub> − <var>r</var><sub>2</sub>) is the <b>near</b> plane. See <a href="projection-depth.html">Projection and reversed-Z depth</a>.</td></tr>
   <tr><td>Infinite far plane</td><td>(0, 0, 0, <var>k</var>)</td><td>The default camera has one. Plane 4 comes out as (0, 0, 0, <code>nearZ</code>), is not normalized, and every sphere passes it.</td></tr>
   <tr><td>Radius under scale</td><td>three ways in section 8</td><td>The Gershgorin bound (<code>getWorldSphere</code>). Safe for any matrix, exact for rotate + scale.</td></tr>

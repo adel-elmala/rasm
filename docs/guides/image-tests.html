@@ -340,6 +340,7 @@
   <tr><td><samp>determinism</samp></td><td>the helmet again in the same process: it must equal <samp>helmet_ibl</samp> exactly (T = 0, F = 0)</td></tr>
   <tr><td><samp>meshlets</samp>, <samp>meshlet_sponza</samp></td><td>the helmet and Sponza drawn by <a href="meshlets.html">meshlets</a> on the vertex-pulling path: they must equal <samp>helmet_ibl</samp> and <samp>sponza</samp> exactly (T = 0, F = 0)</td></tr>
   <tr><td><samp>mesh_helmet</samp>, <samp>mesh_sponza</samp>, <samp>mesh_msaa4</samp>, <samp>mesh_taa</samp>, <samp>mesh_normals</samp></td><td>the same scenes on the mesh-shader path, against <samp>helmet_ibl</samp>, <samp>sponza</samp>, <samp>sponza_msaa4</samp>, <samp>taa</samp> and <samp>debug_normals</samp> of the same run (T = 3/255, F = 0.01%): lavapipe's mesh shaders rasterize a few edge pixels differently (3 of Sponza's). On an RTX 3060 they are equal.</td></tr>
+  <tr><td><samp>far_shadows</samp>, <samp>far_skinning</samp>, <samp>far_taa</samp></td><td>the scenes of <samp>local_shadows</samp>, <samp>skinning</samp> and <samp>taa</samp> moved 6370 km from the origin (Earth-centred coordinates), against those tests of the same run (T = 8/255, F = 0.1%): each view draws in its camera's render space, so only shadow-edge pixels may differ, where the shadow maps' world texel grid falls differently (<a href="large-world-precision.html">large worlds</a>).</td></tr>
 </table>
 </div>
 

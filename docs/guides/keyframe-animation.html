@@ -454,7 +454,7 @@ if (walk >= 0)
 <div class="callout rule">
   <strong>Keep these true</strong>
   <ul>
-    <li>Every shader that reads an instance's matrices goes through <code>getWorldMatrix</code>, <code>getNormalMatrix</code> and <code>getPreviousWorldPosition</code>, never <code>InstanceData::worldMatrix</code> directly.</li>
+    <li>Every shader that reads an instance's matrices goes through <code>getWorldMatrix</code>, <code>getNormalMatrix</code> and <code>getPreviousWorldPosition</code>, never <code>InstanceData::world</code> directly: those give the matrices in the view's render space.</li>
     <li>Kept nodes are stored parents first, and a node's parent is an earlier node.</li>
     <li>The engine never reads a wall clock for animation: the time comes from <code>setAnimationTime</code>.</li>
     <li>The GPU sees only the clock minus the base and phases at the base, never a time of hours.</li>

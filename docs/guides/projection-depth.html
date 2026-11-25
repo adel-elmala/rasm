@@ -704,6 +704,7 @@ depth = (f − D) / (f − n)       reversed: again, swap n and f</code></pre>
 <ul>
   <li>Also reversed-Z: <code>getFrustumPlanes</code> (plane 4 is the far plane), occlusion culling (the Hi-Z keeps the minimum, the farthest), and the stats overlay, whose panel sits at depth 1 (the near plane).</li>
   <li><code>prepareSceneView</code> fits the aspect ratio to each target's size; the stored camera does not change.</li>
+  <li>Depth is a distance from the camera, so a world far from the origin needs nothing more here: the view's matrices are in its camera's render space (<a href="large-world-precision.html#depth">large worlds</a>). With an infinite far plane the depth step is about 1.2 · 10<sup>−7</sup> of the distance: 12 cm at 1000 km.</li>
 </ul>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>

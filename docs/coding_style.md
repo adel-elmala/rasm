@@ -73,6 +73,7 @@ Deliberate exceptions:
   | Unit tests | `tests/<subject>Tests.cpp`, added to `rasm_tests` in `tests/CMakeLists.txt` |
 - Single-header library implementations are defined only in `src/thirdparty_impl.cpp`, the renderer's (`STB_IMAGE_IMPLEMENTATION`, `STB_IMAGE_WRITE_IMPLEMENTATION`, `STB_IMAGE_RESIZE_IMPLEMENTATION`, `VMA_IMPLEMENTATION`), and `src/thirdparty_loaders_impl.cpp`, the loaders' in the `rasm` library (`TINYGLTF_IMPLEMENTATION`, `TINYOBJLOADER_IMPLEMENTATION`). `rasm::renderer` must not hold tinygltf or tinyobjloader. Mind the notes there.
 - Library configuration macros that change behaviour (`GLM_FORCE_DEPTH_ZERO_TO_ONE`, `VMA_VULKAN_VERSION`) are set **once, in CMake**, with `target_compile_definitions`. Never set them in a `.cpp` file: a define placed after a header has already been included has no effect (see `B2`).
+- RASM's own targets build with `GLM_FORCE_EXPLICIT_CTOR` (PRIVATE, so applications keep glm's implicit conversions): a conversion between glm types of another precision or size is written out, `glm::vec3(worldPosition)`. A world position becomes floats only through the render-space helpers (`src/renderer/renderSpace.h`).
 
 ## 4. Formatting
 
@@ -92,6 +93,7 @@ Deliberate exceptions:
 - **GPU-visible structs** (anything a shader reads through a pointer or a buffer):
   - live in `src/renderer/uberMaterialTypes.h` (or its successor) and are mirrored in `shaders/lib/core.slang`,
   - use only `uint32_t`, `int32_t`, `float`, `uint64_t`, `glm::vec2/3/4`, `glm::mat3/4` (scalar layout),
+  - store a world position as two `glm::vec3`s, a high and a low part, and read it in render space (`subtractSplit`, `shaders/lib/renderSpace.slang`),
   - have a `static_assert` on `sizeof` and on every offset that a later field's correctness depends on,
   - are listed in `validateRasmStructs` in `src/renderer/shaderCompiler.cpp`, which checks them against Slang reflection in every build,
   - change on both sides in the same commit.

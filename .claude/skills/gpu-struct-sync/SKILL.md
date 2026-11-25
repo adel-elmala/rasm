@@ -42,6 +42,7 @@ In scalar layout, every type aligns to its largest scalar.
 | nested struct | nested struct | its size | largest member align |
 
 - **Never** use `bool` (1 byte in C++, 4 in Slang), `size_t`, `int`/`long`, `double`, `glm::uvec*`/`ivec*` unless both sides agree, or glm's aligned types.
+- **A world position** (anything placed in the world, not a direction) is two `float3`s, a high and a low part (`splitPosition`, `writeWorldRows` in `src/renderer/renderSpace.cpp`), and its shader reads it in the view's render space through `subtractSplit` (`shaders/lib/renderSpace.slang`), as `getWorldMatrix` and `getLight` do. Never a world position as one float, and never `double` (`docs/guides/large-world-precision.html`).
 - **64-bit fields are 8-aligned on both sides**, so both add the same hidden padding before them, and a struct containing one rounds its size up to a multiple of 8. Example: `lights` ending at 532 puts `vertsPtr` at 536. Keep 64-bit fields at 8-aligned offsets so the padding is visible in the code.
 - **The check compares sizes and offsets, not types (`C11`).** `uint32_t` vs `float`, or swapping two same-size fields, passes every check and still reads garbage. Compare the two definitions field by field by eye.
 

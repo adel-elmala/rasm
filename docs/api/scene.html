@@ -311,7 +311,7 @@ engine.destroyTexture(tile.texture);</code></pre>
 <div class="table-wrap">
 <table>
   <tr><th>Field</th><th>Default</th><th>Meaning</th></tr>
-  <tr><td><code>position</code></td><td>(0, 0, 0)</td><td>World position. The world is right-handed, +Y is up, and a camera looks along −Z.</td></tr>
+  <tr><td><code>position</code></td><td>(0, 0, 0)</td><td>World position, in doubles: precise to the nanometre on a planet in Earth-centred coordinates (<a href="../guides/large-world-precision.html">large worlds</a>). The world is right-handed, +Y is up, and a camera looks along −Z.</td></tr>
   <tr><td><code>rotation</code></td><td>identity</td><td>A <code>glm::quat</code>. Note the constructor order <code>glm::quat(w, x, y, z)</code>.</td></tr>
   <tr><td><code>scale</code></td><td>(1, 1, 1)</td><td>Per axis. Negative values mirror the object.</td></tr>
 </table>
@@ -320,12 +320,12 @@ engine.destroyTexture(tile.texture);</code></pre>
 <div class="api" id="Transform">
   <pre class="sig">struct Transform
 {
-    glm::vec3 position = glm::vec3(0.0f);
-    glm::quat rotation = glm::identity&lt;glm::quat&gt;();
-    glm::vec3 scale    = glm::vec3(1.0f);
+    glm::dvec3  position = glm::dvec3(0.0);
+    glm::quat   rotation = glm::identity&lt;glm::quat&gt;();
+    glm::vec3   scale    = glm::vec3(1.0f);
 };</pre>
   <div class="body">
-    <p>Used for entities and cameras. It is an aggregate, so designated initializers work and you can skip fields: <code>Transform{.position = p, .scale = s}</code>.</p>
+    <p>Used for entities and cameras. It is an aggregate, so designated initializers work and you can skip fields: <code>Transform{.position = p, .scale = s}</code>. A <code>glm::vec3</code> converts to the <code>glm::dvec3</code> position by itself; arithmetic that mixes the two needs a cast, for example <code>glm::vec3(transform.position) - center</code>. Each view draws in its camera's render space, so a scene far from the origin renders like one near it.</p>
   </div>
 </div>
 
@@ -337,9 +337,9 @@ engine.destroyTexture(tile.texture);</code></pre>
 </div>
 
 <div class="api" id="toMatrix">
-  <pre class="sig">glm::mat4 toMatrix() const;</pre>
+  <pre class="sig">glm::dmat4 toMatrix() const;</pre>
   <div class="body">
-    <p>The model matrix: scale first, then rotate, then translate (<code>T * R * S</code>). For a glTF sub-mesh the engine multiplies it with the sub-mesh's node matrix: <code>entity.toMatrix() * subMesh.transform</code>.</p>
+    <p>The model matrix in doubles: scale first, then rotate, then translate (<code>T * R * S</code>). For a glTF sub-mesh the engine multiplies it with the sub-mesh's node matrix, in doubles: <code>entity.toMatrix() * glm::dmat4(subMesh.transform)</code>. It converts to a <code>glm::mat4</code> by itself, which keeps only float precision.</p>
   </div>
 </div>
 
@@ -845,13 +845,13 @@ engine.setMorphWeights(entity, weights.data(), static_cast&lt;uint32_t&gt;(weigh
 <p>A point or spot light needs a <code>range</code> to be clustered; with <code>range</code> 0 it is global. Each cluster holds at most <code>MAX_CLUSTER_LIGHTS</code> lights. The guide <a href="../guides/clustered-lighting.html">Many lights: clustered lighting</a> explains how it works.</p>
 
 <div class="api" id="createLight">
-  <pre class="sig">LightHandle createLight(LightType type, glm::vec3 color = glm::vec3(1.0f), glm::vec3 position = glm::vec3(1.0f), glm::vec3 direction = glm::vec3(0.0f, -1.0f, 0.0f), float intensity = 1.0f, float range = 10.0f, float innerConeAngle = 0.0f, float outerConeAngle = SPOT_OUTER_CONE_ANGLE);</pre>
+  <pre class="sig">LightHandle createLight(LightType type, glm::vec3 color = glm::vec3(1.0f), glm::dvec3 position = glm::dvec3(1.0), glm::vec3 direction = glm::vec3(0.0f, -1.0f, 0.0f), float intensity = 1.0f, float range = 10.0f, float innerConeAngle = 0.0f, float outerConeAngle = SPOT_OUTER_CONE_ANGLE);</pre>
   <div class="body">
     <p>Creates a light. Add it to a scene with <code>addLightToScene</code>, and change or move it with <a href="#updateLight"><code>updateLight</code></a>.</p>
     <dl>
       <dt>type</dt><dd><code>DIRECTIONAL</code>, <code>POINT</code> or <code>SPOT</code>.</dd>
       <dt>color</dt><dd>Linear RGB, multiplied by <code>intensity</code>.</dd>
-      <dt>position</dt><dd>World position (point and spot lights).</dd>
+      <dt>position</dt><dd>World position (point and spot lights), in doubles, like an entity's.</dd>
       <dt>direction</dt><dd>Direction the light travels (directional lights), or the cone's axis (spot lights). Pass a unit vector.</dd>
       <dt>intensity</dt><dd>Strength. Point and spot lights fall off with distance², so they need larger values (the examples use 25 to 900).</dd>
       <dt>range</dt><dd>Point and spot lights: distance where the light reaches zero. 0 = no limit: the light reaches every pixel and is shaded at every pixel (a global light). Give lamps a range, so they are clustered.</dd>
@@ -880,7 +880,7 @@ engine.addLightToScene(scene, spot);</code></pre>
     float       intensity      = 1.0f;
     float       range          = 10.0f;
     glm::vec3   color          = glm::vec3(1.0f);
-    glm::vec3   position       = glm::vec3(1.0f);
+    glm::dvec3  position       = glm::dvec3(1.0);
     glm::vec3   direction      = glm::vec3(0.0f, -1.0f, 0.0f);
     float       innerConeAngle = 0.0f;
     float       outerConeAngle = SPOT_OUTER_CONE_ANGLE;
@@ -906,7 +906,7 @@ engine.addLightToScene(scene, spot);</code></pre>
     <p>Changes the light: every field of <code>values</code> but <code>handle</code>. The <code>type</code> must stay the same, since a shadow's maps are made for it: another type logs an error and changes nothing. It writes one row of the light table, which reaches the GPU in the next frame. A light that gains or loses its range moves between the global and the clustered lights of its scenes. A spot light with angles outside the rule of <code>createLight</code> logs an error and changes nothing.</p>
     <pre><code>// Move a lamp along a circle, once per frame.
 rasm::Light light = engine.getLight(lamp);
-light.position = center + glm::vec3(std::cos(angle), 0.0f, std::sin(angle)) * radius;
+light.position = center + glm::dvec3(std::cos(angle), 0.0, std::sin(angle)) * radius;
 engine.updateLight(lamp, light);</code></pre>
     <p>Moving thousands of lights costs the CPU a call each; lights that do not change cost nothing (<code>examples/11_many_lights</code>).</p>
   </div>
