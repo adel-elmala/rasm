@@ -155,8 +155,8 @@ uint selectPointCount(SceneData *scene, PointData style, uint total, float3 cent
 }
 
 // The split between the two paths, per chunk. The compute path costs a little per point and, once any chunk takes it,
-// a clear and a resolve per pixel of the rect its chunks cover; the triangles cost about ten times more per point and
-// nothing per pixel. So a chunk takes it when its points are POINT_RASTER_MAX_SIZE pixels or less (squares on both
+// a clear and a resolve per pixel of the rect its chunks cover; the triangles cost four (2 pixel points) to ten (1
+// pixel) times more per point and nothing per pixel. So a chunk takes it when its points are POINT_RASTER_MAX_SIZE pixels or less (squares on both
 // paths: a round one under 3 pixels is drawn square), measured at its sphere's point nearest the camera in this view's
 // own projection (not the LOD camera's, which a frozen view keeps), and when it draws at least
 // POINT_RASTER_MIN_DENSITY points per pixel of its rect on screen. A chunk the camera is inside of, or one partly behind
