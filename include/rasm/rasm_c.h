@@ -511,7 +511,7 @@ enum
     RASM_KEY_KEYPAD_ADD              = 103,
     RASM_KEY_KEYPAD_ENTER            = 104,
     RASM_KEY_KEYPAD_EQUAL            = 105,
-    RASM_KEY_COUNT                  = 106,
+    RASM_KEY_COUNT                   = 106,
 };
 
 typedef uint32_t                    rasm_mouse_button;

@@ -137,6 +137,8 @@ namespace rasm::c
     rasm_pool_stats         toC(const PoolStats& stats);
     rasm_load_stats         toC(const LoadStats& stats);
 
+    // An orbit 5 units out for a trackball, 5 units a second for a free-fly camera; NONE until the caller picks one.
+    rasm_camera_controller  getControllerDefaults();
     // The enum fields of an input event, a camera controller and a view.
     bool                    checkInputEvent(const rasm_input_event& event, const char* function);
     bool                    checkCameraController(const rasm_camera_controller& controller, const char* function);

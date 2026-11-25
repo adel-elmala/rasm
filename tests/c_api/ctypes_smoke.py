@@ -1,8 +1,9 @@
 """Drive the RASM C API from Python with ctypes, as a language binding does: no C compiler, only the shared library.
 
-It makes a headless renderer, a red quad in front of a camera and a sun, and renders a few frames of two views of it:
-the whole image, and a small one in the top-right corner. It copies the last frame back and checks its pixels: red in
-the middle of both views, the background at the top-left corner. The structs below mirror
+It makes a headless renderer, a red quad in front of a camera and a sun, and renders a few frames: one view with
+rasm_render, then the last frame two views with rasm_render_views, the whole image and a small one in the top-right
+corner. It copies the last two frames back and checks their pixels: red in the middle of every view, the background at
+the top-left corner. The structs below mirror
 include/rasm/rasm_c.h field by field.
 
     python tests/c_api/ctypes_smoke.py <path to rasm_c.dll / librasm_c.dylib / librasm_c.so>
@@ -119,6 +120,7 @@ def declare(lib):
         "rasm_renderer_create": (c_int32, [c_uint32, POINTER(RendererConfig), POINTER(c_void_p)]),
         "rasm_renderer_destroy": (None, [c_void_p]),
         "rasm_running": (c_uint32, [c_void_p]),
+        "rasm_render": (None, [c_void_p, Handle, Handle]),
         "rasm_view_init": (c_int32, [POINTER(View), c_uint32]),
         "rasm_render_views": (c_int32, [c_void_p, POINTER(View), c_uint32]),
         "rasm_create_scene": (Handle, [c_void_p]),
@@ -240,16 +242,26 @@ def main():
         check(views[1].camera.id != 0, "the second camera", lib)
         views[1].rect = ViewRect(0.75, 0.0, 0.25, 0.25)
 
+        # Frame N - 1 is one view through rasm_render, frame N two through rasm_render_views.
+        single_readback = Handle()
         readback = Handle()
         for frame in range(1, args.frames + 1):
             check(lib.rasm_running(renderer) == TRUE, f"the renderer stopped at frame {frame}", lib)
+            if frame == args.frames - 1:
+                single_readback = lib.rasm_read_frame(renderer, 0)
+                check(single_readback.id != 0, "rasm_read_frame", lib)
             if frame == args.frames:
                 readback = lib.rasm_read_frame(renderer, 0)
                 check(readback.id != 0, "rasm_read_frame", lib)
-            check(lib.rasm_render_views(renderer, views, 2) == OK, "rasm_render_views", lib)
+                check(lib.rasm_render_views(renderer, views, 2) == OK, "rasm_render_views", lib)
+            else:
+                lib.rasm_render(renderer, scene, camera)
 
         image = lib.rasm_image_create()
         try:
+            check(lib.rasm_take_readback(renderer, single_readback, image) == OK, "rasm_take_readback", lib)
+            data = lib.rasm_image_get(image)
+            single_pixels = ctypes.string_at(data.pixels, data.byte_size)
             check(lib.rasm_take_readback(renderer, readback, image) == OK, "rasm_take_readback", lib)
             data = lib.rasm_image_get(image)
             check(data.width == width and data.height == height and data.byte_size == width * height * 4, "the image's size", lib)
@@ -262,9 +274,9 @@ def main():
         lib.rasm_renderer_destroy(renderer)
         lib.rasm_set_log_callback(LogCallback(), None)
 
-    def pixel(x, y):
+    def pixel(x, y, image=None):
         i = (y * width + x) * 4
-        return tuple(pixels[i:i + 3])
+        return tuple((pixels if image is None else image)[i:i + 3])
 
     center = pixel(width // 2, height // 2)
     small = pixel(width * 7 // 8, height // 8)
@@ -272,6 +284,8 @@ def main():
     print(f"center {center}, small view {small}, corner {corner}")
     check(center[0] > center[1] + 50 and center[0] > center[2] + 50, f"the middle is red, got {center}", lib)
     check(small[0] > small[1] + 50 and small[0] > small[2] + 50, f"the small view's middle is red, got {small}", lib)
+    single = pixel(width // 2, height // 2, single_pixels)
+    check(single[0] > single[1] + 50 and single[0] > single[2] + 50, f"rasm_render's middle is red, got {single}", lib)
     check(sum(abs(a - b) for a, b in zip(center, corner)) > 60, f"the corner is background, got {corner}", lib)
     check(not errors, "RASM logged errors: " + " | ".join(errors), lib)
     print(f"OK: {os.path.basename(library)} {lib.rasm_get_version() >> 16}.{lib.rasm_get_version() & 0xFFFF} "

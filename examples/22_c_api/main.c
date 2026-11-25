@@ -16,7 +16,7 @@
  * Three views draw each frame: a top-down map into a view texture (a render target), which a board in the scene shows;
  * the main camera into the window; and the map again into a corner of the window. The main camera has a trackball
  * controller, which a script drives with synthetic mouse events (rasm_add_input_event), the way an application with its
- * own event loop feeds RASM, so frame N is the same on every run. At the end it prints the frame and pool stats.
+ * own event loop feeds RASM; with --fixed-step, which fixes the easing's time step, frame N is the same on every run. At the end it prints the frame and pool stats.
  *
  * Flags, as the C++ examples take them: --headless, --frames N (60), --out <file.png> (frame.png), --fixed-step,
  * --wait-for-loads, --no-cache, --transfer-queue on|off. A headless run copies frame N back into a rasm_image, writes
@@ -242,9 +242,10 @@ static void sendMouse(rasm_renderer *renderer, rasm_input_event_type type, float
     rasm_add_input_event(renderer, &event);
 }
 
-/* The script: press in the middle on frame 1, drag right, let go 5 frames before the last. */
+/* The script: press in the middle on frame 1, drag right, let go 5 frames before the last (frame 2 for a short run). */
 static void sendScriptedOrbit(rasm_renderer *renderer, unsigned frame, unsigned frames)
 {
+    const unsigned release = frames > 7 ? frames - 5 : 2;
     const float x = 0.5f * WIDTH + 5.0f * (float)(frame - 1);
     const float y = 0.5f * HEIGHT;
     if (frame == 1)
@@ -252,9 +253,9 @@ static void sendScriptedOrbit(rasm_renderer *renderer, unsigned frame, unsigned 
         sendMouse(renderer, RASM_INPUT_EVENT_TYPE_MOUSE_MOVE, x, y, 0);
         sendMouse(renderer, RASM_INPUT_EVENT_TYPE_MOUSE_BUTTON, x, y, 1);
     }
-    else if (frame + 5 < frames)
+    else if (frame < release)
         sendMouse(renderer, RASM_INPUT_EVENT_TYPE_MOUSE_MOVE, x, y, 0);
-    else if (frame + 5 == frames)
+    else if (frame == release)
         sendMouse(renderer, RASM_INPUT_EVENT_TYPE_MOUSE_BUTTON, x, y, 0);
 }
 
@@ -440,8 +441,7 @@ int main(int argc, char **argv)
     image = rasm_image_create();
     for (frame = 1; rasm_running(renderer); ++frame)
     {
-        if (frame < args.frames)
-            sendScriptedOrbit(renderer, frame, args.frames);
+        sendScriptedOrbit(renderer, frame, args.frames);
         if (args.headless && frame == args.frames)
             readback = rasm_read_frame(renderer, RASM_READBACK_FORMAT_RGBA8_SRGB);
         rasm_render_views(renderer, views, 3);

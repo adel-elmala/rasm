@@ -12,25 +12,14 @@ using namespace rasm;
 
 namespace
 {
-    // An orbit 5 units out for a trackball, 5 units a second for a free-fly camera; NONE until the caller picks one.
-    rasm_camera_controller getControllerDefaults()
+    // The window an id names: 0 is the main window, as in C++. A removed one is an empty Window: false, with an error.
+    bool getWindowOf(Renderer &renderer, rasm_window window, const Window *&state, const char *function)
     {
-        return {.size = sizeof(rasm_camera_controller),
-                .type = RASM_CAMERA_CONTROLLER_TYPE_NONE,
-                .easing_speed = CameraController{}.easingSpeed,
-                .track_ball_radius = 5.0f,
-                .track_ball_center = {0.0f, 0.0f, 0.0f},
-                .track_ball_orbit_sensitivity = 1.0f,
-                .free_fly_yaw = 0.0f,
-                .free_fly_pitch = 0.0f,
-                .free_fly_speed = 5.0f,
-                .free_fly_look_sensitivity = 1.0f};
-    }
-
-    // The window an id names; 0, or a removed window, is the main window, as in C++.
-    const Window &getWindowOf(Renderer &renderer, rasm_window window)
-    {
-        return renderer.getWindow(c::toCpp(window));
+        state = &renderer.getWindow(c::toCpp(window));
+        if (state->handle.isValid())
+            return true;
+        c::reportError(function, "the window was removed.");
+        return false;
     }
 }
 
@@ -62,7 +51,7 @@ RASM_C_CATCH_RESULT
 rasm_result RASM_CALL rasm_camera_controller_init(rasm_camera_controller *controller, uint32_t size)
 try
 {
-    const rasm_camera_controller defaults = getControllerDefaults();
+    const rasm_camera_controller defaults = c::getControllerDefaults();
     return c::initSized(controller, size, c::CAMERA_CONTROLLER_SIZE_1_1, &defaults, sizeof(defaults), __func__, "controller");
 }
 RASM_C_CATCH_RESULT
@@ -108,14 +97,10 @@ try
     Renderer *r = c::getRenderer(renderer, __func__);
     if (r == nullptr)
         return RASM_ERROR_INVALID_ARGUMENT;
-    const Window &state = getWindowOf(*r, window);
-    // C++ gives an empty Window for a removed one.
-    if (!state.handle.isValid())
-    {
-        c::reportError(__func__, "the window was removed.");
+    const Window *state = nullptr;
+    if (!getWindowOf(*r, window, state, __func__))
         return RASM_ERROR_FAILED;
-    }
-    const rasm_window_info values = c::toC(state);
+    const rasm_window_info values = c::toC(*state);
     return c::writeSized(info, c::WINDOW_INFO_SIZE_1_1, &values, sizeof(values), __func__, "info") ? RASM_OK : RASM_ERROR_INVALID_ARGUMENT;
 }
 RASM_C_CATCH_RESULT
@@ -252,7 +237,7 @@ try
     if (r == nullptr || !c::checkHandle(camera.id, __func__, "camera"))
         return RASM_ERROR_INVALID_ARGUMENT;
     // A field past the caller's size takes its default: the controller is replaced whole, as in C++.
-    rasm_camera_controller values = getControllerDefaults();
+    rasm_camera_controller values = c::getControllerDefaults();
     if (!c::readSized(controller, c::CAMERA_CONTROLLER_SIZE_1_1, &values, sizeof(values), __func__, "controller") || !c::checkCameraController(values, __func__))
         return RASM_ERROR_INVALID_ARGUMENT;
     const c::CallErrors errors;
@@ -277,7 +262,7 @@ RASM_C_CATCH_RESULT
 rasm_camera_rig *RASM_CALL rasm_camera_rig_create(const rasm_camera_controller *controller, const rasm_transform *transform)
 try
 {
-    rasm_camera_controller values = getControllerDefaults();
+    rasm_camera_controller values = c::getControllerDefaults();
     if (!c::readSized(controller, c::CAMERA_CONTROLLER_SIZE_1_1, &values, sizeof(values), __func__, "controller") || !c::checkCameraController(values, __func__))
         return nullptr;
     auto rig = std::make_unique<rasm_camera_rig>();
@@ -368,7 +353,10 @@ try
     Renderer *r = c::getRenderer(renderer, __func__);
     if (r == nullptr)
         return {};
-    return c::toC(getInputArea(getWindowOf(*r, window), rect != nullptr ? c::toCpp(*rect) : ViewRect{}));
+    const Window *state = nullptr;
+    if (!getWindowOf(*r, window, state, __func__))
+        return {};
+    return c::toC(getInputArea(*state, rect != nullptr ? c::toCpp(*rect) : ViewRect{}));
 }
 RASM_C_CATCH({})
 // NOLINTEND(readability-identifier-naming)

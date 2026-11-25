@@ -795,9 +795,26 @@ namespace rasm::c
         return result;
     }
 
+    rasm_camera_controller getControllerDefaults()
+    {
+        return {.size = sizeof(rasm_camera_controller),
+                .type = RASM_CAMERA_CONTROLLER_TYPE_NONE,
+                .easing_speed = CameraController{}.easingSpeed,
+                .track_ball_radius = 5.0f,
+                .track_ball_center = {0.0f, 0.0f, 0.0f},
+                .track_ball_orbit_sensitivity = 1.0f,
+                .free_fly_yaw = 0.0f,
+                .free_fly_pitch = 0.0f,
+                .free_fly_speed = 5.0f,
+                .free_fly_look_sensitivity = 1.0f};
+    }
+
+    // The other type's fields keep their defaults, so a caller that switches the type gets a working controller.
     rasm_camera_controller toC(const CameraController &controller)
     {
-        rasm_camera_controller result = {.size = sizeof(rasm_camera_controller), .type = asNumber(controller.type), .easing_speed = controller.easingSpeed};
+        rasm_camera_controller result = getControllerDefaults();
+        result.type = asNumber(controller.type);
+        result.easing_speed = controller.easingSpeed;
         if (controller.type == CameraController::Type::TRACK_BALL)
         {
             result.track_ball_radius = controller.trackBall.radius;
