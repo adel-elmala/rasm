@@ -380,9 +380,7 @@ namespace rasm
 
         bool drawnHere = false;
         bool descend = record.firstChild != 0;
-        if (record.firstChild == 0)
-            drawnHere = ready;
-        else if (record.refine == TileRefine::ADD)
+        if (record.firstChild == 0 || record.refine == TileRefine::ADD)
             drawnHere = ready;
         else if (!childrenCovered && ready)
         {

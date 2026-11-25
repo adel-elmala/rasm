@@ -138,8 +138,11 @@ rasm_result RASM_CALL rasm_tile_streamer_create(rasm_renderer *renderer, rasm_sc
 try
 {
     c::initialize();
-    if (!c::checkPointer(streamer, __func__, "streamer"))
+    if (streamer == nullptr)
+    {
+        c::reportError(__func__, "streamer is NULL.");
         return RASM_ERROR_INVALID_ARGUMENT;
+    }
     *streamer = nullptr;
     Renderer *r = c::getRenderer(renderer, __func__);
     rasm_tile_streamer_config values = toC(TileStreamerConfig{});
