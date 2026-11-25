@@ -8,10 +8,13 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <iterator>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -51,6 +54,14 @@ namespace
         bool list = false;
     };
 
+    // A tile of the tile_streaming test: its record, and the box its content is.
+    struct TileBox
+    {
+        rasm::TileHandle tile;
+        rasm::Transform transform;
+        glm::vec3 color = glm::vec3(1.0f);
+    };
+
     // What a test's scene holds besides its entities: the lights that cast shadows, and where the camera looks from.
     struct Content
     {
@@ -73,6 +84,10 @@ namespace
         std::vector<rasm::EntityHandle> entities;
         std::vector<rasm::LightHandle> lights;
         glm::dvec3 origin = glm::dvec3(0.0); // where the content's origin is in the world
+        // A test of TileStreamer: each frame updates it with the cut, and gives the tiles it hands out their boxes.
+        std::shared_ptr<rasm::TileStreamer> tiles;
+        std::vector<TileBox> tileBoxes;
+        std::vector<rasm::TileHandle> cut;
     };
 
     // What every scene may use, loaded once.
@@ -441,6 +456,59 @@ namespace
                addSunsetLight(engine, assets, content, 1.0f, glm::vec3(0.6f, -1.0f, -0.35f), 3.0f);
     }
 
+    // A quadtree of boxes drawn by a TileStreamer: the root, its four children, and the first child's four children. The
+    // cut wants the grandchildren, two children and a building on the fourth child, whose refinement is ADD, so it stays
+    // drawn under the building. Drawn: the four grandchildren, three children and the building; not the root, nor the
+    // first child, which its children replace. The boxes are the shared cube with a material of their own each.
+    bool buildTiles(rasm::Engine &engine, const Assets &assets, Content &content)
+    {
+        content.tiles = std::make_shared<rasm::TileStreamer>(engine, content.scene, rasm::TileStreamerConfig{.maxLoadsPerFrame = 64, .maxLoadsInFlight = 64});
+        auto add = [&](rasm::TileHandle parent, const glm::vec3 &center, float size, float height, uint32_t level, rasm::TileRefine refine)
+        {
+            const rasm::TileHandle tile = content.tiles->createTile({.parent = parent,
+                                                                     .center = glm::dvec3(center),
+                                                                     .radius = 0.75 * size + height,
+                                                                     .geometricError = level < 2 ? 0.5 * size : 0.0,
+                                                                     .refine = refine});
+            content.tileBoxes.push_back({.tile = tile, .transform = rasm::Transform{center, glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(0.94f * size, height, 0.94f * size)}, .color = getHue(level, 3)});
+            return tile;
+        };
+        const rasm::TileHandle root = add({}, glm::vec3(0.0f, -0.1f, 0.0f), 8.0f, 0.2f, 0, rasm::TileRefine::REPLACE);
+        rasm::TileHandle children[4];
+        for (int32_t i = 0; i < 4; ++i)
+            children[i] = add(root, glm::vec3(i % 2 == 0 ? -2.0f : 2.0f, -0.1f, i < 2 ? -2.0f : 2.0f), 4.0f, 0.2f, 1, i == 3 ? rasm::TileRefine::ADD : rasm::TileRefine::REPLACE);
+        for (int32_t i = 0; i < 4; ++i)
+            content.cut.push_back(add(children[0], glm::vec3(i % 2 == 0 ? -3.0f : -1.0f, -0.1f, i < 2 ? -3.0f : -1.0f), 2.0f, 0.2f, 2, rasm::TileRefine::REPLACE));
+        content.cut.push_back(children[1]);
+        content.cut.push_back(children[2]);
+        content.cut.push_back(add(children[3], glm::vec3(2.0f, 1.0f, 2.0f), 1.0f, 2.0f, 2, rasm::TileRefine::REPLACE));
+        content.eye = glm::vec3(0.0f, 9.0f, 10.0f);
+        content.center = glm::vec3(0.0f, 0.0f, 0.5f);
+        content.fovY = 45.0f;
+        return assets.cube.isValid() && addSunsetLight(engine, assets, content, 1.0f, glm::vec3(0.45f, -0.75f, -0.5f), 3.0f);
+    }
+
+    // The tile_streaming test's frame: the streamer's update, and the tiles it hands out get their boxes at once.
+    void updateTiles(rasm::Engine &engine, const Assets &assets, const Content &content, rasm::CameraHandle camera)
+    {
+        const rasm::View view = {.scene = content.scene, .camera = camera};
+        content.tiles->setViews(&view, 1);
+        content.tiles->update(content.cut.data(), static_cast<uint32_t>(content.cut.size()));
+        uint32_t count = 0;
+        const rasm::TileHandle *toLoad = content.tiles->getTilesToLoad(count);
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            for (const TileBox &box : content.tileBoxes)
+            {
+                if (!(box.tile == toLoad[i]))
+                    continue;
+                const rasm::MaterialHandle material = createColorMaterial(engine, box.color, 0.8f);
+                const rasm::EntityHandle entity = engine.createEntity("tile", assets.cube, material, box.transform);
+                content.tiles->setTileContent(box.tile, {.entities = &entity, .entityCount = 1, .materials = &material, .materialCount = 1});
+            }
+        }
+    }
+
     // clang-format off
     const ImageTest TESTS[] = {
         {.name = "helmet_ibl",    .build = buildHelmet},
@@ -461,6 +529,7 @@ namespace
         {.name = "materials",     .build = buildMaterials},
         {.name = "views",         .build = buildViews,         .views = true},
         {.name = "views_window2", .build = buildViews,         .views = true, .secondWindow = true},
+        {.name = "tile_streaming", .build = buildTiles},
         // The same images drawn by meshlets: the same triangles, so the same pixels. The mesh_ tests take the mesh shaders
         // where the device has them (lavapipe and the desktop GPUs do), else vertex pulling. lavapipe's mesh shaders round a
         // few positions differently from its vertex shaders: up to 3 levels on 0.2% of the pixels after TAA, and a few edge
@@ -649,6 +718,8 @@ namespace
         auto frame = [&]()
         {
             engine.setAnimationTime(test.time);
+            if (content->tiles)
+                updateTiles(engine, assets, *content, camera);
             if (test.views)
                 engine.render(views, 5);
             else
@@ -799,13 +870,27 @@ namespace
 
         std::vector<BuiltContent> built;
         std::vector<Rendered> rendered;
-        for (const ImageTest &test : TESTS)
+        for (size_t i = 0; i < std::size(TESTS); ++i)
         {
+            const ImageTest &test = TESTS[i];
             if (!isRun(options, test))
                 continue;
             ++run;
             failed += runTest(engine, assets, camera, options, test, built, rendered) ? 0 : 1;
             std::fflush(stdout);
+            // A scene no later test draws goes, so the tests stay under MAX_SCENES; its content (a tile streamer's
+            // tiles too) goes before it.
+            const bool needed = std::any_of(std::begin(TESTS) + static_cast<std::ptrdiff_t>(i) + 1, std::end(TESTS), [&](const ImageTest &later)
+                                            { return isRun(options, later) && later.build == test.build && later.origin == test.origin; });
+            for (auto entry = built.begin(); !needed && entry != built.end(); ++entry)
+            {
+                if (entry->build != test.build || entry->origin != test.origin)
+                    continue;
+                const rasm::SceneHandle scene = entry->content.scene;
+                built.erase(entry);
+                engine.destroyScene(scene);
+                break;
+            }
         }
         return true;
     }
