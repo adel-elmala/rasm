@@ -1163,6 +1163,13 @@ void destroyRenderTarget(const RenderTargetHandle&amp; renderTarget);</pre>
   </div>
 </div>
 
+<div class="api" id="hasBufferInt64Atomics">
+  <pre class="sig">bool hasBufferInt64Atomics() const;</pre>
+  <div class="body">
+    <p><code>true</code> when the device has 64-bit atomics on buffers (<code>shaderBufferInt64Atomics</code>, Vulkan 1.2), which the engine turns on whenever the GPU has it. The compute path of small points needs it (<a href="engine.html#setComputePoints"><code>Renderer::setComputePoints</code></a>); without it every point is drawn by triangles. Desktop GPUs and lavapipe have it; MoltenVK and some mobile GPUs may not.</p>
+  </div>
+</div>
+
 <div class="api" id="hasMeshShaders">
   <pre class="sig">bool hasMeshShaders() const;</pre>
   <div class="body">

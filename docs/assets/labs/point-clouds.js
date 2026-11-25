@@ -183,3 +183,129 @@ RasmLab.register("point-density", function (lab) {
             note.set("Too few points for this size on screen: raise the density to fill the holes.", "bad");
     });
 });
+
+// The compute path on a 12 x 8 pixel patch: each point writes the pixels whose centre its square holds (the centre
+// snapped to 1/256 of a pixel, as the rasterizer snaps a triangle's corners), with a 64-bit max of depth << 32 | id,
+// so the nearest point wins whatever the order the threads ran in, and the higher id on a tie, as a later triangle
+// would. The picked point also shows its triangle (corners -1, -1; 3, -1; -1, 3 of its square): the pixel stage keeps
+// the same pixels, so the two paths draw the same picture.
+RasmLab.register("compute-raster", function (lab) {
+    const W = 760;
+    const H = 330;
+    const COLS = 12;
+    const ROWS = 8;
+    const CELL = 36;
+    const left = 30;
+    const top = 20;
+    const svg = lab.svg(W, H, "A patch of 12 by 8 pixels. Seven points, each with a depth and an id, write the pixels whose centre lies in their square with a 64-bit max. Each pixel shows the id of the point that won it.");
+    const size = lab.slider({ label: "Point size (pixels)", min: 1, max: 2, step: 0.25, value: 2, format: function (v) { return v.toFixed(2); } });
+    const written = lab.slider({ label: "Points written so far", min: 0, max: 7, step: 1, value: 7 });
+    const order = lab.choice({ label: "Order the threads ran in", options: [{ value: "id", label: "by id" }, { value: "reversed", label: "reversed" }, { value: "shuffled", label: "shuffled" }], value: "shuffled" });
+    const picked = lab.slider({ label: "Show the triangle of point", min: 0, max: 6, step: 1, value: 3 });
+    const touchedOut = lab.readout("pixel writes (atomics)");
+    const sameOut = lab.readout("same as by triangles");
+    const note = lab.note();
+
+    // The points: a centre in pixels, a depth (reversed-Z: nearer is larger) and an id.
+    const points = [
+        { x: 2.3, y: 2.6, depth: 0.40 }, { x: 3.1, y: 3.2, depth: 0.55 }, { x: 5.6, y: 4.1, depth: 0.30 }, { x: 6.2, y: 4.7, depth: 0.62 },
+        { x: 8.5, y: 2.5, depth: 0.48 }, { x: 8.9, y: 3.0, depth: 0.48 }, { x: 4.4, y: 6.3, depth: 0.35 },
+    ];
+    const orders = { id: [0, 1, 2, 3, 4, 5, 6], reversed: [6, 5, 4, 3, 2, 1, 0], shuffled: [3, 0, 5, 2, 6, 4, 1] };
+    const hues = ["--gpu", "--cpu", "--mem", "--shader", "--ok", "--accent", "--bad"];
+
+    // The pixels a point of diameter d writes: x from ceil(c - d/2 - 0.5) to floor(c + d/2 - 0.5), at most two.
+    function pixelsOf(p, d) {
+        const cx = Math.round(p.x * 256) / 256;
+        const cy = Math.round(p.y * 256) / 256;
+        const list = [];
+        const x0 = Math.ceil(cx - d / 2 - 0.5);
+        const y0 = Math.ceil(cy - d / 2 - 0.5);
+        const x1 = Math.min(Math.floor(cx + d / 2 - 0.5), x0 + 1);
+        const y1 = Math.min(Math.floor(cy + d / 2 - 0.5), y0 + 1);
+        for (let y = y0; y <= y1; ++y)
+            for (let x = x0; x <= x1; ++x)
+                if (x >= 0 && y >= 0 && x < COLS && y < ROWS)
+                    list.push([x, y]);
+        return list;
+    }
+    // The triangle path's test at a pixel's centre: inside the square (edges included), and the depth test with
+    // GREATER_OR_EQUAL, drawn in id order.
+    function byTriangles(d) {
+        const winner = new Array(COLS * ROWS).fill(-1);
+        for (let i = 0; i < points.length; ++i) {
+            for (const [x, y] of pixelsOf(points[i], d)) {
+                const w = winner[y * COLS + x];
+                if (w < 0 || points[i].depth >= points[w].depth)
+                    winner[y * COLS + x] = i;
+            }
+        }
+        return winner;
+    }
+
+    const cells = [];
+    const labels = [];
+    for (let y = 0; y < ROWS; ++y) {
+        for (let x = 0; x < COLS; ++x) {
+            cells.push(lab.el(svg, "rect", { x: left + x * CELL, y: top + y * CELL, width: CELL, height: CELL, class: "paper" }));
+            labels.push(lab.el(svg, "text", { x: left + x * CELL + CELL / 2, y: top + y * CELL + CELL / 2 + 4, class: "mid small mono", text: "" }));
+        }
+    }
+    const triangle = lab.el(svg, "path", { class: "hot" });
+    const square = lab.el(svg, "rect", { class: "arrow dashed nofill" });
+    const dots = points.map(function (p) { return lab.el(svg, "circle", { cx: left + p.x * CELL, cy: top + p.y * CELL, r: 4 }); });
+    const legendX = left + COLS * CELL + 24;
+    lab.el(svg, "text", { x: legendX, y: top + 12, class: "small title", text: "point" });
+    lab.el(svg, "text", { x: legendX + 60, y: top + 12, class: "small title", text: "depth" });
+    const rows = points.map(function (p, i) {
+        lab.el(svg, "text", { x: legendX + 60, y: top + 34 + i * 20, class: "small mono", text: p.depth.toFixed(2) });
+        return lab.el(svg, "text", { x: legendX, y: top + 34 + i * 20, class: "small mono", text: String(i) });
+    });
+    lab.el(svg, "text", { x: legendX, y: top + 34 + 7 * 20 + 10, class: "small t-faint", text: "a pixel keeps max(depth << 32 | id):" });
+    lab.el(svg, "text", { x: legendX, y: top + 34 + 7 * 20 + 26, class: "small t-faint", text: "the nearest point, then the higher id" });
+
+    lab.draw(function () {
+        const d = size.value;
+        const list = orders[order.value];
+        const k = Math.round(written.value);
+        const word = new Array(COLS * ROWS).fill(-1);
+        let touched = 0;
+        for (let n = 0; n < k; ++n) {
+            const i = list[n];
+            for (const [x, y] of pixelsOf(points[i], d)) {
+                ++touched;
+                const w = word[y * COLS + x];
+                if (w < 0 || points[i].depth > points[w].depth || (points[i].depth === points[w].depth && i > w))
+                    word[y * COLS + x] = i;
+            }
+        }
+        const reference = byTriangles(d);
+        let same = true;
+        for (let c = 0; c < COLS * ROWS; ++c) {
+            const w = word[c];
+            lab.set(cells[c], { class: w < 0 ? "paper" : "paper o-75", style: w < 0 ? null : "fill: var(" + hues[w] + ")" });
+            lab.set(labels[c], { text: w < 0 ? "" : String(w) });
+            if (k === points.length && w !== reference[c])
+                same = false;
+        }
+        points.forEach(function (p, i) {
+            const done = list.indexOf(i) < k;
+            lab.set(dots[i], { style: "fill: var(" + hues[i] + ")", class: done ? "solid" : "o-25" });
+            lab.set(rows[i], { class: done ? "small mono" : "small mono t-faint" });
+        });
+        const p = points[Math.round(picked.value)];
+        const r = d / 2 * CELL;
+        const cx = left + p.x * CELL;
+        const cy = top + p.y * CELL;
+        lab.set(square, { x: cx - r, y: cy - r, width: 2 * r, height: 2 * r });
+        lab.set(triangle, { d: "M" + (cx - r) + "," + (cy + r) + " L" + (cx + 3 * r) + "," + (cy + r) + " L" + (cx - r) + "," + (cy - 3 * r) + " Z" });
+        touchedOut.set(String(touched));
+        sameOut.set(k === points.length ? (same ? "yes" : "no") : "–", same ? "ok" : "bad");
+        if (k < points.length)
+            note.set("Each thread writes its point's pixels with one atomic each, in any order; " + (points.length - k) + " points are still to run.", "");
+        else if (order.value !== "id")
+            note.set("Run in another order, the pixels end the same: the max keeps the nearest point, and the higher id on a tie (points 4 and 5).", "ok");
+        else
+            note.set("Every pixel holds the nearest point: the same pixels the points' triangles cover, cut to their squares.", "ok");
+    });
+});

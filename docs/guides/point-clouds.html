@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Point Clouds · RASM</title>
-<meta name="description" content="Millions of points drawn as small splats: compact storage in a chunk's box, one triangle a point, level of detail by drawing a prefix of a well-ordered chunk, and colormaps for values. Then how RASM does it.">
-<meta name="rasm-sources" content="include/rasm/pointCloud.h include/rasm/colormap.h include/rasm/material.h include/rasm/mesh.h include/rasm/picking.h src/scene/pointCloud.cpp src/scene/colormap.cpp src/renderer/geometryPool.cpp src/renderer/gpuScene.cpp src/renderer/picking.cpp src/renderer/uberMaterialTypes.h shaders/lib/points.slang shaders/passes/points.slang shaders/passes/cull.slang shaders/lib/core.slang src/c/cPointCloud.cpp tests/pointCloudTests.cpp tests/image/imageTests.cpp examples/28_point_cloud/main.cpp">
+<meta name="description" content="Millions of points drawn as small splats: compact storage in a chunk's box, one triangle a point, a compute path with 64-bit atomics for the smallest points, level of detail by drawing a prefix of a well-ordered chunk, and colormaps for values. Then how RASM does it.">
+<meta name="rasm-sources" content="include/rasm/pointCloud.h include/rasm/colormap.h include/rasm/material.h include/rasm/mesh.h include/rasm/picking.h src/scene/pointCloud.cpp src/scene/colormap.cpp src/renderer/geometryPool.cpp src/renderer/gpuScene.cpp src/renderer/picking.cpp src/renderer/pointRaster.cpp src/renderer/uberMaterialTypes.h shaders/lib/points.slang shaders/passes/points.slang shaders/passes/pointRaster.slang shaders/passes/cull.slang shaders/lib/core.slang src/c/cPointCloud.cpp tests/pointCloudTests.cpp tests/image/imageTests.cpp examples/28_point_cloud/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -38,6 +38,7 @@
     <li>Each point is a <b>splat</b>: a small square, disc or sphere on the screen, a few pixels or a few centimetres wide.</li>
     <li>Points come in <b>chunks</b> of up to 65 536 near each other. A chunk stores each position as three <b>16-bit steps of its box</b>: 8 bytes a point with a value, 12 with a color.</li>
     <li>A point is <b>one triangle</b> around its square; the pixel stage cuts it to its shape.</li>
+    <li>Points of 2 pixels or less skip the triangle: a <b>compute pass</b> writes each pixel with a 64-bit max of depth and point, four (2 pixels) to ten (1 pixel) times faster per point, and a resolve puts them into the scene. Both paths take the same pixels.</li>
     <li>The builder puts a chunk's points in an order where <b>every prefix is an even sample</b>. A chunk small on screen draws only its first points: level of detail with no extra data.</li>
     <li>A <b>colormap</b> turns a value into a color through a range (linear or logarithmic) and a 256-entry texture.</li>
   </ul>
@@ -108,7 +109,108 @@
   <div><b>3 %</b><span>for writing the depth</span><small>the sphere shape's cost, measured on every point</small></div>
 </div>
 
-<h2 id="storage"><span class="n">3</span>Storage: 16 bits in a chunk's box</h2>
+<h2 id="compute"><span class="n">3</span>Small points by compute</h2>
+
+<p>A triangle costs the same setup whether it covers 4 pixels or 400. For points of 1 or 2 pixels almost all the time goes there, not into the pixels. A compute shader can skip the triangle: one thread takes a point, finds the pixels its square covers, and writes them itself (Schütz, Kerbl and Wimmer, 2021).</p>
+
+<p>The hard part is the depth test, which the triangle path gets for free. Many threads write the same pixel at once, in any order. The trick: put the depth and the point in <b>one 64-bit word</b> and keep the largest with a 64-bit atomic max (<code>InterlockedMax</code> in Slang). With reversed-Z a nearer point has a larger depth, so the max is the nearest point, whatever order the threads ran in.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="Top: the 64-bit word of a pixel: 32 bits of depth, then 16 bits of instance row and 16 bits of point. Bottom left: three points 2 pixels wide over a 2 by 2 group of pixels, each writing the pixels whose centre its square holds with a 64-bit max. Bottom right: three pixels keep A, which is nearer than C; the fourth keeps B, nearer than A.">
+    <text x="20" y="22" class="small title">a pixel's word, 64 bits</text>
+    <rect x="20" y="32" width="360" height="40" class="gpu"/>
+    <text x="200" y="57" class="mid small mono">depth (float bits, reversed-Z)</text>
+    <rect x="380" y="32" width="180" height="40" class="mem"/>
+    <text x="470" y="57" class="mid small mono">instance row</text>
+    <rect x="560" y="32" width="180" height="40" class="mem o-75"/>
+    <text x="650" y="57" class="mid small mono">point</text>
+    <text x="200" y="90" class="mid small t-faint">bits 63 – 32: compared first</text>
+    <text x="560" y="90" class="mid small t-faint">bits 31 – 0: a tie goes to the larger, as a later triangle</text>
+    <rect x="40" y="120" width="120" height="120" class="paper"/>
+    <path d="M100,120 V240 M40,180 H160" class="grid"/>
+    <circle cx="88" cy="168" r="6" class="ok"/><text x="78" y="162" class="end small mono">A 0.40</text>
+    <circle cx="140" cy="215" r="6" class="hot"/><text x="170" y="220" class="small mono">B 0.62</text>
+    <circle cx="130" cy="140" r="6" class="cpu"/><text x="170" y="138" class="small mono">C 0.30</text>
+    <text x="100" y="262" class="mid small">three points, 2 pixels wide</text>
+    <line x1="230" y1="180" x2="330" y2="180" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="280" y="170" class="mid small mono">atomicMax</text>
+    <text x="280" y="200" class="mid small">a thread a point,</text>
+    <text x="280" y="214" class="mid small">any order</text>
+    <rect x="360" y="120" width="60" height="60" class="ok o-50"/><text x="390" y="155" class="mid small mono">A</text>
+    <rect x="420" y="120" width="60" height="60" class="ok o-50"/><text x="450" y="155" class="mid small mono">A</text>
+    <rect x="360" y="180" width="60" height="60" class="ok o-50"/><text x="390" y="215" class="mid small mono">A</text>
+    <rect x="420" y="180" width="60" height="60" class="hot o-50"/><text x="450" y="215" class="mid small mono">B</text>
+    <text x="420" y="262" class="mid small">each pixel keeps the nearest</text>
+    <text x="520" y="140" class="small">C is behind A wherever</text>
+    <text x="520" y="156" class="small">they meet, A behind B;</text>
+    <text x="520" y="180" class="small">a pixel no point reached</text>
+    <text x="520" y="196" class="small">keeps 0: the far plane</text>
+  </svg>
+  <figcaption>The word holds the point, not its color: the color is found once per pixel, after the last write, instead of once per point.</figcaption>
+</figure>
+
+<p>Then a <b>resolve</b> draws a quad over the pixels the points can reach. Each pixel reads its word, finds the point, and writes its color, its depth and its motion into the scene's targets, with the normal depth test. So meshes in front of a point still hide it, and everything drawn later (labels, the grid, see-through draws, TAA) sees the points like any other surface.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="A frame of one view on a time line. Cull 1 resets the point buffer and adds batches; Scene 1 draws; Hi-Z; Cull 2 adds the late batches, clears the rect of the buffer and runs the raster pass; Scene 2 draws the late meshes, then the resolve writes the points into color, depth and motion, then the sky; Label Depth and Transparent read that depth.">
+    <line x1="20" y1="200" x2="740" y2="200" class="arrow" marker-end="url(#ah)"/>
+    <text x="740" y="220" class="end small t-faint">time, one view</text>
+    <rect x="20" y="40" width="110" height="60" rx="6" class="shader"/>
+    <text x="75" y="62" class="mid small title">Cull 1</text>
+    <text x="75" y="80" class="mid small">reset, add</text>
+    <text x="75" y="94" class="mid small">early batches</text>
+    <rect x="140" y="110" width="90" height="60" rx="6" class="gpu"/>
+    <text x="185" y="136" class="mid small title">Scene 1</text>
+    <text x="185" y="154" class="mid small">meshes</text>
+    <rect x="240" y="40" width="70" height="60" rx="6" class="shader"/>
+    <text x="275" y="75" class="mid small title">Hi-Z</text>
+    <rect x="320" y="40" width="150" height="60" rx="6" class="shader"/>
+    <text x="395" y="62" class="mid small title">Cull 2</text>
+    <text x="395" y="80" class="mid small">late batches, then</text>
+    <text x="395" y="94" class="mid small">clear + raster</text>
+    <rect x="480" y="110" width="160" height="60" rx="6" class="gpu"/>
+    <text x="560" y="130" class="mid small title">Scene 2</text>
+    <text x="560" y="148" class="mid small">meshes, resolve,</text>
+    <text x="560" y="162" class="mid small">then the sky</text>
+    <rect x="650" y="110" width="90" height="60" rx="6" class="gpu o-75"/>
+    <text x="695" y="134" class="mid small title">Labels,</text>
+    <text x="695" y="152" class="mid small">Transparent</text>
+    <path d="M470,70 C500,70 520,90 540,108" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="500" y="56" class="small t-mem">a word a pixel</text>
+    <text x="20" y="20" class="small t-faint">compute passes on top, draw passes below; a frame without the late half (no Hi-Z) rasters in Cull 1 and resolves in Scene 1</text>
+  </svg>
+</figure>
+
+<h3>Which chunk takes which path</h3>
+
+<p>The cull pass decides per chunk, after it chose the chunk's prefix. A chunk goes to compute when both hold:</p>
+
+<div class="formula">
+  <p class="eq">s ≤ 2 pixels   and   k ≥ 0.125 × (its rect on screen, in pixels)</p>
+  <dl>
+    <dt><var>s</var></dt><dd>the points' size at the chunk's point nearest the camera: the largest they get</dd>
+    <dt><var>k</var></dt><dd>the points the chunk draws (its prefix)</dd>
+    <dt>rect</dt><dd>its box's corners on screen, and 2 pixels more: where its points can land</dd>
+  </dl>
+</div>
+
+<p>The first rule keeps the compute path to squares of at most 2 × 2 pixels; bigger points, and every round or sphere point big enough to show its shape, stay triangles. The second rule is the cost: the compute path pays per point a quarter (2 pixels) to a tenth (1 pixel) of a triangle, but once it runs it also clears and resolves every pixel of the rect its chunks cover. A sparse chunk spread over the screen is cheaper as triangles. A chunk the camera is inside of, or that is partly behind it, stays triangles too.</p>
+
+<figure class="lab" data-lab="compute-raster" data-title="Write points with a 64-bit max">
+  <figcaption>Step the points in and change the order the threads ran in: the pixels end the same, each holding the nearest point (4 and 5 tie, and 5 wins as the later triangle would). The orange triangle is the one the triangle path draws for the chosen point; it keeps the pixels whose centre is in the dashed square, the same ones.</figcaption>
+</figure>
+
+<h3>Why the two paths draw the same pixels</h3>
+
+<p>A chunk can switch paths from one frame to the next as the camera moves, so the two must agree to the pixel, or the switch would show. Both take a pixel when its centre lies in the point's square, edges included, and both place the square at the same centre: the compute path snaps it to 1/256 of a pixel, as the rasterizer snaps a triangle's corners. Under MSAA the compute path has one sample a pixel and the resolve writes it into all of the pixel's samples; in a view that also has the compute path, the triangle path covers whole pixels the same way, its triangle reaching half a pixel past the square so no sample of a covered pixel falls outside it. (A view drawn by triangles only keeps the smaller triangle, which is a fifth cheaper under MSAA; see <a href="#in-rasm">Not yet</a>.)</p>
+
+<div class="stats">
+  <div><b>10.7×</b><span>faster per point, 1 pixel</span><small>0.087 ns against 0.93 ns by triangles, all of 33.5 M points a frame</small></div>
+  <div><b>4.1×</b><span>faster per point, 2 pixels</span><small>0.29 ns against 1.18 ns by triangles</small></div>
+  <div><b>8 B</b><span>a pixel, per view</span><small>16.6 MB at 1920 × 1080, cleared only in the rect</small></div>
+</div>
+
+<h2 id="storage"><span class="n">4</span>Storage: 16 bits in a chunk's box</h2>
 
 <p>Points near each other share a box. Inside it, a position needs far less than three 32-bit floats: 16 bits per axis is a step of 1/65 535 of the box, 0.5 mm for a 32 m box. A value (height, intensity, temperature) gets 16 bits too, in steps of the chunk's range of values.</p>
 
@@ -140,7 +242,7 @@
 
 <p>The box also gives the chunk's bounding sphere, so a chunk is culled like any object: out of the view, or behind something in the depth of the frame before. The chunk is placed in the world by a transform in doubles, so a cloud far from the origin keeps its precision (<a href="large-world-precision.html">large worlds</a>).</p>
 
-<h2 id="prefix"><span class="n">4</span>Level of detail by prefix</h2>
+<h2 id="prefix"><span class="n">5</span>Level of detail by prefix</h2>
 
 <p>A chunk far away covers few pixels, and drawing all its points would put many on the same pixel. The cheap fix: draw only its first <var>k</var> points. That works only if the first <var>k</var> points are spread over the whole chunk, for every <var>k</var>. A scanner writes points line by line, and a random shuffle clumps. The builder sorts the points along a Morton curve (a path that visits every small square before the next one), then reads that list in <em>bit-reversed</em> steps.</p>
 
@@ -157,7 +259,7 @@
 
 <p>The level of detail costs no memory: no second copy of the points, no tree. Its limit is that a chunk is one unit: a very large chunk near the camera draws all of its points even where part of it is far. Small chunks (tens of metres) keep that error small; a tree of chunks for whole datasets is the next step.</p>
 
-<h2 id="density"><span class="n">5</span>How many points a chunk keeps</h2>
+<h2 id="density"><span class="n">6</span>How many points a chunk keeps</h2>
 
 <p>The chunk keeps enough points to cover its square on screen a few times. With <var>D</var> the diameter of its sphere on screen and <var>a</var> a point's area in pixels:</p>
 
@@ -175,7 +277,7 @@
   <figcaption>Move the chunk away (a smaller <var>D</var>) and watch it keep fewer points. Set the density to 1 and to 0.5 to see holes open, and switch to one sample per pixel: a hole is a pixel whose samples no point covers.</figcaption>
 </figure>
 
-<p>Measured on a synthetic scan (4 M points, chunks of 32 m, round points of 2 pixels, a top view at 4× MSAA, RTX 3060):</p>
+<p>Measured on a synthetic scan (4 M points, chunks of 32 m, round points of 2 pixels, a top view at 4× MSAA, RTX 3060), all by triangles:</p>
 
 <div class="table-wrap">
 <table>
@@ -190,7 +292,7 @@
 
 <p>The π/4 matters: a disc covers less than its square. Without it, a density of 1 keeps as many points as 0.785 does with it, and leaves 1.3 % of the ground empty.</p>
 
-<h2 id="colormaps"><span class="n">6</span>Colormaps: values to colors</h2>
+<h2 id="colormaps"><span class="n">7</span>Colormaps: values to colors</h2>
 
 <p>A value becomes a color in two steps: the range turns it into <var>t</var> from 0 to 1, and a 256 × 1 texture turns <var>t</var> into a color, read with linear filtering between its entries.</p>
 
@@ -224,7 +326,7 @@
   </div>
 </div>
 
-<h2 id="aa"><span class="n">7</span>Anti-aliasing and motion</h2>
+<h2 id="aa"><span class="n">8</span>Anti-aliasing and motion</h2>
 
 <div class="split">
   <div class="good">
@@ -234,7 +336,7 @@
       <circle cx="40" cy="70" r="120" class="gpu o-50"/>
       <circle cx="135" cy="45" r="6" class="ok"/><circle cx="185" cy="45" r="6" class="bad"/><circle cx="135" cy="95" r="6" class="ok"/><circle cx="185" cy="95" r="6" class="bad"/>
     </svg>
-    <p>The shader turns the distance to the disc's edge into a coverage (alpha-to-coverage): half the samples of an edge pixel, a smooth rim.</p>
+    <p>The shader turns the distance to the disc's edge into a coverage (alpha-to-coverage): half the samples of an edge pixel, a smooth rim. Points of 2 pixels or less have no rim to smooth: they cover whole pixels, all samples, on both paths, so a dense cloud shows no background through partly covered pixels.</p>
   </div>
   <div class="good">
     <h4>TAA: the centre's motion</h4>
@@ -243,24 +345,26 @@
       <line x1="104" y1="77" x2="204" y2="62" class="arrow hot" marker-end="url(#ah-hot)"/>
       <text x="160" y="120" class="mid small">the centre's motion, every pixel</text>
     </svg>
-    <p>The projection's jitter moves the splat; every pixel of it writes the motion of the point's centre, so the history follows the point.</p>
+    <p>The projection's jitter moves the splat; every pixel of it writes the motion of the point's centre, so the history follows the point. The compute path projects with the same jittered matrix, and its resolve writes the same motion.</p>
   </div>
 </div>
 
-<h2 id="pitfalls"><span class="n">8</span>Pitfalls</h2>
+<h2 id="pitfalls"><span class="n">9</span>Pitfalls</h2>
 
 <dl class="pitfalls">
   <div><dt>A far chunk is a stripe or a corner of itself</dt><dd>Its points are in scan order, so a prefix is a part. Build the chunk in a Morton order read in bit-reversed steps.</dd></div>
   <div><dt>Holes in a surface at a distance</dt><dd>Too few points for the chunk's size on screen. Raise the density, or the point size.</dd></div>
   <div><dt>Holes close to the camera</dt><dd>The data is that sparse: every point is drawn. Use a size in metres about the points' spacing.</dd></div>
+  <div><dt>A chunk changes look when it changes path</dt><dd>The compute path and the triangles take different pixels, or round a centre differently. Use one rule for both: a pixel whose centre is in the square, the centre snapped as the rasterizer snaps corners.</dd></div>
+  <div><dt>A small cloud costs more by compute</dt><dd>The clear and the resolve cost per pixel. Send a chunk to compute only when it draws enough points for the pixels it covers, and clear and resolve only that rect.</dd></div>
   <div><dt>Round points vanish at 1 or 2 pixels</dt><dd>A disc that small misses the pixel centres it covers. Draw points under 3 pixels square.</dd></div>
   <div><dt>Steps in the positions far from the origin</dt><dd>The points were floats in world space. Keep them as small offsets in their chunk, and the chunk's place in doubles.</dd></div>
   <div><dt>Colors look washed out or too dark</dt><dd>The colormap's entries are sRGB; store them in an sRGB texture so the read gives linear color.</dd></div>
 </dl>
 
-<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
+<h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
 
-<p>A chunk is a mesh made by <code>buildPointCloudChunk</code>, on any thread, and uploaded by <code>Renderer::createMesh</code>. An entity draws it with a <code>MaterialType::POINTS</code> material, whose <code>PointMaterial</code> gives the size, the shape, the colors and the density. The entity's transform places the chunk; culling, render space far from the origin and picking work as for any entity.</p>
+<p>A chunk is a mesh made by <code>buildPointCloudChunk</code>, on any thread, and uploaded by <code>Renderer::createMesh</code>. An entity draws it with a <code>MaterialType::POINTS</code> material, whose <code>PointMaterial</code> gives the size, the shape, the colors and the density. The entity's transform places the chunk; culling, render space far from the origin and picking work as for any entity. Each view sends its small, dense chunks to the compute path where the GPU has 64-bit buffer atomics (<code>shaderBufferInt64Atomics</code>); <code>RendererConfig::computePoints</code> or <code>Renderer::setComputePoints(false)</code> draws every point by triangles.</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 250" role="img" aria-label="Any thread: buildPointCloudChunk quantizes, sorts and writes the chunk's words. The renderer's thread: createMesh puts them in the point pool and a geometry row. GPU, each view: the cull pass picks the prefix count per chunk (selectPointCount) and writes the draw with 3 indices a point; the point run's pipeline, points.slang, draws one triangle a point and cuts it to its shape.">
@@ -279,14 +383,14 @@
     <rect x="520" y="20" width="220" height="210" rx="6" class="zone"/>
     <text x="532" y="38" class="small title">GPU, every view</text>
     <rect x="536" y="50" width="190" height="70" rx="6" class="shader"/>
-    <text x="631" y="72" class="mid small">Cull: frustum, Hi-Z, then</text>
+    <text x="631" y="72" class="mid small">Cull: frustum, Hi-Z,</text>
     <text x="631" y="90" class="mid small mono">selectPointCount</text>
-    <text x="631" y="108" class="mid small">draw = 3 × k indices</text>
+    <text x="631" y="108" class="mid small">then the path: isRasterChunk</text>
     <line x1="631" y1="120" x2="631" y2="146" class="arrow gpu" marker-end="url(#ah-gpu)"/>
     <rect x="536" y="148" width="190" height="70" rx="6" class="gpu"/>
-    <text x="631" y="170" class="mid small">Scene: the point run,</text>
-    <text x="631" y="188" class="mid small mono">passes/points.slang</text>
-    <text x="631" y="206" class="mid small">a triangle a point, cut</text>
+    <text x="631" y="170" class="mid small">triangles: points.slang</text>
+    <text x="631" y="188" class="mid small">or compute: pointRaster.slang,</text>
+    <text x="631" y="206" class="mid small">atomics, then the resolve</text>
     <text x="20" y="160" class="small">The point run comes after the opaque and MASK runs and before the</text>
     <text x="20" y="176" class="small">blend run. It has its own pipeline per sample count; the depth-only</text>
     <text x="20" y="192" class="small">views of shadows draw no points.</text>
@@ -301,15 +405,16 @@
   <tr><td>16 bits in the box</td><td><code>gfx::PointChunkHeader</code> (48 B) in the point pool (<code>RendererConfig::geometryPoolPoints</code>, 8 B units, 8 MiB by default); the chunk's <code>GeometryData::vertexOffset</code> is its first unit.</td></tr>
   <tr><td>Prefix LOD</td><td><code>selectPointCount</code> in <code>shaders/lib/points.slang</code>, called by the cull pass for the point run (<code>SceneData::pointRun</code>), the one place that decides what a chunk draws. <code>PointMaterial::density</code> is 2 by default. <code>lodErrorPixels</code> 0 draws every point; the forced LOD <var>k</var> (F2) draws <var>N</var> / 2<sup><var>k</var></sup>.</td></tr>
   <tr><td>Colormaps</td><td><code>Renderer::createColormap</code> from 1 to <code>COLORMAP_SIZE</code> linear colors or a <code>ColormapPreset</code>; <code>PointColorMode::SCALAR</code> reads it through <code>PointMaterial::range</code> (<code>ScalarRange</code>); <code>COLOR</code> takes the points' own colors.</td></tr>
-  <tr><td>MSAA and TAA</td><td>Alpha-to-coverage with more than one sample; the centre's motion with TAA.</td></tr>
-  <tr><td>Picking</td><td>A pick pipeline of the point run: <code>PICK_HIT_POINT</code>, and <code>PickHit::feature</code> is the point's index in the arrays given to the builder (<code>Mesh::pointOrder</code> maps it back). <code>PICK_SKIP_POINTS</code> looks through them.</td></tr>
+  <tr><td>Small points by compute</td><td>The cull pass sends a chunk to <code>shaders/passes/pointRaster.slang</code> when <code>isRasterChunk</code> (<code>shaders/lib/points.slang</code>) holds: points of <code>POINT_RASTER_MAX_SIZE</code> (2) pixels or less, at least <code>POINT_RASTER_MIN_DENSITY</code> (0.125) drawn points per pixel of its rect, instance row under 65 536. <code>appendPointBatches</code> adds batches of <code>POINT_BATCH_POINTS</code> (1024) and grows the rect. After the last cull: <code>clearMain</code>, <code>rasterMain</code> (indirect); the resolve quad in the last draw pass, before the sky. A view's buffer (<code>SceneView::pointRaster</code>, <code>getPointRasterLayout</code>): a 48 B header, 8 B a batch, 8 B a pixel.</td></tr>
+  <tr><td>MSAA and TAA</td><td>Alpha-to-coverage with more than one sample, but points of 2 pixels or less cover whole pixels on both paths (the compute path's resolve writes every sample); the centre's motion with TAA, on both paths.</td></tr>
+  <tr><td>Picking</td><td>Always by triangles, which take the same pixels as the compute path. A pick pipeline of the point run: <code>PICK_HIT_POINT</code>, and <code>PickHit::feature</code> is the point's index in the arrays given to the builder (<code>Mesh::pointOrder</code> maps it back). <code>PICK_SKIP_POINTS</code> looks through them.</td></tr>
 </table>
 </div>
 
 <div class="stats">
   <div><b>8 B</b><span>a point, 12 with colors</span><small>+ 48 B a chunk; 2 B a point on the CPU for picks</small></div>
   <div><b>3.6 M</b><span>points a frame from 50 M</span><small>28_point_cloud --points 50000000, two views at 1920 × 1080</small></div>
-  <div><b>1.07 ns</b><span>per point drawn</span><small>RTX 3060, Release: 17 M points 18.2 ms</small></div>
+  <div><b>0.087 ns</b><span>per small point, by compute</span><small>RTX 3060, Release: 33.5 M points of 1 pixel in 3.25 ms; 0.93 ns by triangles</small></div>
 </div>
 
 <h3>Code map</h3>
@@ -321,20 +426,21 @@
   <tr><td>Colormaps</td><td><code>src/scene/colormap.cpp</code>: the preset tables and <code>createColormap</code></td></tr>
   <tr><td>Storage</td><td><code>GeometryPool::allocate</code> and <code>GeometryPool::write</code> for a chunk (<code>src/renderer/geometryPool.cpp</code>)</td></tr>
   <tr><td>The point run</td><td><code>DrawRun::points</code>, <code>ShadedPipelines::pointPipeline</code>, <code>rebuildDrawList</code>, <code>drawSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>Shaders</td><td><code>shaders/lib/points.slang</code> (header, padding, <code>selectPointCount</code>), <code>shaders/passes/points.slang</code> (the draw and the pick), <code>shaders/passes/cull.slang</code></td></tr>
+  <tr><td>The compute path</td><td><code>preparePointRaster</code>, <code>recordPointReset</code>, <code>recordPointRaster</code>, <code>drawPointResolve</code>, <code>getPointRasterLayout</code> in <code>src/renderer/pointRaster.cpp</code>; the buffers made in <code>createSceneView</code> where <code>RenderContext::hasBufferInt64Atomics</code></td></tr>
+  <tr><td>Shaders</td><td><code>shaders/lib/points.slang</code> (header, padding, <code>selectPointCount</code>, <code>isRasterChunk</code>, <code>appendPointBatches</code>), <code>shaders/passes/points.slang</code> (the draw and the pick), <code>shaders/passes/pointRaster.slang</code> (reset, clear, raster, resolve), <code>shaders/passes/cull.slang</code></td></tr>
   <tr><td>Example</td><td><code>examples/28_point_cloud/main.cpp</code>: a synthetic scan 6 000 km out, colored by height, a perspective and an orthographic view</td></tr>
-  <tr><td>Tests</td><td><code>tests/pointCloudTests.cpp</code> (round trip, prefixes); image tests <code>points</code>, <code>points_msaa4</code>, <code>points_taa</code>, <code>points_ortho</code>, <code>far_points</code></td></tr>
+  <tr><td>Tests</td><td><code>tests/pointCloudTests.cpp</code> (round trip, prefixes); image tests <code>points</code>, <code>points_msaa4</code>, <code>points_taa</code>, <code>points_ortho</code>, <code>far_points</code>, and <code>points_triangles</code>, <code>points_msaa4_triangles</code>, <code>points_taa_triangles</code> (the same scene by triangles only, against the compute path's image)</td></tr>
 </table>
 </div>
 
 <div class="callout rule">
   <strong>Rules to keep</strong>
-  <p>A chunk's order is part of its data: every prefix must stay an even sample. The cull pass decides each chunk's count in <code>selectPointCount</code> only. <code>PointData</code> and <code>PointChunkHeader</code> are kept in step on both sides (<a href="struct-layout.html">struct layout</a>).</p>
+  <p>A chunk's order is part of its data: every prefix must stay an even sample. The cull pass decides each chunk's count in <code>selectPointCount</code> only, and its path in <code>isRasterChunk</code> only. The two paths must take the same pixels: a change to one's coverage, size or depth changes the other. <code>PointData</code>, <code>PointChunkHeader</code> and <code>PointRasterHeader</code> are kept in step on both sides (<a href="struct-layout.html">struct layout</a>).</p>
 </div>
 
 <h3>Not yet</h3>
 <ul>
-  <li>A compute rasterizer for points of about 2 pixels or less (64-bit atomics of depth and color), next to this triangle path, chosen per chunk by the cull pass (<code>P32</code>): the next step of the point cloud work.</li>
+  <li>Without the compute path (no 64-bit atomics, or <code>computePoints</code> off) a small point's triangle under MSAA leaves out the samples of a pixel past the square's left, bottom and diagonal sides: 0.7 % of the pixels differ from the compute path's image in the <code>points_msaa4</code> test.</li>
   <li>Streaming a cloud bigger than memory as a tree of chunks, and reading LAS files.</li>
   <li>Points cast no shadows, and debug views draw them as they are (<code>D50</code>).</li>
 </ul>
