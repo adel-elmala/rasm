@@ -258,6 +258,27 @@ TEST_CASE("an orthographic trackball zooms its box at the pointer, which stays o
     CHECK(position.x + pointer.x * perNdc == doctest::Approx(2.0));
     CHECK(position.y + pointer.y * perNdc == doctest::Approx(1.0));
     CHECK(position.z == doctest::Approx(10.0));
+
+    // A thousand steps either way stop at the limits; the box never collapses to 0 or grows to infinity.
+    engine.updateCamera(camera, rasm::CameraInput{.wheelDelta = 1000.0f});
+    CHECK(engine.getCameraProjection(camera).orthographic.top == doctest::Approx(rasm::MIN_TRACK_BALL_RADIUS));
+    engine.updateCamera(camera, rasm::CameraInput{.wheelDelta = -1000.0f});
+    CHECK(engine.getCameraProjection(camera).orthographic.top == doctest::Approx(1e9f));
+    CHECK(std::isfinite(engine.getCameraTransform(camera).position.x));
+}
+
+TEST_CASE("a pan moves the eased pose with the center, so the distance does not jump while easing")
+{
+    rasm::Engine engine(headlessConfig());
+    rasm::Transform transform;
+    transform.position = glm::vec3(0.0f, 0.0f, 10.0f);
+    auto camera = engine.createCamera(perspective(), transform);
+    rasm::CameraController controller = trackBall(10.0f, glm::vec3(0.0f));
+    controller.easingSpeed = 12.0f;
+    engine.setCameraController(camera, controller);
+    engine.updateCamera(camera, rasm::CameraInput{.deltaTime = 0.016f, .panStart = glm::vec2(0.0f), .panEnd = glm::vec2(0.3f, 0.0f)});
+    const glm::dvec3 center = engine.getCameraController(camera).trackBall.center;
+    CHECK(glm::length(engine.getCameraTransform(camera).position - center) == doctest::Approx(10.0));
 }
 
 TEST_CASE("a pan drag moves the trackball's center with the pointer, in perspective and orthographic views")

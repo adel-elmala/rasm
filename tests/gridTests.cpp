@@ -54,6 +54,8 @@ TEST_CASE("a grid's plane follows its orientation, and a disabled grid has no le
     CHECK(data.height == doctest::Approx(23.0f));
     CHECK(data.originCells.y == doctest::Approx(-1.0f));
     CHECK(rasm::makeGridData({}, glm::dvec3(0.0)).levelCount == 0);
+    // Farther than a double counts whole cells: no grid rather than lines in the wrong places.
+    CHECK(rasm::makeGridData({.enabled = true, .cellSize = 1e-9}, glm::dvec3(1e8, 0.0, 0.0)).levelCount == 0);
     CHECK(rasm::makeGridData({.enabled = true, .axes = false}, glm::dvec3(0.0)).xAxisColor.w == 0.0f);
 }
 
@@ -61,6 +63,8 @@ TEST_CASE("a grid with a bad value is refused")
 {
     CHECK(rasm::checkGrid({}));
     CHECK(!rasm::checkGrid({.cellSize = 0.0}));
+    CHECK(!rasm::checkGrid({.cellSize = 1e-310}));
+    CHECK(!rasm::checkGrid({.cellSize = 1e39}));
     CHECK(!rasm::checkGrid({.cellSize = NAN}));
     CHECK(!rasm::checkGrid({.subdivisions = 1}));
     CHECK(!rasm::checkGrid({.subdivisions = 1001}));

@@ -50,9 +50,9 @@ namespace
     };
 
     constexpr rasm::ViewRect RECTS[VIEW_COUNT] = {{.x = 0.0f, .y = 0.0f, .width = 0.5f, .height = 0.5f},
-                                              {.x = 0.5f, .y = 0.0f, .width = 0.5f, .height = 0.5f},
-                                              {.x = 0.0f, .y = 0.5f, .width = 0.5f, .height = 0.5f},
-                                              {.x = 0.5f, .y = 0.5f, .width = 0.5f, .height = 0.5f}};
+                                                  {.x = 0.5f, .y = 0.0f, .width = 0.5f, .height = 0.5f},
+                                                  {.x = 0.0f, .y = 0.5f, .width = 0.5f, .height = 0.5f},
+                                                  {.x = 0.5f, .y = 0.5f, .width = 0.5f, .height = 0.5f}};
 
     // A view's camera with its own rig, input and projection, which the rig's zoom changes.
     struct ViewCamera
@@ -206,10 +206,22 @@ namespace
         return view;
     }
 
-    // One frame of a view's camera: its rig takes the frame's events in its own rect, and may change its projection.
+    // One frame of a view's camera: its rig takes the frame's events in its own rect, and may change its projection. An
+    // orthographic box first takes the view's aspect, as the view draws it, so the zoom and the pan map the pointer
+    // right after the window changed shape (D49).
     void updateViewCamera(rasm::Engine &engine, ViewCamera &view, const rasm::ViewRect &rect)
     {
-        const rasm::InputArea area = rasm::getInputArea(engine.getMainWindow(), rect);
+        const rasm::Window &window = engine.getMainWindow();
+        const rasm::ViewPixels pixels = rasm::getViewPixels(rect, window.pixelWidth, window.pixelHeight);
+        if (view.projection.type == rasm::CameraProjection::Type::ORTHOGRAPHIC && pixels.width > 0 && pixels.height > 0)
+        {
+            rasm::CameraProjection::Orthographic &box = view.projection.orthographic;
+            const float halfHeight = 0.5f * (box.right - box.left) * static_cast<float>(pixels.height) / static_cast<float>(pixels.width);
+            const float middle = 0.5f * (box.bottom + box.top);
+            box.bottom = middle - halfHeight;
+            box.top = middle + halfHeight;
+        }
+        const rasm::InputArea area = rasm::getInputArea(window, rect);
         const rasm::UiInputCapture capture = engine.getUiInputCapture();
         uint32_t count = 0;
         const rasm::InputEvent *events = engine.getInputEvents(count);

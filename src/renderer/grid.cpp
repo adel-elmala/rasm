@@ -11,6 +11,11 @@ namespace rasm
     namespace
     {
         constexpr uint32_t MAX_GRID_SUBDIVISIONS = 1000;
+        // A nanometre to a million kilometres: a float holds the cell, and the cells to any point of a planet fit a double.
+        constexpr double MIN_GRID_CELL = 1e-9;
+        constexpr double MAX_GRID_CELL = 1e9;
+        // Whole cells a double counts exactly; a camera farther out than this from the grid's origin sees no grid.
+        constexpr double MAX_GRID_CELLS = 9007199254740992.0;
 
         bool isFinite(const glm::vec4 &v)
         {
@@ -43,9 +48,9 @@ namespace rasm
             spdlog::error("A grid needs a finite origin and colors, and a non-zero orientation.");
             return false;
         }
-        if (!(grid.cellSize > 0.0) || std::isinf(grid.cellSize))
+        if (!(grid.cellSize >= MIN_GRID_CELL && grid.cellSize <= MAX_GRID_CELL))
         {
-            spdlog::error("A grid needs a finite cellSize greater than 0, got {}.", grid.cellSize);
+            spdlog::error("A grid needs a cellSize from {} to {}, got {}.", MIN_GRID_CELL, MAX_GRID_CELL, grid.cellSize);
             return false;
         }
         if (grid.subdivisions < 2 || grid.subdivisions > MAX_GRID_SUBDIVISIONS)
@@ -93,6 +98,8 @@ namespace rasm
         const double cellSize = grid.cellSize;
         const double x = glm::dot(offset, axisX) / cellSize;
         const double z = glm::dot(offset, axisZ) / cellSize;
+        if (!(std::abs(x) < MAX_GRID_CELLS && std::abs(z) < MAX_GRID_CELLS))
+            return data;
         data.axisX = glm::vec3(axisX);
         data.axisZ = glm::vec3(axisZ);
         data.normal = glm::vec3(normal);

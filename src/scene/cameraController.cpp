@@ -9,6 +9,9 @@ namespace rasm
 {
     namespace
     {
+        // The wheel never takes a trackball's radius, or an orthographic box's smaller half side, past this.
+        constexpr float MAX_ZOOM_SIZE = 1e9f;
+
         glm::vec3 projectOnSphere(const glm::vec2 &ndcPoint)
         {
             float x = ndcPoint.x;
@@ -124,10 +127,14 @@ namespace rasm
         }
 
         // The box shrinks by the zoom around the view's axis, and the camera moves by the pointer's offset from the axis
-        // times (1 - zoom), so the point under the pointer stays where it is.
+        // times (1 - zoom), so the point under the pointer stays where it is. Its smaller half side stays between
+        // MIN_TRACK_BALL_RADIUS and MAX_ZOOM_SIZE, so it never collapses to 0 or grows to infinity.
         void zoomOrthographic(CameraRig &rig, CameraProjection::Orthographic &box, const CameraInput &input, float zoom)
         {
             const float perNdc = 0.5f * std::min(std::abs(box.right - box.left), std::abs(box.top - box.bottom));
+            if (!(perNdc > 0.0f) || std::isinf(perNdc))
+                return;
+            zoom = glm::clamp(zoom, std::min(1.0f, MIN_TRACK_BALL_RADIUS / perNdc), std::max(1.0f, MAX_ZOOM_SIZE / perNdc));
             const glm::vec2 offset(0.5f * (box.left + box.right) + input.pointer.x * perNdc, 0.5f * (box.bottom + box.top) + input.pointer.y * perNdc);
             const glm::quat &rotation = rig.targetTransform.rotation;
             rig.controller.trackBall.center += glm::dvec3((rotation * glm::vec3(1.0f, 0.0f, 0.0f)) * offset.x + (rotation * glm::vec3(0.0f, 1.0f, 0.0f)) * offset.y) * static_cast<double>(1.0f - zoom);
@@ -142,6 +149,7 @@ namespace rasm
             auto &trackBall = rig.controller.trackBall;
             auto &transform = rig.targetTransform;
 
+            const glm::dvec3 centerBefore = trackBall.center;
             const bool orbit = input.mouseStart != input.mouseEnd;
             const bool pan = input.panStart != input.panEnd;
             if (!orbit && !pan && input.wheelDelta == 0.0f)
@@ -183,8 +191,11 @@ namespace rasm
                 if (projection != nullptr && projection->type == CameraProjection::Type::ORTHOGRAPHIC)
                     zoomOrthographic(rig, projection->orthographic, input, zoom);
                 else
-                    trackBall.radius = std::max(trackBall.radius * zoom, MIN_TRACK_BALL_RADIUS);
+                    trackBall.radius = glm::clamp(trackBall.radius * zoom, MIN_TRACK_BALL_RADIUS, MAX_ZOOM_SIZE);
             }
+            // A pan and an orthographic zoom move the center at once: the rendered pose moves with it, so the easing
+            // does not see a change of distance to ease back.
+            rig.transform.position += trackBall.center - centerBefore;
 
             transform.position = trackBall.center + glm::dvec3(trackBall.radius * (transform.rotation * glm::vec3(0.0f, 0.0f, 1.0f)));
         }

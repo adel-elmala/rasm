@@ -567,7 +567,7 @@ engine.render(city.scene, camera);</code></pre>
   <pre class="sig">constexpr float     CAMERA_WHEEL_ZOOM       = 0.9f;
 constexpr float     MIN_TRACK_BALL_RADIUS   = 1e-4f;</pre>
   <div class="body">
-    <p>A wheel step scales a trackball's radius, or an orthographic view's box, by <code>CAMERA_WHEEL_ZOOM</code>: toward the target for a forward step, away for a backward one, so a zoom feels the same at a millimetre and at a kilometre. The radius never goes under <code>MIN_TRACK_BALL_RADIUS</code>, so a zoom out always works again. In <code>rasm/cameraController.h</code>. How it works: <a href="../guides/camera-controllers.html#pan-zoom">Pan and zoom</a>.</p>
+    <p>A wheel step scales a trackball's radius, or an orthographic view's box, by <code>CAMERA_WHEEL_ZOOM</code>: toward the target for a forward step, away for a backward one, so a zoom feels the same at a millimetre and at a kilometre. The radius never goes under <code>MIN_TRACK_BALL_RADIUS</code>, so a zoom out always works again, nor over 10<sup>9</sup>; an orthographic box's smaller half side stays in the same range. In <code>rasm/cameraController.h</code>. How it works: <a href="../guides/camera-controllers.html#pan-zoom">Pan and zoom</a>.</p>
   </div>
 </div>
 
@@ -629,7 +629,7 @@ engine.render(scene, camera);</code></pre>
 void updateCameraRig(CameraRig&amp; rig, CameraProjection&amp; projection, const CameraInput&amp; input);</pre>
   <div class="body">
     <p>One frame: the controller moves <code>targetTransform</code> by the input, then <code>transform</code> eases toward it with <code>easingSpeed</code>. With <code>NONE</code> only the easing runs. The same function moves the engine's cameras, so a rig and an engine camera with the same controller and input end in the same pose.</p>
-    <p>With the camera's <code>projection</code>, a trackball pans by the projection's size at its center (<var>r</var> · tan(<var>fovY</var> / 2), or half the box's smaller side), and for an orthographic projection the wheel scales the box by <code>CAMERA_WHEEL_ZOOM</code> a step and moves the center by the pointer's offset times (1 − the scale), at once: the point under <code>CameraInput::pointer</code> stays put. Set the changed projection back with <a href="#setCameraProjection"><code>setCameraProjection</code></a>. Keep the box's aspect the view's: the engine fits the box's width to the view. Without a projection, a trackball pans as a 45° perspective camera would, and the wheel scales the radius.</p>
+    <p>With the camera's <code>projection</code>, a trackball pans by the projection's size at its center (<var>r</var> · tan(<var>fovY</var> / 2), or half the box's smaller side), and for an orthographic projection the wheel scales the box by <code>CAMERA_WHEEL_ZOOM</code> a step and moves the center by the pointer's offset times (1 − the scale), at once: the point under <code>CameraInput::pointer</code> stays put. Set the changed projection back with <a href="#setCameraProjection"><code>setCameraProjection</code></a>. Keep the box's aspect the view's (<code>D49</code>): the engine fits the box's width to the view, so fit the height before each update, as <code>examples/27_cad_views</code> does. Without a projection, a trackball pans as a 45° perspective camera would, and the wheel scales the radius.</p>
     <pre><code>rasm::updateCameraRig(view.rig, view.projection, rasm::takeCameraInput(view.input, capture, engine.getDeltaTime()));
 engine.setCameraTransform(view.camera, view.rig.transform);
 engine.setCameraProjection(view.camera, view.projection);</code></pre>
@@ -773,7 +773,7 @@ input.buttons.left = rasm::CameraDrag::PAN; // a CAD convention for a flat view<
     <dl>
       <dt>origin</dt><dd>A point of the plane, in the world, where the axes cross. Lines sit on exact multiples of <code>cellSize</code> from it, also 6 000 km from the world's origin.</dd>
       <dt>orientation</dt><dd>Turns the XZ plane: <code class="lang-text">angleAxis(90°, +X)</code> gives a wall facing +Z (a front view's grid), <code class="lang-text">angleAxis(−90°, +Z)</code> one facing +X.</dd>
-      <dt>cellSize</dt><dd>The finest level's cells, in world units, a double. Greater than 0.</dd>
+      <dt>cellSize</dt><dd>The finest level's cells, in world units, a double: 10<sup>−9</sup> to 10<sup>9</sup>. A camera farther from <code>origin</code> than 2<sup>53</sup> cells shows no grid.</dd>
       <dt>subdivisions</dt><dd>Cells of one level per cell of the next, along a side: 10 for decimal, 2 for binary. 2 to 1000.</dd>
       <dt>extent</dt><dd>Half the grid's size along its X and Z axes; 0 leaves that axis endless.</dd>
       <dt>minorColor, majorColor</dt><dd>Linear color and alpha of the lines and of every <code>subdivisions</code>-th line. They go through exposure and tone mapping, like the scene.</dd>
@@ -788,7 +788,7 @@ input.buttons.left = rasm::CameraDrag::PAN; // a CAD convention for a flat view<
   <pre class="sig">bool setCameraGrid(CameraHandle camera, const Grid&amp; grid);
 Grid getCameraGrid(CameraHandle camera);</pre>
   <div class="body">
-    <p>Sets the grid every shaded view of the camera draws, from the next frame; <code>Grid{}</code> turns it off. An invalid camera, or a grid with a value out of range (a <code>cellSize</code> of 0, <code>subdivisions</code> outside 2 to 1000, a negative width or extent, NaN), logs an error, keeps the old grid and returns <code>false</code>. Each camera has its own, so each view of a CAD layout can show the plane it looks at.</p>
+    <p>Sets the grid every shaded view of the camera draws, from the next frame; <code>Grid{}</code> turns it off. An invalid camera, or a grid with a value out of range (a <code>cellSize</code> outside 10<sup>−9</sup> to 10<sup>9</sup>, <code>subdivisions</code> outside 2 to 1000, a negative width or extent, NaN), logs an error, keeps the old grid and returns <code>false</code>. Each camera has its own, so each view of a CAD layout can show the plane it looks at.</p>
     <pre><code>rasm::Grid grid;
 grid.enabled = true;
 grid.cellSize = 0.01; // 1 cm, then 10 cm, 1 m, 10 m ...
