@@ -86,7 +86,8 @@ namespace rasm
     // than a cell sinks into the ground beside it where the ground bends. With shape.drapeWidth > 0 a draped line is
     // built that wide (metres), cut on the grid across its whole width: all of it lies on the drawn ground. It is then
     // drawn that wide in the ground's plane whatever the material's width and facing say (the outline and the dashes
-    // still follow the material), and a new width takes a rebuild.
+    // still follow the material), and a new width takes a rebuild. It is cut at the tile's edges: give each tile the
+    // lines within half the width of it, and its neighbour draws the rest.
     void                            addVectorLines(VectorGeometry& geometry, const glm::dvec3& origin, const glm::dvec3* points, const uint32_t* lineSizes, uint32_t lineCount, const LineShape& shape = {},
                                                    const VectorPlacement& placement = {}, const uint32_t* featureIds = nullptr);
     // Polygons with holes: points holds every ring, one after another, ringSizes[r] points for ring r; polygon i has

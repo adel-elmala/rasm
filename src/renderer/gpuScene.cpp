@@ -2060,10 +2060,12 @@ namespace rasm
                     candidate.high = boxCenter + halfSize;
                     candidate.inView = std::abs(ndc.x) <= 1.0 && std::abs(ndc.y) <= 1.0;
                     // The depth the anchor must be in front of: its own, moved toward the camera by a few pixels' size
-                    // there (reversed-Z: a larger depth is nearer), for any projection.
+                    // there (reversed-Z: a larger depth is nearer), for any projection. An anchor off the screen keeps
+                    // its fade.
                     const glm::dvec4 nearer = glm::dmat4(projection) * (viewPosition + glm::dvec4(0.0, 0.0, LABEL_DEPTH_PIXELS * pixelWorld, 0.0));
                     const float test = overlay ? LABEL_PROBE_OVERLAY : LABEL_PROBE_DEPTH;
-                    candidate.probe = glm::vec4(center, static_cast<float>(nearer.z / nearer.w), test);
+                    if (candidate.inView)
+                        candidate.probe = glm::vec4(center, static_cast<float>(nearer.z / nearer.w), test);
                 }
                 candidates.push_back(candidate);
                 lowSlot = std::min(lowSlot, slot);
@@ -2072,30 +2074,28 @@ namespace rasm
         }
         if (candidates.empty())
             return;
+        // The buffers hold every slot up to the highest in use and grow to twice that, under the same handles, which the
+        // frame's passes name. The fades stay in place across frames; when their buffer grows, every label starts its
+        // fade over.
+        const uint32_t needed = highSlot + 1;
+        const uint32_t capacity = std::min(std::max(needed * 2, 1024u), MAX_LABELS);
+        const bool fadesGrow = view.labelFadeCapacity < needed;
+        if (fadesGrow)
+            view.labelFadeCapacity = ctx.resizeBuffer(view.labelFades, static_cast<uint64_t>(capacity) * sizeof(float)) ? capacity : 0;
         // A label that was hidden (or is new to the view) starts its fade by depth at its test's answer.
         for (LabelCandidate &candidate : candidates)
         {
             const bool hidden = candidate.slot >= view.labels.alpha.size() || view.labels.alpha[candidate.slot] <= 0.0f || view.labels.stamps[candidate.slot] != gpuScene->labelStamps[candidate.slot];
-            if (hidden && candidate.probe.w != LABEL_PROBE_NONE)
+            if ((hidden || fadesGrow) && candidate.probe.w != LABEL_PROBE_NONE)
                 candidate.probe.w += LABEL_PROBE_RESET;
         }
         placeLabels(view.labels, candidates.data(), static_cast<uint32_t>(candidates.size()), gpuScene->labelStamps.data(), MAX_LABELS, width, height, deltaTime / LABEL_FADE_SECONDS);
 
-        // The buffers hold every slot up to the highest in use and grow to twice that, under the same handles, which the
-        // frame's passes name. The fades stay in place across frames; a fade buffer that grows starts its labels over.
-        const uint32_t needed = highSlot + 1;
-        const uint32_t capacity = std::min(std::max(needed * 2, 1024u), MAX_LABELS);
         if (view.labelCapacity[frame] < needed)
         {
             const bool grown = ctx.resizeBuffer(view.labelBuffers[frame], static_cast<uint64_t>(capacity) * sizeof(float)) &&
                                ctx.resizeBuffer(view.labelProbes[frame], static_cast<uint64_t>(capacity) * sizeof(glm::vec4));
             view.labelCapacity[frame] = grown ? capacity : 0;
-        }
-        if (view.labelFadeCapacity < needed)
-        {
-            const std::vector<float> shown(capacity, 1.0f);
-            const bool grown = ctx.resizeBuffer(view.labelFades, static_cast<uint64_t>(capacity) * sizeof(float)) && ctx.fillBuffer(view.labelFades, shown.data(), shown.size() * sizeof(float));
-            view.labelFadeCapacity = grown ? capacity : 0;
         }
         if (view.labelCapacity[frame] < needed ||
             !ctx.fillBuffer(view.labelBuffers[frame], view.labels.alpha.data() + lowSlot, static_cast<size_t>(needed - lowSlot) * sizeof(float), static_cast<size_t>(lowSlot) * sizeof(float)))
@@ -2114,6 +2114,7 @@ namespace rasm
         sceneData.labelFadesPtr = ctx.getBufferDeviceAddress(view.labelFades);
         sceneData.labelFadeStep = deltaTime / LABEL_FADE_SECONDS;
         sceneData.labelSlotCount = needed;
+        view.labelDepthFirst = lowSlot;
         view.labelDepthSlots = needed;
     }
 
@@ -2247,11 +2248,12 @@ namespace rasm
         if (!view.ready || view.labelDepthSlots == 0)
             return;
         const auto commandBuffer = frameResources[frameCount].commandBuffer;
-        const gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, static_cast<uint32_t>(frameCount), viewIndex)};
+        // The slots from the view's first to its last, the ones placeViewLabels wrote a probe for.
+        const gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, static_cast<uint32_t>(frameCount), viewIndex), .argument = view.labelDepthFirst};
         ctx.bindPipeline(commandBuffer, gpuScene->labelDepthPipeline);
         ctx.bindDescriptorSet(commandBuffer, gpuScene->labelDepthPipeline, bindlessDescriptorSet, 0);
         ctx.pushConstants(commandBuffer, gpuScene->labelDepthPipeline, &pushConstants, sizeof(pushConstants), 0);
-        ctx.dispatch(commandBuffer, (view.labelDepthSlots + LABEL_DEPTH_GROUP_SIZE - 1) / LABEL_DEPTH_GROUP_SIZE);
+        ctx.dispatch(commandBuffer, (view.labelDepthSlots - view.labelDepthFirst + LABEL_DEPTH_GROUP_SIZE - 1) / LABEL_DEPTH_GROUP_SIZE);
     }
 
     // Culling packs a run's visible draws at the start of its range and counts them, so each run is one indirect

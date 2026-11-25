@@ -49,14 +49,14 @@ bool isAnchorVisible(SceneData *scene, float4 probe)
     return false;
 }
 
-// One label slot: its fade by depth steps toward its answer (or starts at it, for a label that was hidden), and the
+// One label slot, from pc.argument (the view's first slot) on: its fade by depth steps toward its answer (or starts at it, for a label that was hidden), and the
 // slot's alpha, its placement's, takes it.
 [shader("compute")]
 [numthreads(LABEL_DEPTH_GROUP_SIZE, 1, 1)]
 void labelDepthMain(uint3 threadId : SV_DispatchThreadID)
 {
     SceneData *scene    = pc.scene;
-    uint slot           = threadId.x;
+    uint slot           = pc.argument + threadId.x;
     if (slot >= scene->labelSlotCount)
         return;
     float4 probe        = scene->labelProbesPtr[slot];

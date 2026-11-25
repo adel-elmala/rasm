@@ -408,10 +408,12 @@ namespace
         const Features &features = getFeatures();
         std::vector<glm::dvec3> points;
         std::vector<uint32_t> sizes;
-        // A coarse tile keeps one road point in 2^(5 - level): its cells are as coarse.
+        // A coarse tile keeps one road point in 2^(5 - level): its cells are as coarse. The roads within half their width
+        // of the tile, which cuts them at its edges.
         const uint32_t stride = 1u << std::max(0, 5 - data.level);
+        const glm::dvec2 margin(0.5 * ROAD_WIDTH);
         for (const std::vector<glm::dvec3> &road : features.roads)
-            clipLine(road, low, high, stride, points, sizes);
+            clipLine(road, low - margin, high + margin, stride, points, sizes);
         rasm::VectorGeometry roads;
         rasm::addVectorLines(roads, origin, points.data(), sizes.data(), static_cast<uint32_t>(sizes.size()), {.join = rasm::LineJoin::ROUND, .cap = rasm::LineCap::BUTT, .drapeWidth = ROAD_WIDTH}, placement);
         if (!roads.indices.empty())

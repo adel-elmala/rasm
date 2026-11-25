@@ -799,7 +799,7 @@ namespace
         return assets.cube.isValid() && font.isValid() && addSunsetLight(engine, assets, content, 0.8f, glm::vec3(0.4f, -0.8f, -0.3f), 2.5f);
     }
 
-    // What the picking tests pick:a ground and a box (planes, so the positions are exact), a terrain tile, CesiumMan
+    // What the picking tests pick: a ground and a box (planes, so the positions are exact), a terrain tile, CesiumMan
     // (skinned, posed on the GPU), a line, a label, a see-through polygon and an overlay line over the box.
     bool buildPicking(rasm::Engine &engine, const Assets &assets, Content &content)
     {

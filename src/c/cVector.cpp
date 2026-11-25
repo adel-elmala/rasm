@@ -3,6 +3,7 @@
 #include "rasm/renderer.h"
 #include "rasm/vector.h"
 
+#include <cmath>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -63,6 +64,11 @@ namespace
         if (shape != nullptr && (!c::readSized(shape, c::LINE_SHAPE_SIZE_1_5, &values, sizeof(values), function, "shape") ||
                                  !c::checkEnum(values.join, RASM_LINE_JOIN_ROUND + 1, function, "shape->join") || !c::checkEnum(values.cap, RASM_LINE_CAP_ROUND + 1, function, "shape->cap")))
             return false;
+        if (!std::isfinite(values.drape_width) || values.drape_width < 0.0f)
+        {
+            c::reportError(function, "shape->drape_width must be finite and 0 or more.");
+            return false;
+        }
         result = {.join = static_cast<LineJoin>(values.join), .cap = static_cast<LineCap>(values.cap), .miterLimit = values.miter_limit, .drapeWidth = values.drape_width};
         return true;
     }

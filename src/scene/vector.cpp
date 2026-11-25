@@ -96,13 +96,19 @@ namespace rasm
             return placement.drapeTile != nullptr && placement.drapeTile->size > 0.0 && heights.width >= 4 && (heights.unorm16 != nullptr || heights.floats != nullptr);
         }
 
-        // A world point across the tile, in grid units: (0, 0) at its first corner, (cells, cells) at the other.
-        glm::dvec2 toGrid(const VectorPlacement &placement, const glm::dvec3 &world)
+        // A world point across the tile's plane, in grid units: (0, 0) at its first corner, (cells, cells) at the other,
+        // and past them off the tile.
+        glm::dvec2 toGridPlane(const VectorPlacement &placement, const glm::dvec3 &world)
         {
             const TerrainTileDesc &tile = *placement.drapeTile;
             const glm::dvec3 local = glm::inverse(glm::dquat(tile.orientation)) * (world - tile.center);
-            const double cells = getCells(placement);
-            return glm::clamp(glm::dvec2(local.x / tile.size + 0.5, local.z / tile.size + 0.5), 0.0, 1.0) * cells;
+            return glm::dvec2(local.x / tile.size + 0.5, local.z / tile.size + 0.5) * static_cast<double>(getCells(placement));
+        }
+
+        // A world point across the tile, in grid units, kept on the tile.
+        glm::dvec2 toGrid(const VectorPlacement &placement, const glm::dvec3 &world)
+        {
+            return glm::clamp(toGridPlane(placement, world), 0.0, static_cast<double>(getCells(placement)));
         }
 
         // The drawn ground at a grid point and the normal of the triangle under it, in the world.
@@ -368,9 +374,9 @@ namespace rasm
             return glm::round(grid * STEPS) / STEPS;
         }
 
-        // A draped line shape.drapeWidth wide: built as on flat ground across the tile (metres along the grid's x and z),
-        // then each triangle cut on the grid and each piece's corners lifted onto the drawn ground, so every piece lies
-        // on one terrain triangle. A corner keeps its offset and distance (interpolated in its triangle) and carries the
+        // A draped line shape.drapeWidth wide: built as on flat ground across the tile's plane (metres along the grid's x
+        // and z), then each triangle cut to the tile and on its grid, and each piece's corners lifted onto the drawn
+        // ground, so every piece lies on one terrain triangle. What is past the tile's edges is left to its neighbours. A corner keeps its offset and distance (interpolated in its triangle) and carries the
         // built half width in uv[1].y; the shader only adds the anti-aliasing pixel, in the ground's plane.
         void pushDrapedLine(VectorGeometry &geometry, const glm::dvec3 &origin, const VectorPlacement &placement, const glm::dvec3 *points, uint32_t count, const LineShape &shape,
                             uint32_t featureId)
@@ -382,7 +388,7 @@ namespace rasm
             std::vector<GroundPoint> flat;
             for (uint32_t i = 0; i < count; ++i)
             {
-                const glm::dvec2 at = toGrid(placement, points[i]) * cell;
+                const glm::dvec2 at = toGridPlane(placement, points[i]) * cell;
                 const glm::dvec3 position(at.x, 0.0, at.y);
                 if (flat.empty() || glm::length(position - flat.back().position) > 1e-9)
                     flat.push_back({.position = position, .up = flatUp});
@@ -393,7 +399,9 @@ namespace rasm
             pushLine(band, flat[0].position, flat, shape, featureId);
 
             const glm::dquat orientation(tile.orientation);
+            const auto cells = static_cast<double>(getCells(placement));
             std::vector<Polygon2> pieces;
+            std::vector<Polygon2> cut;
             for (size_t t = 0; t + 2 < band.indices.size(); t += 3)
             {
                 const Vertex *corners[3] = {&band.vertices[band.indices[t]], &band.vertices[band.indices[t + 1]], &band.vertices[band.indices[t + 2]]};
@@ -414,7 +422,16 @@ namespace rasm
                     continue;
                 const glm::dvec3 alongTile = orientation * along;
                 const float metric = corners[0]->uv[2].y;
-                cutTriangle(at[0], at[1], at[2], pieces);
+                // The part on the tile, then cut on its grid.
+                Polygon2 onTile = {at[0], at[1], at[2]};
+                onTile = clipHalf(clipHalf(onTile, glm::dvec2(1.0, 0.0), 0.0, 1.0), glm::dvec2(1.0, 0.0), cells, -1.0);
+                onTile = clipHalf(clipHalf(onTile, glm::dvec2(0.0, 1.0), 0.0, 1.0), glm::dvec2(0.0, 1.0), cells, -1.0);
+                pieces.clear();
+                for (size_t k = 1; k + 1 < onTile.size(); ++k)
+                {
+                    cutTriangle(onTile[0], onTile[k], onTile[k + 1], cut);
+                    pieces.insert(pieces.end(), cut.begin(), cut.end());
+                }
                 for (const Polygon2 &piece : pieces)
                 {
                     const auto first = static_cast<uint32_t>(geometry.vertices.size());
@@ -502,7 +519,7 @@ namespace rasm
         for (uint32_t i = 0; i < lineCount; ++i)
         {
             const uint32_t featureId = featureIds != nullptr ? featureIds[i] : i;
-            if (shape.drapeWidth > 0.0f && isDraped(placement))
+            if (std::isfinite(shape.drapeWidth) && shape.drapeWidth > 0.0f && isDraped(placement))
             {
                 pushDrapedLine(geometry, origin, placement, points + first, lineSizes[i], shape, featureId);
                 first += lineSizes[i];

@@ -263,8 +263,9 @@ VectorVertex getVectorVertex(SceneData *scene, VectorData style, float4x4 world,
         float2 moved        = output.edge * (halfWorld * widen) - vert.uv[0] * builtHalf;
         output.clipPosition = mul(viewProjection, float4(anchor + moved.x * along + moved.y * across, 1.0));
         // It keeps the depth of its point on the ground, which is off by the slope times the move where it moved: drawn
-        // that much nearer, it holds on slopes up to 45 degrees, and the pieces that meet at a point still meet.
-        lift                = length(moved);
+        // that much nearer, it holds on slopes up to 45 degrees, and the pieces that meet at a point still meet. The
+        // widening of a band seen edge-on is not counted, or it would be drawn far nearer than it is.
+        lift                = length(output.edge * halfWorld - vert.uv[0] * builtHalf);
     }
     else if (kind == VECTOR_KIND_LINE || kind == VECTOR_KIND_POINT)
     {
@@ -293,7 +294,7 @@ VectorVertex getVectorVertex(SceneData *scene, VectorData style, float4x4 world,
             // is drawn nearer by its half width in the world, a few pixels' worth (a width in metres is draped exactly
             // with LineShape::drapeWidth).
             if (!metres)
-                lift            = halfWorld * widen;
+                lift            = halfWorld;
         }
         else
         {

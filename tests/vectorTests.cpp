@@ -3,6 +3,7 @@
 #include "doctest/doctest.h"
 
 #include <bit>
+#include <limits>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -253,6 +254,31 @@ TEST_CASE("draped polygons and lines lie on the drawn terrain")
             straight += 0.5 * std::abs((b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z));
     }
     CHECK(straight == doctest::Approx(8.0 * glm::length(glm::dvec2(36.0, -18.0))).epsilon(1e-4));
+
+    // A band along the tile's edge is cut there: its outer half is the neighbour's. On the tile, it is still on the
+    // ground, and covers half its width.
+    const glm::dvec3 edge[2] = {origin + glm::dvec3(-16.0, 0.0, 20.0), origin + glm::dvec3(16.0, 0.0, 20.0)};
+    rasm::VectorGeometry cut;
+    rasm::addVectorLines(cut, origin, edge, &two, 1, {.cap = rasm::LineCap::BUTT, .drapeWidth = 6.0f}, placement);
+    double onTile = 0.0;
+    for (size_t t = 0; t < cut.indices.size(); t += 3)
+    {
+        const glm::vec3 a = cut.vertices[cut.indices[t]].pos;
+        const glm::vec3 b = cut.vertices[cut.indices[t + 1]].pos;
+        const glm::vec3 c = cut.vertices[cut.indices[t + 2]].pos;
+        for (const glm::vec3 &p : {a, b, c})
+        {
+            CHECK(p.z <= 20.0f + 1e-4f);
+            CHECK(static_cast<double>(p.y) == doctest::Approx(heightAt(origin + glm::dvec3(p)) - origin.y).epsilon(1e-5));
+        }
+        onTile += 0.5 * std::abs((b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z));
+    }
+    CHECK(onTile == doctest::Approx(3.0 * 32.0).epsilon(1e-4));
+    // A width that is not finite keeps the middle's draping.
+    rasm::VectorGeometry infinite;
+    rasm::addVectorLines(infinite, origin, edge, &two, 1, {.drapeWidth = std::numeric_limits<float>::infinity()}, placement);
+    REQUIRE_FALSE(infinite.vertices.empty());
+    CHECK(infinite.vertices[0].uv[2].x == KIND_LINE);
 }
 
 TEST_CASE("points are quads of corner offsets, with an icon's corners when given")

@@ -17,6 +17,7 @@
 #include <cmath>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <cstddef>
 #include <cstring>
 #include <filesystem>
@@ -670,6 +671,12 @@ TEST_CASE("meshes and vector features build on any thread, with no renderer")
     REQUIRE(rasm_vector_geometry_get_size(geometry, &vertices, &indices) == RASM_OK);
     CHECK(vertices == 4 + 3 + 4);
     CHECK(indices == 6 + 3 + 6);
+    // 1.9: a draped width that is not finite, or below 0, is refused.
+    shape.drape_width = std::numeric_limits<float>::infinity();
+    CHECK(rasm_vector_add_lines(geometry, origin, points, &size, 1, &shape, nullptr, nullptr) == RASM_ERROR_INVALID_ARGUMENT);
+    shape.drape_width = -1.0f;
+    CHECK(rasm_vector_add_lines(geometry, origin, points, &size, 1, &shape, nullptr, nullptr) == RASM_ERROR_INVALID_ARGUMENT);
+    shape.drape_width = 0.0f;
     const uint32_t ringSizes[1] = {3};
     const uint32_t ringCounts[1] = {1};
     CHECK(rasm_vector_add_polygons(geometry, origin, points, ringSizes, ringCounts, 1, nullptr, nullptr) == RASM_OK);

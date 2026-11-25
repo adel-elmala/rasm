@@ -132,7 +132,8 @@ namespace rasm
         BufferHandle                    labelFades                                                          = {};   // each label slot's fade by depth, kept across frames like visibility
         uint32_t                        labelCapacity[MAX_FRAMES_IN_FLIGHT]                                 = {};
         uint32_t                        labelFadeCapacity                                                   = 0;
-        uint32_t                        labelDepthSlots                                                     = 0;    // this frame's slots for the Label Depth pass; 0: it does nothing
+        uint32_t                        labelDepthFirst                                                     = 0;    // this frame's first slot for the Label Depth pass
+        uint32_t                        labelDepthSlots                                                     = 0;    // and its end; 0: it does nothing
         std::vector<glm::vec4>          labelProbeData;                                                             // scratch, keeps its capacity
         gfx::SceneData                  sceneData                                                           = {};   // this frame's, as the GPU reads it: a pick starts from it
         glm::mat4                       projection                                                          = glm::mat4(1.0f);  // this frame's, without jitter
