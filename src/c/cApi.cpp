@@ -107,6 +107,8 @@ namespace rasm::c
         static_assert(RASM_FORMAT_EAC_R11_UNORM == asNumber(Format::EAC_R11_UNORM));
         static_assert(RASM_FORMAT_EAC_R11G11_UNORM == asNumber(Format::EAC_R11G11_UNORM));
         static_assert(RASM_FORMAT_R16G16_SFLOAT == asNumber(Format::R16G16_SFLOAT));
+        static_assert(RASM_FORMAT_R16_UNORM == asNumber(Format::R16_UNORM));
+        static_assert(RASM_FORMAT_R32_SFLOAT == asNumber(Format::R32_SFLOAT));
         static_assert(RASM_PLATFORM_TYPE_SDL == asNumber(PlatformType::SDL));
         static_assert(RASM_PLATFORM_TYPE_HEADLESS == asNumber(PlatformType::HEADLESS));
         static_assert(RASM_PLATFORM_TYPE_NATIVE == asNumber(PlatformType::NATIVE));
@@ -132,6 +134,8 @@ namespace rasm::c
         static_assert(RASM_MESHLET_PATH_AUTO == asNumber(MeshletPath::AUTO));
         static_assert(RASM_MATERIAL_TYPE_PBR == asNumber(MaterialType::PBR));
         static_assert(RASM_MATERIAL_TYPE_UNLIT == asNumber(MaterialType::UNLIT));
+        static_assert(RASM_MATERIAL_TYPE_TERRAIN == asNumber(MaterialType::TERRAIN));
+        static_assert(RASM_MAX_TERRAIN_CELLS == MAX_TERRAIN_CELLS);
         static_assert(RASM_PBR_SLOT_ALBEDO == asNumber(PbrSlot::ALBEDO));
         static_assert(RASM_PBR_SLOT_METALLIC == asNumber(PbrSlot::METALLIC));
         static_assert(RASM_PBR_SLOT_ROUGHNESS == asNumber(PbrSlot::ROUGHNESS));
@@ -728,6 +732,7 @@ namespace rasm::c
         result.doubleSided = material.double_sided != 0;
         result.alphaMode = static_cast<AlphaMode>(material.alpha_mode);
         result.alphaCutoff = material.alpha_cutoff;
+        result.terrain = toCpp(material.terrain);
         return result;
     }
 
@@ -746,7 +751,30 @@ namespace rasm::c
         result.double_sided = material.doubleSided ? RASM_TRUE : RASM_FALSE;
         result.alpha_mode = asNumber(material.alphaMode);
         result.alpha_cutoff = material.alphaCutoff;
+        result.terrain = toC(material.terrain);
         return result;
+    }
+
+    TerrainMaterial toCpp(const rasm_terrain_material &terrain)
+    {
+        return {.heights = toCpp(terrain.heights),
+                .heightScale = terrain.height_scale,
+                .heightOffset = terrain.height_offset,
+                .minHeight = terrain.min_height,
+                .maxHeight = terrain.max_height,
+                .skirt = terrain.skirt,
+                .sphereRadius = terrain.sphere_radius};
+    }
+
+    rasm_terrain_material toC(const TerrainMaterial &terrain)
+    {
+        return {.heights = toC(terrain.heights),
+                .height_scale = terrain.heightScale,
+                .height_offset = terrain.heightOffset,
+                .min_height = terrain.minHeight,
+                .max_height = terrain.maxHeight,
+                .skirt = terrain.skirt,
+                .sphere_radius = terrain.sphereRadius};
     }
 
     SceneEnvironment toCpp(const rasm_scene_environment &environment)
