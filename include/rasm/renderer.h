@@ -14,6 +14,7 @@
 #include "rasm/light.h"
 #include "rasm/mesh.h"
 #include "rasm/readback.h"
+#include "rasm/terrain.h"
 #include "rasm/tileStreamer.h"
 #include "rasm/view.h"
 #include "rasm/handle.h"
@@ -139,6 +140,13 @@ namespace rasm
         void                        clearMorphWeights(EntityHandle entity);
         std::vector<std::string>    getMorphTargetNames(MeshHandle mesh) const;
         MeshHandle                  createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices, std::vector<uint32_t> colors = {});
+        // The grid every terrain tile of cells x cells shares, made on first use and kept until the renderer goes (not
+        // listed in a tile's content, and destroyMesh refuses it). Invalid for 0 or more than MAX_TERRAIN_CELLS.
+        MeshHandle                  getTerrainMesh(uint32_t cells);
+        // A TERRAIN material from the desc and an entity on getTerrainMesh with getTerrainTransform. The heights decide
+        // the cells (their width - 3). Both invalid on failure. To change the heights' range later, update the
+        // material's terrain and the entity's transform together.
+        TerrainTile                 createTerrainTile(const TerrainTileDesc& desc);
         // A mesh, texture or environment from an AssetLoader is in: its data is on the GPU (an environment: baked).
         // Made with createMesh or createTexture, it is in at once.
         bool                        isLoaded(MeshHandle mesh) const;
@@ -506,6 +514,7 @@ namespace rasm
 
         LoadHooks*                                                              loads               = nullptr;  // the attached AssetLoader's
         std::unordered_set<TextureHandle, HandleHash>                           loadingTextures;    // made by a loader, not filled yet: isLoaded false
+        std::vector<MeshHandle>                                                 terrainMeshes;      // by cells: getTerrainMesh's grids
 
         bool                        isLive(const EntityHandle& entity) const;
         bool                        isLive(const MeshHandle& mesh) const;

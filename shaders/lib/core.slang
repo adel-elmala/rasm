@@ -10,7 +10,7 @@ static const uint   INVALID_TEXTURE_INDEX = 0xFFFFFFFF;
 static const uint   MAX_DRAW_RUNS       = 7;
 
 // Selects how fragMain shades a model. Must match rasm::gfx::MaterialId.
-enum class MaterialId : uint32_t { PBR, UNLIT };
+enum class MaterialId : uint32_t { PBR, UNLIT, TERRAIN };
 
 // Must match rasm::AlphaMode.
 enum class AlphaMode : uint32_t { NONE, MASK, BLEND };
@@ -127,6 +127,18 @@ struct Material
 
 // The texture transforms come after the rest, so a shader copies Material without them and reads them only for a
 // material whose flags have MATERIAL_TEXTURE_TRANSFORM.
+// A TERRAIN material's heights (lib/terrain.slang); zero for the others. Must match rasm::gfx::TerrainData.
+struct TerrainData
+{
+    uint32_t            heights;            // bindless index
+    uint32_t            heightKind;         // TERRAIN_HEIGHTS_*
+    float               heightScale;        // metres = heightOffset + heightScale * sample
+    float               heightOffset;
+    float               minHeight;
+    float               skirt;
+    float               sphereRadius;       // 0: flat
+};
+
 struct MaterialData
 {
     Material            material;
@@ -135,6 +147,7 @@ struct MaterialData
     float               alphaCutoff;
     uint32_t            flags;
     TextureTransform    textureTransforms[TEXTURE_TRANSFORMS];
+    TerrainData         terrain;
 };
 
 struct InstanceData

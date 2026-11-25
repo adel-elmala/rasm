@@ -52,6 +52,9 @@ namespace rasm
         case MaterialType::UNLIT:
             material.name = "unlit";
             break;
+        case MaterialType::TERRAIN:
+            material.name = "terrain";
+            break;
 
         default:
             spdlog::error("Unknown material template type.");
@@ -135,6 +138,10 @@ namespace rasm
                 addBindlessTexture(bindlessDescriptorSet, texture);
             texturesLoading = texturesLoading || (texture.isValid() && !isLoaded(texture));
         }
+        const TextureHandle heights = values.terrain.heights;
+        if (heights.isValid() && getBindlessTextureIndex(heights) == UINT32_MAX)
+            addBindlessTexture(bindlessDescriptorSet, heights, SamplerType::NEAREST_CLAMP);
+        texturesLoading = texturesLoading || (heights.isValid() && !isLoaded(heights));
 
         Material &materialRef = registry.materials[material.index];
         const bool runChanged = materialRef.doubleSided != values.doubleSided || materialRef.alphaMode != values.alphaMode;

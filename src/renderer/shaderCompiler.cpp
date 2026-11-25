@@ -677,7 +677,17 @@ namespace rasm
                                      {"alphaMode", offsetof(gfx::MaterialData, alphaMode)},
                                      {"alphaCutoff", offsetof(gfx::MaterialData, alphaCutoff)},
                                      {"flags", offsetof(gfx::MaterialData, flags)},
-                                     {"textureTransforms", offsetof(gfx::MaterialData, textureTransforms)}});
+                                     {"textureTransforms", offsetof(gfx::MaterialData, textureTransforms)},
+                                     {"terrain", offsetof(gfx::MaterialData, terrain)}});
+
+            valid &= validateStruct(fieldStruct(layouts, materialData, "terrain"), "TerrainData", sizeof(gfx::TerrainData),
+                                    {{"heights", offsetof(gfx::TerrainData, heights)},
+                                     {"heightKind", offsetof(gfx::TerrainData, heightKind)},
+                                     {"heightScale", offsetof(gfx::TerrainData, heightScale)},
+                                     {"heightOffset", offsetof(gfx::TerrainData, heightOffset)},
+                                     {"minHeight", offsetof(gfx::TerrainData, minHeight)},
+                                     {"skirt", offsetof(gfx::TerrainData, skirt)},
+                                     {"sphereRadius", offsetof(gfx::TerrainData, sphereRadius)}});
 
             valid &= validateStruct(material, "Material", sizeof(gfx::Material),
                                     {{"metallicRoughness", offsetof(gfx::Material, pbr)},

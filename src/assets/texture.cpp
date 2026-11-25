@@ -31,6 +31,11 @@ namespace rasm
                     used = true;
                 }
             }
+            if (material.terrain.heights == texture)
+            {
+                material.terrain.heights = {};
+                used = true;
+            }
             if (used)
             {
                 writeMaterialRow(material.handle);

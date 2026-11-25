@@ -1,6 +1,7 @@
 // clang-format off
 #include "core.slang"
 #include "meshletTask.slang"
+#include "terrain.slang"
 
 // The depth-only scene passes of a depth-only target (a shadow map): the draws of rasm.slang without shading.
 // Opaque draws use vertMain and the empty fragMain; MASK and BLEND draws use vertMask and fragMask. With mesh shaders,
@@ -11,10 +12,17 @@ struct VSInput
     uint vertexID : SV_VertexID;
 };
 
+[[vk::binding(0, 0)]]
+Sampler2D gTextures[];
+
 float4 getDepthPosition(InstanceData *instance, int vertexOffset, uint vertexID)
 {
     VertexFull vert         = getVertex(pc.scene, instance, vertexOffset, vertexID);
-    return mul(pc.scene->projection, mul(pc.scene->view, mul(getWorldMatrix(pc.scene, instance), float4(vert.pos, 1.0))));
+    float4x4 world          = getWorldMatrix(pc.scene, instance);
+    MaterialData *model     = pc.scene->materialsPtr + instance->materialIndex;
+    if (model->materialId == MaterialId.TERRAIN)
+        vert.pos            = getTerrainVertex(gTextures, model->terrain, world, vert).position;
+    return mul(pc.scene->projection, mul(pc.scene->view, mul(world, float4(vert.pos, 1.0))));
 }
 
 [shader("vertex")]
@@ -97,9 +105,6 @@ void meshMask(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID, in 
     for (uint t = threadId.x; t < meshlet.triangleCount; t += MESHLET_CHUNK_SIZE)
         triangles[t] = getMeshletTriangle(pc.scene, meshlet, t);
 }
-
-[[vk::binding(0, 0)]]
-Sampler2D gTextures[];
 
 // A hash of an integer cell: three rounds of PCG (Jarzynski and Olano, "Hash Functions for GPU Rendering", 2020).
 uint3 hashCell(int3 cell)

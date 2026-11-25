@@ -101,7 +101,9 @@ namespace rasm
         ETC2_R8G8B8A8_SRGB,
         EAC_R11_UNORM,
         EAC_R11G11_UNORM,
-        R16G16_SFLOAT,          // the last value: VulkanDevice::FORMAT_COUNT
+        R16G16_SFLOAT,
+        R16_UNORM,              // one channel: a terrain tile's heights (rasm/terrain.h)
+        R32_SFLOAT,             // the last value: VulkanDevice::FORMAT_COUNT
     };
 
     // The scene passes' HDR color, and a scene target's optional second color: each pixel's motion since the last frame,
@@ -243,7 +245,7 @@ namespace rasm
         uint32_t     geometryPoolMeshletData = 1u << 23; // with mesh shaders: meshlets' vertices and triangles, 4 B each (32 MiB, about 50k meshlets)
         uint32_t     maxInstances            = 1u << 16; // 164 B each, twice (one copy per frame slot)
         uint32_t     maxLights               = 1u << 14; // 56 B each, twice
-        uint32_t     maxMaterials            = 1u << 12; // materials alive at once, 220 B each, twice
+        uint32_t     maxMaterials            = 1u << 12; // materials alive at once, 248 B each, twice
         uint32_t     maxBindlessTextures     = 1u << 14; // sampled textures at once (slots of the bindless set), at most MAX_BINDLESS_TEXTURES and what the device allows
         uint32_t     maxAnimatedEntities     = 1u << 14; // entities that play a clip, 120 B each, twice
         uint32_t     animationPoolBytes      = 16u << 20; // the nodes, key times and values of every loaded animation
@@ -291,7 +293,7 @@ namespace rasm
         uint32_t     geometryPoolMeshletData = 1u << 23; // with mesh shaders: meshlets' vertices and triangles, 4 B each (32 MiB, about 50k meshlets)
         uint32_t     maxInstances            = 1u << 16; // 164 B each, twice (one copy per frame slot)
         uint32_t     maxLights               = 1u << 14; // 56 B each, twice
-        uint32_t     maxMaterials            = 1u << 12; // materials alive at once, 220 B each, twice
+        uint32_t     maxMaterials            = 1u << 12; // materials alive at once, 248 B each, twice
         uint32_t     maxBindlessTextures     = 1u << 14; // sampled textures at once (slots of the bindless set), at most MAX_BINDLESS_TEXTURES and what the device allows
         uint32_t     maxAnimatedEntities     = 1u << 14; // entities that play a clip, 120 B each, twice
         uint32_t     animationPoolBytes      = 16u << 20; // the nodes, key times and values of every loaded animation

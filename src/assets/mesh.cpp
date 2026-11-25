@@ -109,6 +109,14 @@ namespace rasm
             spdlog::error("destroyMesh: mesh handle {{{}, {}}} is invalid or was destroyed.", mesh.index, mesh.generation);
             return;
         }
+        for (const MeshHandle &grid : terrainMeshes)
+        {
+            if (grid == mesh)
+            {
+                spdlog::error("destroyMesh: mesh {{{}, {}}} is a terrain grid (getTerrainMesh), which every terrain tile shares; the renderer keeps it.", mesh.index, mesh.generation);
+                return;
+            }
+        }
         // The loader drops a load still in its pool, and the path leaves its cache.
         if (loads)
             loads->forget(mesh);

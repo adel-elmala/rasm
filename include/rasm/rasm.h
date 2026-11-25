@@ -18,6 +18,7 @@
 #include "rasm/animation.h"
 #include "rasm/readback.h"
 #include "rasm/renderSpace.h"
+#include "rasm/terrain.h"
 #include "rasm/tileStreamer.h"
 #include "rasm/view.h"
 #include "rasm/render/renderGraph.h"

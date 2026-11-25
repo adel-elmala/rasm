@@ -4,6 +4,7 @@
 #include "unlit.slang"
 #include "shadow.slang"
 #include "meshletTask.slang"
+#include "terrain.slang"
 #if defined(RASM_DEBUG_VIEW)
 #include "debugViews.slang"
 #endif
@@ -38,6 +39,14 @@ struct VSOutput
 #endif
 };
 
+[[vk::binding(0, 0)]]
+Sampler2D gTextures[];
+
+// The same bindless array, for the slots that hold a cube (a point light's shadow). A slot is read only through the
+// declaration that matches its texture.
+[[vk::binding(0, 0)]]
+SamplerCube gCubeTextures[];
+
 // One vertex of a draw, for vertMain and meshMain alike: vertexID is the sub-mesh's own (the raw index-buffer value),
 // lod and meshletKey only feed the debug views.
 VSOutput getVertexOutput(InstanceData *instance, int vertexOffset, uint vertexID, uint lod, uint meshletKey)
@@ -47,6 +56,13 @@ VSOutput getVertexOutput(InstanceData *instance, int vertexOffset, uint vertexID
     float4x4 projectionMat  = pc.scene->projection;
     float3x3 normalMat      = getNormalMatrix(pc.scene, instance);
     VertexFull vert         = getVertex(pc.scene, instance, vertexOffset, vertexID);
+    MaterialData *model     = pc.scene->materialsPtr + instance->materialIndex;
+    if (model->materialId == MaterialId.TERRAIN)
+    {
+        TerrainVertex terrain   = getTerrainVertex(gTextures, model->terrain, modelMat, vert);
+        vert.pos                = terrain.position;
+        vert.normal             = terrain.normal;
+    }
 
     VSOutput output = {};
     output.clipPosition         = mul(projectionMat, mul(viewMat, mul(modelMat, float4(vert.pos, 1.0))));
@@ -116,14 +132,6 @@ void meshMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID, in 
     for (uint t = threadId.x; t < meshlet.triangleCount; t += MESHLET_CHUNK_SIZE)
         triangles[t] = getMeshletTriangle(pc.scene, meshlet, t);
 }
-
-[[vk::binding(0, 0)]]
-Sampler2D gTextures[];
-
-// The same bindless array, for the slots that hold a cube (a point light's shadow). A slot is read only through the
-// declaration that matches its texture.
-[[vk::binding(0, 0)]]
-SamplerCube gCubeTextures[];
 
 // Only double-sided draws show back faces (D8). A mirroring transform turns the authored front faces clockwise, so it
 // swaps which side the rasterizer calls front.

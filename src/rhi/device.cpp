@@ -29,10 +29,12 @@ namespace rasm::rhi
         case Format::D32_SFLOAT:
         case Format::U32_UINT:
         case Format::R16G16_SFLOAT:
+        case Format::R32_SFLOAT:
             return {.bytes = 4};
         case Format::R8G8B8_UNORM:
             return {.bytes = 3};
         case Format::U16_UINT:
+        case Format::R16_UNORM:
             return {.bytes = 2};
         case Format::R16G16B16A16_SFLOAT:
         case Format::R32G32_SFLOAT:
