@@ -33,6 +33,9 @@
 //   --still        no scripted orbit
 //   --zoom         a scripted slow zoom: in on the left view, out on the right one (the chunks' LOD changes)
 //   --triangles    every point by triangles (Renderer::setComputePoints off)
+//   --adaptive     the points grow near the camera where the scan is sparser than their size on screen
+//                  (PointSizeMode::ADAPTIVE, up to 8 pixels), so the near ground closes; they then leave the compute
+//                  path, which takes points of 2 pixels or less
 //   --bench        the GPU time per pass (exampleBench.h), at 1920 x 1080
 
 namespace
@@ -77,6 +80,7 @@ namespace
         bool still = false;
         bool zoom = false;
         bool triangles = false;
+        bool adaptive = false;
     };
 
     struct TilePoints
@@ -270,6 +274,7 @@ namespace
             options.still = options.still || std::strcmp(argv[i], "--still") == 0;
             options.zoom = options.zoom || std::strcmp(argv[i], "--zoom") == 0;
             options.triangles = options.triangles || std::strcmp(argv[i], "--triangles") == 0;
+            options.adaptive = options.adaptive || std::strcmp(argv[i], "--adaptive") == 0;
         }
         return options;
     }
@@ -363,7 +368,8 @@ int main(int argc, char **argv)
                     .colorMode = options.rgb ? rasm::PointColorMode::COLOR : rasm::PointColorMode::SCALAR,
                     .colormap = colormap,
                     .range = {.min = MIN_HEIGHT, .max = MAX_HEIGHT},
-                    .density = options.density};
+                    .density = options.density,
+                    .sizeMode = options.adaptive ? rasm::PointSizeMode::ADAPTIVE : rasm::PointSizeMode::FIXED};
     engine.updateMaterial(material, style);
     const glm::dvec3 origin = FAR_ORIGIN;
     std::vector<rasm::EntityHandle> chunks(tileCount);
