@@ -18,7 +18,7 @@ endif()
 
 if ("renderer" IN_LIST _rasm_components OR "rasm" IN_LIST _rasm_components)
     # rasm is a static library, so its PRIVATE dependencies are link requirements for consumers too.
-    # Stb and tinygltf are absent because rasm only uses their headers.
+    # Stb, tinygltf and earcut-hpp are absent because rasm only uses their headers.
     find_dependency(VulkanHeaders CONFIG)
     # As in RASM's own build: otherwise volk's config adds the SDK's headers (VULKAN_SDK) to its targets.
     if (NOT DEFINED VOLK_PULL_IN_VULKAN)

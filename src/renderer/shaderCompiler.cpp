@@ -601,6 +601,7 @@ namespace rasm
                                      {"runMeshletBudget", offsetof(gfx::SceneData, runMeshletBudget)},
                                      {"meshletRuns", offsetof(gfx::SceneData, meshletRuns)},
                                      {"coneRuns", offsetof(gfx::SceneData, coneRuns)},
+                                     {"viewFlags", offsetof(gfx::SceneData, viewFlags)},
                                      {"meshletDataPtr", offsetof(gfx::SceneData, meshletDataPtr)},
                                      {"originLow", offsetof(gfx::SceneData, originLow)},
                                      {"zero", offsetof(gfx::SceneData, zero)},
@@ -678,7 +679,18 @@ namespace rasm
                                      {"alphaCutoff", offsetof(gfx::MaterialData, alphaCutoff)},
                                      {"flags", offsetof(gfx::MaterialData, flags)},
                                      {"textureTransforms", offsetof(gfx::MaterialData, textureTransforms)},
-                                     {"terrain", offsetof(gfx::MaterialData, terrain)}});
+                                     {"terrain", offsetof(gfx::MaterialData, terrain)},
+                                     {"vector", offsetof(gfx::MaterialData, vector)}});
+
+            valid &= validateStruct(fieldStruct(layouts, materialData, "vector"), "VectorData", sizeof(gfx::VectorData),
+                                    {{"color", offsetof(gfx::VectorData, color)},
+                                     {"outlineColor", offsetof(gfx::VectorData, outlineColor)},
+                                     {"width", offsetof(gfx::VectorData, width)},
+                                     {"outlineWidth", offsetof(gfx::VectorData, outlineWidth)},
+                                     {"dashLength", offsetof(gfx::VectorData, dashLength)},
+                                     {"gapLength", offsetof(gfx::VectorData, gapLength)},
+                                     {"flags", offsetof(gfx::VectorData, flags)},
+                                     {"drawOrder", offsetof(gfx::VectorData, drawOrder)}});
 
             valid &= validateStruct(fieldStruct(layouts, materialData, "terrain"), "TerrainData", sizeof(gfx::TerrainData),
                                     {{"heights", offsetof(gfx::TerrainData, heights)},

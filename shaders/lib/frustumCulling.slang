@@ -2,6 +2,7 @@
 #pragma once
 
 #include "core.slang"
+#include "vector.slang"
 
 struct Sphere
 {
@@ -50,7 +51,22 @@ Sphere getWorldSphere(SceneData *scene, DrawInfo draw)
             radius          = transform->boundsRadius;
         }
     }
-    return getInstanceSphere(scene, instance, center, radius);
+    Sphere sphere           = getInstanceSphere(scene, instance, center, radius);
+    // A vector feature spreads past its anchors by its width, in pixels of this view: the sphere grows by as much, so
+    // nothing of it is culled at the screen's edge or behind a small occluder.
+    MaterialData *material  = scene->materialsPtr + instance->materialIndex;
+    if (material->materialId == MaterialId.VECTOR)
+        sphere.radius      += getVectorPadding(scene, material->vector, sphere.center, sphere.radius);
+    return sphere;
+}
+
+// What culling does differently for a draw of a VECTOR material: a shadow map's view leaves it out (it casts no
+// shadow), an overlay is never occluded, and it is drawn whole (its offsets would break meshlet bounds).
+uint getVectorFlags(SceneData *scene, DrawInfo draw)
+{
+    InstanceData *instance  = scene->instancesPtr + draw.firstInstance;
+    MaterialData *material  = scene->materialsPtr + instance->materialIndex;
+    return material->materialId == MaterialId.VECTOR ? material->vector.flags | 0x80000000u : 0u;
 }
 
 // A sphere fully outside one of the frustum planes is culled.

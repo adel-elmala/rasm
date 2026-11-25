@@ -7,6 +7,7 @@
 #include "rasm/material.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -92,6 +93,35 @@ namespace rasm
         std::vector<TextureHandle>  ownedTextures;
         uint32_t                    users       = 0;    // entities that use it
     };
+
+    // What buildMesh makes besides the vertices: LODs by mesh simplification, and meshlets for a sub-mesh of 1024
+    // triangles or more. Leave both off for geometry the shader moves (vector features, terrain).
+    struct MeshBuildOptions
+    {
+        bool                        lods        = true;
+        bool                        meshlets    = true;
+    };
+
+    // A mesh's CPU data, checked and built by buildMesh on any thread: Renderer::createMesh(MeshBuild) only uploads it.
+    class MeshBuild
+    {
+    public:
+                                    MeshBuild();
+                                    ~MeshBuild();
+                                    MeshBuild(MeshBuild&& other) noexcept;
+        MeshBuild&                  operator=(MeshBuild&& other) noexcept;
+                                    MeshBuild(const MeshBuild&) = delete;
+        MeshBuild&                  operator=(const MeshBuild&) = delete;
+        // False when buildMesh refused the data (it logged why), or after createMesh took it.
+        bool                        isValid() const;
+
+        struct Data;
+        std::unique_ptr<Data>       data;
+    };
+
+    // Checks the data (colors empty or one per vertex, whole triangles, indices in range) and builds what the options
+    // ask for. Thread-safe: it touches no renderer, so an application builds its tiles' meshes on its own threads.
+    MeshBuild                       buildMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices, std::vector<uint32_t> colors = {}, const MeshBuildOptions& options = {});
 
     struct MeshSize
     {

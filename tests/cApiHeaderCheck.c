@@ -30,6 +30,10 @@ int main(void)
     rasm_terrain_tile_desc terrainDesc;
     rasm_terrain_heights heights = {NULL, NULL, 0};
     float samples[16] = {0.0f};
+    rasm_vector_geometry *geometry = NULL;
+    rasm_mesh_build *build = NULL;
+    rasm_dvec3 line[2] = {{0.0, 0.0, 0.0}, {10.0, 0.0, 0.0}};
+    uint32_t lineSize = 2;
 
     if (rasm_get_version() != RASM_C_API_VERSION)
         return 1;
@@ -69,6 +73,11 @@ int main(void)
     if (rasm_terrain_tile_desc_init(&terrainDesc, sizeof(terrainDesc)) != RASM_OK || terrainDesc.terrain.height_scale != 1.0f ||
         rasm_sample_terrain_height(&heights, &terrainDesc.terrain, 0.0, 0.0) != 3.0)
         return 13;
+    if (rasm_vector_geometry_create(&geometry) != RASM_OK || rasm_vector_add_lines(geometry, line[0], line, &lineSize, 1, NULL, NULL, NULL) != RASM_OK ||
+        rasm_build_vector_mesh(geometry, &build) != RASM_OK)
+        return 14;
+    rasm_mesh_build_destroy(build);
+    rasm_vector_geometry_destroy(geometry);
     printf("rasm_c.h %u.%u compiles as C (__STDC_VERSION__ %ld) and links rasm_c_renderer.\n", RASM_C_API_VERSION_MAJOR, RASM_C_API_VERSION_MINOR, (long)__STDC_VERSION__);
     return 0;
 }

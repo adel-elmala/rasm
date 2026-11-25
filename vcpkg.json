@@ -19,7 +19,8 @@
         "meshoptimizer",
         "ktx",
         "shader-slang",
-        "doctest"
+        "doctest",
+        "earcut-hpp"
     ],
     "features": {
         "imgui": {

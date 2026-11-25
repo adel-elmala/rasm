@@ -80,6 +80,9 @@ namespace rasm::c
         constexpr uint32_t asNumber(InputEventType value) { return static_cast<uint32_t>(value); }
         constexpr uint32_t asNumber(ViewToggle value) { return static_cast<uint32_t>(value); }
         constexpr uint32_t asNumber(CameraController::Type value) { return static_cast<uint32_t>(value); }
+        constexpr uint32_t asNumber(VectorUnit value) { return static_cast<uint32_t>(value); }
+        constexpr uint32_t asNumber(VectorFacing value) { return static_cast<uint32_t>(value); }
+        constexpr uint32_t asNumber(VectorDepth value) { return static_cast<uint32_t>(value); }
 
         static_assert(RASM_FORMAT_UNKNOWN == asNumber(Format::UNKNOWN));
         static_assert(RASM_FORMAT_R8G8B8A8_UNORM == asNumber(Format::R8G8B8A8_UNORM));
@@ -135,6 +138,13 @@ namespace rasm::c
         static_assert(RASM_MATERIAL_TYPE_PBR == asNumber(MaterialType::PBR));
         static_assert(RASM_MATERIAL_TYPE_UNLIT == asNumber(MaterialType::UNLIT));
         static_assert(RASM_MATERIAL_TYPE_TERRAIN == asNumber(MaterialType::TERRAIN));
+        static_assert(RASM_MATERIAL_TYPE_VECTOR == asNumber(MaterialType::VECTOR));
+        static_assert(RASM_VECTOR_UNIT_PIXELS == asNumber(VectorUnit::PIXELS));
+        static_assert(RASM_VECTOR_UNIT_METRES == asNumber(VectorUnit::METRES));
+        static_assert(RASM_VECTOR_FACING_SCREEN == asNumber(VectorFacing::SCREEN));
+        static_assert(RASM_VECTOR_FACING_GROUND == asNumber(VectorFacing::GROUND));
+        static_assert(RASM_VECTOR_DEPTH_TESTED == asNumber(VectorDepth::TESTED));
+        static_assert(RASM_VECTOR_DEPTH_OVERLAY == asNumber(VectorDepth::OVERLAY));
         static_assert(RASM_MAX_TERRAIN_CELLS == MAX_TERRAIN_CELLS);
         static_assert(RASM_PBR_SLOT_ALBEDO == asNumber(PbrSlot::ALBEDO));
         static_assert(RASM_PBR_SLOT_METALLIC == asNumber(PbrSlot::METALLIC));
@@ -733,6 +743,7 @@ namespace rasm::c
         result.alphaMode = static_cast<AlphaMode>(material.alpha_mode);
         result.alphaCutoff = material.alpha_cutoff;
         result.terrain = toCpp(material.terrain);
+        result.vector = toCpp(material.vector);
         return result;
     }
 
@@ -752,7 +763,44 @@ namespace rasm::c
         result.alpha_mode = asNumber(material.alphaMode);
         result.alpha_cutoff = material.alphaCutoff;
         result.terrain = toC(material.terrain);
+        result.vector = toC(material.vector);
         return result;
+    }
+
+    VectorMaterial toCpp(const rasm_vector_material &vector)
+    {
+        return {.color = toCpp(vector.color),
+                .width = vector.width,
+                .widthUnit = static_cast<VectorUnit>(vector.width_unit),
+                .facing = static_cast<VectorFacing>(vector.facing),
+                .dashLength = vector.dash_length,
+                .gapLength = vector.gap_length,
+                .outlineColor = toCpp(vector.outline_color),
+                .outlineWidth = vector.outline_width,
+                .drawOrder = vector.draw_order,
+                .depth = static_cast<VectorDepth>(vector.depth)};
+    }
+
+    rasm_vector_material toC(const VectorMaterial &vector)
+    {
+        return {.color = toC(vector.color),
+                .width = vector.width,
+                .width_unit = asNumber(vector.widthUnit),
+                .facing = asNumber(vector.facing),
+                .dash_length = vector.dashLength,
+                .gap_length = vector.gapLength,
+                .outline_color = toC(vector.outlineColor),
+                .outline_width = vector.outlineWidth,
+                .draw_order = vector.drawOrder,
+                .depth = asNumber(vector.depth)};
+    }
+
+    bool checkMaterialDesc(const rasm_material_desc &desc, const char *function)
+    {
+        return checkEnum(desc.type, RASM_MATERIAL_TYPE_VECTOR + 1, function, "desc->type") && checkEnum(desc.alpha_mode, RASM_ALPHA_MODE_BLEND + 1, function, "desc->alpha_mode") &&
+               checkEnum(desc.vector.width_unit, RASM_VECTOR_UNIT_METRES + 1, function, "desc->vector.width_unit") &&
+               checkEnum(desc.vector.facing, RASM_VECTOR_FACING_GROUND + 1, function, "desc->vector.facing") &&
+               checkEnum(desc.vector.depth, RASM_VECTOR_DEPTH_OVERLAY + 1, function, "desc->vector.depth");
     }
 
     TerrainMaterial toCpp(const rasm_terrain_material &terrain)

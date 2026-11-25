@@ -81,9 +81,12 @@ void sortKeysMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
         {
             DrawInfo draw   = scene->drawInfoPtr[first + i];
             scene->sortDrawsPtr[i] = draw;
-            // The view depth of the bounds' center: positive in front of the camera, which looks down -Z.
+            // The draw's order first (lib/vector.slang: a vector layer's drawOrder, the scene's see-through draws in the
+            // middle), then the view depth of the bounds' center, positive in front of the camera, which looks down
+            // -Z, to 24 bits: farthest first within an order.
             float depth     = -mul(scene->view, float4(getWorldSphere(scene, draw).center, 1.0)).z;
-            key             = uint2(~asuint(max(depth, 0.0)), i);
+            uint order      = getBlendOrder(scene, scene->instancesPtr + draw.firstInstance);
+            key             = uint2(order << 24 | (~asuint(max(depth, 0.0)) >> 8), i);
         }
         blockKeys[e]    = key;
     }

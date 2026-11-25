@@ -622,6 +622,84 @@ TEST_CASE("the 1.4 terrain structs start from the C++ defaults, and the helpers 
     CHECK(rasm_get_terrain_mesh(nullptr, 32).id == 0);
 }
 
+TEST_CASE("the 1.5 structs start from the C++ defaults")
+{
+    rasm_mesh_build_options options;
+    REQUIRE(rasm_mesh_build_options_init(&options, sizeof(options)) == RASM_OK);
+    CHECK(options.lods == RASM_TRUE);
+    CHECK(options.meshlets == RASM_TRUE);
+    rasm_line_shape shape;
+    REQUIRE(rasm_line_shape_init(&shape, sizeof(shape)) == RASM_OK);
+    CHECK(shape.join == RASM_LINE_JOIN_ROUND);
+    CHECK(shape.cap == RASM_LINE_CAP_BUTT);
+    CHECK(shape.miter_limit == RASM_MAX_VECTOR_MITER);
+    rasm_vector_placement placement;
+    REQUIRE(rasm_vector_placement_init(&placement, sizeof(placement)) == RASM_OK);
+    CHECK(placement.up.y == 1.0f);
+    CHECK(placement.drape_tile == nullptr);
+    const rasm::VectorMaterial defaults;
+    rasm_material_desc material;
+    std::memset(&material, 0, sizeof(material));
+    CHECK(sizeof(material.vector) == sizeof(rasm_vector_material));
+    CHECK(defaults.width == 1.0f);
+}
+
+TEST_CASE("meshes and vector features build on any thread, with no renderer")
+{
+    rasm_vector_geometry *geometry = nullptr;
+    REQUIRE(rasm_vector_geometry_create(&geometry) == RASM_OK);
+    const rasm_dvec3 origin = {1000.0, 0.0, 1000.0};
+    const rasm_dvec3 points[3] = {{1000.0, 0.0, 1000.0}, {1010.0, 0.0, 1000.0}, {1010.0, 0.0, 1010.0}};
+    const uint32_t size = 3;
+    rasm_line_shape shape;
+    rasm_line_shape_init(&shape, sizeof(shape));
+    shape.join = RASM_LINE_JOIN_BEVEL;
+    std::thread worker([&]()
+                       { CHECK(rasm_vector_add_lines(geometry, origin, points, &size, 1, &shape, nullptr, nullptr) == RASM_OK); });
+    worker.join();
+    uint32_t vertices = 0;
+    uint32_t indices = 0;
+    REQUIRE(rasm_vector_geometry_get_size(geometry, &vertices, &indices) == RASM_OK);
+    CHECK(vertices == 4 + 3 + 4);
+    CHECK(indices == 6 + 3 + 6);
+    const uint32_t ringSizes[1] = {3};
+    const uint32_t ringCounts[1] = {1};
+    CHECK(rasm_vector_add_polygons(geometry, origin, points, ringSizes, ringCounts, 1, nullptr, nullptr) == RASM_OK);
+    CHECK(rasm_vector_add_points(geometry, origin, points, 3, nullptr, nullptr, nullptr) == RASM_OK);
+    rasm_mesh_build *build = nullptr;
+    REQUIRE(rasm_build_vector_mesh(geometry, &build) == RASM_OK);
+    CHECK(build != nullptr);
+    REQUIRE(rasm_vector_geometry_get_size(geometry, &vertices, &indices) == RASM_OK);
+    CHECK(vertices == 0);
+    // Without a renderer the build is still taken and freed.
+    CHECK(rasm_create_mesh_from_build(nullptr, build).id == 0);
+    rasm_vector_geometry_destroy(geometry);
+
+    rasm_vertex triangle[3] = {};
+    const uint32_t triangleIndices[3] = {0, 1, 2};
+    rasm_mesh_build *mesh = nullptr;
+    CHECK(rasm_build_mesh(triangle, 3, triangleIndices, 3, nullptr, nullptr, &mesh) == RASM_OK);
+    rasm_mesh_build_destroy(mesh);
+    const uint32_t bad[3] = {0, 1, 5};
+    CHECK(rasm_build_mesh(triangle, 3, bad, 3, nullptr, nullptr, &mesh) == RASM_ERROR_FAILED);
+    CHECK(mesh == nullptr);
+    CHECK(rasm_build_mesh(triangle, 3, triangleIndices, 3, nullptr, nullptr, nullptr) == RASM_ERROR_INVALID_ARGUMENT);
+    shape.join = 7;
+    CHECK(rasm_vector_add_lines(nullptr, origin, points, &size, 1, &shape, nullptr, nullptr) == RASM_ERROR_INVALID_ARGUMENT);
+    rasm_vector_geometry *other = nullptr;
+    rasm_vector_geometry_create(&other);
+    CHECK(rasm_vector_add_lines(other, origin, points, &size, 1, &shape, nullptr, nullptr) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(contains(rasm_get_last_error(), "shape->join"));
+    rasm_vector_placement placement;
+    rasm_vector_placement_init(&placement, sizeof(placement));
+    rasm_terrain_tile_desc tile;
+    rasm_terrain_tile_desc_init(&tile, sizeof(tile));
+    placement.drape_tile = &tile;
+    CHECK(rasm_vector_add_points(other, origin, points, 3, &placement, nullptr, nullptr) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(contains(rasm_get_last_error(), "drape_heights"));
+    rasm_vector_geometry_destroy(other);
+}
+
 TEST_CASE("a tile streamer call with a bad argument gives a code and a last error")
 {
     rasm_tile_streamer *streamer = reinterpret_cast<rasm_tile_streamer *>(&streamer);

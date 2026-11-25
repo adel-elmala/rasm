@@ -10,7 +10,7 @@ static const uint   INVALID_TEXTURE_INDEX = 0xFFFFFFFF;
 static const uint   MAX_DRAW_RUNS       = 7;
 
 // Selects how fragMain shades a model. Must match rasm::gfx::MaterialId.
-enum class MaterialId : uint32_t { PBR, UNLIT, TERRAIN };
+enum class MaterialId : uint32_t { PBR, UNLIT, TERRAIN, VECTOR };
 
 // Must match rasm::AlphaMode.
 enum class AlphaMode : uint32_t { NONE, MASK, BLEND };
@@ -27,6 +27,9 @@ static const uint   TRANSFORM_EMISSIVE              = 4;
 static const uint   MATERIAL_DOUBLE_SIDED           = 1 << 0;
 static const uint   MATERIAL_TEXTURE_TRANSFORM      = 1 << 1;   // a texture has a KHR_texture_transform that is not the identity
 static const uint   MATERIAL_NORMAL_XY              = 1 << 2;   // the normal map has x and y only (BC5, EAC RG11): z is rebuilt
+
+// SceneData::viewFlags. Must match rasm::gfx::VIEW_*.
+static const uint   VIEW_DEPTH_ONLY                 = 1 << 0;   // a shadow map's view: it draws no VECTOR material
 
 // Must match rasm::MAX_SHADOW_CASCADES.
 static const uint MAX_SHADOW_CASCADES = 4;
@@ -137,6 +140,19 @@ struct TerrainData
     float               sphereRadius;       // 0: flat
 };
 
+// A VECTOR material's style (lib/vector.slang); zero for the others. Must match rasm::gfx::VectorData.
+struct VectorData
+{
+    float4              color;              // linear, straight alpha
+    float4              outlineColor;
+    float               width;              // in pixels or metres (VECTOR_METRES)
+    float               outlineWidth;
+    float               dashLength;
+    float               gapLength;
+    uint32_t            flags;              // VECTOR_*
+    int32_t             drawOrder;
+};
+
 // The texture transforms come after the rest, so a shader copies Material without them and reads them only for a
 // material whose flags have MATERIAL_TEXTURE_TRANSFORM.
 struct MaterialData
@@ -148,6 +164,7 @@ struct MaterialData
     uint32_t            flags;
     TextureTransform    textureTransforms[TEXTURE_TRANSFORMS];
     TerrainData         terrain;
+    VectorData          vector;
 };
 
 struct InstanceData
@@ -235,7 +252,7 @@ struct SceneData
     uint32_t            runMeshletBudget[MAX_DRAW_RUNS];   // a run's meshlet draws past this are drawn whole
     uint32_t            meshletRuns;            // a bit per run whose big draws are drawn by meshlets
     uint32_t            coneRuns;               // a bit per run culled by face, where the cone test holds
-    uint32_t            padding;
+    uint32_t            viewFlags;              // VIEW_*
     uint32_t*           meshletDataPtr;         // the meshlets' vertices and triangles, for the mesh shaders; null without them
     float3              originLow;              // the origin is originHigh + originLow
     uint32_t            zero;                   // 0, which the shader compiler cannot know (renderSpace.slang)

@@ -294,6 +294,8 @@ namespace rasm
                 return gfx::MaterialId::UNLIT;
             case MaterialType::TERRAIN:
                 return gfx::MaterialId::TERRAIN;
+            case MaterialType::VECTOR:
+                return gfx::MaterialId::VECTOR;
             default:
                 return gfx::MaterialId::PBR;
             }
@@ -389,6 +391,20 @@ namespace rasm
                                .minHeight = terrain.minHeight,
                                .skirt = terrain.skirt,
                                .sphereRadius = static_cast<float>(terrain.sphereRadius)};
+            }
+            if (mat.type == MaterialType::VECTOR)
+            {
+                const VectorMaterial &vector = mat.vector;
+                const bool icon = mat.textures[static_cast<uint32_t>(PbrSlot::ALBEDO)].isValid();
+                row.vector = {.color = vector.color,
+                              .outlineColor = vector.outlineColor,
+                              .width = vector.width,
+                              .outlineWidth = vector.outlineWidth,
+                              .dashLength = vector.dashLength,
+                              .gapLength = vector.gapLength,
+                              .flags = (vector.widthUnit == VectorUnit::METRES ? gfx::VECTOR_METRES : 0u) | (vector.facing == VectorFacing::GROUND ? gfx::VECTOR_GROUND : 0u) |
+                                       (vector.depth == VectorDepth::OVERLAY ? gfx::VECTOR_OVERLAY : 0u) | (icon ? gfx::VECTOR_ICON : 0u),
+                              .drawOrder = std::clamp(vector.drawOrder, -127, 127)};
             }
             return row;
         }
@@ -1761,6 +1777,7 @@ namespace rasm
             for (uint32_t i = 0; i < drawList.runs.size(); ++i)
                 sceneData.coneRuns |= drawList.runs[i].cullMode != CullMode::NONE ? 1u << i : 0u;
         }
+        sceneData.viewFlags = view.depthOnly ? gfx::VIEW_DEPTH_ONLY : 0u;
         // Culling and the light clusters count into it.
         sceneData.cullStatsPtr = ctx.getBufferDeviceAddress(gpuScene->cullStats[frame]);
         if (view.hizLevelCount > 0)

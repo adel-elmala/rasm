@@ -10,6 +10,7 @@ namespace rasm
         PBR,
         UNLIT,
         TERRAIN,        // a terrain tile: the shared grid lifted by Material::terrain's heights, shaded as PBR (rasm/terrain.h)
+        VECTOR,         // lines, polygons and points (rasm/vector.h), styled by Material::vector, unlit and blended
 
         COUNT,
     };
@@ -67,6 +68,42 @@ namespace rasm
         double         sphereRadius = 0.0;          // 0: flat; else the tile bends down by d^2 / 2R at d metres from its centre
     };
 
+    // What a VECTOR material's width and dashes are measured in.
+    enum class VectorUnit : uint32_t
+    {
+        PIXELS,         // on screen, whatever the distance
+        METRES,         // in the world: a road's real width
+    };
+
+    // How a line or a point spreads its width.
+    enum class VectorFacing : uint32_t
+    {
+        SCREEN,         // across the screen: the width never foreshortens (a 3D path, a marker)
+        GROUND,         // in the plane of the ground under it (vector/drape up): lies flat on the terrain, foreshortened as the ground is
+    };
+
+    enum class VectorDepth : uint32_t
+    {
+        TESTED,         // hidden behind what is in front of it; a small bias keeps it over the ground it lies on
+        OVERLAY,        // over everything, never hidden
+    };
+
+    // A VECTOR material: the style of a layer of lines, polygons or points. Every feature is at least 1 pixel wide; a
+    // thinner one keeps 1 pixel and fades by its coverage, so it neither vanishes nor shimmers.
+    struct VectorMaterial
+    {
+        glm::vec4      color        = glm::vec4(1.0f);  // linear RGB and alpha; times the vertex colors
+        float          width        = 1.0f;             // a line's width, a point's diameter, in widthUnit; polygons have none
+        VectorUnit     widthUnit    = VectorUnit::PIXELS;
+        VectorFacing   facing       = VectorFacing::SCREEN;
+        float          dashLength   = 0.0f;             // in widthUnit; 0: a solid line
+        float          gapLength    = 0.0f;
+        glm::vec4      outlineColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f); // a band along a line's or point's edge (a road's casing, a marker's ring)
+        float          outlineWidth = 0.0f;             // in widthUnit, inside width; 0: none
+        int32_t        drawOrder    = 0;                // -127 to 127: blended draws of a lower order come first; 0 sorts with the scene's see-through draws
+        VectorDepth    depth        = VectorDepth::TESTED;
+    };
+
     constexpr uint32_t MAX_TEXTURE_SLOTS = static_cast<uint32_t>(PbrSlot::COUNT);
     constexpr uint32_t MAX_PARAM_SLOTS   = static_cast<uint32_t>(PbrParam::COUNT);
 
@@ -83,6 +120,7 @@ namespace rasm
         AlphaMode        alphaMode{};
         float            alphaCutoff  = 0.5f;
         TerrainMaterial  terrain      = {};         // TERRAIN only; textures[ALBEDO] is the imagery, textureTransforms[ALBEDO] its part of the image
+        VectorMaterial   vector       = {};         // VECTOR only; textures[ALBEDO] is a points' icon atlas
     };
 
 }
