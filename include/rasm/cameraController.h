@@ -3,6 +3,8 @@
 
 #include "rasm/transform.h"
 
+#include <cstdint>
+
 namespace rasm
 {
 
@@ -37,13 +39,19 @@ namespace rasm
         // NONE: no controller. updateCameraRig only eases, and beginFrame does not move an engine camera that has it.
         enum class Type { TRACK_BALL, FREE_FLY, NONE };
 
-        // The left drag orbits around center, a pan drag moves center across the view, and the wheel scales radius by
+        // TURNTABLE: the drag's x turns around up, its y tilts, short of the poles, with no roll. ARCBALL: free rotation
+        // from the drag's points on a virtual sphere (Holroyd's sphere and hyperbola), rolls included.
+        enum class OrbitStyle : uint32_t { TURNTABLE, ARCBALL };
+
+        // The orbit drag turns around center, a pan drag moves center across the view, and the wheel scales radius by
         // CAMERA_WHEEL_ZOOM a step, or an orthographic view's box at the pointer. orbitSensitivity 0: a plan view.
         struct TrackBall
         {
             float       radius;            // target orbit radius, wheel zoom eases toward it
             glm::dvec3  center;            // world space, in doubles
-            float       orbitSensitivity; // multiplier for drag rotation
+            float       orbitSensitivity; // multiplier for drag rotation: 1 turns 90 degrees per NDC unit of drag
+            OrbitStyle  style;            // TURNTABLE by default
+            glm::vec3   up;               // the turntable's axis (a globe's local up); zero: +Y
         };
 
         struct FreeFly

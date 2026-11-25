@@ -50,7 +50,7 @@ namespace rasm
         bool            pointerInWindow = false;                // a move or a button event put the pointer in the window, and it has not left
         bool            pointerSeen     = false;                // a move, button or leave event told where the pointer is
         bool            dragActive      = false;                // a mapped button went down in the area, outside the UI, and is not up yet
-        CameraDrag      drag            = CameraDrag::NONE;     // what it does
+        CameraDrag      drag            = CameraDrag::NONE;     // what it does; NONE once a released drag was taken
         MouseButton     dragButton      = MouseButton::LEFT;    // its release ends the drag
         glm::vec2       dragStart       = glm::vec2(0.0f);      // NDC, this frame's
         glm::vec2       dragEnd         = glm::vec2(0.0f);

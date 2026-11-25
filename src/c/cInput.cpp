@@ -13,6 +13,8 @@ using namespace rasm;
 
 namespace
 {
+    static_assert(RASM_ORBIT_STYLE_TURNTABLE == static_cast<uint32_t>(CameraController::OrbitStyle::TURNTABLE));
+    static_assert(RASM_ORBIT_STYLE_ARCBALL == static_cast<uint32_t>(CameraController::OrbitStyle::ARCBALL));
     static_assert(RASM_CAMERA_DRAG_NONE == static_cast<uint32_t>(CameraDrag::NONE));
     static_assert(RASM_CAMERA_DRAG_ORBIT == static_cast<uint32_t>(CameraDrag::ORBIT));
     static_assert(RASM_CAMERA_DRAG_PAN == static_cast<uint32_t>(CameraDrag::PAN));
@@ -94,6 +96,18 @@ try
         return RASM_ERROR_INVALID_ARGUMENT;
     state->state.buttons = converted;
     return RASM_OK;
+}
+RASM_C_CATCH_RESULT
+
+rasm_result RASM_CALL rasm_set_mouse_grab(rasm_renderer *renderer, rasm_window window, rasm_bool on)
+try
+{
+    Renderer *r = c::getRenderer(renderer, __func__);
+    if (r == nullptr)
+        return RASM_ERROR_INVALID_ARGUMENT;
+    const c::CallErrors errors;
+    r->setMouseGrab(on != 0, c::toCpp(window));
+    return errors.result();
 }
 RASM_C_CATCH_RESULT
 

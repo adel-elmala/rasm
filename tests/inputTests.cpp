@@ -125,6 +125,28 @@ TEST_CASE("the button map decides which drag a button starts, and only its relea
     CHECK(!state.dragActive);
 }
 
+TEST_CASE("a drag follows the motion: past the area's edge, and during a grab where the pointer stands still")
+{
+    const InputArea left = {.width = 400.0f, .height = 600.0f};
+    CameraInputState state;
+    rasm::addCameraInputEvent(state, button(350.0f, 300.0f, true), left, {});
+    for (int i = 1; i <= 6; ++i)
+    {
+        // Steps of 30 points to the right: from the third on, the pointer is outside the area.
+        rasm::addCameraInputEvent(state, move(350.0f + 30.0f * static_cast<float>(i), 300.0f), left, {});
+        const rasm::CameraInput input = rasm::takeCameraInput(state, {}, 0.016f);
+        CHECK(isNear(input.mouseEnd - input.mouseStart, glm::vec2(0.15f, 0.0f)));
+    }
+    // A grab: x and y stay, dx and dy carry the motion.
+    InputEvent grabbed = move(350.0f, 300.0f);
+    grabbed.dx = 40.0f;
+    grabbed.dy = -20.0f;
+    rasm::addCameraInputEvent(state, grabbed, left, {});
+    rasm::addCameraInputEvent(state, grabbed, left, {});
+    const rasm::CameraInput input = rasm::takeCameraInput(state, {}, 0.016f);
+    CHECK(isNear(input.mouseEnd - input.mouseStart, glm::vec2(0.4f, 0.2f)));
+}
+
 TEST_CASE("what the UI captures does not reach the camera")
 {
     const InputArea window = WINDOW_800X600;

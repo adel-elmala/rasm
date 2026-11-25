@@ -784,6 +784,17 @@ TEST_CASE("the 1.8 structs start from the C++ defaults, and a grid call with a b
     REQUIRE(rasm_camera_input_init(&input, sizeof(input)) == RASM_OK);
     CHECK(input.pointer.x == 0.0f);
     CHECK(input.pan_end.y == 0.0f);
+    rasm_camera_controller controller;
+    REQUIRE(rasm_camera_controller_init(&controller, sizeof(controller)) == RASM_OK);
+    CHECK(controller.track_ball_style == RASM_ORBIT_STYLE_TURNTABLE);
+    CHECK(controller.track_ball_up.y == 1.0f);
+    CHECK(RASM_ORBIT_STYLE_ARCBALL == static_cast<uint32_t>(rasm::CameraController::OrbitStyle::ARCBALL));
+    rasm_input_event event;
+    REQUIRE(rasm_input_event_init(&event, sizeof(event)) == RASM_OK);
+    CHECK(event.dx == 0.0f);
+    CHECK(rasm_set_mouse_grab(nullptr, rasm_window{}, RASM_TRUE) == RASM_ERROR_INVALID_ARGUMENT);
+    controller.track_ball_style = 9;
+    CHECK(rasm_camera_rig_create(&controller, nullptr) == nullptr);
 
     CHECK(rasm_set_camera_grid(nullptr, rasm_camera{}, &grid) == RASM_ERROR_INVALID_ARGUMENT);
     CHECK(contains(rasm_get_last_error(), "renderer is NULL"));

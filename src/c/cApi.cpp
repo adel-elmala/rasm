@@ -62,6 +62,7 @@ namespace rasm::c
 
         // Fails the build when a C constant and its C++ enum value differ: the C values are fixed by the ABI.
         constexpr uint32_t asNumber(Format value) { return static_cast<uint32_t>(value); }
+        constexpr uint32_t asNumber(CameraController::OrbitStyle value) { return static_cast<uint32_t>(value); }
         constexpr uint32_t asNumber(PlatformType value) { return static_cast<uint32_t>(value); }
         constexpr uint32_t asNumber(NativeWindowType value) { return static_cast<uint32_t>(value); }
         constexpr uint32_t asNumber(Backend value) { return static_cast<uint32_t>(value); }
@@ -862,8 +863,15 @@ namespace rasm::c
             reportError(function, "controller->free_fly_up is not finite.");
             return false;
         }
+        const glm::vec3 trackBallUp = toCpp(controller.track_ball_up);
+        if (!std::isfinite(trackBallUp.x) || !std::isfinite(trackBallUp.y) || !std::isfinite(trackBallUp.z))
+        {
+            reportError(function, "controller->track_ball_up is not finite.");
+            return false;
+        }
         return checkFinite(controller.track_ball_center_d, function, "controller->track_ball_center_d") &&
-               checkEnum(controller.type, RASM_CAMERA_CONTROLLER_TYPE_NONE + 1, function, "controller->type");
+               checkEnum(controller.type, RASM_CAMERA_CONTROLLER_TYPE_NONE + 1, function, "controller->type") &&
+               checkEnum(controller.track_ball_style, RASM_ORBIT_STYLE_ARCBALL + 1, function, "controller->track_ball_style");
     }
 
     bool checkView(const rasm_view &view, const char *function)
@@ -883,7 +891,9 @@ namespace rasm::c
                 .button = static_cast<MouseButton>(event.button),
                 .x = event.x,
                 .y = event.y,
-                .codepoint = event.codepoint};
+                .codepoint = event.codepoint,
+                .dx = event.dx,
+                .dy = event.dy};
     }
 
     rasm_input_event toC(const InputEvent &event)
@@ -899,7 +909,9 @@ namespace rasm::c
                 .button = asNumber(event.button),
                 .x = event.x,
                 .y = event.y,
-                .codepoint = event.codepoint};
+                .codepoint = event.codepoint,
+                .dx = event.dx,
+                .dy = event.dy};
     }
 
     CameraInput toCpp(const rasm_camera_input &input)
@@ -940,7 +952,9 @@ namespace rasm::c
         if (result.type == CameraController::Type::TRACK_BALL)
             result.trackBall = {.radius = controller.track_ball_radius,
                                 .center = glm::dvec3(toCpp(controller.track_ball_center)) + toCpp(controller.track_ball_center_d),
-                                .orbitSensitivity = controller.track_ball_orbit_sensitivity};
+                                .orbitSensitivity = controller.track_ball_orbit_sensitivity,
+                                .style = static_cast<CameraController::OrbitStyle>(controller.track_ball_style),
+                                .up = toCpp(controller.track_ball_up)};
         else if (result.type == CameraController::Type::FREE_FLY)
             result.freeFly = {.yaw = controller.free_fly_yaw,
                               .pitch = controller.free_fly_pitch,
@@ -963,7 +977,9 @@ namespace rasm::c
                 .free_fly_speed = 5.0f,
                 .free_fly_look_sensitivity = 1.0f,
                 .track_ball_center_d = {0.0, 0.0, 0.0},
-                .free_fly_up = {0.0f, 1.0f, 0.0f}};
+                .free_fly_up = {0.0f, 1.0f, 0.0f},
+                .track_ball_style = RASM_ORBIT_STYLE_TURNTABLE,
+                .track_ball_up = {0.0f, 1.0f, 0.0f}};
     }
 
     // The other type's fields keep their defaults, so a caller that switches the type gets a working controller.
@@ -978,6 +994,9 @@ namespace rasm::c
             result.track_ball_center = toFloatPart(controller.trackBall.center);
             result.track_ball_center_d = toRemainder(controller.trackBall.center);
             result.track_ball_orbit_sensitivity = controller.trackBall.orbitSensitivity;
+            result.track_ball_style = asNumber(controller.trackBall.style);
+            if (glm::dot(controller.trackBall.up, controller.trackBall.up) > 0.0f)
+                result.track_ball_up = toC(controller.trackBall.up);
         }
         else if (controller.type == CameraController::Type::FREE_FLY)
         {

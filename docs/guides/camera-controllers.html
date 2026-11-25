@@ -444,6 +444,57 @@ if |move| > 0:  position += normalize(move) · speed · dt</code></pre>
   <figcaption>Inside the circle a point goes onto the ball. Outside it goes onto the rim; moving along the rim then rolls the view around the screen's center. This is Shoemake's arcball mapping. Bell's trackball uses a hyperbola outside the circle instead of the rim, which avoids the sharp change at the edge.</figcaption>
 </figure>
 
+<h3 id="edges">At the edge of the view</h3>
+
+<p>An orbit that maps where the pointer <i>is</i> breaks near the edges. With a view split in four, the edge is close; with a window at the screen's border, the pointer stops there.</p>
+
+<div class="split">
+  <div class="bad">
+    <h4>Positions on a sphere, clamped to the rim</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="A drag that crosses the rim of the virtual ball: inside, it turns the view; on the rim, the same motion only rolls it; past the view's edge, the pointer stops and the turn stops with it.">
+      <line x1="20" y1="110" x2="300" y2="110" class="surface"/>
+      <path d="M40,110 A100,100 0 0,1 240,110" class="ghost"/>
+      <circle cx="110" cy="31" r="4" class="ok"/>
+      <circle cx="200" cy="50" r="4" class="ok"/>
+      <circle cx="240" cy="110" r="4" class="bad"/>
+      <circle cx="240" cy="110" r="8" class="ghost"/>
+      <line x1="244" y1="96" x2="296" y2="96" class="arrow bad dashed"/>
+      <text x="272" y="88" class="mid small t-bad">moves on</text>
+      <text x="160" y="132" class="mid small">past the rim every point lands on one spot: the turn stops or rolls</text>
+    </svg>
+    <p>Shoemake's arcball clamps points outside the ball to its rim, so the turn suddenly becomes a roll; a pointer that leaves the view or reaches the screen's edge stops turning.</p>
+  </div>
+  <div class="good">
+    <h4>Motion, a smooth ball, and a grabbed pointer</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="A turntable uses only the drag's motion, the same everywhere. An arcball uses Holroyd's sphere that turns into a hyperbola outside, so the point keeps moving as the pointer does. The pointer is grabbed, so the motion goes on past the screen's edge.">
+      <line x1="20" y1="110" x2="300" y2="110" class="surface"/>
+      <path d="M69,110 A71,71 0 0,1 190,60" class="ghost"/>
+      <path d="M190,60 Q240,85 300,96" class="ghost"/>
+      <circle cx="120" cy="42" r="4" class="ok"/>
+      <circle cx="190" cy="60" r="4" class="ok"/>
+      <circle cx="245" cy="84" r="4" class="ok"/>
+      <circle cx="292" cy="94" r="4" class="ok"/>
+      <text x="160" y="132" class="mid small">the point moves on as the pointer moves on</text>
+    </svg>
+    <p>A turntable reads only the drag's motion: the same drag turns the same at the centre and at the edge. An arcball lifts its points onto Holroyd's ball: a sphere near the centre and a hyperbola outside, which meet smoothly, so the turn never jumps. And while a button is held, the pointer is grabbed: it hides, and the motion goes on past the screen's edge.</p>
+  </div>
+</div>
+
+<div class="formula">
+  <p class="eq">turntable: yaw −= Δx · k, &nbsp; pitch += Δy · k, &nbsp; |pitch| ≤ 89°</p>
+  <p class="eq">Holroyd: z = √(1 − d²) for d² ≤ ½, &nbsp; z = 1 / (2 d) beyond</p>
+  <dl>
+    <dt>Δx, Δy</dt><dd>the drag's motion this frame, in units of half the view's smaller side</dd>
+    <dt><var>k</var></dt><dd>radians per unit: 90° times a sensitivity</dd>
+    <dt><var>d</var></dt><dd>the drag point's distance from the view's center, the point being the drag's start plus its motion so far</dd>
+  </dl>
+</div>
+
+<figure class="lab" data-lab="orbit-edge" data-title="Drag across the edge">
+  <figcaption>Each curve is how far one small step of the drag turns the view, as the pointer moves from the centre (left) past the edge of the view (x = 1) and beyond. Move the drag up or down: the clamped sphere's turn drops to nothing or turns into a roll at the rim; the smooth ball keeps turning; the turntable is flat.</figcaption>
+</figure>
+
+
 <p>The details that differ between orbit cameras:</p>
 
 <div class="vgrid">
@@ -902,7 +953,7 @@ so                         t = 1 − e^(−k · dt)</code></pre>
 
 <h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
 
-<p>RASM has both kinds of controller: <code>FREE_FLY</code> (a fly camera, turned while a mouse button is held) and <code>TRACK_BALL</code> (an arcball-style orbit camera). Easing is the exponential kind of <a href="#easing">section 6</a>. The controllers are helpers, as in <a href="#who-drives">section 8</a>: a <code>CameraRig</code> holds the <code>controller</code>, the rendered <code>transform</code> and the <code>targetTransform</code>, and <code>updateCameraRig</code> moves it by one <code>CameraInput</code>. They need no <code>Engine</code>. The engine runs the same function for the camera given to <code>beginFrame</code>, unless that camera's controller is <code>CameraController::Type::NONE</code>.</p>
+<p>RASM has both kinds of controller: <code>FREE_FLY</code> (a fly camera, turned while a mouse button is held) and <code>TRACK_BALL</code> (an orbit camera, a turntable by default or an arcball). Easing is the exponential kind of <a href="#easing">section 6</a>. The controllers are helpers, as in <a href="#who-drives">section 8</a>: a <code>CameraRig</code> holds the <code>controller</code>, the rendered <code>transform</code> and the <code>targetTransform</code>, and <code>updateCameraRig</code> moves it by one <code>CameraInput</code>. They need no <code>Engine</code>. The engine runs the same function for the camera given to <code>beginFrame</code>, unless that camera's controller is <code>CameraController::Type::NONE</code>.</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 290" role="img" aria-label="Input events from the SDL platform or addInputEvent go to pollEvents, once per frame, which feeds the engine's CameraInputState for the whole window and gives this frame's CameraInput. beginFrame runs updateCameraRig on the camera's own rig unless its controller is NONE. The application can instead read getInputEvents into its own CameraInputState per view, or read getCameraInput, run updateCameraRig on its own CameraRig, and set the pose with setCameraTransform. Both paths end in the pose that getViewMatrix reads.">
@@ -988,12 +1039,13 @@ while (engine.running())
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>Mouse units</td><td>divide by the smaller side, flip <var>y</var></td><td>The same, in <code>toInputNdc</code>, by the smaller side of the <code>InputArea</code>, around its center. The engine's area is the main window in points (<code>Window</code>'s <code>width</code>, <code>height</code>).</td></tr>
+  <tr><td>Mouse units</td><td>divide by the smaller side, flip <var>y</var></td><td>The same, in <code>toInputNdc</code>, by the smaller side of the <code>InputArea</code>, around its center. The engine's area is the main window in points (<code>Window</code>'s <code>width</code>, <code>height</code>). A drag follows the motion: each <code>MOUSE_MOVE</code> adds its <code>InputEvent::dx</code> and <code>dy</code> (or, without them, its change of position) to the drag's end, so a drag that leaves the area, or runs while the pointer is grabbed, goes on at the same pace. A drag released within a frame still gives its motion to that frame.</td></tr>
+  <tr><td>The screen's edge</td><td>grab the pointer</td><td><code>Renderer::setMouseGrab</code> asks the platform (<code>Platform::setMouseGrab</code>): the SDL platform turns on SDL's relative mouse mode, which hides the pointer and sends motion only, and puts the pointer back where the grab began. The engine's own camera input grabs during its drags (in <code>beginFrame</code>, for a camera with a controller); an application with its own <code>CameraInputState</code> calls it with <code>dragActive</code> (<code>examples/27_cad_views</code>), and one with its own window grabs it itself and sends <code>dx</code>, <code>dy</code> (<code>examples/19_embedding</code>).</td></tr>
   <tr><td>Fly: angles</td><td>yaw around world up, pitch around right, clamp</td><td><code class="lang-text">yaw -= dx * lookSensitivity</code>, <code class="lang-text">pitch += dy * lookSensitivity</code>, pitch clamped to ±89°, rotation <code class="lang-text">angleAxis(yaw, +Y) * angleAxis(pitch, +X)</code>. <code>lookSensitivity</code> is radians per NDC unit. With <code>FreeFly::up</code> other than +Y (a globe's local up) there is no fixed frame: each update turns the camera's forward around <code>up</code> by the yaw, measures the pitch from the plane across <code>up</code>, and rebuilds the rotation with <code class="lang-text">quatLookAt(forward, up)</code>, so the horizon stays level and <code>up</code> may follow a globe's normal anywhere, even every frame; zero or +Y changes nothing.</td></tr>
   <tr><td>Fly: moving</td><td>normalized sum × speed × <var>dt</var></td><td>The same. It flies along the full view direction, and has no keys for up, down or a faster speed.</td></tr>
   <tr><td>Fly: mouse</td><td>drag or capture</td><td>Drag: the view turns while a mouse button that <code>CameraButtons</code> maps to <code>ORBIT</code> or <code>PAN</code> is held; both drags look.</td></tr>
-  <tr><td>Orbit kind</td><td>turntable or arcball</td><td>An arcball-style trackball only (<code>projectOnSphere</code>: Shoemake's lift, rim outside). It can roll. There is no turntable mode.</td></tr>
-  <tr><td>Orbit angle</td><td>2 × or 1 × the angle between the points</td><td>1 × the angle, times <code>orbitSensitivity</code>, applied as <code class="lang-text">rotation * angleAxis(-angle, axis)</code>: in the camera's frame, grab style.</td></tr>
+  <tr><td>Orbit kind</td><td>turntable or arcball</td><td>Both: <code>TrackBall::style</code>. <code>OrbitStyle::TURNTABLE</code>, the default, turns by the drag's motion only: yaw <code class="lang-text">-dx * 90° * orbitSensitivity</code> around <code>TrackBall::up</code> (zero: +Y), pitch <code class="lang-text">dy * 90° * orbitSensitivity</code>, clamped to ±89°, rebuilt with <code class="lang-text">quatLookAt(forward, up)</code>, so it never rolls (the free-fly camera's <code>turnAroundUp</code>). <code>OrbitStyle::ARCBALL</code> lifts the drag's two points onto Holroyd's ball (<code>projectOnTrackBall</code>), so it can roll and never jumps at the rim.</td></tr>
+  <tr><td>Orbit angle</td><td>2 × or 1 × the angle between the points</td><td>The arcball: 1 × the angle, times <code>orbitSensitivity</code>, applied as <code class="lang-text">rotation * angleAxis(-angle, axis)</code>: in the camera's frame, grab style. A turntable step of no motion changes nothing, so a plan view (<code>orbitSensitivity</code> 0) keeps looking straight down.</td></tr>
   <tr><td>Zoom</td><td>additive or multiplicative</td><td>Multiplicative: <code class="lang-text">radius *= CAMERA_WHEEL_ZOOM ^ wheelDelta</code> (0.9 a step), between <code>MIN_TRACK_BALL_RADIUS</code> and 10<sup>9</sup>. With an orthographic projection, the same factor scales the box at the pointer (<code>CameraInput::pointer</code>), and the radius stays.</td></tr>
   <tr><td>Pan</td><td>a grab across the view</td><td>The trackball moves its <code>center</code> by the pan drag (<code>panStart</code> to <code>panEnd</code>), at once, with no easing, by the projection's units per pointer unit. <code>updateCameraRig(rig, projection, input)</code> reads the camera's projection and writes an orthographic zoom into it; <code>updateCameraRig(rig, input)</code> pans as a 45° perspective camera would, and zooms only the radius. <code>Renderer::updateCamera</code> and the engine's own path pass the camera's projection. The rendered pose moves with the center, so the easing does not pull the distance back. A plan view is a trackball with <code>orbitSensitivity</code> 0.</td></tr>
   <tr><td>Buttons</td><td>the application's choice</td><td><code>CameraInputState::buttons</code>, a <code>CameraButtons</code>: a <code>CameraDrag</code> (<code>NONE</code>, <code>ORBIT</code>, <code>PAN</code>) for the left, right, middle, back and forward buttons and Shift + left. Defaults: left orbits; right, middle and Shift + left pan; back and forward do nothing. One drag at a time; only its button's release ends it. <code>Renderer::setCameraButtons</code> sets the engine's own.</td></tr>
@@ -1014,12 +1066,12 @@ while (engine.running())
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>Types</td><td><code>CameraInput</code>, <code>CameraController</code>, <code>CameraRig</code>, <code>CAMERA_WHEEL_ZOOM</code> in <code>include/rasm/cameraController.h</code>; <code>CameraInputState</code>, <code>CameraButtons</code>, <code>CameraDrag</code>, <code>InputArea</code> in <code>include/rasm/cameraInput.h</code>; <code>Camera</code> in <code>include/rasm/camera.h</code></td></tr>
-  <tr><td>Controllers and easing</td><td><code>createCameraRig</code>, <code>updateCameraRig</code>, <code>projectOnSphere</code>, <code>zoomOrthographic</code> in <code>src/scene/cameraController.cpp</code></td></tr>
+  <tr><td>Controllers and easing</td><td><code>createCameraRig</code>, <code>updateCameraRig</code>, <code>projectOnTrackBall</code>, <code>turnAroundUp</code>, <code>zoomOrthographic</code> in <code>src/scene/cameraController.cpp</code>; the grab: <code>Renderer::setMouseGrab</code>, <code>Platform::setMouseGrab</code> (SDL's relative mouse mode in <code>src/platform/sdlPlatform.cpp</code>)</td></tr>
   <tr><td>Events to <code>CameraInput</code></td><td><code>addCameraInputEvent</code>, <code>takeCameraInput</code>, <code>toInputNdc</code> in <code>src/platform/cameraInput.cpp</code></td></tr>
   <tr><td>The engine's path</td><td><code>Renderer::pollEvents</code> and <code>Renderer::beginFrame</code> in <code>src/renderer/renderer.cpp</code>; <code>Renderer::updateCamera</code>, <code>Renderer::setCameraController</code> in <code>src/scene/camera.cpp</code></td></tr>
   <tr><td>Setup</td><td><code>Renderer::createCamera</code>, <code>Renderer::setCameraTransform</code> in <code>src/scene/camera.cpp</code></td></tr>
   <tr><td>Examples</td><td><code>examples/05_city</code>: a free-fly rig on the engine's input, a tour the user takes over; <code>examples/19_embedding</code>: its own <code>CameraInputState</code>, F switches orbit and fly; <code>examples/27_cad_views</code>: four views, orthographic ones that pan with the left button and zoom at the pointer</td></tr>
-  <tr><td>Tests</td><td><code>tests/cameraTests.cpp</code>: frame-time movement, diagonal speed, the pitch clamp, orbit sphere, easing, rigs and <code>NONE</code>; <code>tests/inputTests.cpp</code>: areas, drags, the button map, the wheel, <code>pollEvents</code>; pans and the zoom at the pointer in <code>tests/cameraTests.cpp</code></td></tr>
+  <tr><td>Tests</td><td><code>tests/cameraTests.cpp</code>: frame-time movement, diagonal speed, the pitch clamp, orbit sphere, easing, rigs and <code>NONE</code>; <code>tests/inputTests.cpp</code>: areas, drags, the button map, the wheel, <code>pollEvents</code>; pans, the zoom at the pointer, the turntable at the centre and at the edge, its pole, the arcball past its rim in <code>tests/cameraTests.cpp</code>; a drag past the area's edge and during a grab in <code>tests/inputTests.cpp</code></td></tr>
 </table>
 </div>
 
@@ -1037,7 +1089,7 @@ while (engine.running())
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>The engine's own input covers the whole main window; an application with several views (<code>Renderer::render</code> with a list of <code>View</code>s) keeps one <code>CameraInputState</code> per view. A view in another window (<code>ViewOutput::window</code>) reads that window's events: each <code>InputEvent</code> names its window. There is no turntable or walk mode, and a fly camera has no keys for up, down or a faster speed. A perspective zoom moves toward the center, not toward the point under the pointer: that needs the point's depth, which a pick (<a href="picking.html">Picking</a>) could give a frame later. An orthographic zoom reads the camera's stored box, so keep its aspect the view's: the engine fits the box's width to the view, not its height (<code>D49</code>).</p>
+  <p>The engine's own input covers the whole main window; an application with several views (<code>Renderer::render</code> with a list of <code>View</code>s) keeps one <code>CameraInputState</code> per view. A view in another window (<code>ViewOutput::window</code>) reads that window's events: each <code>InputEvent</code> names its window. There is no walk mode, and a fly camera has no keys for up, down or a faster speed. A perspective zoom moves toward the center, not toward the point under the pointer: that needs the point's depth, which a pick (<a href="picking.html">Picking</a>) could give a frame later. An orthographic zoom reads the camera's stored box, so keep its aspect the view's: the engine fits the box's width to the view, not its height (<code>D49</code>).</p>
 </div>
 
 <h3>Further reading</h3>

@@ -70,6 +70,8 @@ namespace rasm
         float           x               = 0.0f;
         float           y               = 0.0f;
         uint32_t        codepoint       = 0;                    // Unicode
+        float           dx              = 0.0f;                 // MOUSE_MOVE: the motion since the last move, in window points;
+        float           dy              = 0.0f;                 // during a mouse grab x and y stay, and only these move
     };
 
     // What Dear ImGui took from the last UI frame (Engine::getUiInputCapture). All false without a UI.

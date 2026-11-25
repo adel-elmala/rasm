@@ -222,12 +222,15 @@ engine.addCameraToScene(scene, camera);</code></pre>
   <pre class="sig">struct CameraController
 {
     enum class Type { TRACK_BALL, FREE_FLY, NONE };
+    enum class OrbitStyle : uint32_t { TURNTABLE, ARCBALL };
 
     struct TrackBall
     {
         float       radius;
         glm::dvec3  center;
         float       orbitSensitivity;
+        OrbitStyle  style;
+        glm::vec3   up;
     };
 
     struct FreeFly
@@ -254,7 +257,9 @@ engine.addCameraToScene(scene, camera);</code></pre>
       <dt>type</dt><dd><code>TRACK_BALL</code> or <code>FREE_FLY</code>, or <code>NONE</code>: no controller. <code>beginFrame</code> then leaves the camera alone, and it keeps the pose you set with <code>setCameraTransform</code>. A <code>CameraRig</code> with <code>NONE</code> only eases toward its target.</dd>
       <dt>radius</dt><dd>Orbit distance from <code>center</code>. Each wheel step multiplies it by <code>CAMERA_WHEEL_ZOOM</code> (0.9 forward, 1 / 0.9 backward), never below <code>MIN_TRACK_BALL_RADIUS</code>. The rendered distance eases toward it. With an orthographic projection the wheel scales the box instead (<a href="#updateCameraRig"><code>updateCameraRig</code></a>). A pan drag moves <code>center</code> across the view, at once. <code>orbitSensitivity</code> 0 makes a plan view that only pans and zooms.</dd>
       <dt>center</dt><dd>The point the camera orbits and looks at, in world space, in doubles.</dd>
-      <dt>orbitSensitivity</dt><dd>Multiplies the drag rotation. 1 means the scene follows the cursor.</dd>
+      <dt>orbitSensitivity</dt><dd>Multiplies the drag rotation: at 1 a turntable turns 90° per NDC unit of drag (half the view's smaller side), and an arcball's scene follows the cursor. 0: a plan view that only pans and zooms.</dd>
+      <dt>style</dt><dd><code>TURNTABLE</code> (the default, 0): the drag's motion turns around <code>up</code> and tilts, short of the poles, with no roll, the same anywhere in the view. <code>ARCBALL</code>: free rotation from the drag's points on Holroyd's ball (a sphere near the centre, a hyperbola outside), rolls included, smooth past the view's edge. How they differ: <a href="../guides/camera-controllers.html#edges">At the edge of the view</a>.</dd>
+      <dt>up (trackball)</dt><dd>The turntable's axis, a globe's local up for example. Zero: +Y.</dd>
       <dt>yaw, pitch</dt><dd>Radians. <code>setCameraController</code> overwrites them from the current view direction, so the view does not jump. Pitch stays within ±89°.</dd>
       <dt>speed</dt><dd>World units per second for W, A, S, D.</dd>
       <dt>lookSensitivity</dt><dd>Radians per NDC unit of mouse drag.</dd>
@@ -506,6 +511,17 @@ engine.render(city.scene, camera);</code></pre>
   <pre class="sig">void setCameraButtons(const CameraButtons&amp; buttons);</pre>
   <div class="body">
     <p>Which drag each mouse button starts for the engine's own camera input, the one <code>getCameraInput</code> gives (<a href="#CameraButtons"><code>CameraButtons</code></a>). By default the left button orbits, and the right and middle buttons and Shift + left pan. Set every button to <code>CameraDrag::ORBIT</code> to orbit with any button, as before pans existed.</p>
+  </div>
+</div>
+
+<div class="api" id="setMouseGrab">
+  <pre class="sig">void setMouseGrab(bool on, WindowHandle window = {});</pre>
+  <div class="body">
+    <p>Grabs the mouse for a camera drag: the SDL platform hides the pointer and sends motion only (<code>InputEvent::dx</code>, <code>dy</code>), so the drag goes on past the window's and the screen's edge, and on release puts the pointer back where the grab began. The engine's own camera input grabs during its drags by itself (in <code>beginFrame</code>, for a camera with a controller). An application with its own <code>CameraInputState</code> per view calls it each frame with the drag's state; one that owns its window (<code>NATIVE</code>) grabs the mouse itself and sends the motion in <code>dx</code>, <code>dy</code>. A headless renderer does nothing.</p>
+    <pre><code>bool dragging = false;
+for (ViewCamera &amp;view : views)
+    dragging = dragging || view.input.dragActive;
+engine.setMouseGrab(dragging);</code></pre>
   </div>
 </div>
 

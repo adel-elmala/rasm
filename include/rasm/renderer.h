@@ -348,6 +348,10 @@ namespace rasm
         // Which drag each mouse button starts for the main window's camera input (CameraButtons' defaults: left orbits,
         // right, middle and shift + left pan).
         void                        setCameraButtons(const CameraButtons& buttons);
+        // A camera drag's grab of the mouse: the SDL platform hides the pointer and sends motion only (InputEvent::dx,
+        // dy), so a drag goes on past the window's edge, and puts the pointer back on release. The engine's own camera
+        // input grabs during its drags; an application with its own CameraInputState calls it with dragActive.
+        void                        setMouseGrab(bool on, WindowHandle window = {});
         UiInputCapture              getUiInputCapture() const;
         float                       getDeltaTime() const;
         // The main window's size in points and in pixels, for NATIVE and HEADLESS; the SDL platform reads its own. A

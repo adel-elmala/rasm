@@ -632,6 +632,13 @@ enum
     RASM_CAMERA_CONTROLLER_TYPE_NONE       = 2,
 };
 
+typedef uint32_t                    rasm_orbit_style;
+enum
+{
+    RASM_ORBIT_STYLE_TURNTABLE      = 0,    /* 1.8: turns around up and tilts, no roll */
+    RASM_ORBIT_STYLE_ARCBALL        = 1,    /* 1.8: free rotation on a virtual sphere */
+};
+
 typedef struct rasm_camera_rig          rasm_camera_rig;
 typedef struct rasm_camera_input_state  rasm_camera_input_state;
 
@@ -708,6 +715,8 @@ typedef struct rasm_input_event
     float                           x;
     float                           y;
     uint32_t                        codepoint;
+    float                           dx;                                        /* 1.8: a move's motion in window points; */
+    float                           dy;                                        /* during a mouse grab only these move */
 } rasm_input_event;
 
 typedef struct rasm_camera_input
@@ -740,6 +749,8 @@ typedef struct rasm_camera_controller
     float                           free_fly_look_sensitivity;
     rasm_dvec3                      track_ball_center_d;                       /* 1.2: added to track_ball_center, in doubles */
     rasm_vec3                       free_fly_up;                               /* 1.2: the axis yaw turns around; 0, 1, 0 by default */
+    rasm_orbit_style                track_ball_style;                          /* 1.8: TURNTABLE by default */
+    rasm_vec3                       track_ball_up;                             /* 1.8: the turntable's axis; 0, 1, 0 by default */
 } rasm_camera_controller;
 
 typedef struct rasm_view
@@ -1377,7 +1388,10 @@ RASM_C_API rasm_bool        RASM_CALL rasm_get_view_pixel(rasm_renderer* rendere
 
 /* Added in 1.8: orthographic controls and reference grids. A camera input state's buttons decide which drag each mouse
  * button starts (rasm_camera_buttons_init: left orbits, right, middle and shift + left pan); rasm_set_camera_buttons sets
- * the renderer's own. A trackball pans its center with a pan drag, and its wheel scales the radius by
+ * the renderer's own. A drag follows rasm_input_event's dx and dy (a move without them: its change of position), and
+ * rasm_set_mouse_grab hides the pointer during a drag so it goes on past the window's edge (the renderer's own camera
+ * input does it by itself). A trackball orbits as a turntable (track_ball_style, around track_ball_up, no roll) or an
+ * arcball, from the drag's motion. A trackball pans its center with a pan drag, and its wheel scales the radius by
  * RASM_CAMERA_WHEEL_ZOOM a step, or, for an orthographic projection, the box at the pointer: rasm_update_camera passes the
  * camera's projection, rasm_camera_rig_update_projection takes one and writes it back. rasm_set_camera_grid draws a
  * reference grid in every shaded view of the camera (rasm_grid_init: disabled, the XZ plane through the origin, 1 unit
@@ -1385,6 +1399,7 @@ RASM_C_API rasm_bool        RASM_CALL rasm_get_view_pixel(rasm_renderer* rendere
 RASM_C_API rasm_result      RASM_CALL rasm_camera_buttons_init(rasm_camera_buttons* buttons, uint32_t size);
 RASM_C_API rasm_result      RASM_CALL rasm_set_camera_buttons(rasm_renderer* renderer, const rasm_camera_buttons* buttons);
 RASM_C_API rasm_result      RASM_CALL rasm_camera_input_state_set_buttons(rasm_camera_input_state* state, const rasm_camera_buttons* buttons);
+RASM_C_API rasm_result      RASM_CALL rasm_set_mouse_grab(rasm_renderer* renderer, rasm_window window, rasm_bool on);
 RASM_C_API rasm_result      RASM_CALL rasm_camera_rig_update_projection(rasm_camera_rig* rig, rasm_camera_projection* projection, const rasm_camera_input* input);
 RASM_C_API rasm_result      RASM_CALL rasm_grid_init(rasm_grid* grid, uint32_t size);
 RASM_C_API rasm_result      RASM_CALL rasm_set_camera_grid(rasm_renderer* renderer, rasm_camera camera, const rasm_grid* grid);

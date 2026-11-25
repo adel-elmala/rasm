@@ -218,7 +218,7 @@ namespace
             }
             break;
         case SDL_EVENT_MOUSE_MOTION:
-            renderer.addInputEvent({.type = rasm::InputEventType::MOUSE_MOVE, .x = event.motion.x, .y = event.motion.y});
+            renderer.addInputEvent({.type = rasm::InputEventType::MOUSE_MOVE, .x = event.motion.x, .y = event.motion.y, .dx = event.motion.xrel, .dy = event.motion.yrel});
             break;
         case SDL_EVENT_MOUSE_WHEEL:
             renderer.addInputEvent({.type = rasm::InputEventType::MOUSE_WHEEL, .x = event.wheel.x, .y = event.wheel.y});
@@ -341,7 +341,8 @@ namespace
 
     // One frame of the application's camera: its rig takes the events of the last pollEvents, in the window's area, and
     // skips what the UI took. F switches between orbit and fly from where the camera is.
-    void updateCamera(rasm::Renderer &renderer, rasm::CameraHandle camera, rasm::CameraRig &rig, rasm::CameraInputState &cameraInput, const rasm::CameraController &orbit, const rasm::CameraController &fly)
+    void updateCamera(rasm::Renderer &renderer, rasm::CameraHandle camera, rasm::CameraRig &rig, rasm::CameraInputState &cameraInput, const rasm::CameraController &orbit, const rasm::CameraController &fly,
+                      SDL_Window *grabWindow)
     {
         const rasm::UiInputCapture capture = renderer.getUiInputCapture();
         const rasm::Window &window = renderer.getMainWindow();
@@ -360,6 +361,18 @@ namespace
         }
         rasm::updateCameraRig(rig, rasm::takeCameraInput(cameraInput, capture, renderer.getDeltaTime()));
         renderer.setCameraTransform(camera, rig.transform);
+        // The window is the application's, so it grabs the mouse itself while a drag runs, as RASM's SDL platform does:
+        // the pointer hides, the drag goes on past the edge (the moves carry dx and dy), and it comes back on release.
+        if (grabWindow != nullptr && SDL_GetWindowRelativeMouseMode(grabWindow) != cameraInput.dragActive)
+        {
+            static float grabX = 0.0f;
+            static float grabY = 0.0f;
+            if (cameraInput.dragActive)
+                SDL_GetMouseState(&grabX, &grabY);
+            SDL_SetWindowRelativeMouseMode(grabWindow, cameraInput.dragActive);
+            if (!cameraInput.dragActive)
+                SDL_WarpMouseInWindow(grabWindow, grabX, grabY);
+        }
     }
 
     int run(ExampleArgs &args, SDL_Window *window, const rasm::NativeWindow &native, SDL_Window *secondWindow, const rasm::NativeWindow &secondNative)
@@ -496,7 +509,7 @@ namespace
 
             // The frame's events, the same the UI gets, move the example's camera before the frame.
             renderer.pollEvents();
-            updateCamera(renderer, camera, rig, cameraInput, orbit, fly);
+            updateCamera(renderer, camera, rig, cameraInput, orbit, fly, args.headless ? nullptr : window);
             const rasm::View views[] = {{.scene = scene, .camera = camera}, {.scene = scene, .camera = above, .output = {.window = second}}};
             renderer.render(views, second.isValid() ? 2 : 1);
 

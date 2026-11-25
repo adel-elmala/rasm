@@ -17,8 +17,10 @@
 // CAD views: a bracket in four views, as a CAD program shows a part. A perspective view (TAA) that orbits, and three
 // orthographic ones (top, front, side; 4x MSAA) that pan and zoom. Each view's camera has a reference grid of its own
 // (Renderer::setCameraGrid) in the plane behind the part, with the world's axes in red (X), green (Y) and blue (Z);
-// dimension lines and their labels are vector features, a few pixels wide in every view.
-// - Perspective view: drag to orbit, right or middle drag (or Shift + drag) to pan, wheel to zoom.
+// dimension lines and their labels are vector features, a few pixels wide in every view, drawn as overlays so the part
+// never hides a dimension.
+// - Perspective view: drag to orbit (a turntable around +Y), right or middle drag (or Shift + drag) to pan, wheel to
+//   zoom. A drag grabs the pointer (Renderer::setMouseGrab), so it goes on past the window's edge.
 // - Orthographic views: drag to pan (each view's CameraButtons map the left button to PAN), wheel to zoom at the
 //   pointer, which stays on the same point of the part.
 // A headless run (or --check) scripts an orbit, a zoom in the top view and a pan in the front view, then checks that the
@@ -164,8 +166,8 @@ namespace
         addDimension(lines, text, atlas, origin, origin + glm::dvec3(-3.0, 4.6, 0.0), origin + glm::dvec3(3.0, 4.6, 0.0), glm::dvec3(0.0, 1.0, 0.0), names);
         addDimension(lines, text, atlas, origin, origin + glm::dvec3(3.6, 0.0, 1.5), origin + glm::dvec3(3.6, 3.8, 1.5), glm::dvec3(1.0, 0.0, 0.0), names);
         addDimension(lines, text, atlas, origin, origin + glm::dvec3(-3.0, 0.0, 2.2), origin + glm::dvec3(3.0, 0.0, 2.2), glm::dvec3(0.0, 0.0, 1.0), names);
-        const rasm::MaterialHandle lineStyle = createVectorMaterial(engine, {.color = glm::vec4(0.95f, 0.55f, 0.1f, 1.0f), .width = 1.5f, .drawOrder = 10});
-        const rasm::MaterialHandle textStyle = createVectorMaterial(engine, {.color = glm::vec4(0.95f, 0.6f, 0.15f, 1.0f), .width = 15.0f, .outlineColor = glm::vec4(0.02f, 0.02f, 0.03f, 1.0f), .outlineWidth = 3.0f, .drawOrder = 20, .font = engine.createFont(atlas)});
+        const rasm::MaterialHandle lineStyle = createVectorMaterial(engine, {.color = glm::vec4(0.95f, 0.55f, 0.1f, 1.0f), .width = 1.5f, .drawOrder = 10, .depth = rasm::VectorDepth::OVERLAY});
+        const rasm::MaterialHandle textStyle = createVectorMaterial(engine, {.color = glm::vec4(0.95f, 0.6f, 0.15f, 1.0f), .width = 15.0f, .outlineColor = glm::vec4(0.02f, 0.02f, 0.03f, 1.0f), .outlineWidth = 3.0f, .drawOrder = 20, .depth = rasm::VectorDepth::OVERLAY, .font = engine.createFont(atlas)});
         engine.addEntityToScene(part.scene, engine.createEntity("dimensions", engine.createMesh(rasm::buildVectorMesh(std::move(lines))), lineStyle, rasm::Transform{origin}));
         engine.addEntityToScene(part.scene, engine.createEntity("dimension labels", engine.createMesh(rasm::buildVectorMesh(std::move(text))), textStyle, rasm::Transform{origin}));
         return true;
@@ -347,7 +349,8 @@ int main(int argc, char **argv)
     const float zoomY = 0.5f * pointsHigh * 0.32f;
     glm::dvec3 pointBeforeZoom(0.0);
     uint32_t failures = 0;
-    uint32_t checksLeft = check ? 3 : 0;
+    uint32_t checksLeft = check ? 4 : 0;
+    glm::dvec3 centerBeforePan(0.0);
     rasm::PickHandle topPick;
     rasm::PickHandle sidePick;
     uint32_t frame = 0;
@@ -385,8 +388,16 @@ int main(int argc, char **argv)
         const double zoomPixelY = (zoomY - RECTS[TOP].y * pointsHigh) * static_cast<double>(window.pixelHeight) / pointsHigh;
         if (check && frame == ZOOM_FRAME)
             pointBeforeZoom = getOrthographicPoint(engine, views[TOP].camera, topPixels, zoomPixelX, zoomPixelY);
+        if (check && frame == PAN_FRAME)
+            centerBeforePan = views[FRONT].rig.controller.trackBall.center;
+        bool dragging = false;
         for (uint32_t i = 0; i < VIEW_COUNT; ++i)
+        {
             updateViewCamera(engine, views[i], RECTS[i]);
+            dragging = dragging || views[i].input.dragActive;
+        }
+        // While a view's drag runs, the pointer is grabbed: it hides and the drag goes on past the window's edge.
+        engine.setMouseGrab(dragging);
         if (check && frame == ZOOM_FRAME)
         {
             // Across the view: the point under the pointer is where it was, to a thousandth of a pixel.
@@ -396,6 +407,19 @@ int main(int argc, char **argv)
             const bool zoomed = views[TOP].projection.orthographic.right < 0.7f * ORTHO_HALF_WIDTH;
             const bool ok = zoomed && error <= 1e-3 * pixel;
             std::printf("cad check %-22s %s: half width %.3f, the point moved %.2e m (a pixel is %.4f m)\n", "zoom at the pointer", ok ? "ok  " : "FAIL", views[TOP].projection.orthographic.right, error, pixel);
+            failures += ok ? 0 : 1;
+            --checksLeft;
+        }
+        if (check && frame == PAN_FRAME)
+        {
+            // The drag of 60 points left and 20 down within one frame: the scene follows it, so the center moves right
+            // and up by as many world units as those points cover in the view.
+            const rasm::CameraProjection::Orthographic &box = views[FRONT].projection.orthographic;
+            const double perPoint = static_cast<double>(box.top - box.bottom) / (RECTS[FRONT].height * pointsHigh);
+            const glm::dvec3 moved = views[FRONT].rig.controller.trackBall.center - centerBeforePan;
+            const double error = glm::length(moved - glm::dvec3(60.0 * perPoint, 20.0 * perPoint, 0.0));
+            const bool ok = error <= 1e-3 * perPoint;
+            std::printf("cad check %-22s %s: the center moved (%.4f, %.4f) m, off by %.2e m\n", "pan with the pointer", ok ? "ok  " : "FAIL", moved.x, moved.y, error);
             failures += ok ? 0 : 1;
             --checksLeft;
         }

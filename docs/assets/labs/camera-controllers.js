@@ -253,3 +253,80 @@ RasmLab.register("ortho-zoom", function (lab) {
             note.set("Zoomed at the centre: the box shrank around the camera, and the point that was under the pointer slid toward the edge.", "bad");
     });
 });
+
+// How far one small horizontal step of a drag turns the view, as the pointer moves from the view's centre past its
+// edge: Shoemake's sphere clamped to the rim, Holroyd's sphere and hyperbola, and a turntable that reads the motion only.
+RasmLab.register("orbit-edge", function (lab) {
+    const svg = lab.svg(760, 300, "A plot of the turn per drag step against the pointer's x, from the centre past the view's edge, for a clamped sphere, Holroyd's smooth ball and a turntable.");
+    const height = lab.slider({ label: "The drag's height y", min: 0, max: 0.9, step: 0.01, value: 0.2, format: function (v) { return v.toFixed(2); } });
+    const rimOut = lab.readout("clamped sphere at x = 1.5");
+    const smoothOut = lab.readout("smooth ball at x = 1.5");
+    const note = lab.note();
+    const STEP = 0.02;
+    const X0 = 70;
+    const X1 = 730;
+    const Y0 = 250;
+    const Y1 = 30;
+    const MAX_X = 2.5;
+    const MAX_ANGLE = 2.2;  // degrees per step on the plot's top
+
+    function shoemake(x, y) {
+        const d2 = x * x + y * y;
+        if (d2 <= 1) return [x, y, Math.sqrt(1 - d2)];
+        const d = Math.sqrt(d2);
+        return [x / d, y / d, 0];
+    }
+    function holroyd(x, y) {
+        const d2 = x * x + y * y;
+        const z = d2 <= 0.5 ? Math.sqrt(1 - d2) : 0.5 / Math.sqrt(d2);
+        const n = Math.hypot(x, y, z);
+        return [x / n, y / n, z / n];
+    }
+    function angle(map, x, y) {
+        const a = map(x, y);
+        const b = map(x + STEP, y);
+        const dot = Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]);
+        return Math.acos(dot) * 180 / Math.PI;
+    }
+    function px(x) { return X0 + (X1 - X0) * x / MAX_X; }
+    function py(a) { return Y0 + (Y1 - Y0) * Math.min(a, MAX_ANGLE) / MAX_ANGLE; }
+
+    lab.el(svg, "rect", { x: px(1), y: Y1, width: px(MAX_X) - px(1), height: Y0 - Y1, class: "zone" });
+    lab.el(svg, "line", { x1: X0, y1: Y0, x2: X1, y2: Y0, class: "arrow" });
+    lab.el(svg, "line", { x1: X0, y1: Y0, x2: X0, y2: Y1, class: "arrow" });
+    lab.el(svg, "text", { x: px(1) + 8, y: Y1 + 16, class: "small", text: "past the view's edge" });
+    lab.el(svg, "text", { x: (X0 + X1) / 2, y: 290, class: "mid small", text: "the pointer's x (NDC: 0 the centre, 1 the edge of the view's smaller side)" });
+    lab.el(svg, "text", { x: X0 - 8, y: Y1 + 4, class: "end small", text: `${MAX_ANGLE}°` });
+    lab.el(svg, "text", { x: X0 - 8, y: Y0 + 4, class: "end small", text: "0°" });
+    const turntable = lab.el(svg, "path", { class: "arrow cpu thick" });
+    const rim = lab.el(svg, "path", { class: "arrow bad thick" });
+    const smooth = lab.el(svg, "path", { class: "arrow ok thick" });
+    lab.el(svg, "text", { x: X1, y: 110, class: "end small t-cpu", text: "turntable: the motion only" });
+    lab.el(svg, "text", { x: X1, y: 128, class: "end small t-ok", text: "smooth ball (Holroyd)" });
+    lab.el(svg, "text", { x: X1, y: 146, class: "end small t-bad", text: "sphere clamped to its rim (Shoemake)" });
+
+    lab.draw(function () {
+        const y = height.value;
+        const k = STEP * 90;   // the turntable: 90 degrees per unit
+        let a = "";
+        let b = "";
+        let c = "";
+        for (let i = 0; i <= 120; i++) {
+            const x = MAX_X * i / 120;
+            a += `${i === 0 ? "M" : "L"}${px(x).toFixed(1)},${py(angle(shoemake, x, y)).toFixed(1)} `;
+            b += `${i === 0 ? "M" : "L"}${px(x).toFixed(1)},${py(angle(holroyd, x, y)).toFixed(1)} `;
+            c += `${i === 0 ? "M" : "L"}${px(x).toFixed(1)},${py(k).toFixed(1)} `;
+        }
+        lab.set(rim, { d: a });
+        lab.set(smooth, { d: b });
+        lab.set(turntable, { d: c });
+        const rimAt = angle(shoemake, 1.5, y);
+        const smoothAt = angle(holroyd, 1.5, y);
+        rimOut.set(`${rimAt.toFixed(2)}° a step`, rimAt < 0.05 ? "bad" : "");
+        smoothOut.set(`${smoothAt.toFixed(2)}° a step`, "ok");
+        if (y < 0.05)
+            note.set("On the clamped sphere every point past the rim is the same point: the turn stops dead at the edge. The smooth ball slows down but keeps turning; the turntable does not care where the pointer is.", "bad");
+        else
+            note.set("Past the rim the clamped sphere only slides along its edge, a roll around the view's centre, not the turn the drag asked for. The smooth ball keeps turning the same way.", "bad");
+    });
+});

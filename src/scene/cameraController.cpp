@@ -1,6 +1,8 @@
 #include "rasm/cameraController.h"
 #include "rasm/camera.h"
 
+#include "glm/gtc/constants.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -12,26 +14,14 @@ namespace rasm
         // The wheel never takes a trackball's radius, or an orthographic box's smaller half side, past this.
         constexpr float MAX_ZOOM_SIZE = 1e9f;
 
-        glm::vec3 projectOnSphere(const glm::vec2 &ndcPoint)
+        // A drag point on Holroyd's virtual trackball: the sphere of radius 1 near the center, and outside it the
+        // hyperbola z = 1 / (2 d) that meets the sphere smoothly at d = 1 / sqrt(2). Unlike a point clamped to the
+        // sphere's rim, it moves on as the pointer moves on, so a drag past the edge goes on turning the same way.
+        glm::vec3 projectOnTrackBall(const glm::vec2 &ndcPoint)
         {
-            float x = ndcPoint.x;
-            float y = ndcPoint.y;
-            float z = 0.0f;
-
-            float lengthSquared = x * x + y * y;
-            if (lengthSquared <= 1.0f)
-            {
-                // Point is inside the sphere
-                z = std::sqrt(1.0f - lengthSquared);
-            }
-            else
-            {
-                // Point is outside the sphere, project onto the sphere
-                float length = std::sqrt(lengthSquared);
-                x /= length;
-                y /= length;
-            }
-            return glm::vec3(x, y, z);
+            const float lengthSquared = glm::dot(ndcPoint, ndcPoint);
+            const float z = lengthSquared <= 0.5f ? std::sqrt(1.0f - lengthSquared) : 0.5f / std::sqrt(lengthSquared);
+            return glm::normalize(glm::vec3(ndcPoint, z));
         }
 
         // A zero up, or +Y, is the world's up: the controller then turns exactly as it did before up existed.
@@ -157,25 +147,32 @@ namespace rasm
                 return;
             }
 
-            if (orbit)
+            if (orbit && trackBall.style == CameraController::OrbitStyle::ARCBALL)
             {
-                auto p0 = projectOnSphere(input.mouseStart);
-                auto p1 = projectOnSphere(input.mouseEnd);
+                const glm::vec3 p0 = projectOnTrackBall(input.mouseStart);
+                const glm::vec3 p1 = projectOnTrackBall(input.mouseEnd);
 
-                // The sphere points are in camera space, so the axis is a camera-local axis.
-                auto axis = glm::cross(p0, p1);
-                auto angle = std::acos(glm::clamp(glm::dot(p0, p1), -1.0f, 1.0f));
-
-                angle *= trackBall.orbitSensitivity;
-
+                // The points are in camera space, so the axis is a camera-local axis.
+                glm::vec3 axis = glm::cross(p0, p1);
+                const float angle = std::acos(glm::clamp(glm::dot(p0, p1), -1.0f, 1.0f)) * trackBall.orbitSensitivity;
                 if (glm::dot(axis, axis) > 1e-12f)
                 {
                     axis = glm::normalize(axis);
-
-                    // Compose on the right to rotate in the camera's local frame.
-                    // The inverse rotation (-angle) makes the scene follow the cursor, as in a grab-style trackball.
+                    // Compose on the right to rotate in the camera's local frame. The inverse rotation (-angle) makes
+                    // the scene follow the cursor, as in a grab-style trackball.
                     transform.rotation = glm::normalize(transform.rotation * glm::angleAxis(-angle, axis));
                 }
+            }
+            else if (orbit)
+            {
+                // The drag's motion only, never where it is: the same drag turns the same at the center and at the
+                // edge. Right turns the scene right (the camera left around up), up tilts the scene up.
+                const glm::vec2 delta = (input.mouseEnd - input.mouseStart) * (glm::half_pi<float>() * trackBall.orbitSensitivity);
+                const glm::vec3 up = glm::dot(trackBall.up, trackBall.up) > 1e-12f ? trackBall.up : glm::vec3(0.0f, 1.0f, 0.0f);
+                float pitch = 0.0f;
+                // No turn, no new rotation: a plan view (orbitSensitivity 0) keeps looking straight down.
+                if (delta != glm::vec2(0.0f))
+                    transform.rotation = turnAroundUp(transform.rotation, up, -delta.x, delta.y, pitch);
             }
 
             // A grab: the scene follows the pointer, so the center moves the other way.

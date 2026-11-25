@@ -242,7 +242,7 @@
 <table>
   <tr><th>Case</th><th>Who gets it</th></tr>
   <tr><td>A press over a UI window</td><td>The UI, until the release, even when the pointer leaves the window (a slider drag).</td></tr>
-  <tr><td>A press outside every UI window</td><td>The camera starts the drag its button map gives the button (an orbit or a pan) and keeps it until that button's release, even over a UI window.</td></tr>
+  <tr><td>A press outside every UI window</td><td>The camera starts the drag its button map gives the button (an orbit or a pan) and keeps it until that button's release, even over a UI window. The drag follows the moves' <code>dx</code> and <code>dy</code>, and the platform grabs the pointer meanwhile (<code>Platform::setMouseGrab</code>), so the drag goes on past the window's edge.</td></tr>
   <tr><td>The wheel over a UI window</td><td>The UI scrolls; the camera does not zoom.</td></tr>
   <tr><td>A text field has the focus</td><td>Keys type into it. Shortcuts like F1 or Escape wait until it lets go.</td></tr>
   <tr><td>The window loses the focus</td><td>Nobody: the window will never see the release of a held key or button, so every key counts as up and a drag ends.</td></tr>

@@ -534,3 +534,70 @@ TEST_CASE("a free-fly rig follows an up that sweeps past -Y without a jump")
     }
     CHECK(largestTurn < 0.05f);
 }
+
+namespace
+{
+    rasm::CameraRig orbitRig(rasm::CameraController::OrbitStyle style)
+    {
+        const rasm::CameraController controller = {.type = rasm::CameraController::Type::TRACK_BALL,
+                                                   .trackBall = {.radius = 10.0f, .center = glm::dvec3(0.0), .orbitSensitivity = 1.0f, .style = style},
+                                                   .easingSpeed = 0.0f};
+        rasm::Transform start;
+        start.position = glm::dvec3(0.0, 0.0, 10.0);
+        return rasm::createCameraRig(controller, start);
+    }
+
+    float getAngle(const glm::quat &a, const glm::quat &b)
+    {
+        return 2.0f * std::acos(std::min(1.0f, std::abs(glm::dot(a, b))));
+    }
+}
+
+TEST_CASE("a turntable drag turns the same at the center and at the edge of the view")
+{
+    rasm::CameraRig centre = orbitRig(rasm::CameraController::OrbitStyle::TURNTABLE);
+    rasm::CameraRig edge = orbitRig(rasm::CameraController::OrbitStyle::TURNTABLE);
+    rasm::updateCameraRig(centre, rasm::CameraInput{.mouseStart = glm::vec2(0.0f), .mouseEnd = glm::vec2(0.2f, 0.1f)});
+    rasm::updateCameraRig(edge, rasm::CameraInput{.mouseStart = glm::vec2(1.7f, 0.95f), .mouseEnd = glm::vec2(1.9f, 1.05f)});
+    CHECK(getAngle(centre.transform.rotation, edge.transform.rotation) < 1e-5f);
+    // A drag to the right turns the camera to the left around the center: the scene follows the pointer.
+    CHECK(centre.transform.position.x < 0.0);
+    CHECK(glm::length(centre.transform.position) == doctest::Approx(10.0));
+}
+
+TEST_CASE("a turntable never rolls and never passes the pole")
+{
+    rasm::CameraRig rig = orbitRig(rasm::CameraController::OrbitStyle::TURNTABLE);
+    for (int i = 0; i < 40; ++i)
+    {
+        rasm::updateCameraRig(rig, rasm::CameraInput{.mouseStart = glm::vec2(0.0f), .mouseEnd = glm::vec2(0.13f, -0.2f)});
+        const glm::vec3 forward = rig.transform.rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+        const glm::vec3 right = rig.transform.rotation * glm::vec3(1.0f, 0.0f, 0.0f);
+        CHECK(std::abs(right.y) < 1e-4f);
+        CHECK(std::asin(glm::clamp(forward.y, -1.0f, 1.0f)) >= glm::radians(-89.0f) - 1e-4f);
+        CHECK(rig.transform.position.y > 0.0);
+    }
+    // At the limit, more of the same drag only turns around up.
+    const glm::vec3 forward = rig.transform.rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+    CHECK(std::asin(forward.y) == doctest::Approx(glm::radians(-89.0f)).epsilon(1e-3));
+}
+
+TEST_CASE("an arcball drag past the edge of its sphere goes on turning the same way")
+{
+    rasm::CameraRig rig = orbitRig(rasm::CameraController::OrbitStyle::ARCBALL);
+    float last = 0.0f;
+    glm::quat before = rig.transform.rotation;
+    for (int i = 0; i < 12; ++i)
+    {
+        const float x = 0.5f + 0.15f * static_cast<float>(i);
+        rasm::updateCameraRig(rig, rasm::CameraInput{.mouseStart = glm::vec2(x, 0.0f), .mouseEnd = glm::vec2(x + 0.15f, 0.0f)});
+        const float angle = getAngle(before, rig.transform.rotation);
+        // Each step turns around the camera's up, to the same side, and never jumps.
+        CHECK(angle > 1e-4f);
+        CHECK(angle < 0.3f);
+        CHECK(rig.transform.position.x < 0.0);
+        before = rig.transform.rotation;
+        last = angle;
+    }
+    CHECK(last > 0.0f);
+}
