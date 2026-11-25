@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>C API · RASM</title>
 <meta name="description" content="RASM from C and from other languages: the rasm_c and rasm_c_renderer shared libraries, rasm_c.h, its ABI rules (versions, sized structs, handles, errors, memory, threads), every function, and the map from the C++ API.">
-<meta name="rasm-sources" content="include/rasm/rasm_c.h src/c/cApi.h src/c/cApi.cpp src/c/cRenderer.cpp src/c/cScene.cpp src/c/cInput.cpp src/c/cViews.cpp src/c/cAnimation.cpp src/c/cTiles.cpp src/c/cLoader.cpp src/CMakeLists.txt cmake/RasmInstall.cmake cmake/rasmConfig.cmake.in examples/22_c_api/main.c tests/cApiTests.cpp tests/c_api/ctypes_smoke.py tests/consumer/CMakeLists.txt tools/check_install.py src/platform/paths.cpp include/rasm/handle.h">
+<meta name="rasm-sources" content="include/rasm/rasm_c.h src/c/cApi.h src/c/cApi.cpp src/c/cRenderer.cpp src/c/cScene.cpp src/c/cInput.cpp src/c/cViews.cpp src/c/cAnimation.cpp src/c/cTiles.cpp src/c/cTerrain.cpp src/c/cLoader.cpp src/CMakeLists.txt cmake/RasmInstall.cmake cmake/rasmConfig.cmake.in examples/22_c_api/main.c tests/cApiTests.cpp tests/c_api/ctypes_smoke.py tests/consumer/CMakeLists.txt tools/check_install.py src/platform/paths.cpp include/rasm/handle.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -159,7 +159,7 @@ lib.rasm_renderer_create((1 &lt;&lt; 16) | 0, ctypes.byref(config), ctypes.byref
 <h2 id="rules"><span class="n">3</span>The rules of the header</h2>
 
 <h3 id="versions">Versions</h3>
-<p><code>RASM_C_API_VERSION</code> is <code>major &lt;&lt; 16 | minor</code>: <code>RASM_C_API_VERSION_MAJOR</code> and <code>RASM_C_API_VERSION_MINOR</code>, 1.3 today: 1.1 added windows, input, views, render targets, camera helpers, animation and stats to 1.0, 1.2 added positions in doubles (<a href="#rasm_get_transform_d">below</a>), a free-fly controller's up axis and an environment's orientation, and 1.3 tile streaming (<a href="#rasm_tile_streamer_create">below</a>) and the renderer config's <code>max_bindless_textures</code>, all at the end of the header. Within one major version the API only grows at its end: new functions, new enum constants, new struct fields after the last one. Nothing is renumbered, reordered or removed. <a href="#rasm_renderer_create"><code>rasm_renderer_create</code></a> and <a href="#rasm_engine_create"><code>rasm_engine_create</code></a> take your <code>RASM_C_API_VERSION</code> and fail with <code>RASM_ERROR_VERSION</code> when the major versions differ, or when your minor version is newer than the library's: a newer header may use fields or functions the library does not have.</p>
+<p><code>RASM_C_API_VERSION</code> is <code>major &lt;&lt; 16 | minor</code>: <code>RASM_C_API_VERSION_MAJOR</code> and <code>RASM_C_API_VERSION_MINOR</code>, 1.4 today: 1.1 added windows, input, views, render targets, camera helpers, animation and stats to 1.0, 1.2 added positions in doubles (<a href="#rasm_get_transform_d">below</a>), a free-fly controller's up axis and an environment's orientation, 1.3 tile streaming (<a href="#rasm_tile_streamer_create">below</a>) and the renderer config's <code>max_bindless_textures</code>, and 1.4 terrain tiles (<a href="#rasm_create_terrain_tile">below</a>), the formats <code>RASM_FORMAT_R16_UNORM</code> and <code>RASM_FORMAT_R32_SFLOAT</code>, the material type <code>RASM_MATERIAL_TYPE_TERRAIN</code> and the material desc's <code>terrain</code>, all at the end of the header. Within one major version the API only grows at its end: new functions, new enum constants, new struct fields after the last one. Nothing is renumbered, reordered or removed. <a href="#rasm_renderer_create"><code>rasm_renderer_create</code></a> and <a href="#rasm_engine_create"><code>rasm_engine_create</code></a> take your <code>RASM_C_API_VERSION</code> and fail with <code>RASM_ERROR_VERSION</code> when the major versions differ, or when your minor version is newer than the library's: a newer header may use fields or functions the library does not have.</p>
 
 <h3 id="sized">Structs that grow</h3>
 
@@ -546,6 +546,28 @@ rasm_tile_streamer_set_views(tiles, views, 3);
 rasm_tile_streamer_update(tiles, wanted, wantedCount);
 uint32_t count = 0;
 const rasm_tile *toLoad = rasm_tile_streamer_get_tiles_to_load(tiles, &amp;count);</code></pre>
+  </div>
+</div>
+
+<div class="api" id="rasm_create_terrain_tile">
+  <pre class="sig">rasm_result      rasm_terrain_tile_desc_init(rasm_terrain_tile_desc* desc, uint32_t size);
+rasm_mesh        rasm_get_terrain_mesh(rasm_renderer* renderer, uint32_t cells);
+rasm_result      rasm_create_terrain_tile(rasm_renderer* renderer, const rasm_terrain_tile_desc* desc, rasm_entity* entity, rasm_material* material);
+rasm_result      rasm_get_terrain_transform(const rasm_terrain_tile_desc* desc, rasm_transform_d* transform);
+double           rasm_sample_terrain_height(const rasm_terrain_heights* heights, const rasm_terrain_material* terrain, double u, double v);
+rasm_result      rasm_get_terrain_position(const rasm_terrain_tile_desc* desc, const rasm_terrain_heights* heights, double u, double v, rasm_dvec3* position);</pre>
+  <div class="body">
+    <p>1.4. <a href="scene.html#createTerrainTile"><code>createTerrainTile</code></a>, <a href="scene.html#getTerrainMesh"><code>getTerrainMesh</code></a> and the CPU helpers of <a href="../guides/terrain.html">Terrain from height maps</a>, in both libraries. <code>rasm_terrain_material</code> is <a href="materials.html#TerrainMaterial"><code>TerrainMaterial</code></a> (<code>heights</code>, <code>height_scale</code>, <code>height_offset</code>, <code>min_height</code>, <code>max_height</code>, <code>skirt</code>, <code>sphere_radius</code>), also the last field of <code>rasm_material_desc</code>, so an older caller's update keeps it. <code>rasm_terrain_tile_desc</code> is sized: <code>center</code> a <code>rasm_dvec3</code>, <code>orientation</code>, <code>tile_size</code> (C++ <code>size</code>), <code>terrain</code>, <code>imagery</code>, <code>imagery_rect</code>, <code>roughness</code>. <code>rasm_terrain_heights</code> points at one of <code>unorm16</code> and <code>floats</code>, with a <code>width</code> of 4 to <code>RASM_MAX_TERRAIN_CELLS</code> + 3. <code>rasm_create_terrain_tile</code> returns <code>RASM_ERROR_FAILED</code> where C++ returns invalid handles. <code>rasm_create_texture</code> takes the two height formats, one level.</p>
+    <pre><code>rasm_terrain_tile_desc tile;
+rasm_terrain_tile_desc_init(&amp;tile, sizeof(tile));
+tile.tile_size = 256.0;
+tile.terrain.heights = heights; // a 35 x 35 RASM_FORMAT_R16_UNORM texture
+tile.terrain.height_scale = 1.0f / 16.0f;
+tile.terrain.min_height = 120.0f;
+tile.terrain.max_height = 380.0f;
+rasm_entity entity;
+rasm_material material;
+rasm_create_terrain_tile(renderer, &amp;tile, &amp;entity, &amp;material);</code></pre>
   </div>
 </div>
 

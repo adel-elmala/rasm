@@ -447,7 +447,7 @@ streamer.update(world.cut.data(), static_cast&lt;uint32_t&gt;(world.cut.size()))
 uint32_t count = 0;
 const rasm::TileHandle *toLoad = streamer.getTilesToLoad(count);
 // ... ask the server for each; when one arrives:
-streamer.setTileContent(node.tile, {.entities = entities, .entityCount = 1, .meshes = meshes, .meshCount = 1, .materials = materials, .materialCount = 1, .textures = textures, .textureCount = 1});
+streamer.setTileContent(node.tile, {.entities = entities, .entityCount = 1, .materials = materials, .materialCount = 1, .textures = textures, .textureCount = 2});
 engine.render(views.data(), static_cast&lt;uint32_t&gt;(views.size()));</code></pre>
 
 <h3>Where RASM follows this page, and where it differs</h3>
@@ -473,7 +473,7 @@ engine.render(views.data(), static_cast&lt;uint32_t&gt;(views.size()));</code></
 
 <div class="stats">
   <div><b>48 MiB</b><span>the budget of <code>examples/24_map_tiles</code>, held on every frame of a 1500-frame flight</span><small>Release, headless, RTX 3060</small></div>
-  <div><b>0.04 ms</b><span><code>update</code> on average, with up to 204 tiles drawn (0.6 ms at most)</span><small>about 230 tiles in memory, 1300 records</small></div>
+  <div><b>0.03 ms</b><span><code>update</code> on average, with up to 137 tiles drawn (0.6 ms at most)</span><small>about 500 tiles in memory, 965 records</small></div>
   <div><b>2.6 ms</b><span>the longest frame after the first 30, with 4 tiles uploaded per frame</span><small>the tiles' data made on 3 threads</small></div>
 </div>
 
@@ -488,7 +488,7 @@ engine.render(views.data(), static_cast&lt;uint32_t&gt;(views.size()));</code></
   <tr><td>A texture's allocation size</td><td><code>RenderContext::getTextureMemoryBytes</code>; <code>rhi::Texture::memoryBytes</code> set in <code>VulkanDevice::createTexture</code></td></tr>
   <tr><td>The C API</td><td><code>rasm_tile_streamer_*</code> in <code>include/rasm/rasm_c.h</code>, <code>src/c/cTiles.cpp</code>; <code>examples/22_c_api</code> streams its ground as five tiles</td></tr>
   <tr><td>Tests</td><td><code>tests/tileResidencyTests.cpp</code>; the image test <code>tile_streaming</code> (<code>tests/image/imageTests.cpp</code>)</td></tr>
-  <tr><td>Example</td><td><code>examples/24_map_tiles</code>: a 32 km quadtree of terrain tiles, and glTF landmarks under empty <code>ADD</code> tiles, two views</td></tr>
+  <tr><td>Example</td><td><code>examples/24_map_tiles</code>: a 32 km quadtree of terrain tiles (<a href="terrain.html">height maps lifted on the GPU</a>), and glTF landmarks under empty <code>ADD</code> tiles, two views</td></tr>
 </table>
 </div>
 
