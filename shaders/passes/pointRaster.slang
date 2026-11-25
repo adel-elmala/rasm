@@ -36,23 +36,20 @@ void resetMain()
     header->rectMaxY                = 0;
 }
 
-// The rect's words to 0: no point, as depth 0 is the far plane at infinity. Up to POINT_MAX_CLEAR_GROUPS groups over
-// the view, each thread a pixel or more; the pixels outside the rect are left as they are, as nothing reads them.
+// The rect's words to 0: no point, as depth 0 is the far plane at infinity. Each thread a pixel of the rect or more;
+// the pixels outside it are left as they are, as nothing reads them.
 [shader("compute")]
 [numthreads(POINT_CLEAR_GROUP_SIZE, 1, 1)]
 void clearMain(uint3 threadId : SV_DispatchThreadID)
 {
     SceneData *scene    = pc.scene;
     PointRasterHeader *header = scene->pointRasterPtr;
-    uint4 rect          = uint4(header->rectMinX, header->rectMinY, header->rectMaxX, header->rectMaxY);
-    uint pixels         = scene->viewportWidth * scene->viewportHeight;
+    uint2 low           = uint2(header->rectMinX, header->rectMinY);
+    uint width          = header->rectMaxX - low.x + 1;
+    uint pixels         = width * (header->rectMaxY - low.y + 1);
     uint stride         = header->clearGroups * POINT_CLEAR_GROUP_SIZE;
     for (uint i = threadId.x; i < pixels; i += stride)
-    {
-        uint2 pixel     = uint2(i % scene->viewportWidth, i / scene->viewportWidth);
-        if (all(pixel >= rect.xy) && all(pixel <= rect.zw))
-            scene->pointPixelsPtr[i] = 0;
-    }
+        scene->pointPixelsPtr[(low.y + i / width) * scene->viewportWidth + low.x + i % width] = 0;
 }
 
 // The pixels of a point's square: those whose centre is within half its diameter of the point's centre, edges
@@ -105,7 +102,11 @@ void rasterMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
     {
         uint point          = first + i;
         uint2 packed        = scene->pointsPtr[base + POINT_CHUNK_HEADER_UNITS + point];
-        if (!isPointShown(style, chunk, packed.y >> 16))
+        // A point the triangles would collapse (a clear color, a scalar out of the range, a clear colormap entry)
+        // writes nothing, so the point behind it wins, as by triangles. The batch's style is the group's own.
+        float colormapAt    = getPointColormapPosition(style, chunk, packed.y >> 16);
+        if (style.color.a <= 0.0 || colormapAt == POINT_OUT_OF_RANGE ||
+            (colormapAt >= 0.0 && gTextures[style.colormap].SampleLevel(getColormapCoordinate(colormapAt), 0.0).a <= 0.0))
             continue;
         float3 local        = chunk.boxMin + float3(packed.x & 0xFFFF, packed.x >> 16, packed.y & 0xFFFF) * chunk.boxStep;
         float3 position     = mul(world, float4(local, 1.0)).xyz;
@@ -168,7 +169,7 @@ ResolveOutput resolveFrag(ResolveVertex input)
     float colormapAt        = getPointColormapPosition(style, chunk, packed.y >> 16);
     float4 color            = getPointBaseColor(scene, style, chunk, base, point);
     if (colormapAt >= 0.0)
-        color *= gTextures[style.colormap].SampleLevel(getColormapCoordinate(colormapAt), 0.0);
+        color *= gTextures[NonUniformResourceIndex(style.colormap)].SampleLevel(getColormapCoordinate(colormapAt), 0.0);
     if (colormapAt == POINT_OUT_OF_RANGE)
         color = float4(0.0);
     if (color.a <= 0.0)

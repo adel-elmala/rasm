@@ -43,14 +43,10 @@ namespace rasm::gfx
     constexpr uint32_t      POINT_CHUNK_HEADER_WORDS    = 12;
     constexpr uint32_t      POINT_INDICES               = 3;        // a triangle a point, around its square
 
-    // The compute point rasterizer (shaders/passes/pointRaster.slang). Must match shaders/lib/points.slang.
-    constexpr float         POINT_RASTER_MAX_SIZE       = 2.0f;     // a chunk whose points are this many pixels across or less goes to it
-    constexpr float         POINT_RASTER_MIN_DENSITY    = 0.125f;   // and that draws this many points per pixel of its rect on screen
+    // The compute point rasterizer's batches (shaders/passes/pointRaster.slang). Must match shaders/lib/points.slang.
     constexpr uint32_t      POINT_BATCH_POINTS          = 1024;     // points of a batch: a group of the raster dispatch
     constexpr uint32_t      POINT_BATCHES_PER_CHUNK     = 64;       // MAX_POINT_CHUNK_POINTS / POINT_BATCH_POINTS
     constexpr uint32_t      POINT_MAX_BATCHES           = 65535;    // a view's batches a frame: the raster dispatch's groups (maxComputeWorkGroupCount)
-    constexpr uint32_t      POINT_RASTER_MAX_ROWS       = 1u << 16; // a pixel's word keeps the instance row in 16 bits; rows past it draw by triangles
-    constexpr uint32_t      POINT_CLEAR_GROUP_SIZE      = 256;      // pixels a group of the clear dispatch
 
     // VectorData::flags. Must match shaders/lib/vector.slang.
     constexpr uint32_t      VECTOR_METRES               = 1u << 0;  // width and dashes in metres, else pixels

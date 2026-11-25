@@ -33,7 +33,7 @@ namespace rasm
 
     void Renderer::setComputePoints(bool on)
     {
-        if (on && !ctx.hasBufferInt64Atomics() && !config.computePoints)
+        if (on && !ctx.hasBufferInt64Atomics())
             spdlog::warn("setComputePoints: this GPU has no 64-bit buffer atomics (shaderBufferInt64Atomics); every point is drawn by triangles.");
         config.computePoints = on;
     }
@@ -131,6 +131,7 @@ namespace rasm
         ctx.dispatchIndirect(commandBuffer, view.pointRaster[frame], offsetof(gfx::PointRasterHeader, clearGroups));
         ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::COMPUTE);
         ctx.bindPipeline(commandBuffer, gpuScene->pointRasterPipeline);
+        ctx.bindDescriptorSet(commandBuffer, gpuScene->pointRasterPipeline, bindlessDescriptorSet, 0);
         ctx.pushConstants(commandBuffer, gpuScene->pointRasterPipeline, &pushConstants, sizeof(pushConstants), 0);
         ctx.dispatchIndirect(commandBuffer, view.pointRaster[frame], offsetof(gfx::PointRasterHeader, rasterGroups));
     }

@@ -1085,12 +1085,16 @@ namespace rasm
         // (shadow.slang) as spvImageGatherExtended and warns when the profile lacks it; plain gathers emit no such
         // SPIR-V capability, so naming it changes no code. With spvDemoteToHelperInvocation, discard becomes
         // OpDemoteToHelperInvocation instead of OpKill: the lane stays in its 2x2 quad as a helper, so the derivatives
-        // of the samples after a cut-out's discard stay defined (B33).
-        static slang::CompilerOptionEntry spirvOptions[] = {{slang::CompilerOptionName::EmitSpirvDirectly, {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}},
-                                                            {slang::CompilerOptionName::Capability, {slang::CompilerOptionValueKind::Int, 0, 0, nullptr, nullptr}},
-                                                            {slang::CompilerOptionName::Capability, {slang::CompilerOptionValueKind::Int, 0, 0, nullptr, nullptr}}};
-        spirvOptions[1].value.intValue0 = globalSession->findCapability("spvImageGatherExtended");
-        spirvOptions[2].value.intValue0 = globalSession->findCapability("spvDemoteToHelperInvocation");
+        // of the samples after a cut-out's discard stay defined (B33). A NonUniformResourceIndex sample (pointRaster.slang's
+        // resolve, which reads many materials' colormaps in one draw) makes Slang ask for the other capabilities below
+        // and warn without them; they only allow what a shader uses, so the other shaders' code is the same.
+        static const char *const spirvCapabilities[] = {"spvImageGatherExtended", "spvDemoteToHelperInvocation", "spvShaderNonUniformEXT", "SPV_KHR_non_semantic_info", "SPV_GOOGLE_user_type",
+                                                        "spvDerivativeControl", "spvImageQuery", "spvSparseResidency", "spvMinLod", "spvFragmentFullyCoveredEXT"};
+        constexpr uint32_t SPIRV_OPTION_COUNT = 1 + sizeof(spirvCapabilities) / sizeof(spirvCapabilities[0]);
+        static slang::CompilerOptionEntry spirvOptions[SPIRV_OPTION_COUNT] = {};
+        spirvOptions[0] = {slang::CompilerOptionName::EmitSpirvDirectly, {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}};
+        for (uint32_t i = 1; i < SPIRV_OPTION_COUNT; ++i)
+            spirvOptions[i] = {slang::CompilerOptionName::Capability, {slang::CompilerOptionValueKind::Int, static_cast<int32_t>(globalSession->findCapability(spirvCapabilities[i - 1])), 0, nullptr, nullptr}};
 
         slang::TargetDesc targetDesc = {};
 
@@ -1099,7 +1103,7 @@ namespace rasm
         case Target::SPIRV:
             targetDesc.format = SLANG_SPIRV;
             targetDesc.profile = globalSession->findProfile("spirv_1_4");
-            targetDesc.compilerOptionEntryCount = 3;
+            targetDesc.compilerOptionEntryCount = SPIRV_OPTION_COUNT;
             targetDesc.compilerOptionEntries = spirvOptions;
             break;
         case Target::MSL:

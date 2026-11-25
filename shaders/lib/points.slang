@@ -109,13 +109,6 @@ float4 getPointBaseColor(SceneData *scene, PointData style, PointChunk chunk, ui
     return style.color * float4(decodeSrgb(decoded.r), decodeSrgb(decoded.g), decodeSrgb(decoded.b), 1.0);
 }
 
-// Whether the point can draw, without its colormap: the compute path drops one that cannot, so the point behind it
-// shows, as by triangles. A colormap's own clear entries are dropped by the resolve instead.
-bool isPointShown(PointData style, PointChunk chunk, uint scalarStep)
-{
-    return style.color.a > 0.0 && getPointColormapPosition(style, chunk, scalarStep) != POINT_OUT_OF_RANGE;
-}
-
 // How far a point's triangle reaches past the chunk's sphere: half its size and a pixel, in this view's pixels at the
 // sphere's far side (as getVectorPadding), so culling keeps a chunk whose points reach into the view.
 float getPointPadding(SceneData *scene, PointData style, float3 center, float radius)
@@ -192,20 +185,25 @@ bool isRasterChunk(SceneData *scene, PointData style, float3 center, float radiu
 }
 
 // Adds a chunk's first count points to the view's batches, POINT_BATCH_POINTS a batch, and grows the rect that the
-// clear and the resolve cover by the chunk's (an empty rect, its min past its max, runs neither). A chunk that does
-// not fit the buffer's batches takes back what it added and goes to the triangles: while a failed add is not taken
-// back yet, every later add sees the count past the capacity and fails too, so the batches below the final count are
-// all written.
+// clear and the resolve cover by the chunk's (an empty rect, its min past its max, runs neither). The batches are
+// taken with a compare-exchange that adds only what fits, so every batch below the final count is written; a chunk
+// that does not fit goes to the triangles. The clear runs as many groups as the largest chunk's rect needs, and its
+// threads loop over the whole rect.
 bool appendPointBatches(SceneData *scene, uint row, uint count, uint4 rect)
 {
     PointRasterHeader *header = scene->pointRasterPtr;
     uint batches        = (count + POINT_BATCH_POINTS - 1) / POINT_BATCH_POINTS;
     uint first          = 0;
-    InterlockedAdd(header->rasterGroups, batches, first);
-    if (first + batches > scene->pointBatchCapacity)
+    InterlockedAdd(header->rasterGroups, 0u, first);
+    for (;;)
     {
-        InterlockedAdd(header->rasterGroups, 0u - batches);
-        return false;
+        if (first + batches > scene->pointBatchCapacity)
+            return false;
+        uint seen       = 0;
+        InterlockedCompareExchange(header->rasterGroups, first, first + batches, seen);
+        if (seen == first)
+            break;
+        first           = seen;
     }
     for (uint b = 0; b < batches; ++b)
     {
@@ -216,8 +214,8 @@ bool appendPointBatches(SceneData *scene, uint row, uint count, uint4 rect)
     InterlockedMin(header->rectMinY, rect.y);
     InterlockedMax(header->rectMaxX, rect.z);
     InterlockedMax(header->rectMaxY, rect.w);
-    uint pixels         = scene->viewportWidth * scene->viewportHeight;
-    header->clearGroups = min((pixels + POINT_CLEAR_GROUP_SIZE - 1) / POINT_CLEAR_GROUP_SIZE, POINT_MAX_CLEAR_GROUPS);
+    uint pixels         = (rect.z - rect.x + 1) * (rect.w - rect.y + 1);
+    InterlockedMax(header->clearGroups, min((pixels + POINT_CLEAR_GROUP_SIZE - 1) / POINT_CLEAR_GROUP_SIZE, POINT_MAX_CLEAR_GROUPS));
     return true;
 }
 // clang-format on
