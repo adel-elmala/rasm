@@ -2104,10 +2104,15 @@ namespace rasm
 
         // The slots between the view's labels belong to other scenes: the pass leaves them.
         std::vector<glm::vec4> &probes = view.labelProbeData;
+        // Labels that are all overlays, or off the screen, need no pass.
         probes.assign(needed - lowSlot, glm::vec4(0.0f, 0.0f, 0.0f, LABEL_PROBE_NONE));
+        bool tested = false;
         for (const LabelCandidate &candidate : candidates)
+        {
             probes[candidate.slot - lowSlot] = candidate.probe;
-        if (!gpuScene->labelDepthPipeline.isValid() || view.labelFadeCapacity < needed || sceneData.depthTexture == UINT32_MAX || ctx.getRenderTargetDesc(view.renderTarget).cube ||
+            tested = tested || candidate.probe.w == LABEL_PROBE_DEPTH || candidate.probe.w == LABEL_PROBE_DEPTH + LABEL_PROBE_RESET;
+        }
+        if (!tested || !gpuScene->labelDepthPipeline.isValid() || view.labelFadeCapacity < needed || sceneData.depthTexture == UINT32_MAX || ctx.getRenderTargetDesc(view.renderTarget).cube ||
             !ctx.fillBuffer(view.labelProbes[frame], probes.data(), probes.size() * sizeof(glm::vec4), static_cast<size_t>(lowSlot) * sizeof(glm::vec4)))
             return;
         sceneData.labelProbesPtr = ctx.getBufferDeviceAddress(view.labelProbes[frame]);
