@@ -95,12 +95,13 @@
 <h2 id="create"><span class="n">1</span>Create a material</h2>
 
 <div class="api" id="MaterialType">
-  <pre class="sig">enum class MaterialType { PBR, UNLIT, TERRAIN, COUNT };</pre>
+  <pre class="sig">enum class MaterialType { PBR, UNLIT, TERRAIN, VECTOR, COUNT };</pre>
   <div class="body">
     <dl>
       <dt>PBR</dt><dd>Lit by the scene's lights (metallic-roughness model). Reads the texture slots listed in <a href="#PbrSlot">the slot table</a>.</dd>
       <dt>UNLIT</dt><dd>Only the base color (texture × factor), not lit. It goes through the tone map like every other color (<a href="../guides/tone-mapping.html">Tone mapping</a>).</dd>
       <dt>TERRAIN</dt><dd>A terrain tile: the shared grid lifted by <code>Material::terrain</code>'s heights, then lit as <code>PBR</code> with the albedo (the imagery) as base color. Made by <a href="scene.html#createTerrainTile"><code>createTerrainTile</code></a> (<a href="../guides/terrain.html">Terrain from height maps</a>).</dd>
+      <dt>VECTOR</dt><dd>Lines, polygons and points (<a href="scene.html#vectors">vector features</a>), styled by <code>Material::vector</code>, unlit. It is always <code>BLEND</code> and double-sided, whatever <code>updateMaterial</code> sets: its smooth edges are blended, in the Transparent pass, in its <code>drawOrder</code> (<a href="../guides/vector-rendering.html">Vector lines, polygons and points</a>).</dd>
       <dt>COUNT</dt><dd>Not a type; it counts the values.</dd>
     </dl>
   </div>
@@ -176,6 +177,7 @@ rasm::MaterialHandle brick = engine.createMaterial(rasm::MaterialType::PBR, text
     AlphaMode        alphaMode{};
     float            alphaCutoff  = 0.5f;
     TerrainMaterial  terrain      = {};
+    VectorMaterial   vector       = {};
 };</pre>
   <div class="body">
     <dl>
@@ -189,6 +191,7 @@ rasm::MaterialHandle brick = engine.createMaterial(rasm::MaterialType::PBR, text
       <dt>doubleSided</dt><dd>Draw back faces too.</dd>
       <dt>alphaMode</dt><dd>Solid, cut-out or see-through (<a href="#AlphaMode"><code>AlphaMode</code></a>). Default <code>NONE</code>: solid.</dd>
       <dt>alphaCutoff</dt><dd>For <code>MASK</code>: no pixel where alpha is below it. Default 0.5.</dd>
+      <dt>vector</dt><dd>For <code>VECTOR</code> only: the style (<a href="#VectorMaterial"><code>VectorMaterial</code></a>). <code>textures[ALBEDO]</code> is the icon atlas of points built with icons.</dd>
       <dt>terrain</dt><dd>For <code>TERRAIN</code> only: the tile's heights (<a href="#TerrainMaterial"><code>TerrainMaterial</code></a>). The imagery is <code>textures[ALBEDO]</code>, and its part of the image <code>textureTransforms[ALBEDO]</code>.</dd>
     </dl>
     <p>The flat <code>params</code> array is easy to index wrongly; <code>docs/code_review.md</code> plans a typed struct (<code>C9</code>).</p>
@@ -215,6 +218,45 @@ rasm::MaterialHandle brick = engine.createMaterial(rasm::MaterialType::PBR, text
       <dt>sphereRadius</dt><dd>0: flat. Else the tile bends down by d² / 2R at d metres from its centre, to sit on a planet (6 371 000 for the Earth): 5 cm off the sphere at 100 km.</dd>
     </dl>
   </div>
+</div>
+
+<div class="api" id="VectorMaterial">
+  <pre class="sig">struct VectorMaterial
+{
+    glm::vec4      color        = glm::vec4(1.0f);
+    float          width        = 1.0f;
+    VectorUnit     widthUnit    = VectorUnit::PIXELS;
+    VectorFacing   facing       = VectorFacing::SCREEN;
+    float          dashLength   = 0.0f;
+    float          gapLength    = 0.0f;
+    glm::vec4      outlineColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    float          outlineWidth = 0.0f;
+    int32_t        drawOrder    = 0;
+    VectorDepth    depth        = VectorDepth::TESTED;
+};</pre>
+  <div class="body">
+    <p>A layer's style. Every feature is at least one pixel wide; a thinner one keeps one pixel and fades by its coverage, so it neither vanishes nor shimmers.</p>
+    <dl>
+      <dt>color</dt><dd>Linear RGB and straight alpha, times the vertex colors.</dd>
+      <dt>width, widthUnit</dt><dd>A line's width or a point's diameter, in pixels on screen (<code>VectorUnit::PIXELS</code>) or metres in the world (<code>VectorUnit::METRES</code>). Polygons have none.</dd>
+      <dt>facing</dt><dd><code>VectorFacing::SCREEN</code>: spread across the screen, never foreshortened. <code>VectorFacing::GROUND</code>: in the ground's plane under the feature (its up), lying on the ground.</dd>
+      <dt>dashLength, gapLength</dt><dd>In <code>widthUnit</code>; both above 0 for dashes. In pixels they follow the pixel's size at each vertex.</dd>
+      <dt>outlineColor, outlineWidth</dt><dd>A band along a line's or point's edge, inside <code>width</code>: a road's casing, a marker's ring.</dd>
+      <dt>drawOrder</dt><dd>−127 to 127: blended draws of a lower order are drawn first; the scene's other see-through draws sort at 0, by depth.</dd>
+      <dt>depth</dt><dd><code>VectorDepth::TESTED</code>: hidden behind what is in front, nearer than the ground it lies on by a small bias. <code>VectorDepth::OVERLAY</code>: over everything, never occlusion culled.</dd>
+    </dl>
+    <pre><code>// examples/25_vector_map: roads 7 px wide with a 1.5 px casing.
+rasm::Material values = engine.getMaterial(material);
+values.vector = {.color = glm::vec4(1.0f, 0.75f, 0.25f, 1.0f), .width = 7.0f, .outlineColor = glm::vec4(0.55f, 0.32f, 0.08f, 1.0f), .outlineWidth = 1.5f, .drawOrder = -10};
+engine.updateMaterial(material, values);</code></pre>
+  </div>
+</div>
+
+<div class="api" id="VectorUnit">
+  <pre class="sig">enum class VectorUnit : uint32_t { PIXELS, METRES };
+enum class VectorFacing : uint32_t { SCREEN, GROUND };
+enum class VectorDepth : uint32_t { TESTED, OVERLAY };</pre>
+  <div class="body"><p>The choices of <a href="#VectorMaterial"><code>VectorMaterial</code></a>: <code>VectorUnit</code> for the width and dashes, <code>VectorFacing</code> for the plane a width spreads in, <code>VectorDepth</code> for the depth test.</p></div>
 </div>
 
 <div class="api" id="PbrSlot">
@@ -483,7 +525,7 @@ ctx.pushConstants(commandBuffer, overlayPipeline, &amp;textureIndex, sizeof(text
 <div class="table-wrap">
 <table>
   <tr><th>Constant</th><th>Value</th><th>Meaning</th></tr>
-  <tr><td><code>EngineConfig::maxMaterials</code></td><td>4096</td><td>materials alive at once, the default material included; the table has one more row, 248 B each, twice</td></tr>
+  <tr><td><code>EngineConfig::maxMaterials</code></td><td>4096</td><td>materials alive at once, the default material included; the table has one more row, 304 B each, twice</td></tr>
   <tr><td><code>RendererConfig::maxBindlessTextures</code></td><td>16384</td><td>texture slots, shared by materials, glTF images, render targets and you; lowered to the device's limit</td></tr>
   <tr><td><code>MAX_TEXTURE_SLOTS</code></td><td>6</td><td>textures per material</td></tr>
   <tr><td><code>MAX_PARAM_SLOTS</code></td><td>12</td><td>floats in <code>params</code></td></tr>

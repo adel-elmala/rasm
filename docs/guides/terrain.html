@@ -404,7 +404,7 @@ streamer.setTileContent(node.tile, {.entities = entities, .entityCount = 1, .mat
   <tr><td>Normals</td><td>central differences with a border</td><td>Per vertex, in <code>getTerrainVertex</code>, from the four samples around it, with the curvature's slope; interpolated across the triangle. The fragment stage has no normal map for terrain.</td></tr>
   <tr><td>Imagery</td><td>its own, or a part of the parent's</td><td>The base color: <code>TerrainTileDesc::imagery</code>, with <code>imageryRect</code> as its texture transform; a slot made by <code>createTerrainTile</code> clamps.</td></tr>
   <tr><td>Curvature</td><td>d² / 2R</td><td><code>TerrainMaterial::sphereRadius</code>; 0 is flat.</td></tr>
-  <tr><td>The CPU's height</td><td>the same rule</td><td><code>sampleTerrainHeight</code> and <code>getTerrainPosition</code>: the two triangles of a cell, split from (0, 1) to (1, 0), with corners computed in floats as the shader does; for placing objects and cameras, and to check a picked point.</td></tr>
+  <tr><td>The CPU's height</td><td>the same rule</td><td><code>sampleTerrainHeight</code> and <code>getTerrainPosition</code>: the two triangles of a cell, split from (0, 1) to (1, 0), with corners computed in floats as the shader does; for placing objects and cameras, and to check a picked point. Vector features draped on a tile use it too (<a href="vector-rendering.html#drape">Draping on terrain</a>).</td></tr>
   <tr><td>Changes between levels</td><td>—</td><td>None: a tile swaps at once (no geomorphing between levels).</td></tr>
 </table>
 </div>

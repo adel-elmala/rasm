@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Scenes and Meshes · RASM</title>
 <meta name="description" content="Scenes, entities, Transform, meshes (createMesh, loadMesh, loadGLTF, Vertex, SubMesh, MeshLod), animation and morph targets, lights, adding objects to scenes, when changes reach the GPU, and the limits.">
-<meta name="rasm-sources" content="include/rasm/scene.h include/rasm/terrain.h src/scene/terrain.cpp include/rasm/animation.h src/renderer/animation.cpp src/assets/morphImport.cpp src/assets/environment.cpp src/renderer/environmentBake.cpp include/rasm/entity.h include/rasm/mesh.h include/rasm/light.h include/rasm/transform.h include/rasm/renderer.h include/rasm/types.h src/scene/scene.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/transform.cpp src/assets/mesh.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/material.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/gpuTable.cpp src/renderer/geometryPool.cpp src/core/handle.cpp shaders/lib/pbr.slang shaders/lib/core.slang examples/00_hello_scene/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp examples/05_city/main.cpp examples/14_morph_targets/main.cpp src/assets/meshData.h">
+<meta name="rasm-sources" content="include/rasm/scene.h include/rasm/terrain.h src/scene/terrain.cpp include/rasm/vector.h src/scene/vector.cpp include/rasm/animation.h src/renderer/animation.cpp src/assets/morphImport.cpp src/assets/environment.cpp src/renderer/environmentBake.cpp include/rasm/entity.h include/rasm/mesh.h include/rasm/light.h include/rasm/transform.h include/rasm/renderer.h include/rasm/types.h src/scene/scene.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/transform.cpp src/assets/mesh.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/material.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/gpuTable.cpp src/renderer/geometryPool.cpp src/core/handle.cpp shaders/lib/pbr.slang shaders/lib/core.slang examples/00_hello_scene/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp examples/05_city/main.cpp examples/14_morph_targets/main.cpp src/assets/meshData.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -435,6 +435,36 @@ return engine.createMesh(std::move(vertices), std::move(indices), std::move(colo
   </div>
 </div>
 
+<div class="api" id="buildMesh">
+  <pre class="sig">MeshBuild buildMesh(std::vector&lt;Vertex&gt; vertices, std::vector&lt;uint32_t&gt; indices, std::vector&lt;uint32_t&gt; colors = {}, const MeshBuildOptions&amp; options = {});
+MeshHandle createMesh(MeshBuild&amp;&amp; build);</pre>
+  <div class="body">
+    <p>The two halves of <code>createMesh</code>. <code>buildMesh</code> is a free function that touches no renderer, so any thread may call it: it checks the data as <code>createMesh</code> does (colors empty or one per vertex, whole triangles, indices in range; an error and an invalid build otherwise) and builds the LODs and meshlets the options ask for, the slow part of a big mesh. <code>Renderer::createMesh(MeshBuild&amp;&amp;)</code> then only uploads it, on the renderer's thread, and takes the build (invalid afterwards). An application that makes its tiles' meshes builds them on its own threads, and its frames only upload.</p>
+    <pre><code>// On a worker thread:
+rasm::MeshBuild build = rasm::buildMesh(std::move(vertices), std::move(indices));
+// Later, on the renderer's thread:
+const rasm::MeshHandle mesh = renderer.createMesh(std::move(build));</code></pre>
+  </div>
+</div>
+
+<div class="api" id="MeshBuildOptions">
+  <pre class="sig">struct MeshBuildOptions
+{
+    bool                        lods        = true;
+    bool                        meshlets    = true;
+};</pre>
+  <div class="body"><p><code>lods</code>: <a href="../guides/mesh-simplification.html">simplified LODs</a>. <code>meshlets</code>: <a href="../guides/meshlets.html">meshlets</a> for a sub-mesh of 1024 triangles or more. Leave both off for geometry the shader moves (vector features, which <a href="#buildVectorMesh"><code>buildVectorMesh</code></a> does).</p></div>
+</div>
+
+<div class="api" id="MeshBuild">
+  <pre class="sig">class MeshBuild
+{
+public:
+    bool                        isValid() const;
+};</pre>
+  <div class="body"><p>A mesh's CPU data, ready to upload. Move-only. <code>isValid</code> is false when <code>buildMesh</code> refused the data, and after a <code>createMesh</code> took it.</p></div>
+</div>
+
 <div class="api" id="SkinVertex">
   <pre class="sig">struct SkinVertex
 {
@@ -681,7 +711,79 @@ const glm::dvec3 ground = rasm::getTerrainPosition(tile, {.unorm16 = samples.dat
   <div class="body"><p>The most cells per side of a terrain grid; a tile's heights have cells + 3 samples a side.</p></div>
 </div>
 
-<h2 id="animation"><span class="n">6</span>Animation</h2>
+<h2 id="vectors"><span class="n">6</span>Vector features</h2>
+
+<p>Lines, polygons and points from map data: a mesh built by the functions below, drawn with a <a href="materials.html#VectorMaterial"><code>VECTOR</code> material</a> on an entity at the features' origin (no rotation, scale 1). The vertices keep each feature's points and offsets; the shader spreads them by the material's width every frame (<a href="../guides/vector-rendering.html">Vector lines, polygons and points</a>). The functions touch no renderer, so any thread may call them, each on its own geometry.</p>
+
+<div class="api" id="VectorGeometry">
+  <pre class="sig">struct VectorGeometry
+{
+    std::vector&lt;Vertex&gt;         vertices;
+    std::vector&lt;uint32_t&gt;       indices;
+};</pre>
+  <div class="body"><p>What the add functions append to. Build it into a mesh with <a href="#buildVectorMesh"><code>buildVectorMesh</code></a>. The vertex layout is <code>shaders/lib/vector.slang</code>'s; the feature id of each vertex is in <code>tangent.w</code>.</p></div>
+</div>
+
+<div class="api" id="addVectorLines">
+  <pre class="sig">void addVectorLines(VectorGeometry&amp; geometry, const glm::dvec3&amp; origin, const glm::dvec3* points, const uint32_t* lineSizes, uint32_t lineCount, const LineShape&amp; shape = {},
+                    const VectorPlacement&amp; placement = {}, const uint32_t* featureIds = nullptr);</pre>
+  <div class="body">
+    <dl>
+      <dt>origin</dt><dd>The world position of the entity that will draw the mesh: the vertices are offsets from it in floats, so a map far from the world's origin keeps its precision.</dd>
+      <dt>points, lineSizes, lineCount</dt><dd>Every line's points, in doubles, one line after another, <code>lineSizes[i]</code> for line <code>i</code>. A line of fewer than 2 distinct points is skipped.</dd>
+      <dt>shape</dt><dd>Joins and caps (<a href="#LineShape"><code>LineShape</code></a>).</dd>
+      <dt>placement</dt><dd>At the points' own heights, or draped on a terrain tile (<a href="#VectorPlacement"><code>VectorPlacement</code></a>).</dd>
+      <dt>featureIds</dt><dd>One per line, the id picking will report; null: the line's number.</dd>
+    </dl>
+    <pre><code>const glm::dvec3 road[3] = {{0.0, 0.0, 0.0}, {120.0, 0.0, 40.0}, {260.0, 0.0, 10.0}};
+const uint32_t size = 3;
+rasm::VectorGeometry geometry;
+rasm::addVectorLines(geometry, glm::dvec3(0.0), road, &amp;size, 1, {.join = rasm::LineJoin::ROUND, .cap = rasm::LineCap::ROUND});
+const rasm::MeshHandle mesh = engine.createMesh(rasm::buildVectorMesh(std::move(geometry)));</code></pre>
+  </div>
+</div>
+
+<div class="api" id="addVectorPolygons">
+  <pre class="sig">void addVectorPolygons(VectorGeometry&amp; geometry, const glm::dvec3&amp; origin, const glm::dvec3* points, const uint32_t* ringSizes, const uint32_t* ringCounts, uint32_t polygonCount,
+                       const VectorPlacement&amp; placement = {}, const uint32_t* featureIds = nullptr);</pre>
+  <div class="body"><p>Polygons with holes, cut into triangles by earcut. <code>points</code> holds every ring, one after another, <code>ringSizes[r]</code> points for ring <code>r</code>; polygon <code>i</code> has <code>ringCounts[i]</code> rings, its outline first, then its holes. Rings need not be closed nor wound a given way. Without a drape they are cut in the ground's plane through <code>origin</code> (perpendicular to <code>placement.up</code>) and keep their points' heights.</p></div>
+</div>
+
+<div class="api" id="addVectorPoints">
+  <pre class="sig">void addVectorPoints(VectorGeometry&amp; geometry, const glm::dvec3&amp; origin, const glm::dvec3* points, uint32_t pointCount, const VectorPlacement&amp; placement = {},
+                     const uint32_t* featureIds = nullptr, const glm::vec4* iconRects = nullptr);</pre>
+  <div class="body"><p>Points or markers: a disc each, the material's <code>width</code> across, with its outline as a ring. With <code>iconRects</code> (u0, v0, u1, v1 per point, in the material's albedo texture) a square icon instead.</p></div>
+</div>
+
+<div class="api" id="buildVectorMesh">
+  <pre class="sig">MeshBuild buildVectorMesh(VectorGeometry geometry);</pre>
+  <div class="body"><p><a href="#buildMesh"><code>buildMesh</code></a> with no LODs and no meshlets, which the shader's offsets would break. Safe on any thread; upload the result with <code>createMesh(MeshBuild&amp;&amp;)</code>.</p></div>
+</div>
+
+<div class="api" id="LineShape">
+  <pre class="sig">struct LineShape
+{
+    LineJoin                    join            = LineJoin::ROUND;
+    LineCap                     cap             = LineCap::BUTT;
+    float                       miterLimit      = MAX_VECTOR_MITER;
+};
+enum class LineJoin : uint32_t { MITER, BEVEL, ROUND };
+enum class LineCap : uint32_t { BUTT, SQUARE, ROUND };
+constexpr float MAX_VECTOR_MITER = 2.0f;</pre>
+  <div class="body"><p>How segments meet and lines end. A miter longer than <code>miterLimit</code> half widths (1 to <code>MAX_VECTOR_MITER</code>, which culling's pad counts on) is beveled. A square cap reaches half a width past the end point.</p></div>
+</div>
+
+<div class="api" id="VectorPlacement">
+  <pre class="sig">struct VectorPlacement
+{
+    glm::vec3                   up              = glm::vec3(0.0f, 1.0f, 0.0f);
+    const TerrainTileDesc*      drapeTile       = nullptr;
+    TerrainHeights              drapeHeights    = {};
+};</pre>
+  <div class="body"><p>Without a drape, features sit at their points' heights on a ground whose up is <code>up</code> (world space). With <code>drapeTile</code> and <code>drapeHeights</code> (the tile's desc and the samples of its heights texture), they are placed across the tile, their own height ignored, cut where they cross the terrain's grid lines and cell diagonals, and lifted by <a href="#sampleTerrainHeight"><code>sampleTerrainHeight</code></a>'s rule, so they lie exactly on the drawn ground. Draped features must lie within the tile; make them content of the same tile as its terrain, so both are drawn together.</p></div>
+</div>
+
+<h2 id="animation"><span class="n">7</span>Animation</h2>
 
 <p>A glTF model's clips move its nodes, and the GPU poses them (<a href="../guides/keyframe-animation.html">Keyframe animation</a>). A skinned model's clips move its joints, and the GPU skins its vertices once per frame for every view (<a href="../guides/skinning.html">Skinning</a>); it plays the same way. A morphed model's clips move its weights too (<a href="#morph-targets">Morph targets</a>). The application owns the clock: it calls <code>setAnimationTime</code> once per frame, and starts a clip on an entity with <code>playAnimation</code>. Nothing else runs per frame on the CPU, however many entities play.</p>
 
@@ -817,7 +919,7 @@ enum class AnimationInterpolation : uint32_t { STEP, LINEAR, CUBICSPLINE };</pre
   <div class="body"><p>What the import keeps of a glTF file's animations, in <code>GLTFRaw::animation</code>. <code>nodes</code> holds only the nodes a clip can move, parents before children, with their rest pose (a node below static parents hangs below an extra node whose <code>rest</code> is their world matrix). Each sampler's values are vec4s: a quaternion x, y, z, w, or a translation or scale with w = 0; <code>CUBICSPLINE</code> stores an in-tangent, the value and an out-tangent per key. A sampler that does not parse is skipped with a warning, and its clip keeps its index. <code>joints</code> holds every skin a sub-mesh uses, one skin after another: each joint's node in <code>nodes</code> (a joint is always kept, moved or not) and its inverse bind matrix (the identity when the file has none). <code>morphWeights</code> holds the rest weights of every node that draws a morphed mesh, one node after another (the node's, else the mesh's, else 0), and <code>morphTargetNames</code> one name per weight. A glTF weights sampler becomes one sampler per target, its value in x, and one <code>AnimationPath::WEIGHTS</code> channel per weight, whose <code>node</code> is the weight's index in <code>morphWeights</code>.</p></div>
 </div>
 
-<h2 id="morph-targets"><span class="n">7</span>Morph targets</h2>
+<h2 id="morph-targets"><span class="n">8</span>Morph targets</h2>
 
 <p>A glTF mesh with morph targets has a list of weights per entity. The GPU adds each target's deltas, times its weight, to the vertices once per frame, before the skin, for every view (<a href="../guides/morph-targets.html">Morph targets</a>). A weight comes from the application when it set one, else from the playing clip's weights channel, else from the mesh's rest weights.</p>
 
@@ -887,7 +989,7 @@ engine.setMorphWeights(entity, weights.data(), static_cast&lt;uint32_t&gt;(weigh
   <p>An entity of a morphed mesh is posed every frame, with a clip or not, like a skinned one: it takes a row of the animated entity table (<code>EngineConfig::maxAnimatedEntities</code>), and its weights take rows of <code>EngineConfig::maxMorphWeights</code>. The <code>Skin</code> pass reads only the targets whose weight is not 0. The deltas take 24 B per vertex and target in the geometry pool (<code>EngineConfig::geometryPoolMorphs</code>).</p>
 </div>
 
-<h2 id="lights"><span class="n">8</span>Lights</h2>
+<h2 id="lights"><span class="n">9</span>Lights</h2>
 
 <div class="split">
   <div>
@@ -1021,7 +1123,7 @@ engine.updateLight(lamp, light);</code></pre>
   <div class="body"><p>π/4: the default outer angle of a spot light's cone, glTF's default (<code>rasm/light.h</code>).</p></div>
 </div>
 
-<h2 id="environments"><span class="n">9</span>Environments</h2>
+<h2 id="environments"><span class="n">10</span>Environments</h2>
 
 <p>An <b>environment</b> is an HDR photo of the light all around a scene. It lights every <code>PBR</code> material from all directions (soft light from the sky, reflections on shiny surfaces) and shows behind the scene as the sky. The guide <a href="../guides/image-based-lighting.html">Image-based lighting</a> explains how.</p>
 
@@ -1079,7 +1181,7 @@ engine.setSceneEnvironment(scene, {});</code></pre>
   </div>
 </div>
 
-<h2 id="timing"><span class="n">10</span>When changes reach the GPU</h2>
+<h2 id="timing"><span class="n">11</span>When changes reach the GPU</h2>
 
 <div class="table-wrap">
 <table>
@@ -1097,7 +1199,7 @@ engine.setSceneEnvironment(scene, {});</code></pre>
 </div>
 <p>The engine keeps one copy of each table per frame slot. A changed row is uploaded to each copy once, in that copy's own frame, so the GPU never reads a row while the CPU writes it. The guide <a href="../guides/gpu-scene.html">The GPU scene tables</a> explains the details.</p>
 
-<h2 id="limits"><span class="n">11</span>Limits</h2>
+<h2 id="limits"><span class="n">12</span>Limits</h2>
 
 <div class="table-wrap">
 <table>

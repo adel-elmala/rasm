@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>C API · RASM</title>
 <meta name="description" content="RASM from C and from other languages: the rasm_c and rasm_c_renderer shared libraries, rasm_c.h, its ABI rules (versions, sized structs, handles, errors, memory, threads), every function, and the map from the C++ API.">
-<meta name="rasm-sources" content="include/rasm/rasm_c.h src/c/cApi.h src/c/cApi.cpp src/c/cRenderer.cpp src/c/cScene.cpp src/c/cInput.cpp src/c/cViews.cpp src/c/cAnimation.cpp src/c/cTiles.cpp src/c/cTerrain.cpp src/c/cLoader.cpp src/CMakeLists.txt cmake/RasmInstall.cmake cmake/rasmConfig.cmake.in examples/22_c_api/main.c tests/cApiTests.cpp tests/c_api/ctypes_smoke.py tests/consumer/CMakeLists.txt tools/check_install.py src/platform/paths.cpp include/rasm/handle.h">
+<meta name="rasm-sources" content="include/rasm/rasm_c.h src/c/cApi.h src/c/cApi.cpp src/c/cRenderer.cpp src/c/cScene.cpp src/c/cInput.cpp src/c/cViews.cpp src/c/cAnimation.cpp src/c/cTiles.cpp src/c/cTerrain.cpp src/c/cVector.cpp src/c/cLoader.cpp src/CMakeLists.txt cmake/RasmInstall.cmake cmake/rasmConfig.cmake.in examples/22_c_api/main.c tests/cApiTests.cpp tests/c_api/ctypes_smoke.py tests/consumer/CMakeLists.txt tools/check_install.py src/platform/paths.cpp include/rasm/handle.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -159,7 +159,7 @@ lib.rasm_renderer_create((1 &lt;&lt; 16) | 0, ctypes.byref(config), ctypes.byref
 <h2 id="rules"><span class="n">3</span>The rules of the header</h2>
 
 <h3 id="versions">Versions</h3>
-<p><code>RASM_C_API_VERSION</code> is <code>major &lt;&lt; 16 | minor</code>: <code>RASM_C_API_VERSION_MAJOR</code> and <code>RASM_C_API_VERSION_MINOR</code>, 1.4 today: 1.1 added windows, input, views, render targets, camera helpers, animation and stats to 1.0, 1.2 added positions in doubles (<a href="#rasm_get_transform_d">below</a>), a free-fly controller's up axis and an environment's orientation, 1.3 tile streaming (<a href="#rasm_tile_streamer_create">below</a>) and the renderer config's <code>max_bindless_textures</code>, and 1.4 terrain tiles (<a href="#rasm_create_terrain_tile">below</a>), the formats <code>RASM_FORMAT_R16_UNORM</code> and <code>RASM_FORMAT_R32_SFLOAT</code>, the material type <code>RASM_MATERIAL_TYPE_TERRAIN</code> and the material desc's <code>terrain</code>, all at the end of the header. Within one major version the API only grows at its end: new functions, new enum constants, new struct fields after the last one. Nothing is renumbered, reordered or removed. <a href="#rasm_renderer_create"><code>rasm_renderer_create</code></a> and <a href="#rasm_engine_create"><code>rasm_engine_create</code></a> take your <code>RASM_C_API_VERSION</code> and fail with <code>RASM_ERROR_VERSION</code> when the major versions differ, or when your minor version is newer than the library's: a newer header may use fields or functions the library does not have.</p>
+<p><code>RASM_C_API_VERSION</code> is <code>major &lt;&lt; 16 | minor</code>: <code>RASM_C_API_VERSION_MAJOR</code> and <code>RASM_C_API_VERSION_MINOR</code>, 1.5 today: 1.1 added windows, input, views, render targets, camera helpers, animation and stats to 1.0, 1.2 added positions in doubles (<a href="#rasm_get_transform_d">below</a>), a free-fly controller's up axis and an environment's orientation, 1.3 tile streaming (<a href="#rasm_tile_streamer_create">below</a>) and the renderer config's <code>max_bindless_textures</code>, and 1.4 terrain tiles (<a href="#rasm_create_terrain_tile">below</a>), the formats <code>RASM_FORMAT_R16_UNORM</code> and <code>RASM_FORMAT_R32_SFLOAT</code>, the material type <code>RASM_MATERIAL_TYPE_TERRAIN</code> and the material desc's <code>terrain</code>, and 1.5 meshes built on any thread and vector features (<a href="#rasm_build_mesh">below</a>), <code>RASM_MATERIAL_TYPE_VECTOR</code> and the material desc's <code>vector</code>, all at the end of the header. Within one major version the API only grows at its end: new functions, new enum constants, new struct fields after the last one. Nothing is renumbered, reordered or removed. <a href="#rasm_renderer_create"><code>rasm_renderer_create</code></a> and <a href="#rasm_engine_create"><code>rasm_engine_create</code></a> take your <code>RASM_C_API_VERSION</code> and fail with <code>RASM_ERROR_VERSION</code> when the major versions differ, or when your minor version is newer than the library's: a newer header may use fields or functions the library does not have.</p>
 
 <h3 id="sized">Structs that grow</h3>
 
@@ -568,6 +568,31 @@ tile.terrain.max_height = 380.0f;
 rasm_entity entity;
 rasm_material material;
 rasm_create_terrain_tile(renderer, &amp;tile, &amp;entity, &amp;material);</code></pre>
+  </div>
+</div>
+
+<div class="api" id="rasm_build_mesh">
+  <pre class="sig">rasm_result      rasm_mesh_build_options_init(rasm_mesh_build_options* options, uint32_t size);
+rasm_result      rasm_build_mesh(const rasm_vertex* vertices, uint32_t vertex_count, const uint32_t* indices, uint32_t index_count, const uint32_t* colors, const rasm_mesh_build_options* options, rasm_mesh_build** build);
+void             rasm_mesh_build_destroy(rasm_mesh_build* build);
+rasm_mesh        rasm_create_mesh_from_build(rasm_renderer* renderer, rasm_mesh_build* build);
+rasm_result      rasm_line_shape_init(rasm_line_shape* shape, uint32_t size);
+rasm_result      rasm_vector_placement_init(rasm_vector_placement* placement, uint32_t size);
+rasm_result      rasm_vector_geometry_create(rasm_vector_geometry** geometry);
+void             rasm_vector_geometry_destroy(rasm_vector_geometry* geometry);
+rasm_result      rasm_vector_geometry_get_size(const rasm_vector_geometry* geometry, uint32_t* vertex_count, uint32_t* index_count);
+rasm_result      rasm_vector_add_lines(rasm_vector_geometry* geometry, rasm_dvec3 origin, const rasm_dvec3* points, const uint32_t* line_sizes, uint32_t line_count, const rasm_line_shape* shape, const rasm_vector_placement* placement, const uint32_t* feature_ids);
+rasm_result      rasm_vector_add_polygons(rasm_vector_geometry* geometry, rasm_dvec3 origin, const rasm_dvec3* points, const uint32_t* ring_sizes, const uint32_t* ring_counts, uint32_t polygon_count, const rasm_vector_placement* placement, const uint32_t* feature_ids);
+rasm_result      rasm_vector_add_points(rasm_vector_geometry* geometry, rasm_dvec3 origin, const rasm_dvec3* points, uint32_t point_count, const rasm_vector_placement* placement, const uint32_t* feature_ids, const rasm_vec4* icon_rects);
+rasm_result      rasm_build_vector_mesh(rasm_vector_geometry* geometry, rasm_mesh_build** build);</pre>
+  <div class="body">
+    <p>1.5. <a href="scene.html#buildMesh"><code>buildMesh</code></a> and the <a href="scene.html#vectors">vector features</a>, in both libraries. <code>rasm_mesh_build</code> and <code>rasm_vector_geometry</code> are opaque. <code>rasm_build_mesh</code> and the <code>rasm_vector_*</code> functions touch no renderer, so any thread may call them, one thread per geometry; <code>rasm_build_mesh</code> returns <code>RASM_ERROR_FAILED</code> for data <code>buildMesh</code> refuses. <code>rasm_create_mesh_from_build</code> runs on the renderer's thread and destroys the build whatever it returns. <code>rasm_build_vector_mesh</code> empties the geometry. <code>rasm_mesh_build_options</code> (<code>lods</code>, <code>meshlets</code>), <code>rasm_line_shape</code> (<code>join</code>: <code>RASM_LINE_JOIN_MITER</code>, <code>RASM_LINE_JOIN_BEVEL</code> or <code>RASM_LINE_JOIN_ROUND</code>; <code>cap</code>: <code>RASM_LINE_CAP_BUTT</code>, <code>RASM_LINE_CAP_SQUARE</code> or <code>RASM_LINE_CAP_ROUND</code>; <code>miter_limit</code>) and <code>rasm_vector_placement</code> (<code>up</code>, <code>drape_tile</code> a <code>rasm_terrain_tile_desc</code> or NULL, <code>drape_heights</code>) are sized; NULL takes the defaults. <code>rasm_vector_material</code> is <a href="materials.html#VectorMaterial"><code>VectorMaterial</code></a>, the last field of <code>rasm_material_desc</code>: <code>width_unit</code> <code>RASM_VECTOR_UNIT_PIXELS</code> or <code>RASM_VECTOR_UNIT_METRES</code>, <code>facing</code> <code>RASM_VECTOR_FACING_SCREEN</code> or <code>RASM_VECTOR_FACING_GROUND</code>, <code>depth</code> <code>RASM_VECTOR_DEPTH_TESTED</code> or <code>RASM_VECTOR_DEPTH_OVERLAY</code>.</p>
+    <pre><code>rasm_vector_geometry *geometry = NULL;
+rasm_vector_geometry_create(&amp;geometry);
+rasm_vector_add_lines(geometry, origin, points, sizes, lineCount, NULL, NULL, NULL); // on a worker thread
+rasm_mesh_build *build = NULL;
+rasm_build_vector_mesh(geometry, &amp;build);
+rasm_mesh roads = rasm_create_mesh_from_build(renderer, build); // on the renderer's thread</code></pre>
   </div>
 </div>
 

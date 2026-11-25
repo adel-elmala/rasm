@@ -261,7 +261,7 @@
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>Key</td><td>(order, index)</td><td>(<code>~asuint(view depth)</code>, place in the run): the view depth of the draw's bounding sphere center, clamped at 0, so the farthest draw comes first.</td></tr>
+  <tr><td>Key</td><td>(order, index)</td><td>(the draw's order in the top 8 bits, then the top 24 bits of <code>~asuint(view depth)</code>; place in the run): the order is a vector layer's <code>drawOrder</code> around the scene's see-through draws (<a href="vector-rendering.html#order">vector features</a>), the view depth the draw's bounding sphere center, clamped at 0, so within an order the farthest draw comes first.</td></tr>
   <tr><td>Size</td><td>a power of two, at least a block</td><td><code>getBlendSortCapacity</code>: the blend run's size rounded up to a power of two, at least <code>BLEND_SORT_BLOCK</code> (1024). The visible count is read on the GPU (<code>drawCountsPtr[blendRun]</code>).</td></tr>
   <tr><td>Block</td><td>a workgroup in shared memory</td><td>1024 keys per group of <code>BLEND_SORT_GROUP_SIZE</code> (256) threads, each doing 2 of the 512 compares per step.</td></tr>
   <tr><td>Plan</td><td>a list of dispatches</td><td><code>getBlendSortDispatches</code>: keys, then per merge past a block its long steps and one local merge, then write. The step's sizes go in the push constant's <code>argument</code> as log<sub>2</sub> <var>k</var> and log<sub>2</sub> <var>j</var>.</td></tr>

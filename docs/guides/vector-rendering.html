@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vector Lines, Polygons and Points · RASM</title>
+<meta name="description" content="How a map engine draws vector data: wide lines spread from their center line in the vertex shader, joins and caps, edges smoothed by the distance to them, a one-pixel minimum, widths in pixels or metres, polygons with holes by ear clipping, points and markers, draw order and depth, draping on terrain, culling that pads for pixel widths, and motion for TAA. Then how RASM does it.">
+<meta name="rasm-sources" content="include/rasm/vector.h include/rasm/material.h include/rasm/mesh.h src/scene/vector.cpp src/assets/mesh.cpp shaders/lib/vector.slang shaders/passes/rasm.slang shaders/lib/frustumCulling.slang shaders/passes/cull.slang shaders/passes/sort.slang src/c/cVector.cpp include/rasm/rasm_c.h examples/25_vector_map/main.cpp examples/24_map_tiles/main.cpp tests/vectorTests.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/vector-rendering.js"></script>
+</head>
+<body data-root="../" data-page="guides/vector-rendering.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>Vector lines, polygons and points</h1>
+<p class="lead">A map is mostly vector data: roads and rivers are lines, lakes and parks are polygons, shops are points. Their shape comes from the data, but their look comes from a style: a road is 7 pixels wide at any zoom. This page shows how to draw them on the GPU: lines spread from their center line in the vertex shader, joins and caps, smooth edges from the distance to them, polygons with holes, points, the order they are drawn in, how they lie on terrain, and what culling must do for widths measured in pixels. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>A line's vertices keep its <b>center line</b>, and an <b>offset</b> in half widths. The vertex shader multiplies the offset by the style's width, so a style changes without a rebuild.</li>
+    <li>Where two segments meet, a <b>join</b> fills the gap (miter, bevel or round); the ends get a <b>cap</b> (butt, square or round).</li>
+    <li>Each fragment knows its <b>distance to the edge</b>. One pixel's change of it (<code class="lang-text">fwidth</code>) gives a smooth edge, at any width and angle.</li>
+    <li>A line is never drawn under <b>one pixel</b>: a thinner one keeps one pixel and fades by its coverage, so it neither vanishes nor shimmers.</li>
+    <li>A width is in <b>pixels</b> or in <b>metres</b>, spread <b>across the screen</b> or <b>in the ground's plane</b>.</li>
+    <li>Polygons with holes are cut into triangles by <b>ear clipping</b>. Points are quads with a round edge.</li>
+    <li>Layers are drawn in a set <b>order</b>, over the ground by a small depth bias, or <b>over everything</b>.</li>
+    <li>On terrain, features are <b>cut on the terrain's grid</b>, so each piece lies flat on one terrain triangle.</li>
+    <li>Culling must <b>pad</b> a feature's bounds by its width in pixels at its distance, or wide lines vanish at the screen's edge.</li>
+  </ul>
+</div>
+
+<h2 id="problem"><span class="n">1</span>The problem</h2>
+
+<p>A GPU draws triangles. A road is a list of points, and its width is a number of pixels on screen: as the camera zooms out, the road keeps its 7 pixels while the world shrinks. So the triangles of a line depend on the camera. Rebuilding them on the CPU every frame is slow; building them once in world units makes them too thin far away and too wide near.</p>
+
+<div class="split">
+  <div class="bad">
+    <h4>Triangles in world units</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="A road built once 10 metres wide, seen in perspective: wide near the camera, narrower and narrower, then broken into dots far away.">
+      <path d="M40,135 L140,135 L104,60 L96,60 Z" class="gpu o-50"/>
+      <rect x="98" y="50" width="3" height="4" class="gpu"/><rect x="99" y="40" width="2" height="3" class="gpu"/><rect x="99" y="28" width="2" height="2" class="gpu"/>
+      <text x="160" y="125" class="small">near: wide</text>
+      <text x="125" y="36" class="small t-bad">far: under a pixel, gaps</text>
+    </svg>
+    <p>The width follows the perspective: a far road is thinner than a pixel and breaks up.</p>
+  </div>
+  <div class="good">
+    <h4>A center line and offsets</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="The vertices sit on the center line; the vertex shader moves each one by plus or minus half a width, in pixels, every frame.">
+      <line x1="30" y1="100" x2="290" y2="40" class="arrow dashed"/>
+      <polygon points="27,85 287,25 293,55 33,115" class="gpu o-25"/>
+      <circle cx="30" cy="100" r="4" class="hot"/><circle cx="290" cy="40" r="4" class="hot"/>
+      <text x="40" y="130" class="small">offset y = −1 … +1, times half the width</text>
+    </svg>
+    <p>The data is built once; the vertex shader spreads it by the width every frame.</p>
+  </div>
+</div>
+
+<h2 id="offsets"><span class="n">2</span>A line as a center line and offsets</h2>
+
+<p>Each segment of the line becomes a quad of four vertices. All four sit on the center line, two at each end. Each also has an <b>offset</b> (x along the segment, y across it), in half widths: −1 on one side, +1 on the other. The vertex shader puts the vertex at <code class="lang-text">anchor + (x · along + y · across) · half width</code>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="A segment from A to B. Its quad has four vertices: A and B with offset y minus 1 below, A and B with offset y plus 1 above. The shader moves each vertex by its offset times half the width. A fragment's distance to the center line, in half widths, is the interpolated y: 0 in the middle, 1 at the edge.">
+    <line x1="120" y1="120" x2="560" y2="120" class="arrow dashed"/>
+    <rect x="120" y="80" width="440" height="80" class="gpu o-25"/>
+    <circle cx="120" cy="120" r="6" class="hot"/><circle cx="560" cy="120" r="6" class="hot"/>
+    <text x="110" y="140" class="end">A</text><text x="572" y="140">B</text>
+    <circle cx="120" cy="80" r="5" class="gpu"/><circle cx="560" cy="80" r="5" class="gpu"/><circle cx="120" cy="160" r="5" class="gpu"/><circle cx="560" cy="160" r="5" class="gpu"/>
+    <text x="120" y="70" class="mid small mono">(0, +1)</text><text x="560" y="70" class="mid small mono">(0, +1)</text>
+    <text x="120" y="182" class="mid small mono">(0, −1)</text><text x="560" y="182" class="mid small mono">(0, −1)</text>
+    <line x1="620" y1="80" x2="620" y2="120" class="arrow" marker-end="url(#ah)"/><line x1="620" y1="120" x2="620" y2="80" class="arrow" marker-end="url(#ah)"/>
+    <text x="630" y="104" class="small">half width</text>
+    <text x="340" y="205" class="mid small">a fragment's |y| is its distance from the center line, in half widths: 1 is the edge</text>
+  </svg>
+  <figcaption>The CPU builds this once: anchors and offsets. The width lives in the style, read by the shader, so changing a road's width costs nothing.</figcaption>
+</figure>
+
+<h2 id="joins"><span class="n">3</span>Joins and caps</h2>
+
+<p>Two quads that meet at an angle leave a wedge open on the outer side of the turn. A <b>join</b> fills it. The ends of a line get a <b>cap</b>.</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Miter: the outer edges extended until they meet in a point.">
+      <path d="M20,100 L120,60 L220,100" class="arrow dashed"/>
+      <path d="M20,120 L120,80 L220,120 L220,80 L120,30 L20,80 Z" class="gpu o-25"/>
+    </svg>
+    <h4>Miter</h4>
+    <p>The outer edges meet in a point. A sharp turn makes a long spike, so past a limit it becomes a bevel.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Bevel: the outer corners joined by a straight cut.">
+      <path d="M20,100 L120,60 L220,100" class="arrow dashed"/>
+      <path d="M20,120 L120,80 L220,120 L220,80 L136,42 L104,42 L20,80 Z" class="gpu o-25"/>
+    </svg>
+    <h4>Bevel</h4>
+    <p>The two outer corners joined by one triangle.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Round: a fan of triangles around the joint.">
+      <path d="M20,100 L120,60 L220,100" class="arrow dashed"/>
+      <path d="M20,120 L120,80 L220,120 L220,80 L140,40 Q120,32 100,40 L20,80 Z" class="gpu o-25"/>
+    </svg>
+    <h4>Round</h4>
+    <p>A fan of triangles around the joint; its edge is round to the pixel.</p>
+  </div>
+</div>
+
+<figure class="lab" data-lab="vector-joins" data-title="Build a join">
+  <figcaption>Drag the middle point and change the join. Make the turn sharp with a miter and watch it fall back to a bevel.</figcaption>
+</figure>
+
+<h2 id="edges"><span class="n">4</span>Smooth edges, and never thinner than a pixel</h2>
+
+<p>Each vertex hands its offset to the fragments, interpolated. A fragment's distance to the edge is |y| on the body, the length of (x, y) in a round join or cap, the larger of |x| and |y| in a square cap. The geometry reaches one pixel past the edge, and the fragment covers what is inside:</p>
+
+<div class="formula">
+  <p class="eq">coverage = saturate((1 − distance) / fwidth(distance) + 0.5)</p>
+  <dl>
+    <dt>distance</dt><dd>in half widths: 1 at the edge</dd>
+    <dt>fwidth</dt><dd>how much the distance changes over one pixel: the smooth band is one pixel wide at any width, distance and angle</dd>
+  </dl>
+</div>
+
+<div class="split">
+  <div class="bad">
+    <h4>A line of 0.3 pixels, drawn as it is</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="A line thinner than a pixel covers the centers of only some pixels: it breaks into dashes that move as the camera moves.">
+      <path d="M10,10 H310 M10,30 H310 M10,50 H310 M10,70 H310 M10,90 H310 M10,110 H310 M30,0 V120 M50,0 V120 M70,0 V120 M90,0 V120 M110,0 V120 M130,0 V120 M150,0 V120 M170,0 V120 M190,0 V120 M210,0 V120 M230,0 V120 M250,0 V120 M270,0 V120 M290,0 V120" class="grid"/>
+      <rect x="30" y="70" width="20" height="20" class="hot"/><rect x="110" y="50" width="20" height="20" class="hot"/><rect x="190" y="50" width="20" height="20" class="hot"/><rect x="270" y="30" width="20" height="20" class="hot"/>
+      <line x1="20" y1="85" x2="300" y2="35" class="arrow"/>
+    </svg>
+    <p>Only the pixels whose centers it crosses are hit: dashes that crawl and shimmer.</p>
+  </div>
+  <div class="good">
+    <h4>One pixel, faded to 0.3</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="The same line kept one pixel wide and faded to 30 percent: every pixel along it is lightly covered, a steady faint line.">
+      <path d="M10,10 H310 M10,30 H310 M10,50 H310 M10,70 H310 M10,90 H310 M10,110 H310 M30,0 V120 M50,0 V120 M70,0 V120 M90,0 V120 M110,0 V120 M130,0 V120 M150,0 V120 M170,0 V120 M190,0 V120 M210,0 V120 M230,0 V120 M250,0 V120 M270,0 V120 M290,0 V120" class="grid"/>
+      <path d="M20,90 L300,40 L300,30 L20,80 Z" class="hot o-25"/>
+      <line x1="20" y1="85" x2="300" y2="35" class="arrow"/>
+    </svg>
+    <p>Every pixel along it gets a little: a faint, steady line. MSAA and TAA then have nothing to fight.</p>
+  </div>
+</div>
+
+<h2 id="units"><span class="n">5</span>Pixels or metres; the screen or the ground</h2>
+
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Width in pixels: the same width on screen near and far.">
+      <path d="M30,120 L120,20 M60,120 L130,20" class="arrow dashed"/>
+      <path d="M40,120 L122,20" class="arrow gpu thick"/>
+    </svg>
+    <h4>Pixels</h4>
+    <p>A road of a map style: the same width at any zoom. The world width is the pixel width times the pixel's size at that depth.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Width in metres: wide near, narrow far, like the real road.">
+      <path d="M80,120 L160,120 L124,20 L116,20 Z" class="gpu o-50"/>
+    </svg>
+    <h4>Metres</h4>
+    <p>A river 40 m wide, as it is in the world. Far away it reaches the one-pixel minimum and fades.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Across the screen: the offset is perpendicular to the line on screen.">
+      <path d="M30,100 L210,40" class="arrow dashed"/>
+      <path d="M26,88 L206,28 L214,52 L34,112 Z" class="gpu o-25"/>
+      <text x="120" y="120" class="mid small">a band on the screen</text>
+    </svg>
+    <h4>Across the screen</h4>
+    <p>The offset is turned to the screen: the line never foreshortens. For 3D paths, routes, markers.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="In the ground's plane: the band lies on the ground and foreshortens as the ground does.">
+      <path d="M10,110 L230,110 L170,40 L70,40 Z" class="paper"/>
+      <path d="M100,110 L140,110 L126,40 L114,40 Z" class="gpu o-50"/>
+    </svg>
+    <h4>In the ground's plane</h4>
+    <p>The band lies on the ground: a road draped on hills. Seen edge-on it gets thinner, down to the minimum.</p>
+  </div>
+</div>
+
+<h2 id="polygons"><span class="n">6</span>Polygons with holes</h2>
+
+<p>A lake is an outline with islands inside, each a ring of points. <b>Ear clipping</b> cuts it into triangles: it joins each hole to the outline by a bridge, so the shape is one ring, then cuts off "ears", triangles made of three neighbour points with no other point inside, until nothing is left. A polygon's own edges are triangle edges, so MSAA or TAA smooths them.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="Left: a lake outline with an island. Middle: a bridge joins the island to the outline, making one ring. Right: the ring cut into ears, triangles that cover the lake but not the island.">
+    <path d="M40,100 Q60,30 150,40 Q230,50 220,110 Q200,170 120,165 Q50,160 40,100 Z" class="mem o-50"/>
+    <path d="M110,90 L150,85 L150,120 L115,120 Z" class="paper"/>
+    <text x="130" y="190" class="mid small">outline and an island</text>
+    <path d="M300,100 Q320,30 410,40 Q490,50 480,110 Q460,170 380,165 Q310,160 300,100 Z" class="mem o-50"/>
+    <path d="M370,90 L410,85 L410,120 L375,120 Z" class="paper"/>
+    <line x1="370" y1="90" x2="320" y2="60" class="arrow hot thick"/>
+    <text x="390" y="190" class="mid small">a bridge makes one ring</text>
+    <path d="M560,100 Q580,30 670,40 Q750,50 740,110 Q720,170 640,165 Q570,160 560,100 Z" class="mem o-50"/>
+    <path d="M630,90 L670,85 L670,120 L635,120 Z" class="paper"/>
+    <path d="M560,100 L630,90 L580,50 Z M580,50 L630,90 L670,85 Z M670,85 L740,110 L670,40 Z M670,120 L740,110 L670,85 Z M635,120 L640,165 L740,110 Z M560,100 L640,165 L635,120 Z" class="arrow"/>
+    <text x="650" y="190" class="mid small">ears: triangles around the hole</text>
+  </svg>
+  <figcaption>Ear clipping takes O(n²) at worst; with a spatial index of the points, as earcut has, it is fast on real map data with thousands of points.</figcaption>
+</figure>
+
+<h2 id="points"><span class="n">7</span>Points and markers</h2>
+
+<p>A point is a quad around its anchor, its four corners at offsets (±1, ±1). The fragment's distance is the length of its offset, so the disc is round and smooth; a ring along its edge is the same distance test at 1 − ring width. An icon is the same quad with texture coordinates from an atlas.</p>
+
+<h2 id="order"><span class="n">8</span>Draw order and depth</h2>
+
+<p>Map layers overlap on purpose: a road over a park over the ground. All lie in the same plane, so the depth test cannot order them. They are blended with their smooth edges, in a fixed <b>order</b> of layers, each one a little nearer than the ground by a <b>depth bias</b>. An <b>overlay</b> (a route, a selection) is drawn at the near plane, over everything.</p>
+
+<div class="split">
+  <div class="bad">
+    <h4>A marker at its anchor's depth</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="Side view: the camera looks down at the ground. A marker facing the screen stands at its anchor's depth; its lower half is behind the ground, which is nearer there, and is hidden.">
+      <path d="M10,110 L310,110" class="surface"/>
+      <circle cx="40" cy="20" r="6" class="cpu"/>
+      <line x1="40" y1="20" x2="230" y2="110" class="arrow cpu dashed"/>
+      <line x1="215" y1="80" x2="245" y2="140" class="arrow hot thick"/>
+      <path d="M230,110 L245,140" class="bad"/>
+      <text x="160" y="60" class="small t-bad">lower half under the ground</text>
+    </svg>
+    <p>A quad that faces the screen stands up from the ground: below its anchor the ground is nearer and hides it.</p>
+  </div>
+  <div class="good">
+    <h4>The ground's depth under each corner</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="Each corner of the marker takes the depth of the ground under its pixel when that is nearer: the marker lies on the ground and shows whole.">
+      <path d="M10,110 L310,110" class="surface"/>
+      <circle cx="40" cy="20" r="6" class="cpu"/>
+      <line x1="40" y1="20" x2="230" y2="110" class="arrow cpu dashed"/>
+      <line x1="205" y1="108" x2="255" y2="108" class="arrow ok thick"/>
+      <text x="120" y="60" class="small t-ok">corners at the ground's depth</text>
+    </svg>
+    <p>Each corner takes the depth of the ground under its pixel, through the ground plane at the anchor, when that is nearer.</p>
+  </div>
+</div>
+
+<h2 id="drape"><span class="n">9</span>Draping on terrain</h2>
+
+<p>A road on hilly terrain must follow the drawn ground exactly, or it sinks into a hill or floats over a valley. The terrain is drawn as two triangles per cell, each flat. So cut every segment where it crosses a grid line or a cell's diagonal, and lift each new point by the terrain's own rule: then each piece lies flat on one terrain triangle. Polygons are cut the same way.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 220" role="img" aria-label="Left, from above: a segment crossing a terrain grid with its diagonals; dots where it crosses a line. Right, from the side: the cut line follows the terrain's triangles exactly, while the uncut line cuts through a hill.">
+    <path d="M30,30 V190 M80,30 V190 M130,30 V190 M180,30 V190 M230,30 V190 M30,30 H230 M30,80 H230 M30,130 H230 M30,180 H230" class="grid"/>
+    <path d="M30,80 L80,30 M30,130 L130,30 M30,180 L180,30 M80,180 L230,30 M130,180 L230,80 M180,180 L230,130" class="grid"/>
+    <line x1="45" y1="160" x2="215" y2="55" class="arrow gpu thick"/>
+    <g class="hot"><circle cx="64" cy="148" r="4"/><circle cx="80" cy="138" r="4"/><circle cx="101" cy="125" r="4"/><circle cx="113" cy="118" r="4"/><circle cx="130" cy="108" r="4"/><circle cx="145" cy="98" r="4"/><circle cx="163" cy="87" r="4"/><circle cx="180" cy="77" r="4"/><circle cx="193" cy="69" r="4"/></g>
+    <text x="130" y="210" class="mid small">cut at x = k, z = k and x + z = k</text>
+    <path d="M300,170 L350,120 L400,140 L450,90 L500,110 L550,70 L600,120 L650,100 L720,150" class="surface"/>
+    <line x1="300" y1="170" x2="720" y2="150" class="arrow bad dashed"/>
+    <polyline points="300,166 350,116 400,136 450,86 500,106 550,66 600,116 650,96 720,146" class="arrow gpu thick"/>
+    <text x="510" y="200" class="mid small">cut: on the ground everywhere; uncut (dashed): through the hills</text>
+  </svg>
+  <figcaption>The heights come from the same samples and the same rule the terrain shader uses, so the line and the ground agree to the bit at each cut, and a tiny depth bias is enough.</figcaption>
+</figure>
+
+<h2 id="culling"><span class="n">10</span>Culling a width in pixels</h2>
+
+<p>A line's bounding sphere is built from its center line. A line 40 pixels wide whose center line is just off the screen still covers 20 pixels of it. A pixel is larger far away, so the pad grows with depth: pad the sphere by the widest offset in pixels times the size of a pixel at the sphere's far side, for each view. The occlusion test then uses the padded sphere too.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="The screen's left edge. A wide line's center line is just outside it; its sphere, outside the frustum, would be culled, but half the line's width is inside the screen. The padded sphere reaches inside and the line is kept.">
+    <rect x="300" y="20" width="440" height="170" class="paper"/>
+    <text x="520" y="40" class="mid small">the screen</text>
+    <line x1="270" y1="40" x2="270" y2="180" class="arrow dashed"/>
+    <rect x="240" y="40" width="60" height="140" class="gpu o-50"/>
+    <circle cx="270" cy="110" r="24" class="bad o-50"/>
+    <circle cx="270" cy="110" r="56" class="arrow ok dashed"/>
+    <text x="180" y="110" class="end small t-bad">center line's sphere: outside</text>
+    <text x="345" y="175" class="small t-ok">padded by half the width: kept</text>
+  </svg>
+  <figcaption>Without the pad, the line pops in only when its center line enters the screen. The pad is per view: an orthographic map view has the same pixel size everywhere, a perspective one a larger one far away.</figcaption>
+</figure>
+
+<h2 id="motion"><span class="n">11</span>Motion for TAA</h2>
+
+<p>TAA moves each pixel's history by the motion of what is in it. A smooth edge is part line, part ground: the line writes its anchor's motion scaled by its coverage, and the blend keeps the rest of the motion behind it. So a line over the sky, the ground or a moving object reprojects without a smear.</p>
+
+<h2 id="pitfalls"><span class="n">12</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>Thin lines break into crawling dashes</dt><dd>They are thinner than a pixel. Keep one pixel and fade by the coverage.</dd></div>
+  <div><dt>Wide lines vanish at the screen's edge</dt><dd>Culling uses the center line's bounds. Pad by the width in pixels at the far side, per view.</dd></div>
+  <div><dt>Markers and roads are cut in half on a tilted map</dt><dd>A quad facing the screen sinks into the ground below its anchor. Give each corner the depth of the ground under it.</dd></div>
+  <div><dt>A see-through line is darker at its joints</dt><dd>Its quads and joins overlap on the inner side of a turn and blend twice. Draw see-through lines opaque, or as one layer with a lower alpha.</dd></div>
+  <div><dt>Roads sink into hills or float over valleys</dt><dd>The line is not cut on the terrain's grid, or the terrain is drawn from other heights than the ones used to drape.</dd></div>
+  <div><dt>Layers flicker against each other</dt><dd>Same depth, no order. Draw layers in a fixed order, blended, with a depth bias against the ground only.</dd></div>
+  <div><dt>Mesh simplification ruins the lines</dt><dd>LODs and meshlets are for meshes whose vertices stay where they are. Build vector meshes without them.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">13</span>In RASM</h2>
+
+<p>A layer of vector features is an ordinary entity: a mesh built by the vector builders (<code>include/rasm/vector.h</code>), drawn with a <code>MaterialType::VECTOR</code> material whose <code>VectorMaterial</code> is the style. So it goes through the GPU culling, the Transparent pass's sort, TAA and MSAA like any blended mesh, and is a <a href="tile-streaming.html">TileStreamer</a> tile's content like any other.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>any thread</span>
+  <span><i class="mem"></i>the renderer's thread</span>
+  <span><i class="shader"></i>shaders</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="On any thread: addVectorLines, addVectorPolygons and addVectorPoints append to a VectorGeometry, and buildVectorMesh makes a MeshBuild with no LODs and no meshlets. On the renderer's thread: createMesh of the build only uploads; an entity at the features' origin with a VECTOR material. In the shaders: the cull pass pads the sphere, leaves vectors out of shadow maps and never occludes an overlay; the sort orders by draw order; getVectorVertex spreads each vertex; shadeVector gives the coverage, outline and dashes.">
+    <rect x="20" y="20" width="220" height="230" rx="8" class="zone"/>
+    <text x="130" y="42" class="mid title t-cpu">any thread</text>
+    <rect x="36" y="58" width="188" height="64" rx="6" class="cpu"/><text x="130" y="78" class="mid small mono">addVectorLines</text><text x="130" y="94" class="mid small mono">addVectorPolygons</text><text x="130" y="110" class="mid small mono">addVectorPoints</text>
+    <rect x="36" y="134" width="188" height="40" rx="6" class="cpu"/><text x="130" y="152" class="mid small">VectorGeometry: anchors,</text><text x="130" y="167" class="mid small">offsets, kinds</text>
+    <rect x="36" y="186" width="188" height="48" rx="20" class="cpu"/><text x="130" y="206" class="mid small mono">buildVectorMesh</text><text x="130" y="222" class="mid small">a MeshBuild</text>
+
+    <rect x="280" y="20" width="200" height="230" rx="8" class="zone"/>
+    <text x="380" y="42" class="mid title t-mem">renderer</text>
+    <rect x="296" y="58" width="168" height="40" rx="6" class="mem"/><text x="380" y="76" class="mid small mono">createMesh(build)</text><text x="380" y="91" class="mid small">only uploads</text>
+    <rect x="296" y="110" width="168" height="40" rx="6" class="mem"/><text x="380" y="128" class="mid small">entity at the origin,</text><text x="380" y="143" class="mid small">VECTOR material</text>
+    <rect x="296" y="162" width="168" height="48" rx="6" class="mem"/><text x="380" y="182" class="mid small">material row:</text><text x="380" y="198" class="mid small">VectorData</text>
+    <line x1="224" y1="210" x2="292" y2="80" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="520" y="20" width="220" height="230" rx="8" class="zone"/>
+    <text x="630" y="42" class="mid title t-shader">shaders</text>
+    <rect x="536" y="58" width="188" height="40" rx="6" class="shader"/><text x="630" y="76" class="mid small">cull.slang: pad, no shadow,</text><text x="630" y="91" class="mid small">overlay never occluded</text>
+    <rect x="536" y="110" width="188" height="40" rx="6" class="shader"/><text x="630" y="128" class="mid small">sort.slang: drawOrder,</text><text x="630" y="143" class="mid small">then far to near</text>
+    <rect x="536" y="162" width="188" height="36" rx="6" class="shader"/><text x="630" y="185" class="mid small mono">getVectorVertex</text>
+    <rect x="536" y="206" width="188" height="36" rx="6" class="shader"/><text x="630" y="229" class="mid small mono">shadeVector</text>
+    <line x1="464" y1="186" x2="532" y2="130" class="arrow mem dashed" marker-end="url(#ah-mem)"/>
+  </svg>
+  <figcaption>The builders touch no renderer, so a map's tiles are built on its own threads end to end; the main thread only uploads (<code>P30</code>'s fix: <code>buildMesh</code> and <code>createMesh(MeshBuild&amp;&amp;)</code>, for any mesh).</figcaption>
+</figure>
+
+<pre><code>// From examples/25_vector_map/main.cpp: a road layer, then a tile's roads built on a server thread.
+rasm::MaterialHandle roads = makeLayer(engine, {.color = glm::vec4(1.0f, 0.75f, 0.25f, 1.0f), .width = 7.0f, .outlineColor = glm::vec4(0.55f, 0.32f, 0.08f, 1.0f), .outlineWidth = 1.5f, .drawOrder = -10});
+// ... on a server thread:
+rasm::VectorGeometry geometry;
+rasm::addVectorLines(geometry, origin, points.data(), sizes.data(), static_cast&lt;uint32_t&gt;(sizes.size()), {.join = rasm::LineJoin::ROUND, .cap = rasm::LineCap::ROUND});
+data.layers[ROADS] = rasm::buildVectorMesh(std::move(geometry));
+// ... on the main thread, when the tile arrives:
+const rasm::MeshHandle mesh = engine.createMesh(std::move(data.layers[ROADS]));
+const rasm::EntityHandle entity = engine.createEntity("layer", mesh, roads, rasm::Transform{origin});</code></pre>
+
+<h3>Where RASM follows this page, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Topic</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>The vertex</td><td>anchor and offset</td><td><code>Vertex</code>: <code>pos</code> the anchor, <code>normal</code> the ground's up, <code>tangent</code> the direction the offset is measured from (w: the feature id), <code>uv[0]</code> the offset, <code>uv[1]</code> the distance along the line or an icon's coordinates, <code>uv[2]</code> the kind and the distance metric (<code>shaders/lib/vector.slang</code>).</td></tr>
+  <tr><td>Joins, caps</td><td>miter, bevel, round; butt, square, round</td><td><code>LineShape</code>: <code>LineJoin</code>, <code>LineCap</code>, <code>miterLimit</code> up to <code>MAX_VECTOR_MITER</code> (2 half widths). Each join triangle is in its own segment's frame, so the distance across is exact on both sides.</td></tr>
+  <tr><td>Smooth edges</td><td>distance and <code class="lang-text">fwidth</code></td><td>The geometry reaches one pixel past the edge; <code>getVectorCoverage</code>. The minimum is one pixel, faded below (<code>fade</code>). In the ground's plane, a band seen edge-on under half a pixel widens to half a pixel and fades.</td></tr>
+  <tr><td>Style</td><td>width, units, plane</td><td><code>VectorMaterial</code>: <code>color</code>, <code>width</code>, <code>widthUnit</code> (<code>PIXELS</code>, <code>METRES</code>), <code>facing</code> (<code>SCREEN</code>, <code>GROUND</code>), <code>dashLength</code>, <code>gapLength</code>, <code>outlineColor</code>, <code>outlineWidth</code>, <code>drawOrder</code>, <code>depth</code> (<code>TESTED</code>, <code>OVERLAY</code>). Dashes in pixels follow the pixel's size at each vertex, so along a line that runs into the distance they are close, not exact.</td></tr>
+  <tr><td>Polygons</td><td>ear clipping</td><td>earcut (<samp>mapbox/earcut.hpp</samp>, vcpkg <samp>earcut-hpp</samp>, header-only), in the ground's plane through the origin, or across the tile when draped. No smooth edges of their own: MSAA or TAA.</td></tr>
+  <tr><td>Order and depth</td><td>layers in order, a bias, overlays</td><td>Vectors are always in the blend run. The Transparent pass sorts by (<code>VECTOR_ORDER_SCENE</code> + <code>drawOrder</code>, then far to near); the scene's see-through draws sort at order 0. A tested feature is nearer by a share of its depth (<code>VECTOR_DEPTH_BIAS</code>, 1/4096); a screen-facing corner takes the ground's depth under it (<code>getGroundDepth</code>); an overlay is at the near plane and never occlusion culled.</td></tr>
+  <tr><td>Draping</td><td>cut on the grid</td><td><code>VectorPlacement::drapeTile</code> and <code>drapeHeights</code>: cut at x = k, z = k and x + z = k (the grid's split), lifted by <code>getTerrainPosition</code>, with the triangle's normal as the ground's up.</td></tr>
+  <tr><td>Culling</td><td>pad per view</td><td><code>getWorldSphere</code> adds <code>getVectorPadding</code> for a <code>VECTOR</code> material: 2 half widths and 3 pixels at the sphere's far side (in metres for a metre width), in the view's own pixel size, so the frustum test, the Hi-Z test, the blend sort and the culling debug view all see it. Shadow maps leave vectors out (<code>VIEW_DEPTH_ONLY</code>); vector draws are drawn whole, never by meshlets.</td></tr>
+  <tr><td>Motion</td><td>the anchor's, by coverage</td><td><code>toVectorOutput</code> writes the anchor's motion times alpha; the premultiplied blend keeps the rest of what is behind.</td></tr>
+</table>
+</div>
+
+<div class="stats">
+  <div><b>1.6 ms</b><span>the longest frame of <code>25_vector_map</code> after the first 30, 1500 frames, two views (TAA and 4× MSAA)</span><small>Release, headless, RTX 3060</small></div>
+  <div><b>7</b><span>layers in a tile, one draw each: parks, water, river, streets, roads, rail, places</span><small>materials shared by every tile</small></div>
+  <div><b>0</b><span>meshes built on the main thread: the tiles' meshes are built on 3 server threads</span><small>createMesh(MeshBuild&amp;&amp;) only uploads</small></div>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The builders</td><td><code>addVectorLines</code>, <code>addVectorPolygons</code>, <code>addVectorPoints</code>, <code>buildVectorMesh</code>, <code>VectorGeometry</code>, <code>VectorPlacement</code>, <code>LineShape</code> in <code>include/rasm/vector.h</code>; <code>src/scene/vector.cpp</code></td></tr>
+  <tr><td>The style</td><td><code>VectorMaterial</code>, <code>VectorUnit</code>, <code>VectorFacing</code>, <code>VectorDepth</code> in <code>include/rasm/material.h</code>; <code>gfx::VectorData</code> in <code>MaterialData</code></td></tr>
+  <tr><td>Meshes off the main thread</td><td><code>buildMesh</code>, <code>MeshBuild</code>, <code>MeshBuildOptions</code> (<code>include/rasm/mesh.h</code>), <code>Renderer::createMesh(MeshBuild&amp;&amp;)</code> in <code>src/assets/mesh.cpp</code></td></tr>
+  <tr><td>Shaders</td><td><code>shaders/lib/vector.slang</code> (<code>getVectorVertex</code>, <code>shadeVector</code>, <code>getVectorPadding</code>, <code>getBlendOrder</code>); <code>rasm.slang</code>; <code>frustumCulling.slang</code>, <code>cull.slang</code>, <code>sort.slang</code></td></tr>
+  <tr><td>The C API (1.5)</td><td><code>rasm_build_mesh</code>, <code>rasm_create_mesh_from_build</code>, <code>rasm_vector_*</code>, <code>rasm_vector_material</code> in <code>src/c/cVector.cpp</code></td></tr>
+  <tr><td>Tests</td><td><code>tests/vectorTests.cpp</code> (offsets, joins, caps, sides, holes, draping on the drawn ground, points); image tests <code>vectors</code>, <code>vectors_msaa4</code>, <code>vectors_taa</code> (with a line just off screen that culling's pad keeps)</td></tr>
+  <tr><td>Examples</td><td><code>examples/25_vector_map</code> (a city's vector tiles, <code>--culling</code> for the culling debug view); <code>examples/24_map_tiles</code> (roads and lakes draped on the terrain)</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li><code>src/scene/vector.cpp</code> and <code>shaders/lib/vector.slang</code> agree on the vertex: the kinds, the metrics, the across direction <code>cross(along, up)</code>.</li>
+    <li>No offset reaches past <code>MAX_VECTOR_MITER</code> half widths: culling's pad counts on it.</li>
+    <li>Vector meshes have no LODs and no meshlets (<code>buildVectorMesh</code>).</li>
+    <li>Every pass that draws a <code>VECTOR</code> material spreads its vertices; a new one (an ID pass for picking) too. The feature id is in <code>tangent.w</code>.</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <strong>Not done yet</strong>
+  <p>Text and labels (the next part of this plan item). See-through lines blend twice where their pieces overlap (<code>D45</code>). Dashes in pixels are close, not exact, on a line that runs into the distance. Decoding vector tile files (MVT) is the application's.</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Mapbox, <i>Drawing Antialiased Lines with OpenGL</i> (2015): lines as extruded vertices, joins, and the distance to the edge.</li>
+  <li>Matt DesLauriers, <i>Drawing Lines is Hard</i> (2015): the ways to draw lines on the GPU and their trade-offs.</li>
+  <li>David Eberly, <i>Triangulation by Ear Clipping</i> (2002); mapbox/earcut.hpp.</li>
+  <li>Cesium, <i>Robust Polyline Rendering with WebGL</i> and ground primitives: lines on terrain.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>
