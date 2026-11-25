@@ -73,6 +73,9 @@ namespace rasm
 
     struct SceneView
     {
+        glm::dmat4                      previousViewProjection                                              = glm::dmat4(1.0);  // the frame before's, world space, without jitter
+        glm::dmat4                      frozenViewProjection                                                = glm::dmat4(1.0);  // world space
+        glm::dvec3                      frozenOrigin                                                        = glm::dvec3(0.0);  // the render space of frozenPlanes, frozenLodDepthPlane and frozenViewPoint
         SceneHandle                     scene;
         CameraHandle                    camera;
         RenderTargetHandle              renderTarget;
@@ -108,18 +111,15 @@ namespace rasm
         bool                            late                                                                = false;
         DebugView                       debugView                                                           = DebugView::NONE;
         bool                            frozen                                                              = false;
-        glm::dvec3                      frozenOrigin                                                        = glm::dvec3(0.0);  // the render space of the frozen values below
         glm::vec4                       frozenPlanes[6]                                                     = {};
         float                           frozenLodPixelsPerUnit                                              = 0.0f;
         glm::vec4                       frozenLodDepthPlane                                                 = glm::vec4(0.0f);
-        glm::dmat4                      frozenViewProjection                                                = glm::dmat4(1.0);  // world space
         glm::vec4                       frozenViewPoint                                                     = glm::vec4(0.0f);
         uint32_t                        width                                                               = 0;
         uint32_t                        height                                                              = 0;
         bool                            jitter                                                              = false;    // addTaaPass: the projection takes a sub-pixel offset per frame
         uint32_t                        jitterFrame                                                         = 0;        // counts the jittered frames, for getTaaJitter
         bool                            hasPrevious                                                         = false;
-        glm::dmat4                      previousViewProjection                                              = glm::dmat4(1.0);  // the frame before's, world space, without jitter
     };
 
     // A shaded view's pipelines for one sample count of its target: they must match the attachments they draw into.

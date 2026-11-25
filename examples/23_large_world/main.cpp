@@ -40,7 +40,7 @@ namespace
     constexpr uint32_t LOCAL_LIGHTS = 24;
     constexpr uint32_t COMPARE_THRESHOLD = 8;
     constexpr double COMPARE_FRACTION = 0.001;
-    const glm::dvec3 PARIS(4197000.0, 168000.0, 4786000.0);
+    constexpr glm::dvec3 PARIS(4197000.0, 168000.0, 4786000.0);
     // WGS84
     constexpr double EQUATOR_RADIUS = 6378137.0;
     constexpr double POLAR_RADIUS = 6356752.314245;
@@ -163,8 +163,9 @@ namespace
         const auto side = static_cast<uint32_t>(std::ceil(std::sqrt(static_cast<double>(pillars))));
         for (uint32_t i = 0; i < pillars; ++i)
         {
+            const uint32_t row = i / side;
             const float x = (static_cast<float>(i % side) - 0.5f * static_cast<float>(side - 1)) * 2.5f;
-            const float z = -6.0f - static_cast<float>(i / side) * 2.5f;
+            const float z = -6.0f - static_cast<float>(row) * 2.5f;
             const float height = 0.6f + 0.5f * static_cast<float>((i * 7) % 5);
             addEntity(engine, content.scene, "pillar", meshes.cube, stone, place(placement, glm::vec3(x, 0.5f * height, z), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(0.4f, height, 0.4f)), -1);
         }
@@ -288,10 +289,14 @@ int main(int argc, char **argv)
     uint32_t pillars = 400;
     for (int i = 1; i < argc; ++i)
     {
-        if (std::strcmp(argv[i], "--origin") == 0 && i + 1 < argc && !parseOrigin(argv[++i], origin))
+        if (std::strcmp(argv[i], "--origin") == 0 && i + 1 < argc)
         {
-            std::fprintf(stderr, "error: --origin takes x,y,z in metres.\n");
-            return 1;
+            ++i;
+            if (!parseOrigin(argv[i], origin))
+            {
+                std::fprintf(stderr, "error: --origin takes x,y,z in metres.\n");
+                return 1;
+            }
         }
         if (std::strcmp(argv[i], "--pillars") == 0 && i + 1 < argc)
             pillars = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));

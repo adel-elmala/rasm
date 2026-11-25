@@ -39,7 +39,7 @@ namespace
     // After the frame is read: frames that let the readback settle, then frames that must not allocate (P27).
     constexpr uint32_t SETTLE_FRAMES = 2;
     constexpr uint32_t STEADY_FRAMES = 4;
-    const glm::dvec3 FAR_ORIGIN = glm::dvec3(4197000.0, 168000.0, 4786000.0);
+    constexpr glm::dvec3 FAR_ORIGIN(4197000.0, 168000.0, 4786000.0);
 
     struct Options
     {
@@ -93,15 +93,15 @@ namespace
         bool taa = false;
         bool bloom = false;
         rasm::DebugView view = rasm::DebugView::NONE;
-        uint32_t frames = 4; // rendered before the frame that is read
-        double time = 0.0;   // the animation clock of every frame, in seconds
-        rasm::MeshletPath meshlets = rasm::MeshletPath::OFF;
-        uint32_t threshold = 3;              // a channel differs when it is off by more than this (0-255)
-        double fraction = 0.001;             // the test fails when more of the pixels than this differ
-        bool views = false;                  // drawn by Engine::render with the content's views instead of a graph
-        bool secondWindow = false;           // a views test that reads the content's second window instead of the main one
-        const char *sameAs = nullptr;        // compare with this test's image of the same run instead of a golden
+        uint32_t frames = 4;                 // rendered before the frame that is read
+        double time = 0.0;                   // the animation clock of every frame, in seconds
         glm::dvec3 origin = glm::dvec3(0.0); // the scene, its lights and the camera moved here by a translation
+        rasm::MeshletPath meshlets = rasm::MeshletPath::OFF;
+        uint32_t threshold = 3;       // a channel differs when it is off by more than this (0-255)
+        double fraction = 0.001;      // the test fails when more of the pixels than this differ
+        bool views = false;           // drawn by Engine::render with the content's views instead of a graph
+        bool secondWindow = false;    // a views test that reads the content's second window instead of the main one
+        const char *sameAs = nullptr; // compare with this test's image of the same run instead of a golden
     };
 
     struct Comparison
@@ -475,9 +475,9 @@ namespace
         // The same scenes moved 6370 km from the world's origin (Earth-centred coordinates of Paris): each view draws in
         // its camera's render space, so they look the same. Only the shadow maps' texel grids, which stay the world's,
         // move by part of a texel, so a few shadow edge pixels differ.
-        {.name = "far_shadows",   .build = buildLocalShadows,  .threshold = 8, .fraction = 0.001, .sameAs = "local_shadows", .origin = FAR_ORIGIN},
-        {.name = "far_skinning",  .build = buildSkinning,      .time = 1.25, .threshold = 8, .fraction = 0.001, .sameAs = "skinning", .origin = FAR_ORIGIN},
-        {.name = "far_taa",       .build = buildHelmet,        .taa = true, .frames = 16, .threshold = 8, .fraction = 0.001, .sameAs = "taa", .origin = FAR_ORIGIN},
+        {.name = "far_shadows",   .build = buildLocalShadows,  .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "local_shadows"},
+        {.name = "far_skinning",  .build = buildSkinning,      .time = 1.25, .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "skinning"},
+        {.name = "far_taa",       .build = buildHelmet,        .taa = true, .frames = 16, .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "taa"},
     };
     // clang-format on
 
