@@ -7,10 +7,10 @@
 // Constants
 static const uint   INVALID_TEXTURE_INDEX = 0xFFFFFFFF;
 // A run per alpha mode and cull mode, and one blend run. Must match rasm::gfx::MAX_DRAW_RUNS.
-static const uint   MAX_DRAW_RUNS       = 7;
+static const uint   MAX_DRAW_RUNS       = 8;
 
 // Selects how fragMain shades a model. Must match rasm::gfx::MaterialId.
-enum class MaterialId : uint32_t { PBR, UNLIT, TERRAIN, VECTOR };
+enum class MaterialId : uint32_t { PBR, UNLIT, TERRAIN, VECTOR, POINTS };
 
 // Must match rasm::AlphaMode.
 enum class AlphaMode : uint32_t { NONE, MASK, BLEND };
@@ -182,6 +182,18 @@ struct VectorData
     float               distanceRange;      // the atlas's: a texel holds 0.5 + distance / distanceRange
 };
 
+// A POINTS material's style (lib/points.slang); zero for the others. Must match rasm::gfx::PointData.
+struct PointData
+{
+    float4              color;              // linear, straight alpha
+    float               size;               // diameter in pixels or metres (POINT_METRES)
+    uint32_t            flags;              // POINT_*
+    uint32_t            colormap;           // bindless index, INVALID_TEXTURE_INDEX without one
+    float               rangeMin;           // the scalars the colormap spans (their logarithms with POINT_LOG)
+    float               rangeMax;
+    float               density;            // points drawn per point-size square of the chunk on screen; 0: all
+};
+
 // The texture transforms come after the rest, so a shader copies Material without them and reads them only for a
 // material whose flags have MATERIAL_TEXTURE_TRANSFORM.
 struct MaterialData
@@ -194,6 +206,7 @@ struct MaterialData
     TextureTransform    textureTransforms[TEXTURE_TRANSFORMS];
     TerrainData         terrain;
     VectorData          vector;
+    PointData           points;
 };
 
 struct InstanceData
@@ -237,6 +250,7 @@ struct SceneData
     uint32_t            runCount;
     uint32_t            runFirst[MAX_DRAW_RUNS];
     uint32_t            blendRun;           // the run the Transparent pass draws, sorted back to front; MAX_DRAW_RUNS without one
+    uint32_t            pointRun;           // the run of point cloud chunks (lib/points.slang); MAX_DRAW_RUNS without one
     uint32_t            sortCapacity;
     uint32_t            hizLevelCount;      // 0: no occlusion culling for this call
     uint32_t            depthTexture;       // bindless index of the pass's depth texture
@@ -282,6 +296,7 @@ struct SceneData
     uint32_t            meshletRuns;            // a bit per run whose big draws are drawn by meshlets
     uint32_t            coneRuns;               // a bit per run culled by face, where the cone test holds
     uint32_t            viewFlags;              // VIEW_*
+    uint32_t            padding;                // keeps meshletDataPtr 8-byte aligned
     uint32_t*           meshletDataPtr;         // the meshlets' vertices and triangles, for the mesh shaders; null without them
     float3              originLow;              // the origin is originHigh + originLow
     uint32_t            zero;                   // 0, which the shader compiler cannot know (renderSpace.slang)
@@ -292,6 +307,7 @@ struct SceneData
     float*              labelFadesPtr;          // the view's label slots' fade by depth, kept across frames (passes/labelDepth.slang)
     float               labelFadeStep;          // the fade's change this frame
     uint32_t            labelSlotCount;         // slots the Label Depth pass tests: 0 to this
+    uint2*              pointsPtr;              // the point pool in 8 B units: each chunk's header, positions and colors (lib/points.slang)
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.

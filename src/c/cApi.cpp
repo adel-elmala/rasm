@@ -1,5 +1,6 @@
 #include "c/cApi.h"
 #include "platform/paths.h"
+#include "rasm/pointCloud.h"
 
 #include "spdlog/sinks/sink.h"
 #include "spdlog/spdlog.h"
@@ -84,6 +85,9 @@ namespace rasm::c
         constexpr uint32_t asNumber(VectorUnit value) { return static_cast<uint32_t>(value); }
         constexpr uint32_t asNumber(VectorFacing value) { return static_cast<uint32_t>(value); }
         constexpr uint32_t asNumber(VectorDepth value) { return static_cast<uint32_t>(value); }
+        constexpr uint32_t asNumber(PointShape value) { return static_cast<uint32_t>(value); }
+        constexpr uint32_t asNumber(PointColorMode value) { return static_cast<uint32_t>(value); }
+        constexpr uint32_t asNumber(ColormapPreset value) { return static_cast<uint32_t>(value); }
 
         static_assert(RASM_FORMAT_UNKNOWN == asNumber(Format::UNKNOWN));
         static_assert(RASM_FORMAT_R8G8B8A8_UNORM == asNumber(Format::R8G8B8A8_UNORM));
@@ -142,6 +146,21 @@ namespace rasm::c
         static_assert(RASM_MATERIAL_TYPE_UNLIT == asNumber(MaterialType::UNLIT));
         static_assert(RASM_MATERIAL_TYPE_TERRAIN == asNumber(MaterialType::TERRAIN));
         static_assert(RASM_MATERIAL_TYPE_VECTOR == asNumber(MaterialType::VECTOR));
+        static_assert(RASM_MATERIAL_TYPE_POINTS == asNumber(MaterialType::POINTS));
+        static_assert(RASM_POINT_SHAPE_SQUARE == asNumber(PointShape::SQUARE));
+        static_assert(RASM_POINT_SHAPE_ROUND == asNumber(PointShape::ROUND));
+        static_assert(RASM_POINT_SHAPE_SPHERE == asNumber(PointShape::SPHERE));
+        static_assert(RASM_POINT_COLOR_MODE_COLOR == asNumber(PointColorMode::COLOR));
+        static_assert(RASM_POINT_COLOR_MODE_SCALAR == asNumber(PointColorMode::SCALAR));
+        static_assert(RASM_COLORMAP_VIRIDIS == asNumber(ColormapPreset::VIRIDIS));
+        static_assert(RASM_COLORMAP_TURBO == asNumber(ColormapPreset::TURBO));
+        static_assert(RASM_COLORMAP_MAGMA == asNumber(ColormapPreset::MAGMA));
+        static_assert(RASM_COLORMAP_INFERNO == asNumber(ColormapPreset::INFERNO));
+        static_assert(RASM_COLORMAP_PLASMA == asNumber(ColormapPreset::PLASMA));
+        static_assert(RASM_COLORMAP_CIVIDIS == asNumber(ColormapPreset::CIVIDIS));
+        static_assert(RASM_COLORMAP_GRAY + 1 == asNumber(ColormapPreset::COUNT));
+        static_assert(RASM_COLORMAP_SIZE == COLORMAP_SIZE);
+        static_assert(RASM_MAX_POINT_CHUNK_POINTS == MAX_POINT_CHUNK_POINTS);
         static_assert(RASM_VECTOR_UNIT_PIXELS == asNumber(VectorUnit::PIXELS));
         static_assert(RASM_VECTOR_UNIT_METRES == asNumber(VectorUnit::METRES));
         static_assert(RASM_VECTOR_FACING_SCREEN == asNumber(VectorFacing::SCREEN));
@@ -609,6 +628,7 @@ namespace rasm::c
             .geometryPoolSubMeshes = config.geometry_pool_sub_meshes,
             .geometryPoolMeshlets = config.geometry_pool_meshlets,
             .geometryPoolMeshletData = config.geometry_pool_meshlet_data,
+            .geometryPoolPoints = config.geometry_pool_points,
             .maxInstances = config.max_instances,
             .maxLights = config.max_lights,
             .maxMaterials = config.max_materials,
@@ -679,6 +699,7 @@ namespace rasm::c
             .ui = config.ui ? RASM_TRUE : RASM_FALSE,
             .anti_aliasing = asNumber(config.antiAliasing),
             .max_bindless_textures = config.maxBindlessTextures,
+            .geometry_pool_points = config.geometryPoolPoints,
         };
     }
 
@@ -748,6 +769,7 @@ namespace rasm::c
         result.terrain = toCpp(material.terrain);
         result.vector = toCpp(material.vector);
         result.vector.font = toCpp(material.font);
+        result.points = toCpp(material.points);
         return result;
     }
 
@@ -769,6 +791,7 @@ namespace rasm::c
         result.terrain = toC(material.terrain);
         result.vector = toC(material.vector);
         result.font = toC(material.vector.font);
+        result.points = toC(material.points);
         return result;
     }
 
@@ -800,9 +823,36 @@ namespace rasm::c
                 .depth = asNumber(vector.depth)};
     }
 
+    PointMaterial toCpp(const rasm_point_material &points)
+    {
+        return {.color = toCpp(points.color),
+                .size = points.size,
+                .sizeUnit = static_cast<VectorUnit>(points.size_unit),
+                .shape = static_cast<PointShape>(points.shape),
+                .colorMode = static_cast<PointColorMode>(points.color_mode),
+                .colormap = toCpp(points.colormap),
+                .range = {.min = points.range.min, .max = points.range.max, .log = points.range.log != 0, .clamp = points.range.clamp != 0},
+                .density = points.density};
+    }
+
+    rasm_point_material toC(const PointMaterial &points)
+    {
+        return {.color = toC(points.color),
+                .size = points.size,
+                .size_unit = asNumber(points.sizeUnit),
+                .shape = asNumber(points.shape),
+                .color_mode = asNumber(points.colorMode),
+                .colormap = toC(points.colormap),
+                .range = {.min = points.range.min, .max = points.range.max, .log = points.range.log ? RASM_TRUE : RASM_FALSE, .clamp = points.range.clamp ? RASM_TRUE : RASM_FALSE},
+                .density = points.density};
+    }
+
     bool checkMaterialDesc(const rasm_material_desc &desc, const char *function)
     {
-        return checkEnum(desc.type, RASM_MATERIAL_TYPE_VECTOR + 1, function, "desc->type") && checkEnum(desc.alpha_mode, RASM_ALPHA_MODE_BLEND + 1, function, "desc->alpha_mode") &&
+        return checkEnum(desc.type, RASM_MATERIAL_TYPE_POINTS + 1, function, "desc->type") &&
+               checkEnum(desc.points.size_unit, RASM_VECTOR_UNIT_METRES + 1, function, "desc->points.size_unit") &&
+               checkEnum(desc.points.shape, RASM_POINT_SHAPE_SPHERE + 1, function, "desc->points.shape") &&
+               checkEnum(desc.points.color_mode, RASM_POINT_COLOR_MODE_SCALAR + 1, function, "desc->points.color_mode") && checkEnum(desc.alpha_mode, RASM_ALPHA_MODE_BLEND + 1, function, "desc->alpha_mode") &&
                checkEnum(desc.vector.width_unit, RASM_VECTOR_UNIT_METRES + 1, function, "desc->vector.width_unit") &&
                checkEnum(desc.vector.facing, RASM_VECTOR_FACING_GROUND + 1, function, "desc->vector.facing") &&
                checkEnum(desc.vector.depth, RASM_VECTOR_DEPTH_OVERLAY + 1, function, "desc->vector.depth");

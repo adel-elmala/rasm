@@ -61,6 +61,9 @@ namespace rasm
             material.alphaMode = AlphaMode::BLEND;
             material.doubleSided = true;
             break;
+        case MaterialType::POINTS:
+            material.name = "points";
+            break;
 
         default:
             spdlog::error("Unknown material template type.");
@@ -165,7 +168,8 @@ namespace rasm
             updated.alphaMode = AlphaMode::BLEND;
             updated.doubleSided = true;
         }
-        const bool runChanged = materialRef.doubleSided != updated.doubleSided || materialRef.alphaMode != updated.alphaMode;
+        // The type decides whether a point cloud chunk is drawn by the point run.
+        const bool runChanged = materialRef.doubleSided != updated.doubleSided || materialRef.alphaMode != updated.alphaMode || materialRef.type != updated.type;
         materialRef = updated;
         materialRef.handle = material;
         materialRef.terrain.heights = heights;

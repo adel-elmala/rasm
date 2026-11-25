@@ -160,6 +160,10 @@ namespace rasm
         FontHandle                  createFont(const FontAtlas& atlas);
         // Its atlas goes through the release queue; materials that name it lose it (their labels draw nothing).
         void                        destroyFont(FontHandle font);
+        // A 256 x 1 sRGB texture in its own bindless slot for PointMaterial::colormap: 1 to COLORMAP_SIZE linear colors,
+        // evenly spread and interpolated, or a preset. Destroyed with destroyTexture.
+        TextureHandle               createColormap(const glm::vec4* colors, uint32_t count);
+        TextureHandle               createColormap(ColormapPreset preset);
         // A mesh, texture or environment from an AssetLoader is in: its data is on the GPU (an environment: baked).
         // Made with createMesh or createTexture, it is in at once.
         bool                        isLoaded(MeshHandle mesh) const;

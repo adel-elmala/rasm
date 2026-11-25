@@ -48,6 +48,7 @@ namespace rasm
     {
         AlphaMode                       alphaMode                                                           = AlphaMode::NONE;
         CullMode                        cullMode                                                            = CullMode::NONE;
+        bool                            points                                                              = false;    // point cloud chunks, drawn by the point pipeline
         uint32_t                        first                                                               = 0;
         uint32_t                        count                                                               = 0;
         uint32_t                        meshletDraws                                                        = 0;    // draws whose geometry has meshlets
@@ -161,6 +162,7 @@ namespace rasm
         PipelineHandle                  blendPipeline                                                       = {};
         PipelineHandle                  skyPipeline                                                         = {};
         PipelineHandle                  gridPipeline                                                        = {};
+        PipelineHandle                  pointPipeline                                                       = {};       // the point run's (passes/points.slang), alpha-to-coverage with more than one sample
         PipelineHandle                  meshPipeline                                                        = {};       // the opaque and MASK runs' meshlets, with mesh shaders
         PipelineHandle                  meshMaskPipeline                                                    = {};
         DebugPipelines                  debug;
@@ -191,6 +193,7 @@ namespace rasm
         std::vector<EntityDrawState>    entities;
         std::vector<CullMode>           instanceCullModes;
         std::vector<AlphaMode>          instanceAlphaModes;
+        std::vector<uint8_t>            instancePoints;                                                             // per instance row: 1 for a point cloud chunk with a POINTS material
         RangeAllocator                  instanceRows;                                                               // a range per entity, reused at once: each slot has its own copy
         RangeAllocator                  meshletWords;                                                               // each view's meshlet visibility words, a range per instance row of a mesh with meshlets
         std::vector<uint32_t>           instanceMeshlets;                                                           // per instance row: the meshlets of its LOD with the most

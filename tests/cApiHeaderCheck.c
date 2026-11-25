@@ -40,6 +40,9 @@ int main(void)
     rasm_grid grid;
     rasm_camera_buttons buttons;
     rasm_camera camera = {0};
+    rasm_point_cloud_chunk_desc chunk;
+    rasm_vec3 points[2] = {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}};
+    rasm_material_desc material;
 
     if (rasm_get_version() != RASM_C_API_VERSION)
         return 1;
@@ -93,6 +96,17 @@ int main(void)
     if (rasm_grid_init(&grid, sizeof(grid)) != RASM_OK || grid.subdivisions != 10 || rasm_camera_buttons_init(&buttons, sizeof(buttons)) != RASM_OK ||
         buttons.right != RASM_CAMERA_DRAG_PAN || rasm_set_camera_grid(NULL, camera, &grid) != RASM_ERROR_INVALID_ARGUMENT)
         return 17;
+    material.points.shape = RASM_POINT_SHAPE_SPHERE;
+    material.points.range.log = RASM_FALSE;
+    if (rasm_point_cloud_chunk_desc_init(&chunk, sizeof(chunk)) != RASM_OK || chunk.count != 0)
+        return 18;
+    chunk.positions = points;
+    chunk.count = 2;
+    if (rasm_build_point_cloud_chunk(&chunk, &build) != RASM_OK || build == NULL || material.points.shape != RASM_POINT_SHAPE_SPHERE)
+        return 19;
+    rasm_mesh_build_destroy(build);
+    if (rasm_create_colormap_preset(NULL, RASM_COLORMAP_VIRIDIS).id != 0 || (RASM_PICK_SKIP_ALL & RASM_PICK_SKIP_POINTS) == 0)
+        return 20;
     printf("rasm_c.h %u.%u compiles as C (__STDC_VERSION__ %ld) and links rasm_c_renderer.\n", RASM_C_API_VERSION_MAJOR, RASM_C_API_VERSION_MINOR, (long)__STDC_VERSION__);
     return 0;
 }

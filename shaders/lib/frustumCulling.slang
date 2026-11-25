@@ -3,6 +3,7 @@
 
 #include "core.slang"
 #include "vector.slang"
+#include "points.slang"
 
 struct Sphere
 {
@@ -57,6 +58,8 @@ Sphere getWorldSphere(SceneData *scene, DrawInfo draw)
     MaterialData *material  = scene->materialsPtr + instance->materialIndex;
     if (material->materialId == MaterialId.VECTOR)
         sphere.radius      += getVectorPadding(scene, material->vector, sphere.center, sphere.radius);
+    else if (material->materialId == MaterialId.POINTS)
+        sphere.radius      += getPointPadding(scene, material->points, sphere.center, sphere.radius);
     return sphere;
 }
 

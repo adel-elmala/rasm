@@ -42,10 +42,13 @@ namespace rasm
         BufferHandle            morphBuffer() const;
         BufferHandle            meshletBuffer() const;
         BufferHandle            meshletDataBuffer() const;
+        BufferHandle            pointBuffer() const;
         BufferHandle            tableBuffer() const;
         GeometryPoolStats       stats() const;
 
     private:
+        bool                    allocatePoints(const ObjRaw& raw, MeshGeometry& geometry);
+        bool                    writePoints(RenderContext& ctx, const ObjRaw& raw, const MeshGeometry& geometry);
         BufferHandle            vertices                = {};
         BufferHandle            indices                 = {};
         BufferHandle            colors                  = {};
@@ -53,6 +56,7 @@ namespace rasm
         BufferHandle            morphs                  = {};
         BufferHandle            meshlets                = {};
         BufferHandle            meshletData             = {};       // with mesh shaders only
+        BufferHandle            points                  = {};       // point cloud chunks, in 8 B units
         BufferHandle            table                   = {};
         RangeAllocator          vertexRanges;
         RangeAllocator          indexRanges;
@@ -61,7 +65,11 @@ namespace rasm
         RangeAllocator          morphRanges;
         RangeAllocator          meshletRanges;
         RangeAllocator          meshletDataRanges;
+        RangeAllocator          pointRanges;
         RangeAllocator          subMeshRows;
+        uint32_t                pointTriangles          = 0;        // the index range every chunk draws: 0, 1, 2, ..., a triangle a point
+        bool                    pointTrianglesAllocated = false;
+        bool                    pointTrianglesWritten   = false;
         bool                    meshletsFullLogged      = false;
         bool                    meshletDataFullLogged   = false;
     };

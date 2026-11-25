@@ -10,12 +10,7 @@
 
 using namespace rasm;
 
-// A mesh's built data, and the geometry the vector functions append to.
-struct rasm_mesh_build
-{
-    MeshBuild build;
-};
-
+// The geometry the vector functions append to.
 struct rasm_vector_geometry
 {
     VectorGeometry geometry;

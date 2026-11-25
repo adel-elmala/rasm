@@ -3,6 +3,7 @@
 
 #include "core.slang"
 #include "frustumCulling.slang"
+#include "points.slang"
 
 // The coarsest LOD whose error, seen from the LOD camera, stays under lodErrorPixels. The LOD camera is the view's
 // own, or for a shadow map the camera of the view that reads it (prepareSceneView), so both pick the same LOD. The
@@ -41,6 +42,13 @@ uint selectLod(SceneData *scene, GeometryData *geometry, Sphere sphere)
 GeometryData *getDrawGeometry(SceneData *scene, DrawInfo draw)
 {
     return scene->geometryPtr + scene->instancesPtr[draw.firstInstance].geometryIndex;
+}
+
+// A point cloud chunk's draw of its first count points (lib/points.slang): six indices each.
+DrawInfo getPointDraw(DrawInfo draw, uint count)
+{
+    draw.indexCount         = POINT_INDICES * count;
+    return draw;
 }
 
 // The draw with the index range of one of its LODs.

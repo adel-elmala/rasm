@@ -119,6 +119,7 @@ namespace rasm
         std::vector<PickRequest>    spare;                          // taken requests, whose hit vectors keep their capacity
         PickSlot                    slots[MAX_FRAMES_IN_FLIGHT];
         PipelineHandle              pipelines[3]            = {};   // opaque, MASK, BLEND
+        PipelineHandle              pointPipeline           = {};   // the point run's (passes/points.slang)
         InstanceOwners              owners;
         std::vector<uint32_t>       texels;                         // scratch: a slot's copied ids then positions
         std::vector<PickSample>     samples;                        // scratch
