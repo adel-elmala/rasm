@@ -170,3 +170,18 @@ TEST_CASE("an octree holds every point once, each in its node's cube, the nodes 
     CHECK(rasm::buildPointCloudChunk(chunk).isValid());
     CHECK(rasm::getPointCloudNodeChunk(octree, static_cast<uint32_t>(octree.nodes.size())).count == 0);
 }
+
+TEST_CASE("a node with one point left keeps a spacing, so the nodes under it still refine")
+{
+    // A stray point at the world's origin and a scan 6 000 km away: a node near the top holds the scan's one sample.
+    std::vector<glm::dvec3> points = makeGround(50000);
+    points.emplace_back(0.0, 0.0, 0.0);
+    rasm::PointCloudOctree octree;
+    REQUIRE(rasm::buildPointCloudOctree({.positions = points.data(), .count = static_cast<uint32_t>(points.size()), .maxNodePoints = 4096}, octree));
+    for (const rasm::PointCloudNode &node : octree.nodes)
+    {
+        CHECK(node.spacing > 0.0f);
+        const bool leaf = std::all_of(node.children, node.children + 8, [](uint32_t child) { return child == rasm::POINT_NODE_NONE; });
+        CHECK((node.geometricError > 0.0f) == !leaf);
+    }
+}

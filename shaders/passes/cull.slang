@@ -166,7 +166,7 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
             // Small points go to the compute path, the others to the run's triangles. The chunk takes no slot, and the
             // late phase sees it drawn.
             uint4 rect      = uint4(0);
-            float spacing   = (style.flags & POINT_ADAPTIVE) != 0 ? loadPointSpacing(scene, uint(getDrawGeometry(scene, draw)->vertexOffset)) : 0.0;
+            float spacing   = (style.flags & POINT_ADAPTIVE) != 0 ? getWorldSpacing(loadPointSpacing(scene, uint(getDrawGeometry(scene, draw)->vertexOffset)), getWorldMatrix(scene, instance)) : 0.0;
             bool raster     = counted && scene->pointRasterPtr != nullptr && draw.firstInstance < POINT_RASTER_MAX_ROWS &&
                               isRasterChunk(scene, style, spacing, sphere.center, sphere.radius, count, rect) && appendPointBatches(scene, draw.firstInstance, count, count < total, rect);
             visible         = counted && !raster;

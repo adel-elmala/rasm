@@ -574,7 +574,10 @@ int main(int argc, char **argv)
     rasm::PickHandle pick;
     bool picked = false;
     const rasm::Window &window = engine.getMainWindow();
-    // With --wait-for-loads the frames before the first cut is in are not counted, so frame N is the flight's N-th.
+    // The streamed nodes are not the AssetLoader's loads: with --wait-for-loads the frames before the first cut is in are
+    // not counted, so frame N is the flight's N-th, and exampleRunning counts from there.
+    if (args.waitForLoads)
+        engine.waitForLoads();
     while (args.waitForLoads && flightStart == 0 ? engine.running() : exampleRunning(engine, args))
     {
         ++frame;
@@ -619,9 +622,12 @@ int main(int argc, char **argv)
             const rasm::EntityHandle entity = engine.createEntity("node", mesh, material, rasm::Transform{node.center});
             // Hidden until it fades in.
             engine.setPointChunkLod(entity, {.drawn = options.fade > 0.0 ? 0.0f : 1.0f});
-            nodes[job.node].entity = entity;
-            nodes[job.node].fade = 0.0f;
-            streamer.setTileContent(job.tile, {.entities = &entity, .entityCount = 1, .meshes = &mesh, .meshCount = 1});
+            // A tile the streamer cancelled meanwhile refuses its content and destroys it: the node keeps what it had.
+            if (streamer.setTileContent(job.tile, {.entities = &entity, .entityCount = 1, .meshes = &mesh, .meshCount = 1}))
+            {
+                nodes[job.node].entity = entity;
+                nodes[job.node].fade = 0.0f;
+            }
         }
         const double uploadMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - uploadStart).count();
 

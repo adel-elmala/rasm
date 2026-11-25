@@ -71,6 +71,13 @@ float loadPointSpacing(SceneData *scene, uint base)
     return asfloat(scene->pointsPtr[base + 5].y);
 }
 
+// A chunk's spacing is in its entity's units: in the world it is that times the entity's scale (its matrix's first
+// column), which getPointDiameter's pixel size is in.
+float getWorldSpacing(float spacing, float4x4 world)
+{
+    return spacing * length(mul(world, float4(1.0, 0.0, 0.0, 0.0)).xyz);
+}
+
 // A chunk's LOD (rasm::PointChunkLod, Renderer::setPointChunkLod), in its instance's meshletVisibility word: -1 when it
 // was never set (all its points, no finer chunk), else bits 24 to 30 the share of its points drawn (of 127) and bits 3o
 // to 3o + 2 the drawn share (of 7) of the finer chunk in octant o of its entity's space, o = (x >= 0) | (y >= 0) << 1 |

@@ -340,25 +340,27 @@ namespace rasm
         uint8_t bytes[LAS_HEADER_14] = {};
         file.read(reinterpret_cast<char *>(bytes), sizeof(bytes));
         const auto size = static_cast<size_t>(file.gcount());
+        const bool opened = file.is_open();
         file.clear();
         LasHeader header;
-        std::string error = file ? "" : "it cannot be read";
+        std::string error = opened ? "" : "it cannot be read";
         std::error_code sizeError;
         const uint64_t fileSize = std::filesystem::file_size(pathFromUtf8(resolved), sizeError);
         if (error.empty() && !parseHeader(bytes, size, header, error))
             file.close();
         // A broken header must not make the reader allocate what the file cannot hold: its records and, uncompressed,
-        // its points must fit in it.
-        const bool lazByHeader = header.compressed;
-        if (error.empty() && (sizeError || header.pointOffset > fileSize ||
-                              (!lazByHeader && header.pointOffset + header.pointCount * static_cast<uint64_t>(header.recordLength) > fileSize)))
-            error = "it ends before the " + std::to_string(header.pointCount) + " points its header promises";
+        // its points must fit in it. LASzip marks a compressed file by its format's bit 7, or by a record of its own.
+        if (error.empty() && (sizeError || header.pointOffset > fileSize))
+            error = "it ends before its point records start";
         PointLayout layout;
         bool laszipRecord = false;
         if (error.empty())
+            readRecords(file, header, cloud, laszipRecord);
+        if (error.empty() && !(header.compressed || laszipRecord) && header.pointOffset + header.pointCount * static_cast<uint64_t>(header.recordLength) > fileSize)
+            error = "it ends before the " + std::to_string(header.pointCount) + " points its header promises";
+        if (error.empty())
         {
             getPointLayout(header.format, layout);
-            readRecords(file, header, cloud, laszipRecord);
             cloud.pointFormat = header.format;
             cloud.versionMinor = header.versionMinor;
             cloud.compressed = header.compressed || laszipRecord;

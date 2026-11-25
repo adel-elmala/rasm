@@ -115,7 +115,7 @@ void rasterMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
         float3 position     = mul(world, float4(local, 1.0)).xyz;
         float4 clip         = mul(scene->projection, mul(scene->view, float4(position, 1.0)));
         float finer         = getPointFinerShare(instance->meshletVisibility, local);
-        rasterPoint(scene, clip, getPointDiameter(scene, style, chunk.spacing, finer, clip.w), row << 16 | point, thinned);
+        rasterPoint(scene, clip, getPointDiameter(scene, style, getWorldSpacing(chunk.spacing, world), finer, clip.w), row << 16 | point, thinned);
     }
 }
 

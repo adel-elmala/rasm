@@ -151,10 +151,14 @@ namespace rasm
                     octree.indices.push_back(point.index);
                 }
                 // A few points at the edge of the data measure far apart, but they are no surface to cover: a node is
-                // never sparser than its parent, so its adaptive points never grow past its parent's.
+                // never sparser than its parent, so its adaptive points never grow past its parent's. Fewer than 2 points
+                // measure nothing (0): such a node takes its parent's spacing, or its grid's cell.
                 record.spacing = measurePointSpacing(octree.positions.data() + record.firstPoint, record.pointCount);
-                if (record.parent != POINT_NODE_NONE)
-                    record.spacing = std::min(record.spacing, octree.nodes[record.parent].spacing);
+                const float parentSpacing = record.parent != POINT_NODE_NONE ? octree.nodes[record.parent].spacing : 0.0f;
+                if (!(record.spacing > 0.0f))
+                    record.spacing = parentSpacing > 0.0f ? parentSpacing : static_cast<float>(2.0 * record.halfSize / static_cast<double>(desc.cells));
+                else if (parentSpacing > 0.0f)
+                    record.spacing = std::min(record.spacing, parentSpacing);
             }
             own.clear();
             own.shrink_to_fit();
