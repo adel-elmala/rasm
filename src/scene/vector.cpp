@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <utility>
 
@@ -69,7 +70,7 @@ namespace rasm
             geometry.vertices.push_back({.pos = glm::vec3(point.position - origin),
                                          .normal = glm::vec3(point.up),
                                          .uv = {glm::vec2(offset), extra, glm::vec2(static_cast<float>(kind), static_cast<float>(metric))},
-                                         .tangent = glm::vec4(glm::vec3(along), static_cast<float>(featureId))});
+                                         .tangent = glm::vec4(glm::vec3(along), std::bit_cast<float>(featureId))});
         }
 
         void pushTriangle(VectorGeometry &geometry, uint32_t a, uint32_t b, uint32_t c)
@@ -180,20 +181,24 @@ namespace rasm
 
         // The offsets of a join's or cap's rim, from angle a0 to a1 (radians, in the segment's frame: x along, y
         // across), as a fan around the point.
-        void pushFan(VectorGeometry &geometry, const glm::dvec3 &origin, const GroundPoint &point, const glm::dvec3 &along, double a0, double a1, float distance, uint32_t featureId)
+        void pushFan(VectorGeometry &geometry, const glm::dvec3 &origin, const GroundPoint &point, const glm::dvec3 &along, double a0, double a1, const glm::vec2 &extra, uint32_t featureId)
         {
             const auto steps = static_cast<uint32_t>(std::max(1.0, std::ceil(std::abs(a1 - a0) / ROUND_STEP)));
             const auto center = static_cast<uint32_t>(geometry.vertices.size());
-            pushVertex(geometry, origin, point, along, glm::dvec2(0.0), glm::vec2(distance, 0.0f), Kind::LINE, Metric::ROUND, featureId);
+            pushVertex(geometry, origin, point, along, glm::dvec2(0.0), extra, Kind::LINE, Metric::ROUND, featureId);
             for (uint32_t s = 0; s <= steps; ++s)
             {
                 const double angle = a0 + (a1 - a0) * s / steps;
-                pushVertex(geometry, origin, point, along, glm::dvec2(std::sin(angle), std::cos(angle)), glm::vec2(distance, 0.0f), Kind::LINE, Metric::ROUND, featureId);
+                pushVertex(geometry, origin, point, along, glm::dvec2(std::sin(angle), std::cos(angle)), extra, Kind::LINE, Metric::ROUND, featureId);
                 if (s > 0)
                     pushTriangle(geometry, center, center + s, center + s + 1);
             }
         }
 
+        // A join fills the gap on the outer side of the turn from alongA to alongB. Its vertices carry the turn (uv[1].y:
+        // from the frame's outer normal to the other segment's, plus 8 times the outer side), so a line spread across the
+        // screen turns the join to the screen's angles (shaders/lib/vector.slang, getScreenJoinOffset). A bevel is
+        // measured round from the joint: its straight edge is a triangle's edge, inside the line's distance.
         void pushJoin(VectorGeometry &geometry, const glm::dvec3 &origin, const GroundPoint &point, const glm::dvec3 &alongA, const glm::dvec3 &alongB, const LineShape &shape, float distance,
                       uint32_t featureId)
         {
@@ -205,41 +210,42 @@ namespace rasm
                 return;
             const double side = turn > 0.0 ? -1.0 : 1.0;
             const glm::dvec2 outerB(glm::dot(side * acrossB, alongA), glm::dot(side * acrossB, acrossA));
+            // The turn from A's outer normal (0, side) to B's, the short way round.
+            const double a0 = std::atan2(0.0, side);
+            double a1 = std::atan2(outerB.x, outerB.y);
+            if (a1 - a0 > PI)
+                a1 -= 2.0 * PI;
+            if (a0 - a1 > PI)
+                a1 += 2.0 * PI;
+            const glm::vec2 inA(distance, static_cast<float>(a1 - a0 + 8.0 * side));
+            const glm::vec2 inB(distance, static_cast<float>(a0 - a1 + 8.0 * side));
             if (shape.join == LineJoin::ROUND)
             {
-                // From (0, side) to outerB, the short way round.
-                const double a0 = std::atan2(0.0, side);
-                double a1 = std::atan2(outerB.x, outerB.y);
-                if (a1 - a0 > PI)
-                    a1 -= 2.0 * PI;
-                if (a0 - a1 > PI)
-                    a1 += 2.0 * PI;
-                pushFan(geometry, origin, point, alongA, a0, a1, distance, featureId);
+                pushFan(geometry, origin, point, alongA, a0, a1, inA, featureId);
                 return;
             }
             const glm::dvec3 bisector = normalizeOr(side * (acrossA + acrossB), side * acrossA);
             const double cosine = glm::dot(bisector, side * acrossA);
             const double miter = cosine > 1e-6 ? 1.0 / cosine : 1e9;
             const auto first = static_cast<uint32_t>(geometry.vertices.size());
-            const glm::vec2 extra(distance, 0.0f);
             if (shape.join == LineJoin::MITER && miter <= std::clamp(static_cast<double>(shape.miterLimit), 1.0, static_cast<double>(MAX_VECTOR_MITER)))
             {
                 // Two triangles, each in its own segment's frame, so the distance across is exact in both.
                 const glm::dvec3 tip = bisector * miter;
-                pushVertex(geometry, origin, point, alongA, glm::dvec2(0.0), extra, Kind::LINE, Metric::ACROSS, featureId);
-                pushVertex(geometry, origin, point, alongA, glm::dvec2(0.0, side), extra, Kind::LINE, Metric::ACROSS, featureId);
-                pushVertex(geometry, origin, point, alongA, glm::dvec2(glm::dot(tip, alongA), glm::dot(tip, acrossA)), extra, Kind::LINE, Metric::ACROSS, featureId);
-                pushVertex(geometry, origin, point, alongB, glm::dvec2(0.0), extra, Kind::LINE, Metric::ACROSS, featureId);
-                pushVertex(geometry, origin, point, alongB, glm::dvec2(glm::dot(tip, alongB), glm::dot(tip, acrossB)), extra, Kind::LINE, Metric::ACROSS, featureId);
-                pushVertex(geometry, origin, point, alongB, glm::dvec2(0.0, side), extra, Kind::LINE, Metric::ACROSS, featureId);
+                pushVertex(geometry, origin, point, alongA, glm::dvec2(0.0), inA, Kind::LINE, Metric::ACROSS, featureId);
+                pushVertex(geometry, origin, point, alongA, glm::dvec2(0.0, side), inA, Kind::LINE, Metric::ACROSS, featureId);
+                pushVertex(geometry, origin, point, alongA, glm::dvec2(glm::dot(tip, alongA), glm::dot(tip, acrossA)), inA, Kind::LINE, Metric::ACROSS, featureId);
+                pushVertex(geometry, origin, point, alongB, glm::dvec2(0.0), inB, Kind::LINE, Metric::ACROSS, featureId);
+                pushVertex(geometry, origin, point, alongB, glm::dvec2(glm::dot(tip, alongB), glm::dot(tip, acrossB)), inB, Kind::LINE, Metric::ACROSS, featureId);
+                pushVertex(geometry, origin, point, alongB, glm::dvec2(0.0, side), inB, Kind::LINE, Metric::ACROSS, featureId);
                 pushTriangle(geometry, first, first + 1, first + 2);
                 pushTriangle(geometry, first + 3, first + 4, first + 5);
                 return;
             }
             // Bevel: the two outer corners joined.
-            pushVertex(geometry, origin, point, alongA, glm::dvec2(0.0), extra, Kind::LINE, Metric::ACROSS, featureId);
-            pushVertex(geometry, origin, point, alongA, glm::dvec2(0.0, side), extra, Kind::LINE, Metric::ACROSS, featureId);
-            pushVertex(geometry, origin, point, alongA, outerB, extra, Kind::LINE, Metric::ACROSS, featureId);
+            pushVertex(geometry, origin, point, alongA, glm::dvec2(0.0), inA, Kind::LINE, Metric::ROUND, featureId);
+            pushVertex(geometry, origin, point, alongA, glm::dvec2(0.0, side), inA, Kind::LINE, Metric::ROUND, featureId);
+            pushVertex(geometry, origin, point, alongA, outerB, inA, Kind::LINE, Metric::ROUND, featureId);
             pushTriangle(geometry, first, first + 1, first + 2);
         }
 
@@ -248,7 +254,7 @@ namespace rasm
         {
             if (cap == LineCap::ROUND)
             {
-                pushFan(geometry, origin, point, forward, 0.0, PI, distance, featureId);
+                pushFan(geometry, origin, point, forward, 0.0, PI, glm::vec2(distance, 0.0f), featureId);
                 return;
             }
             if (cap != LineCap::SQUARE)

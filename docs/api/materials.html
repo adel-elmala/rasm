@@ -242,8 +242,8 @@ rasm::MaterialHandle brick = engine.createMaterial(rasm::MaterialType::PBR, text
       <dt>facing</dt><dd><code>VectorFacing::SCREEN</code>: spread across the screen, never foreshortened. <code>VectorFacing::GROUND</code>: in the ground's plane under the feature (its up), lying on the ground.</dd>
       <dt>dashLength, gapLength</dt><dd>In <code>widthUnit</code>; both above 0 for dashes. In pixels they follow the pixel's size at each vertex.</dd>
       <dt>outlineColor, outlineWidth</dt><dd>A band along a line's or point's edge, inside <code>width</code>: a road's casing, a marker's ring.</dd>
-      <dt>drawOrder</dt><dd>−127 to 127: blended draws of a lower order are drawn first; the scene's other see-through draws sort at 0, by depth.</dd>
-      <dt>depth</dt><dd><code>VectorDepth::TESTED</code>: hidden behind what is in front, nearer than the ground it lies on by a small bias. <code>VectorDepth::OVERLAY</code>: over everything, never occlusion culled.</dd>
+      <dt>drawOrder</dt><dd>−127 to 127: blended draws of a lower order are drawn first; the scene's other see-through draws sort at 0, by depth. It holds while the GPU blend sort runs; with frozen culling (<a href="engine.html#setCullingFrozen"><code>setCullingFrozen</code></a>) the blended draws go in list order.</dd>
+      <dt>depth</dt><dd><code>VectorDepth::TESTED</code>: hidden behind what is in front, nearer than the ground it lies on by 1/4096 of its distance, whatever the projection. <code>VectorDepth::OVERLAY</code>: over everything, never occlusion culled.</dd>
     </dl>
     <pre><code>// examples/25_vector_map: roads 7 px wide with a 1.5 px casing.
 rasm::Material values = engine.getMaterial(material);

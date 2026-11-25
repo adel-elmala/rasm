@@ -7,9 +7,10 @@
 // point (its anchor), and the vertex shader spreads it by the material's width, so a style changes with no rebuild:
 //   pos         the anchor, in object space
 //   normal      the ground's up at the anchor
-//   tangent     xyz: the direction the offset is measured from (a line's segment); w: the feature id
+//   tangent     xyz: the direction the offset is measured from (a line's segment); w: the feature id's bits
 //   uv[0]       the offset, in half widths: x along the tangent, y across it
-//   uv[1]       a line's distance along it in metres (x), or a point's icon coordinates
+//   uv[1]       a line's distance along it in metres (x) and, at a join, its turn and outer side (y,
+//               getScreenJoinOffset); a point's icon coordinates
 //   uv[2]       x: the kind (VECTOR_KIND_*), y: how the fragment measures the distance to the edge (VECTOR_METRIC_*)
 
 // VectorData::flags. Must match rasm::gfx::VECTOR_*.
@@ -30,12 +31,14 @@ static const uint   VECTOR_METRIC_BOX       = 1;    // the larger of |x| and |y|
 static const uint   VECTOR_METRIC_ACROSS    = 2;    // |y|: a line's body, its miter and bevel joins
 static const uint   VECTOR_METRIC_FILL      = 3;    // 0: a polygon covers its triangles whole
 
-// A tested feature is drawn this much nearer, as a share of its depth (reversed-Z: depth times 1 + bias), so it stays
-// over the ground it was draped on: 25 cm at 1 km.
+// A tested feature is drawn this much nearer, as a share of its distance, so it stays over the ground it was draped
+// on: 25 cm at 1 km.
 static const float  VECTOR_DEPTH_BIAS   = 1.0 / 4096.0;
 // The offsets of a vertex stay within this many half widths (a miter is limited to 2, a square cap's corner is 1.42),
 // and one more pixel of anti-aliasing: what culling pads a feature's sphere by.
 static const float  VECTOR_MAX_OFFSET   = 2.0;
+// Must match rasm::MAX_VECTOR_MITER.
+static const float  MAX_VECTOR_MITER    = 2.0;
 
 struct VectorVertex
 {
@@ -44,8 +47,11 @@ struct VectorVertex
     float2  edge;           // the offset in half widths, the anti-aliasing pixel included: the edge is at 1
     float   metric;
     float   fade;           // coverage of a feature thinner than a pixel
-    float   dash;           // the distance along a line, in the unit of the dashes
+    float   dash;           // a line's distance along it, in the unit of the dashes; 0 for the other kinds
+    float   kind;           // VECTOR_KIND_*
 };
+
+static const float  VECTOR_PI           = 3.14159265358979;
 
 float3 safeNormalize(float3 v, float3 fallback)
 {
@@ -53,41 +59,115 @@ float3 safeNormalize(float3 v, float3 fallback)
     return length2 > 1e-20 ? v * rsqrt(length2) : fallback;
 }
 
+// Any direction across the ground: the one src/scene/vector.cpp's getGroundAxis picks.
+float3 getGroundAxis(float3 up)
+{
+    return safeNormalize(cross(up, abs(up.z) < 0.9 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0)), float3(1.0, 0.0, 0.0));
+}
+
+// The direction across a segment: cross(along, up), as the CPU computes it, with the same fallback.
+float3 getAcross(float3 along, float3 up)
+{
+    return safeNormalize(cross(along, up), getGroundAxis(up));
+}
+
+// A clip w no smaller than the near plane's: a vertex behind the camera gets the sizes of one at the near plane, not
+// sizes that grow without bound. An orthographic view's w is 1.
+float getSafeW(SceneData *scene, float w)
+{
+    return scene->projection[3][3] == 0.0 ? max(w, scene->nearZ) : w;
+}
+
 // A clip position in pixels from the screen's centre (not flipped: only differences are used).
 float2 toPixels(SceneData *scene, float4 clip)
 {
-    return clip.xy / max(clip.w, 1e-6) * float2(scene->viewportWidth, scene->viewportHeight) * 0.5;
+    return clip.xy / getSafeW(scene, clip.w) * float2(scene->viewportWidth, scene->viewportHeight) * 0.5;
 }
 
 // World units per pixel at a point of the given clip w (a perspective view's depth; 1 for an orthographic one).
 float getPixelWorld(SceneData *scene, float w)
 {
-    return 2.0 * max(w, 1e-6) / (abs(scene->projection[1][1]) * float(scene->viewportHeight));
+    return 2.0 * getSafeW(scene, w) / (abs(scene->projection[1][1]) * float(scene->viewportHeight));
 }
 
-// A vertex spread across the screen from an anchor on the ground: the depth of the ground under its pixel, found
-// through the ground plane's screen Jacobian at the anchor. Below the anchor on screen the ground is nearer, so a
-// marker or a line facing the screen would sink into it at the anchor's depth; the nearer of the two keeps it whole.
-// 0 (the far plane in reversed-Z) when the plane is seen edge-on.
-float getGroundDepth(SceneData *scene, float4x4 viewProjection, float3 anchor, float3 up, float4 anchorClip, float2 offset, float pixelWorld)
+float getViewDepth(SceneData *scene, float3 position)
 {
-    float3 axisX    = safeNormalize(cross(up, abs(up.z) < 0.9 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0)), float3(1.0, 0.0, 0.0));
+    return -mul(scene->view, float4(position, 1.0)).z;
+}
+
+// A 3D direction at the anchor, seen on screen; fallback when it points at the camera.
+float2 getScreenDirection(SceneData *scene, float4x4 viewProjection, float3 anchor, float2 base, float3 direction, float step, float2 fallback)
+{
+    float4 ahead    = mul(viewProjection, float4(anchor + direction * step, 1.0));
+    float2 delta    = toPixels(scene, ahead) - base;
+    return ahead.w > 0.0 && dot(delta, delta) > 1e-8 ? normalize(delta) : fallback;
+}
+
+// A segment's along (xy) and across (zw) on screen: across is perpendicular to along, on the side of getAcross.
+float4 getScreenFrame(SceneData *scene, float4x4 viewProjection, float3 anchor, float2 base, float3 along, float3 up, float step)
+{
+    float2 screenAlong  = getScreenDirection(scene, viewProjection, anchor, base, along, step, float2(1.0, 0.0));
+    float2 screenAcross = float2(-screenAlong.y, screenAlong.x);
+    float2 side         = getScreenDirection(scene, viewProjection, anchor, base, getAcross(along, up), step, screenAcross);
+    return float4(screenAlong, dot(side, screenAcross) < 0.0 ? -screenAcross : screenAcross);
+}
+
+float wrapAngle(float angle)
+{
+    return angle - 2.0 * VECTOR_PI * floor((angle + VECTOR_PI) / (2.0 * VECTOR_PI));
+}
+
+// A join's offset turned from the ground's angles to the screen's. The CPU builds a join from the turn on the ground
+// between this vertex's segment and the other one (uv[1].y: the turn in radians from this segment's outer normal to
+// the other's, plus 8 times the outer side); across the screen the turn looks wider or narrower, so each rim offset
+// keeps its share of the turn, and a miter's tip takes its length for the screen's turn (past MAX_VECTOR_MITER: the
+// middle of the bevel).
+float2 getScreenJoinOffset(SceneData *scene, float4x4 viewProjection, float3 anchor, float2 base, float3 along, float3 up, float step, float4 frame, float2 offset, float encodedTurn)
+{
+    float side          = encodedTurn > 0.0 ? 1.0 : -1.0;
+    float turn          = encodedTurn - 8.0 * side;
+    float start         = side > 0.0 ? 0.0 : VECTOR_PI;
+    float length0       = length(offset);
+    if (abs(turn) < 1e-4 || length0 < 1e-6)
+        return offset;
+    // The other segment, in this one's (along, across) coordinates, then in the world and on screen.
+    float2 otherAcross  = float2(sin(start + turn), cos(start + turn)) * side;
+    float3 otherAlong   = along * otherAcross.y - getAcross(along, up) * otherAcross.x;
+    float4 otherFrame   = getScreenFrame(scene, viewProjection, anchor, base, otherAlong, up, step);
+    float2 otherOuter   = otherFrame.zw * side;
+    float screenTurn    = wrapAngle(atan2(dot(otherOuter, frame.xy), dot(otherOuter, frame.zw)) - start);
+    // A turn that flips its direction on screen keeps none.
+    if (screenTurn * turn < 0.0)
+        screenTurn = 0.0;
+    float angle         = start + wrapAngle(atan2(offset.x, offset.y) - start) * (screenTurn / turn);
+    float length1       = length0;
+    if (length0 > 1.0001)
+    {
+        float halfCosine = cos(0.5 * screenTurn);
+        length1         = halfCosine > 1.0 / MAX_VECTOR_MITER ? 1.0 / halfCosine : halfCosine;
+    }
+    return float2(sin(angle), cos(angle)) * length1;
+}
+
+// The point of the ground plane at the anchor under the pixel offset from it, found through the plane's screen
+// Jacobian at the anchor. w = 0 when the plane is seen edge-on.
+float4 getGroundPoint(SceneData *scene, float4x4 viewProjection, float3 anchor, float3 up, float2 base, float2 offset, float pixelWorld)
+{
+    float3 axisX    = getGroundAxis(up);
     float3 axisZ    = cross(axisX, up);
     float step      = 8.0 * pixelWorld;
     float4 clipX    = mul(viewProjection, float4(anchor + axisX * step, 1.0));
     float4 clipZ    = mul(viewProjection, float4(anchor + axisZ * step, 1.0));
     if (clipX.w <= 0.0 || clipZ.w <= 0.0)
-        return 0.0;
-    float2 base     = toPixels(scene, anchorClip);
+        return float4(0.0);
     float2 perX     = (toPixels(scene, clipX) - base) / step;
     float2 perZ     = (toPixels(scene, clipZ) - base) / step;
     float det       = perX.x * perZ.y - perX.y * perZ.x;
     if (abs(det) <= 1e-6 * (dot(perX, perX) + dot(perZ, perZ)))
-        return 0.0;
+        return float4(0.0);
     float a         = (offset.x * perZ.y - offset.y * perZ.x) / det;
     float b         = (perX.x * offset.y - perX.y * offset.x) / det;
-    float4 ground   = mul(viewProjection, float4(anchor + axisX * a + axisZ * b, 1.0));
-    return ground.w > 0.0 ? ground.z / ground.w : 0.0;
+    return float4(anchor + axisX * a + axisZ * b, 1.0);
 }
 
 VectorVertex getVectorVertex(SceneData *scene, VectorData style, float4x4 world, VertexFull vert)
@@ -96,7 +176,7 @@ VectorVertex getVectorVertex(SceneData *scene, VectorData style, float4x4 world,
     float3x3 world3         = (float3x3)world;
     float3 anchor           = mul(world, float4(vert.pos, 1.0)).xyz;
     float3 up               = safeNormalize(mul(world3, vert.normal), float3(0.0, 1.0, 0.0));
-    float3 along            = safeNormalize(mul(world3, vert.tangent.xyz), float3(1.0, 0.0, 0.0));
+    float3 along            = safeNormalize(mul(world3, vert.tangent.xyz), getGroundAxis(up));
     uint kind               = uint(vert.uv[2].x + 0.5);
 
     VectorVertex output;
@@ -105,7 +185,10 @@ VectorVertex getVectorVertex(SceneData *scene, VectorData style, float4x4 world,
     output.edge             = float2(0.0);
     output.metric           = vert.uv[2].y;
     output.fade             = 1.0;
-    output.dash             = vert.uv[1].x;
+    output.dash             = 0.0;
+    output.kind             = float(kind);
+    // The world point whose depth the vertex takes: the anchor, the vertex itself, or the ground under it.
+    float3 depthPoint       = anchor;
     if (kind == VECTOR_KIND_LINE || kind == VECTOR_KIND_POINT)
     {
         float pixelWorld    = getPixelWorld(scene, output.clipPosition.w);
@@ -114,54 +197,60 @@ VectorVertex getVectorVertex(SceneData *scene, VectorData style, float4x4 world,
         // Never under a pixel: a thinner feature keeps one and fades by its coverage.
         output.fade         = saturate(widthPixels);
         float halfPixels    = 0.5 * max(widthPixels, 1.0);
-        if (!metres)
-            output.dash     = vert.uv[1].x / pixelWorld;
+        if (kind == VECTOR_KIND_LINE)
+            output.dash     = metres ? vert.uv[1].x : vert.uv[1].x / pixelWorld;
         if ((style.flags & VECTOR_GROUND) != 0)
         {
             // In the ground's plane: the half width in the world, and how many pixels it covers across the screen,
             // which is less where the ground is seen edge-on. Under half a pixel it widens to half a pixel and fades.
-            float3 across       = safeNormalize(cross(along, up), float3(0.0, 0.0, 1.0));
+            float3 across       = getAcross(along, up);
             float halfWorld     = halfPixels * pixelWorld;
             float4 side         = mul(viewProjection, float4(anchor + across * halfWorld, 1.0));
             float onScreen      = side.w > 0.0 ? length(toPixels(scene, side) - toPixels(scene, output.clipPosition)) : halfPixels;
             float widen         = onScreen < 0.5 ? min(0.5 / max(onScreen, 1e-3), 64.0) : 1.0;
             output.fade        *= saturate(onScreen / 0.5);
             output.edge         = vert.uv[0] * (1.0 + 1.0 / max(onScreen * widen, 0.5));
-            float3 offset       = (output.edge.x * along + output.edge.y * across) * halfWorld * widen;
-            output.clipPosition = mul(viewProjection, float4(anchor + offset, 1.0));
+            depthPoint          = anchor + (output.edge.x * along + output.edge.y * across) * halfWorld * widen;
+            output.clipPosition = mul(viewProjection, float4(depthPoint, 1.0));
         }
         else
         {
-            // Across the screen: a point's offset follows the screen's axes, a line's its direction on screen.
-            float2 screenAlong  = float2(1.0, 0.0);
-            float2 screenAcross = float2(0.0, 1.0);
+            // Across the screen: a point's offset follows the screen's axes, a line's its direction on screen, and a
+            // join's offset is turned to the screen's angles.
+            float2 base         = toPixels(scene, output.clipPosition);
+            float step          = 8.0 * pixelWorld;
+            float4 frame        = float4(1.0, 0.0, 0.0, 1.0);
+            float2 offset       = vert.uv[0];
             if (kind == VECTOR_KIND_LINE)
             {
-                float2 base     = toPixels(scene, output.clipPosition);
-                float step      = 8.0 * pixelWorld;
-                float4 ahead    = mul(viewProjection, float4(anchor + along * step, 1.0));
-                float2 delta    = toPixels(scene, ahead) - base;
-                if (ahead.w > 0.0 && dot(delta, delta) > 1e-8)
-                    screenAlong = normalize(delta);
-                screenAcross    = float2(-screenAlong.y, screenAlong.x);
-                // The side the vertex's y points to: the ground's across direction, seen on screen.
-                float4 side     = mul(viewProjection, float4(anchor + safeNormalize(cross(along, up), float3(0.0, 0.0, 1.0)) * step, 1.0));
-                if (side.w > 0.0 && dot(toPixels(scene, side) - base, screenAcross) < 0.0)
-                    screenAcross = -screenAcross;
+                frame           = getScreenFrame(scene, viewProjection, anchor, base, along, up, step);
+                if (vert.uv[1].y != 0.0)
+                    offset      = getScreenJoinOffset(scene, viewProjection, anchor, base, along, up, step, frame, offset, vert.uv[1].y);
             }
-            output.edge         = vert.uv[0] * (1.0 + 1.0 / halfPixels);
-            float2 offset       = (output.edge.x * screenAlong + output.edge.y * screenAcross) * halfPixels;
-            float depth         = output.clipPosition.z / max(output.clipPosition.w, 1e-6);
-            depth               = max(depth, getGroundDepth(scene, viewProjection, anchor, up, output.clipPosition, offset, pixelWorld));
-            output.clipPosition.xy += offset / (float2(scene->viewportWidth, scene->viewportHeight) * 0.5) * output.clipPosition.w;
-            output.clipPosition.z = depth * output.clipPosition.w;
+            output.edge         = offset * (1.0 + 1.0 / halfPixels);
+            float2 pixels       = (output.edge.x * frame.xy + output.edge.y * frame.zw) * halfPixels;
+            // Below the anchor on screen the ground is nearer: a corner takes the ground's depth under it when that is
+            // nearer, so a marker or a line facing the screen does not sink into the ground it stands on.
+            float4 ground       = getGroundPoint(scene, viewProjection, anchor, up, base, pixels, pixelWorld);
+            if (ground.w > 0.0 && getViewDepth(scene, ground.xyz) < getViewDepth(scene, anchor))
+                depthPoint      = ground.xyz;
+            output.clipPosition.xy += pixels / (float2(scene->viewportWidth, scene->viewportHeight) * 0.5) * getSafeW(scene, output.clipPosition.w);
         }
     }
-    // Reversed-Z: a larger depth is nearer. An overlay is at the near plane, so it passes every test.
+    // Reversed-Z: a larger depth is nearer. An overlay is at the near plane, so it passes every test. A tested feature
+    // takes the depth of its depth point moved toward the camera by VECTOR_DEPTH_BIAS of its distance, which holds for
+    // any projection: perspective, orthographic, a finite far plane.
     if ((style.flags & VECTOR_OVERLAY) != 0)
+    {
         output.clipPosition.z = output.clipPosition.w;
+    }
     else
-        output.clipPosition.z *= 1.0 + VECTOR_DEPTH_BIAS;
+    {
+        float distance      = max(abs(getViewDepth(scene, depthPoint)), 1e-3);
+        float4 biased       = mul(viewProjection, float4(depthPoint + scene->view[2].xyz * (VECTOR_DEPTH_BIAS * distance), 1.0));
+        if (biased.w != 0.0)
+            output.clipPosition.z = biased.z / biased.w * output.clipPosition.w;
+    }
     return output;
 }
 
@@ -188,7 +277,7 @@ float getVectorCoverage(float value, float limit)
 }
 
 // A fragment's color with its coverage in alpha: the outline band along the edge, the dashes, and the fade.
-float4 shadeVector(VectorData style, float4 vertexColor, float2 edge, float metric, float fade, float dash)
+float4 shadeVector(VectorData style, float4 vertexColor, float2 edge, float metric, float fade, float dash, uint kind)
 {
     float4 color        = style.color * vertexColor;
     if (uint(metric + 0.5) == VECTOR_METRIC_FILL)
@@ -201,7 +290,7 @@ float4 shadeVector(VectorData style, float4 vertexColor, float2 edge, float metr
         color           = lerp(color, style.outlineColor, 1.0 - getVectorCoverage(distance, inner));
     }
     float period        = style.dashLength + style.gapLength;
-    if (style.dashLength > 0.0 && style.gapLength > 0.0)
+    if (kind == VECTOR_KIND_LINE && style.dashLength > 0.0 && style.gapLength > 0.0)
     {
         float phase     = dash - floor(dash / period) * period;
         coverage       *= getVectorCoverage(abs(phase - 0.5 * style.dashLength), 0.5 * style.dashLength);

@@ -2,6 +2,7 @@
 
 #include "doctest/doctest.h"
 
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -70,7 +71,8 @@ TEST_CASE("a straight line is a quad of offsets across it, with its distance alo
         CHECK(vertex.uv[2].y == METRIC_ACROSS);
         CHECK(std::abs(vertex.uv[0].y) == 1.0f);
         CHECK(vertex.uv[0].x == 0.0f);
-        CHECK(vertex.tangent == glm::vec4(1.0f, 0.0f, 0.0f, 77.0f));
+        CHECK(glm::vec3(vertex.tangent) == glm::vec3(1.0f, 0.0f, 0.0f));
+        CHECK(std::bit_cast<uint32_t>(vertex.tangent.w) == 77u);
         CHECK(vertex.normal == glm::vec3(0.0f, 1.0f, 0.0f));
     }
     // Offsets from the origin, in floats; the distance along the line in metres.
@@ -78,6 +80,16 @@ TEST_CASE("a straight line is a quad of offsets across it, with its distance alo
     CHECK(geometry.vertices[2].pos == glm::vec3(10.0f, 0.0f, 0.0f));
     CHECK(geometry.vertices[0].uv[1].x == 0.0f);
     CHECK(geometry.vertices[3].uv[1].x == 10.0f);
+}
+
+TEST_CASE("a feature id keeps all its bits")
+{
+    const glm::dvec3 points[2] = {{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}};
+    const uint32_t ids[2] = {16777217u, 4294967295u};
+    rasm::VectorGeometry geometry;
+    rasm::addVectorPoints(geometry, glm::dvec3(0.0), points, 2, {}, ids);
+    CHECK(std::bit_cast<uint32_t>(geometry.vertices[0].tangent.w) == 16777217u);
+    CHECK(std::bit_cast<uint32_t>(geometry.vertices[4].tangent.w) == 4294967295u);
 }
 
 TEST_CASE("caps and joins: round ones are fans of unit offsets, a miter reaches both edges exactly")
@@ -226,7 +238,7 @@ TEST_CASE("points are quads of corner offsets, with an icon's corners when given
         CHECK(vertex.uv[2].x == KIND_POINT);
         CHECK(std::abs(vertex.uv[0].x) == 1.0f);
         CHECK(std::abs(vertex.uv[0].y) == 1.0f);
-        CHECK(vertex.tangent.w == static_cast<float>(i / 4));
+        CHECK(std::bit_cast<uint32_t>(vertex.tangent.w) == i / 4);
     }
     // The second point's top-right corner: (u1, v0) of its rect.
     CHECK(geometry.vertices[7].uv[1] == glm::vec2(1.0f, 0.5f));

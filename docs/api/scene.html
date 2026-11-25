@@ -721,7 +721,7 @@ const glm::dvec3 ground = rasm::getTerrainPosition(tile, {.unorm16 = samples.dat
     std::vector&lt;Vertex&gt;         vertices;
     std::vector&lt;uint32_t&gt;       indices;
 };</pre>
-  <div class="body"><p>What the add functions append to. Build it into a mesh with <a href="#buildVectorMesh"><code>buildVectorMesh</code></a>. The vertex layout is <code>shaders/lib/vector.slang</code>'s; the feature id of each vertex is in <code>tangent.w</code>.</p></div>
+  <div class="body"><p>What the add functions append to. Build it into a mesh with <a href="#buildVectorMesh"><code>buildVectorMesh</code></a>. The vertex layout is <code>shaders/lib/vector.slang</code>'s; the bits of each vertex's feature id are in <code>tangent.w</code> (read them with <code>std::bit_cast&lt;uint32_t&gt;</code>), exact for any 32-bit id.</p></div>
 </div>
 
 <div class="api" id="addVectorLines">

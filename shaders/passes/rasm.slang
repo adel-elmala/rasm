@@ -74,7 +74,7 @@ VSOutput getVertexOutput(InstanceData *instance, int vertexOffset, uint vertexID
         output.clipPosition         = feature.clipPosition;
         output.worldPosition        = feature.anchor;
         output.worldNormal          = float3(0.0, 1.0, 0.0);
-        output.worldTangent         = float4(feature.dash, 0.0, 0.0, 0.0);
+        output.worldTangent         = float4(feature.dash, feature.kind, 0.0, 0.0);
         output.color                = getVertexColor(pc.scene, instance->geometryIndex, vertexID);
         output.uv0                  = feature.edge;
         output.uv1                  = vert.uv[1];
@@ -283,9 +283,10 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     if (model->materialId == MaterialId.VECTOR)
     {
         VectorData style = model->vector;
-        float4 color = shadeVector(style, input.color, input.uv0, input.uv2.x, input.uv2.y, input.worldTangent.x);
+        uint kind = uint(input.worldTangent.y + 0.5);
+        float4 color = shadeVector(style, input.color, input.uv0, input.uv2.x, input.uv2.y, input.worldTangent.x, kind);
         uint icon = model->material.metallicRoughness.baseColorTextureIndex;
-        if ((style.flags & VECTOR_ICON) != 0 && icon != INVALID_TEXTURE_INDEX)
+        if (kind == VECTOR_KIND_POINT && (style.flags & VECTOR_ICON) != 0 && icon != INVALID_TEXTURE_INDEX)
             color *= sampleMaterial(gTextures[icon], input.uv1);
         return VECTOR_OUTPUT(toTarget(color, 1.0));
     }
