@@ -927,6 +927,7 @@ struct PointCloudChunkDesc
     const uint32_t*     colors      = nullptr;
     const float*        scalars     = nullptr;
     uint32_t            count       = 0;
+    float               spacing     = 0.0f;
 };</pre>
   <div class="body">
     <dl>
@@ -934,6 +935,7 @@ struct PointCloudChunkDesc
       <dt>colors</dt><dd>RGBA8 with RGB sRGB-encoded (<a href="#packVertexColor"><code>packVertexColor</code></a>), one per point, for <code>PointColorMode::COLOR</code>; the alpha is not read (points are opaque); null: none.</dd>
       <dt>scalars</dt><dd>A value per point (height, intensity, ...), for a colormap (<code>PointColorMode::SCALAR</code>); null: none. Stored as 16-bit steps of the chunk's range.</dd>
       <dt>count</dt><dd>1 to <code>MAX_POINT_CHUNK_POINTS</code>.</dd>
+      <dt>spacing</dt><dd>The distance between neighbouring points, in the chunk's units, which an <code>ADAPTIVE</code> size grows to. 0: measured from the points, as the cell size at which they take half as many cells as there are points (1.2 times the mean spacing of a random sample, 1.4 times a grid's step).</dd>
     </dl>
   </div>
 </div>
@@ -947,6 +949,111 @@ rasm::MeshBuild build = rasm::buildPointCloudChunk({.positions = points.data(), 
 // Later, on the renderer's thread:
 const rasm::EntityHandle chunk = renderer.createEntity("chunk", renderer.createMesh(std::move(build)), pointMaterial, rasm::Transform{tileCorner});
 renderer.addEntityToScene(scene, chunk);</code></pre>
+  </div>
+</div>
+
+<div class="api" id="PointChunkLod">
+  <pre class="sig">struct PointChunkLod
+{
+    float               drawn       = 1.0f;
+    float               finer[8]    = {};
+};</pre>
+  <div class="body">
+    <dl>
+      <dt>drawn</dt><dd>The share of the points its level of detail keeps that the chunk draws, 0 to 1: a prefix of a prefix, so a chunk fades in and out as an even sample. 0 draws nothing.</dd>
+      <dt>finer</dt><dd>Per octant of the entity's space (<var>x</var> ≥ 0 adds 1, <var>y</var> ≥ 0 adds 2, <var>z</var> ≥ 0 adds 4), the drawn share of a finer chunk over that octant, 0 to 1. An <code>ADAPTIVE</code> point there shrinks back toward the material's <code>size</code> by it, as the finer chunk fills the gaps it closed.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="setPointChunkLod">
+  <pre class="sig">void                        setPointChunkLod(EntityHandle entity, const PointChunkLod&amp; lod);</pre>
+  <div class="body"><p>Sets an entity's <code>PointChunkLod</code> (7 bits for <code>drawn</code>, 3 for each <code>finer</code>, in its instance row); an entity starts with all its points and no finer chunk. A value that did not change writes nothing; one that did rewrites the entity's rows, which the next frame draws. An octree's streamer sets it each frame for the nodes it fades (<a href="../guides/point-octree.html#fades">Fades</a>).</p></div>
+</div>
+
+<h3 id="point-octree">Octrees of points</h3>
+
+<p>A point cloud larger than GPU memory streams as an octree (<a href="../guides/point-octree.html">Streaming point clouds</a>): each node a sample of its cube, its children the detail it lacks, each node a chunk on an entity at its cube's centre, and a <a href="engine.html#TileStreamer"><code>TileStreamer</code></a> tile with <code>TileRefine::ADD</code>. <code>rasm/pointCloudOctree.h</code>.</p>
+
+<div class="api" id="PointCloudOctreeDesc">
+  <pre class="sig">struct PointCloudOctreeDesc
+{
+    const glm::dvec3*   positions       = nullptr;
+    const uint32_t*     colors          = nullptr;
+    const float*        scalars         = nullptr;
+    uint32_t            count           = 0;
+    uint32_t            cells           = 128;
+    uint32_t            maxNodePoints   = 16384;
+};</pre>
+  <div class="body">
+    <dl>
+      <dt>positions</dt><dd>World positions in doubles: ECEF, a projection's metres, anything.</dd>
+      <dt>colors, scalars</dt><dd>As <a href="#PointCloudChunkDesc"><code>PointCloudChunkDesc</code></a>'s; null: none.</dd>
+      <dt>cells</dt><dd>A node keeps the point nearest the centre of each cell its points take, of a <code>cells</code>³ grid over its cube (a power of two, 2 or more), and passes the others down. The grid is coarser for a node that would keep more than <code>maxNodePoints</code>.</dd>
+      <dt>maxNodePoints</dt><dd>A node with no more points left is a leaf that keeps them all; 1 to <code>MAX_POINT_CHUNK_POINTS</code>.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="PointCloudNode">
+  <pre class="sig">constexpr uint32_t  POINT_NODE_NONE         = UINT32_MAX;
+
+struct PointCloudNode
+{
+    glm::dvec3          center          = glm::dvec3(0.0);
+    double              halfSize        = 0.0;
+    glm::dvec3          boundsCenter    = glm::dvec3(0.0);
+    double              boundsRadius    = 0.0;
+    float               spacing         = 0.0f;
+    float               geometricError  = 0.0f;
+    uint32_t            parent          = POINT_NODE_NONE;
+    uint32_t            children[8]     = {POINT_NODE_NONE, POINT_NODE_NONE, POINT_NODE_NONE, POINT_NODE_NONE, POINT_NODE_NONE, POINT_NODE_NONE, POINT_NODE_NONE, POINT_NODE_NONE};
+    uint32_t            firstPoint      = 0;
+    uint32_t            pointCount      = 0;
+    uint32_t            level           = 0;
+};</pre>
+  <div class="body">
+    <dl>
+      <dt>center, halfSize</dt><dd>Its cube. Its points are offsets from <code>center</code>, where its entity goes, so its octants are those of <a href="#PointChunkLod"><code>PointChunkLod::finer</code></a>.</dd>
+      <dt>boundsCenter, boundsRadius</dt><dd>A sphere around its points and its children's, inside its parent's: its tile's <code>TileDesc::center</code> and <code>radius</code>.</dd>
+      <dt>spacing</dt><dd>Measured as a chunk's is, and never more than its parent's: a few points at the data's edge are no surface to grow over.</dd>
+      <dt>geometricError</dt><dd>Its spacing, 0 for a leaf: its tile's <code>TileDesc::geometricError</code>, so its children are wanted while its spacing on screen passes the cut's error.</dd>
+      <dt>children</dt><dd>By octant (<var>x</var> ≥ centre adds 1, <var>y</var> 2, <var>z</var> 4); <code>POINT_NODE_NONE</code> where the node kept every point.</dd>
+      <dt>firstPoint, pointCount</dt><dd>Its points in the octree's arrays: up to <code>maxNodePoints</code> for a node with children, up to <code>MAX_POINT_CHUNK_POINTS</code> for a leaf.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="PointCloudOctree">
+  <pre class="sig">struct PointCloudOctree
+{
+    std::vector&lt;PointCloudNode&gt;     nodes;
+    std::vector&lt;glm::vec3&gt;          positions;
+    std::vector&lt;uint32_t&gt;           colors;
+    std::vector&lt;float&gt;              scalars;
+    std::vector&lt;uint32_t&gt;           indices;
+};</pre>
+  <div class="body"><p>The root is <code>nodes[0]</code>, each node before its children. The point arrays hold the nodes' points one node after the other (<code>colors</code> and <code>scalars</code> empty without them); <code>indices</code> gives each point's index in the desc, so a pick's <code>PickHit::feature</code> on a node's entity is the desc's point <code>indices[firstPoint + feature]</code>. About 24 B a point in CPU memory, 28 with colors.</p></div>
+</div>
+
+<div class="api" id="buildPointCloudOctree">
+  <pre class="sig">bool                    buildPointCloudOctree(const PointCloudOctreeDesc&amp; desc, PointCloudOctree&amp; octree);
+PointCloudChunkDesc     getPointCloudNodeChunk(const PointCloudOctree&amp; octree, uint32_t node);</pre>
+  <div class="body">
+    <p>Builds the octree on any thread (6 M points a second in Release on one thread): the points sorted along a 63-bit Morton curve of the cube around them, then each node sampled from its run of that order. False, with an error, for no points, a point that is not finite or a bad grid. Points beyond <code>MAX_POINT_CHUNK_POINTS</code> at one place are left out with a warning. <code>getPointCloudNodeChunk</code> is a node's chunk desc, its arrays the octree's and its spacing the node's, for <a href="#buildPointCloudChunk"><code>buildPointCloudChunk</code></a> on a worker thread.</p>
+    <pre><code>rasm::PointCloudOctree octree;
+rasm::buildPointCloudOctree({.positions = cloud.positions.data(), .colors = cloud.colors.data(), .count = static_cast&lt;uint32_t&gt;(cloud.positions.size())}, octree);
+for (uint32_t n = 0; n &lt; octree.nodes.size(); ++n)
+{
+    const rasm::PointCloudNode &amp;node = octree.nodes[n];
+    tiles[n] = streamer.createTile({.parent = node.parent == rasm::POINT_NODE_NONE ? rasm::TileHandle{} : tiles[node.parent],
+                                    .center = node.boundsCenter,
+                                    .radius = node.boundsRadius,
+                                    .geometricError = node.geometricError,
+                                    .refine = rasm::TileRefine::ADD});
+}
+// A tile handed out: its chunk on a worker thread, then its mesh and entity on the renderer's thread.
+rasm::MeshBuild build = rasm::buildPointCloudChunk(rasm::getPointCloudNodeChunk(octree, n));</code></pre>
   </div>
 </div>
 

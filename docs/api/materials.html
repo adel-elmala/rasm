@@ -310,6 +310,12 @@ enum class VectorDepth : uint32_t { TESTED, OVERLAY };</pre>
     SPHERE,
 };
 
+enum class PointSizeMode : uint32_t
+{
+    FIXED,
+    ADAPTIVE,
+};
+
 enum class PointColorMode : uint32_t
 {
     COLOR,
@@ -326,6 +332,8 @@ struct PointMaterial
     TextureHandle  colormap;
     ScalarRange    range        = {};
     float          density      = 2.0f;
+    PointSizeMode  sizeMode     = PointSizeMode::FIXED;
+    float          maxSize      = 8.0f;
 };</pre>
   <div class="body">
     <p>The style of point cloud chunks (<a href="../guides/point-clouds.html">Point clouds</a>). Each point is drawn as one triangle cut to its shape, unlit.</p>
@@ -336,6 +344,7 @@ struct PointMaterial
       <dt>colorMode</dt><dd><code>COLOR</code>: the chunk's own colors (white without them). <code>SCALAR</code>: each point's value through <code>range</code> and <code>colormap</code> (<code>color</code> alone without either).</dd>
       <dt>colormap, range</dt><dd>A colormap from <a href="scene.html#createColormap"><code>createColormap</code></a>, and the values it spans (<a href="scene.html#ScalarRange"><code>ScalarRange</code></a>).</dd>
       <dt>density</dt><dd>Level of detail: a chunk draws the first <code>density</code> × <var>D</var>² / <var>a</var> points of its order (<var>D</var> its sphere's diameter on screen, <var>a</var> a point's area in pixels, π/4 of the square for a round point). 1 leaves about 0.3 % of a flat surface empty, 2 none; 0 draws every point.</dd>
+      <dt>sizeMode, maxSize</dt><dd><code>FIXED</code>: every point is <code>size</code>. <code>ADAPTIVE</code>: a point grows, up to <code>maxSize</code> pixels, where its chunk's points no longer cover the ground <code>density</code> times at <code>size</code>: from that spacing on screen on, and faster, so near the camera they cover it about 4 times and a sparse sample still closes. The spacing is the chunk's (<a href="scene.html#PointCloudChunkDesc"><code>PointCloudChunkDesc::spacing</code></a>); a finer chunk over a point takes it back to <code>size</code> (<a href="scene.html#PointChunkLod"><code>PointChunkLod</code></a>). Points that already cover keep <code>size</code>, so far chunks stay on the compute path; a near chunk whose points grow past 2 pixels is drawn by triangles (<a href="../guides/point-octree.html#adaptive">Adaptive point size</a>).</dd>
     </dl>
     <pre><code>const rasm::MaterialHandle material = engine.createMaterial(rasm::MaterialType::POINTS);
 rasm::Material values = engine.getMaterial(material);

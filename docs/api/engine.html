@@ -85,6 +85,7 @@
   <tr><td><a href="scene.html#createMesh"><code>createMesh</code></a></td><td>mesh from your vertices</td><td>scene.html</td></tr>
   <tr><td><a href="scene.html#buildMesh"><code>createMesh(MeshBuild&amp;&amp;)</code></a></td><td>upload a mesh built on another thread</td><td>scene.html</td></tr>
   <tr><td><a href="#loadFont"><code>loadFont</code></a> / <a href="scene.html#createFont"><code>createFont</code></a></td><td>a font's distance atlas, for labels</td><td>this page, scene.html</td></tr>
+  <tr><td><a href="#loadPointCloud"><code>loadPointCloud</code></a></td><td>a LAS or LAZ file's points in doubles, for an octree</td><td>this page</td></tr>
   <tr><td><a href="scene.html#createColormap"><code>createColormap</code></a></td><td>a colormap for point clouds' values, from colors or a preset</td><td>scene.html</td></tr>
   <tr><td><a href="scene.html#createTerrainTile"><code>createTerrainTile</code></a></td><td>a terrain tile from its heights and image</td><td>scene.html</td></tr>
   <tr><td><a href="scene.html#getTerrainMesh"><code>getTerrainMesh</code></a></td><td>the grid terrain tiles share</td><td>scene.html</td></tr>
@@ -882,6 +883,7 @@ MeshHandle        loadGLTF(const std::string&amp; path);
 TextureHandle     loadTexture(const std::string&amp; path, Format format = Format::R8G8B8A8_SRGB);
 EnvironmentHandle loadEnvironment(const std::string&amp; path);
 bool              loadFont(const std::string&amp; path, FontAtlas&amp; atlas, const FontLoadOptions&amp; options = {});
+bool              loadPointCloud(const std::string&amp; path, PointCloudData&amp; cloud, const PointCloudLoadOptions&amp; options = {});
 void              waitForLoads();
 LoadStats         getLoadStats() const;
 std::string       resolveAssetPath(const std::string&amp; path) const;
@@ -918,6 +920,56 @@ struct FontLoadOptions
 };</pre>
   <div class="body">
     <p>A font file's bytes into a <a href="scene.html#FontAtlas"><code>FontAtlas</code></a>, with stb_truetype: each codepoint's signed distance glyph, its metrics, and the kerning of every pair the atlas holds (the font's <samp>kern</samp> table or GPOS pairs). Any thread. <code>emSize</code> is the atlas's pixels per em (8 to 256): larger is sharper for very large text and a larger atlas. <code>distanceRange</code> is the atlas pixels the stored distance spans (1 to <code>emSize</code>): a halo reaches half of it, scaled to the text's size. <code>codepoints</code>: the characters to hold; null gives ASCII and Latin-1 (32 to 126, 160 to 255). The fallback <samp>?</samp> is always added. The atlas is 512 texels wide (1024 past 64 texels per em), packed in rows, and twice as wide while a glyph or the rows do not fit; past 4096 × 4096 the call fails. Kerning is looked up for every pair, so thousands of codepoints take seconds. stb_truetype trusts the font's tables: load only fonts you trust (<code>B34</code>). In <code>rasm::rasm</code>; a <code>rasm::renderer</code> program brings its own atlas.</p>
+  </div>
+</div>
+
+<div class="api" id="loadPointCloud">
+  <pre class="sig">bool                        loadPointCloud(const std::string&amp; path, PointCloudData&amp; cloud, const PointCloudLoadOptions&amp; options = {});</pre>
+  <div class="body">
+    <p>Reads a LAS file (1.0 to 1.4, point formats 0 to 10) with RASM's own reader, or a LAZ file through LASzip (Apache-2.0), on the calling thread, any thread: about 48 M points a second for an uncompressed file in Release. The positions are the file's integers times its scale plus its offset, in doubles, so ECEF and projected coordinates keep their millimetres. Colors (formats 2, 3, 5, 7, 8, 10) become RGBA8: their high byte, or the value itself when no channel passes 255 (files that store 8-bit colors). The coordinate system is the OGC WKT of the <samp>LASF_Projection</samp> records, when there is one. False, with an error, for a file that cannot be read, is no LAS file, has an unknown format or ends early. Build an octree of it with <a href="scene.html#buildPointCloudOctree"><code>buildPointCloudOctree</code></a>. <code>AssetLoader</code> and <code>Engine</code>; in <code>rasm::rasm</code>.</p>
+    <pre><code>rasm::PointCloudData cloud;
+if (!engine.loadPointCloud("scans/tile.laz", cloud, {.scalar = rasm::PointCloudScalar::CLASSIFICATION}))
+    return 1;</code></pre>
+  </div>
+</div>
+
+<div class="api" id="PointCloudData">
+  <pre class="sig">enum class PointCloudScalar : uint32_t
+{
+    NONE,
+    INTENSITY,
+    CLASSIFICATION,
+    ELEVATION,
+    GPS_TIME,
+    RETURN_NUMBER,
+};
+
+struct PointCloudLoadOptions
+{
+    PointCloudScalar            scalar          = PointCloudScalar::INTENSITY;
+    bool                        zUpToYUp        = false;
+};
+
+struct PointCloudData
+{
+    std::vector&lt;glm::dvec3&gt;     positions;
+    std::vector&lt;uint32_t&gt;       colors;
+    std::vector&lt;float&gt;          scalars;
+    glm::dvec3                  boundsMin       = glm::dvec3(0.0);
+    glm::dvec3                  boundsMax       = glm::dvec3(0.0);
+    std::string                 coordinateSystem;
+    uint32_t                    pointFormat     = 0;
+    uint32_t                    versionMinor    = 0;
+    bool                        compressed      = false;
+};</pre>
+  <div class="body">
+    <dl>
+      <dt>scalar</dt><dd>The value <code>scalars</code> holds for each point, for a colormap: <code>ELEVATION</code> is its height (<var>z</var>, or <var>y</var> with <code>zUpToYUp</code>); <code>NONE</code> leaves <code>scalars</code> empty.</dd>
+      <dt>zUpToYUp</dt><dd>(<var>x</var>, <var>y</var>, <var>z</var>) to (<var>x</var>, <var>z</var>, −<var>y</var>): a projected file's east, north and up to RASM's east, up and south. Leave it off for ECEF.</dd>
+      <dt>colors</dt><dd>Empty for a format without color.</dd>
+      <dt>boundsMin, boundsMax</dt><dd>The header's, turned like the points.</dd>
+      <dt>pointFormat, versionMinor, compressed</dt><dd>The file's point format (0 to 10), its LAS 1.<var>x</var> version, and LAZ.</dd>
+    </dl>
   </div>
 </div>
 

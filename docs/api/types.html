@@ -186,6 +186,7 @@ public:
     uint64_t     instances               = 0;        // instance rows, of maxInstances
     uint64_t     animationPoolBytes      = 0;        // of animationPoolBytes
     uint32_t     releasesWaiting         = 0;        // destroyed objects the GPU may still use
+    uint64_t     points                  = 0;        // 8 B units of geometryPoolPoints
 };</pre>
   <div class="body">
     <p>What <a href="engine.html#getPoolStats"><code>getPoolStats</code></a> returns: the live objects, and the used part of each engine-wide pool. A destroyed object's share comes back once the GPU has finished the frames that may use it, so the numbers of a streaming application go up and down but do not grow. Compare them with the <code>EngineConfig</code> sizes to budget.</p>
