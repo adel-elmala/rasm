@@ -95,13 +95,14 @@
 <h2 id="create"><span class="n">1</span>Create a material</h2>
 
 <div class="api" id="MaterialType">
-  <pre class="sig">enum class MaterialType { PBR, UNLIT, TERRAIN, VECTOR, COUNT };</pre>
+  <pre class="sig">enum class MaterialType { PBR, UNLIT, TERRAIN, VECTOR, POINTS, COUNT };</pre>
   <div class="body">
     <dl>
       <dt>PBR</dt><dd>Lit by the scene's lights (metallic-roughness model). Reads the texture slots listed in <a href="#PbrSlot">the slot table</a>.</dd>
       <dt>UNLIT</dt><dd>Only the base color (texture × factor), not lit. It goes through the tone map like every other color (<a href="../guides/tone-mapping.html">Tone mapping</a>).</dd>
       <dt>TERRAIN</dt><dd>A terrain tile: the shared grid lifted by <code>Material::terrain</code>'s heights, then lit as <code>PBR</code> with the albedo (the imagery) as base color. Made by <a href="scene.html#createTerrainTile"><code>createTerrainTile</code></a> (<a href="../guides/terrain.html">Terrain from height maps</a>).</dd>
       <dt>VECTOR</dt><dd>Lines, polygons and points (<a href="scene.html#vectors">vector features</a>), styled by <code>Material::vector</code>, unlit. It is always <code>BLEND</code> and double-sided, whatever <code>updateMaterial</code> sets: its smooth edges are blended, in the Transparent pass, in its <code>drawOrder</code> (<a href="../guides/vector-rendering.html">Vector lines, polygons and points</a>).</dd>
+      <dt>POINTS</dt><dd>A point cloud chunk (<a href="scene.html#point-clouds">point clouds</a>), styled by <code>Material::points</code>, unlit. A chunk is drawn only with a <code>POINTS</code> material, by a run of its own after the opaque and cut-out draws; on a triangle mesh it shades as <code>PBR</code>. <code>alphaMode</code> and <code>doubleSided</code> do not apply (<a href="../guides/point-clouds.html">Point clouds</a>).</dd>
       <dt>COUNT</dt><dd>Not a type; it counts the values.</dd>
     </dl>
   </div>
@@ -178,6 +179,7 @@ rasm::MaterialHandle brick = engine.createMaterial(rasm::MaterialType::PBR, text
     float            alphaCutoff  = 0.5f;
     TerrainMaterial  terrain      = {};
     VectorMaterial   vector       = {};
+    PointMaterial    points       = {};
 };</pre>
   <div class="body">
     <dl>
@@ -192,6 +194,7 @@ rasm::MaterialHandle brick = engine.createMaterial(rasm::MaterialType::PBR, text
       <dt>alphaMode</dt><dd>Solid, cut-out or see-through (<a href="#AlphaMode"><code>AlphaMode</code></a>). Default <code>NONE</code>: solid.</dd>
       <dt>alphaCutoff</dt><dd>For <code>MASK</code>: no pixel where alpha is below it. Default 0.5.</dd>
       <dt>vector</dt><dd>For <code>VECTOR</code> only: the style (<a href="#VectorMaterial"><code>VectorMaterial</code></a>). <code>textures[ALBEDO]</code> is the icon atlas of points built with icons.</dd>
+      <dt>points</dt><dd>For <code>POINTS</code> only: the points' style (<a href="#PointMaterial"><code>PointMaterial</code></a>).</dd>
       <dt>terrain</dt><dd>For <code>TERRAIN</code> only: the tile's heights (<a href="#TerrainMaterial"><code>TerrainMaterial</code></a>). The imagery is <code>textures[ALBEDO]</code>, and its part of the image <code>textureTransforms[ALBEDO]</code>.</dd>
     </dl>
     <p>The flat <code>params</code> array is easy to index wrongly; <code>docs/code_review.md</code> plans a typed struct (<code>C9</code>).</p>
@@ -296,6 +299,48 @@ enum class VectorDepth : uint32_t { TESTED, OVERLAY };</pre>
 };</pre>
   <div class="body">
     <p>Offsets into <code>params</code>. <code>MAX_PARAM_SLOTS</code> = 12 (<code>PbrParam::COUNT</code>). Roughness is clamped to 0.045 – 1 and metallic to 0 – 1 in the shader. The albedo's fourth float is its alpha (glTF's base color alpha). <code>EMISSIVE_STRENGTH</code> multiplies the emissive factor, so a glow can pass 1 (glTF <code>KHR_materials_emissive_strength</code>).</p>
+  </div>
+</div>
+
+<div class="api" id="PointMaterial">
+  <pre class="sig">enum class PointShape : uint32_t
+{
+    SQUARE,
+    ROUND,
+    SPHERE,
+};
+
+enum class PointColorMode : uint32_t
+{
+    COLOR,
+    SCALAR,
+};
+
+struct PointMaterial
+{
+    glm::vec4      color        = glm::vec4(1.0f);
+    float          size         = 2.0f;
+    VectorUnit     sizeUnit     = VectorUnit::PIXELS;
+    PointShape     shape        = PointShape::ROUND;
+    PointColorMode colorMode    = PointColorMode::COLOR;
+    TextureHandle  colormap;
+    ScalarRange    range        = {};
+    float          density      = 2.0f;
+};</pre>
+  <div class="body">
+    <p>The style of point cloud chunks (<a href="../guides/point-clouds.html">Point clouds</a>). Each point is drawn as one triangle cut to its shape, unlit.</p>
+    <dl>
+      <dt>color</dt><dd>Linear RGB and alpha, times the point's color or its colormap color. A point whose color has alpha 0 is not drawn.</dd>
+      <dt>size, sizeUnit</dt><dd>The diameter in pixels (the same at every distance) or metres; at least one pixel.</dd>
+      <dt>shape</dt><dd><code>SQUARE</code>; <code>ROUND</code>, a disc, smooth-edged with MSAA; <code>SPHERE</code>, a disc that writes a sphere's depth, so points meet as balls would. Points under 3 pixels are drawn square.</dd>
+      <dt>colorMode</dt><dd><code>COLOR</code>: the chunk's own colors (white without them). <code>SCALAR</code>: each point's value through <code>range</code> and <code>colormap</code> (<code>color</code> alone without either).</dd>
+      <dt>colormap, range</dt><dd>A colormap from <a href="scene.html#createColormap"><code>createColormap</code></a>, and the values it spans (<a href="scene.html#ScalarRange"><code>ScalarRange</code></a>).</dd>
+      <dt>density</dt><dd>Level of detail: a chunk draws the first <code>density</code> × <var>D</var>² / <var>a</var> points of its order (<var>D</var> its sphere's diameter on screen, <var>a</var> a point's area in pixels, π/4 of the square for a round point). 1 leaves about 0.3 % of a flat surface empty, 2 none; 0 draws every point.</dd>
+    </dl>
+    <pre><code>const rasm::MaterialHandle material = engine.createMaterial(rasm::MaterialType::POINTS);
+rasm::Material values = engine.getMaterial(material);
+values.points = {.size = 2.0f, .colorMode = rasm::PointColorMode::SCALAR, .colormap = engine.createColormap(rasm::ColormapPreset::TURBO), .range = {.min = -20.0f, .max = 50.0f}};
+engine.updateMaterial(material, values);</code></pre>
   </div>
 </div>
 
