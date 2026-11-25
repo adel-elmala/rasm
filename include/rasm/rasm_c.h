@@ -1318,8 +1318,8 @@ RASM_C_API rasm_result      RASM_CALL rasm_vector_add_labels(rasm_vector_geometr
  * application's own graph) what is under desc->rect of its pixels, as that frame drew it: the pixels' centres, no TAA
  * jitter, one sample per pixel. The next frame's end draws it, and rasm_is_pick_ready says when its answer is in,
  * without waiting. rasm_take_pick writes up to capacity hits, nearest the rect's centre first, into an array whose
- * elements have the size of the first (set hits[0].size, or rasm_pick_hit_init each); hit_count gets how many there
- * are. A hit names the entity the frame drew, which may be destroyed since: rasm_is_entity_alive tells.
+ * elements have the size of the first (set hits[0].size, with rasm_pick_hit_init; the others get it); hit_count gets
+ * how many there are. A hit names the entity the frame drew, which may be destroyed since: rasm_is_entity_alive tells.
  * rasm_get_view_pixel turns a point of a window (a mouse position) into a pixel of the window view at rect. */
 RASM_C_API rasm_result      RASM_CALL rasm_pick_desc_init(rasm_pick_desc* desc, uint32_t size);
 RASM_C_API rasm_result      RASM_CALL rasm_pick_hit_init(rasm_pick_hit* hit, uint32_t size);

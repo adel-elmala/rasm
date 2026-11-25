@@ -130,7 +130,9 @@ try
             return RASM_ERROR_INVALID_ARGUMENT;
         }
     }
+    // A pick has at most one hit per pixel of its rect, so a larger capacity ("all of them") needs no more room.
     constexpr uint32_t STACK_HITS = 64;
+    capacity = std::min(capacity, MAX_PICK_SIZE * MAX_PICK_SIZE);
     PickHit onStack[STACK_HITS];
     std::vector<PickHit> onHeap(capacity > STACK_HITS ? capacity : 0);
     PickHit *converted = capacity > STACK_HITS ? onHeap.data() : onStack;
@@ -141,10 +143,14 @@ try
         *hit_count = taken ? count : 0;
     if (!taken)
         return errors.result() == RASM_OK ? RASM_ERROR_FAILED : errors.result();
+    // Every element has the size of the first (stride), whatever its own size field holds: each gets the fields that
+    // size reaches, and its size set to it.
     for (uint32_t i = 0; i < std::min(capacity, count); ++i)
     {
         const rasm_pick_hit value = toC(converted[i]);
-        c::writeSized(reinterpret_cast<uint8_t *>(hits) + static_cast<size_t>(i) * stride, c::PICK_HIT_SIZE_1_7, &value, sizeof(value), __func__, "hit");
+        auto *element = reinterpret_cast<uint8_t *>(hits) + static_cast<size_t>(i) * stride;
+        std::memcpy(element, &stride, sizeof(stride));
+        std::memcpy(element + sizeof(uint32_t), reinterpret_cast<const uint8_t *>(&value) + sizeof(uint32_t), std::min<size_t>(stride, sizeof(value)) - sizeof(uint32_t));
     }
     return RASM_OK;
 }

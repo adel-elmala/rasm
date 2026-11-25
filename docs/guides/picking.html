@@ -273,7 +273,7 @@
       <text x="90" y="128" class="mid small">alpha 0.3</text>
     </svg>
     <h4>See-through</h4>
-    <p>No blending in an id. A see-through surface is picked where its alpha reaches a threshold: an editor sets it low to select glass, a game high to aim through it.</p>
+    <p>No blending in an id. A see-through surface is picked where its alpha reaches a threshold: an editor sets it low to select glass, a game high to aim through it. Drawn in the image's blend order without writing depth, the one shown on top writes last.</p>
   </div>
   <div class="vcard">
     <svg viewBox="0 0 240 130" role="img" aria-label="One pixel with four MSAA samples on an edge, and the single pick sample at its centre.">
@@ -358,7 +358,7 @@
   <tr><td>Two integer texels</td><td><code>R32G32B32A32_UINT</code> ids (instance row + 1, feature id, <code>PICK_HIT_*</code> flags, the material row) and positions (render-space float bits, <code>packPickNormal</code>), with a <code>D32_SFLOAT</code> depth.</td></tr>
   <tr><td>Relative to the camera</td><td>The view's render space (<a href="large-world-precision.html">Large worlds</a>); <code>toWorldPosition</code> with the view's origin of that frame. A vector feature writes its own point under the pixel without its depth bias, so an overlay or a label gives the ground under it.</td></tr>
   <tr><td>Ids that outlive the frame</td><td>The GPU writes the instance row. <code>InstanceOwners</code> keeps, per frame slot, which entity's sub-mesh each row holds as that slot's table does; <code>readPicks</code> maps the rows before the slot's next sync, so a destroyed entity's row reused at once still names the old <code>EntityHandle</code>, which <code>Renderer::isAlive</code> then calls dead.</td></tr>
-  <tr><td>See-through and cut-outs</td><td><code>MASK</code> cuts at the material's cutoff; <code>BLEND</code> meshes and every vector feature (lines, points, polygons, labels) are picked where their alpha as drawn reaches <code>PickDesc::minAlpha</code> (0.5 by default, a line's drawn edge). Overlays stay on top, as on screen.</td></tr>
+  <tr><td>See-through and cut-outs</td><td><code>MASK</code> cuts at the material's cutoff; <code>BLEND</code> meshes and every vector feature (lines, points, polygons, labels) are picked where their alpha as drawn reaches <code>PickDesc::minAlpha</code> (0.5 by default, a line's drawn edge; 1/255 steps, rounded down). The blend run is sorted as the view sorts it (draw order, then back to front: <code>recordBlendSort</code> on the pick's SceneData) and drawn last without writing depth, so the feature the view shows on top writes the pixel last. Overlays stay on top, as on screen.</td></tr>
   <tr><td>Kinds to look through</td><td><code>PICK_SKIP_MESHES</code>, <code>PICK_SKIP_BLEND</code>, <code>PICK_SKIP_TERRAIN</code>, <code>PICK_SKIP_VECTORS</code>, <code>PICK_SKIP_LABELS</code>, <code>PICK_SKIP_OVERLAYS</code>: their triangles collapse in the vertex stage.</td></tr>
   <tr><td>A rect, grouped</td><td><code>groupPickSamples</code>: a <code>PickHit</code> per (row, feature) with its pixel count and its pixel nearest the centre, then nearest the camera.</td></tr>
   <tr><td>No allocation, no stall</td><td>Requests, their hit vectors and the scratch keep their capacity, so a hover pick every frame allocates nothing (the image tests count it). <code>takePick</code> waits only when called before the frame is done.</td></tr>

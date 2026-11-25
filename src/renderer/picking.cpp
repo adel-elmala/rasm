@@ -3,6 +3,7 @@
 #include "rasm/renderSpace.h"
 #include "core/utils.h"
 #include "platform/paths.h"
+#include "renderer/blendSort.h"
 #include "renderer/geometryPool.h"
 #include "renderer/gpuScene.h"
 #include "renderer/viewGraph.h"
@@ -20,13 +21,17 @@ namespace rasm
     namespace
     {
         // Byte offsets in a slot's culling buffer: cull.slang's visible draws, its slot per draw and count per group,
-        // the draw counts per run, then the cull stats it adds to, which nothing reads.
+        // the draw counts per run, the cull stats it adds to, which nothing reads, then the blend sort's keys and the
+        // draws it copies aside (sort.slang).
         struct PickCullLayout
         {
             uint64_t cullSlots = 0;
             uint64_t groupCounts = 0;
             uint64_t drawCounts = 0;
             uint64_t stats = 0;
+            uint64_t sortKeys = 0;
+            uint64_t sortDraws = 0;
+            uint32_t sortCapacity = 0;
             uint64_t size = 0;
         };
     }
@@ -45,7 +50,10 @@ namespace rasm
             layout.groupCounts = layout.cullSlots + static_cast<uint64_t>(capacity) * sizeof(uint32_t);
             layout.drawCounts = layout.groupCounts + groups * sizeof(uint32_t);
             layout.stats = layout.drawCounts + gfx::MAX_DRAW_RUNS * sizeof(uint32_t);
-            layout.size = layout.stats + CULL_STATS_WORDS * sizeof(uint32_t);
+            layout.sortKeys = layout.stats + CULL_STATS_WORDS * sizeof(uint32_t);
+            layout.sortCapacity = getBlendSortCapacity(capacity);
+            layout.sortDraws = layout.sortKeys + static_cast<uint64_t>(layout.sortCapacity) * 2 * sizeof(uint32_t);
+            layout.size = layout.sortDraws + static_cast<uint64_t>(layout.sortCapacity) * sizeof(gfx::DrawInfo);
             return layout;
         }
 
@@ -124,7 +132,8 @@ namespace rasm
     uint32_t getPickArgument(const PickDesc &desc)
     {
         const float alpha = std::isfinite(desc.minAlpha) ? std::clamp(desc.minAlpha, 0.0f, 1.0f) : 0.5f;
-        return (desc.skip & PICK_SKIP_ALL) | static_cast<uint32_t>(std::lround(alpha * 255.0f)) << 8;
+        // Rounded down, so a surface whose alpha is minAlpha is picked.
+        return (desc.skip & PICK_SKIP_ALL) | static_cast<uint32_t>(std::floor(alpha * 255.0f)) << 8;
     }
 
     // The octahedral code of rasm.slang's packPickNormal, back to a unit vector.
@@ -347,7 +356,8 @@ namespace rasm
         if (chosenCount == 0)
             return;
 
-        // The pick pipelines: rasm.slang's vertex stage and pickMain, per alpha mode, made on the first pick (P31).
+        // The pick pipelines: rasm.slang's vertex stage and pickMain, per alpha mode, made on the first pick (P31). The BLEND one
+        // tests depth but does not write it: its draws, sorted, write the ids in the order the view blends them.
         const char *alphaDefines[3] = {"", "#define RASM_ALPHA_MASK 1\n", "#define RASM_ALPHA_BLEND 1\n"};
         const char *names[3] = {"rasmPick", "rasmPickMask", "rasmPickBlend"};
         const Format formats[MAX_COLOR_ATTACHMENTS] = {PICK_FORMAT, PICK_FORMAT};
@@ -359,7 +369,7 @@ namespace rasm
             if (source.empty())
                 source = readFile(pathFromUtf8(config.shaderDir) / "passes/rasm.slang");
             picks->pipelines[i] = createGraphicsPipeline(names[i], std::string("#define RASM_PICK 1\n") + alphaDefines[i] + "#line 1\n" + source, formats, DEPTH_FORMAT, "vertMain", "pickMain",
-                                                         BlendMode::NONE, true);
+                                                         BlendMode::NONE, i != 2);
         }
         const bool pipelines = picks->pipelines[0].isValid() && picks->pipelines[1].isValid() && picks->pipelines[2].isValid();
 
@@ -449,10 +459,14 @@ namespace rasm
             sceneData.coneRuns = 0;
             sceneData.meshletDrawsPtr = 0;
             sceneData.groupMeshletsPtr = 0;
-            sceneData.sortKeysPtr = 0;
-            sceneData.sortDrawsPtr = 0;
-            sceneData.sortCapacity = 0;
-            sceneData.blendRun = gfx::MAX_DRAW_RUNS;
+            // The blend run is sorted as the view sorted it (its draw order first, then back to front) and drawn last
+            // without writing depth, so the see-through surface the view shows on top writes the pixel last.
+            const bool sorted = view.culled && view.sortBlend;
+            const uint32_t sortCapacity = sorted ? getBlendSortCapacity(drawList.runs[view.blendRun].count) : 0;
+            sceneData.sortKeysPtr = sorted ? cullAddress + layout.sortKeys : 0;
+            sceneData.sortDrawsPtr = sorted ? cullAddress + layout.sortDraws : 0;
+            sceneData.sortCapacity = sortCapacity;
+            sceneData.blendRun = sorted ? view.blendRun : gfx::MAX_DRAW_RUNS;
             sceneData.debugView = 0;
             const uint32_t sceneDataIndex = MAX_SCENE_VIEWS + i;
             ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), static_cast<size_t>(sceneDataIndex) * sizeof(gfx::SceneData));
@@ -471,6 +485,11 @@ namespace rasm
                 ctx.bindPipeline(commandBuffer, gpuScene->cullWritePipeline);
                 ctx.pushConstants(commandBuffer, gpuScene->cullWritePipeline, &cullConstants, sizeof(cullConstants), 0);
                 ctx.dispatch(commandBuffer, view.groupCount);
+                if (sorted)
+                {
+                    ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::COMPUTE);
+                    recordBlendSort(sceneAddress, sortCapacity);
+                }
                 ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::GRAPHICS);
             }
 
@@ -497,7 +516,11 @@ namespace rasm
                     ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet, 0);
                     bound = pipeline;
                 }
-                ctx.setCullMode(commandBuffer, run.cullMode);
+                // Through a mirrored view the front faces turn clockwise, as drawSceneView swaps them.
+                CullMode cullMode = run.cullMode;
+                if (view.mirrored && cullMode != CullMode::NONE)
+                    cullMode = cullMode == CullMode::BACK ? CullMode::FRONT : CullMode::BACK;
+                ctx.setCullMode(commandBuffer, cullMode);
                 const gfx::PushConstants pushConstants{.scene = sceneAddress, .firstDraw = run.first, .argument = argument};
                 ctx.pushConstants(commandBuffer, pipeline, &pushConstants, sizeof(pushConstants), 0);
                 if (view.culled)
@@ -584,7 +607,8 @@ namespace rasm
                                        .y = request.rect.y + y});
                 }
             }
-            groupPickSamples(samples, request.rect, picks->groups);
+            // Ranked from the centre the caller asked for, also when the rect was cut at the view's edge.
+            groupPickSamples(samples, request.desc.rect, picks->groups);
             request.hits.resize(picks->groups.size());
             for (size_t i = 0; i < picks->groups.size(); ++i)
             {

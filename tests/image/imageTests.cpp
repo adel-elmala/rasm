@@ -768,10 +768,18 @@ namespace
                         createVectorMaterial(engine, {.color = glm::vec4(0.12f, 0.1f, 0.08f, 1.0f), .width = 22.0f, .outlineColor = glm::vec4(1.0f), .outlineWidth = 3.0f, .drawOrder = 40, .font = font}));
         const rasm::EntityHandle labelEntity = content.entities.back();
 
-        rasm::VectorGeometry polygon;
-        const glm::dvec3 square[4] = {{-3.8, 0.0, -3.0}, {-2.2, 0.0, -3.0}, {-2.2, 0.0, -1.8}, {-3.8, 0.0, -1.8}};
+        // A small square drawn over the big one by its draw order, though it comes first in the draw list.
         const uint32_t four = 4;
         const uint32_t oneRing = 1;
+        rasm::VectorGeometry small;
+        const glm::dvec3 smallSquare[4] = {{-3.6, 0.0, -2.9}, {-3.2, 0.0, -2.9}, {-3.2, 0.0, -2.6}, {-3.6, 0.0, -2.6}};
+        const uint32_t smallId = 43;
+        rasm::addVectorPolygons(small, origin, smallSquare, &four, &oneRing, 1, {}, &smallId);
+        addVectorEntity(engine, content, std::move(small), createVectorMaterial(engine, {.color = glm::vec4(0.2f, 0.6f, 0.2f, 0.9f), .drawOrder = 10}));
+        const rasm::EntityHandle smallEntity = content.entities.back();
+
+        rasm::VectorGeometry polygon;
+        const glm::dvec3 square[4] = {{-3.8, 0.0, -3.0}, {-2.2, 0.0, -3.0}, {-2.2, 0.0, -1.8}, {-3.8, 0.0, -1.8}};
         const uint32_t polygonId = 41;
         rasm::addVectorPolygons(polygon, origin, square, &four, &oneRing, 1, {}, &polygonId);
         addVectorEntity(engine, content, std::move(polygon), createVectorMaterial(engine, {.color = glm::vec4(0.9f, 0.4f, 0.1f, 0.4f), .drawOrder = -5}));
@@ -798,6 +806,7 @@ namespace
             {.name = "under overlay", .point = {1.2, 0.0, 0.9}, .entity = box, .pixels = 60.0, .skip = onlyBox},
             {.name = "polygon at 0.3", .point = {-3.0, 0.0, -2.4}, .entity = polygonEntity, .feature = 41, .flags = rasm::PICK_HIT_FEATURE, .minAlpha = 0.3f},
             {.name = "polygon at 0.5", .point = {-3.0, 0.0, -2.4}, .entity = ground, .plane = up},
+            {.name = "order on top", .point = {-3.4, 0.0, -2.75}, .entity = smallEntity, .feature = 43, .flags = rasm::PICK_HIT_FEATURE, .minAlpha = 0.3f},
         };
         content.eye = glm::vec3(0.0f, 4.0f, 5.5f);
         content.center = glm::vec3(0.0f, 0.0f, -0.6f);

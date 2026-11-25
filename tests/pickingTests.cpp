@@ -57,10 +57,11 @@ TEST_CASE("getPickClipMatrix stretches the rect's pixels to the whole of NDC")
 
 TEST_CASE("getPickArgument packs the skip mask and minAlpha in 1/255 steps")
 {
-    CHECK(rasm::getPickArgument({}) == (128u << 8));
+    // Rounded down, so an alpha of exactly minAlpha is picked: 0.5 is 127 / 255.
+    CHECK(rasm::getPickArgument({}) == (127u << 8));
     CHECK(rasm::getPickArgument({.minAlpha = 1.0f, .skip = rasm::PICK_SKIP_LABELS}) == (rasm::PICK_SKIP_LABELS | 255u << 8));
     CHECK(rasm::getPickArgument({.minAlpha = -2.0f}) == 0u);
-    CHECK(rasm::getPickArgument({.minAlpha = NAN}) == (128u << 8));
+    CHECK(rasm::getPickArgument({.minAlpha = NAN}) == (127u << 8));
 }
 
 TEST_CASE("unpackPickNormal gives back the shader's packed normal")

@@ -99,6 +99,14 @@ namespace
         bool done = false;
     };
 
+    // An answer takes a couple of frames, so a pick every frame keeps up to three in flight; the newest answer shows.
+    struct Hover
+    {
+        rasm::PickHandle picks[3];
+        rasm::PickHit hits[MAX_HITS];
+        uint32_t count = 0;
+    };
+
     struct Scene
     {
         rasm::SceneHandle scene;
@@ -499,13 +507,6 @@ int main(int argc, char **argv)
     rasm::EntityHandle replacement;
     rasm::PickHandle victimPick;
 
-    // An answer takes a couple of frames, so a pick every frame keeps up to three in flight; the newest answer shows.
-    struct Hover
-    {
-        rasm::PickHandle picks[3];
-        rasm::PickHit hits[MAX_HITS];
-        uint32_t count = 0;
-    };
     Hover hover;
     rasm::PickHit kept;
     bool keptValid = false;

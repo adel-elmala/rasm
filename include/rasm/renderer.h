@@ -520,6 +520,7 @@ namespace rasm
         bool                        createMeshletPipelines(uint32_t view, bool opaque, bool mask);
         void                        recordHiz(uint32_t view);
         void                        recordBlendSort(uint32_t view);
+        void                        recordBlendSort(uint64_t sceneDataAddress, uint32_t capacity);
         void                        drawSceneView(uint32_t view, uint32_t phase);
         void                        drawTransparent(uint32_t view);
         void                        drawCullingGhosts(uint32_t view);

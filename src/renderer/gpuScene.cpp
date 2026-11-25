@@ -2091,8 +2091,13 @@ namespace rasm
     {
         const SceneView &view = gpuScene->views[viewIndex];
         const auto frame = static_cast<uint32_t>(frameCount);
-        const auto commandBuffer = frameResources[frame].commandBuffer;
-        const uint32_t capacity = getBlendSortCapacity(gpuScene->drawLists[view.scene.index].runs[view.blendRun].count);
+        recordBlendSort(getSceneDataAddress(ctx, *gpuScene, frame, viewIndex), getBlendSortCapacity(gpuScene->drawLists[view.scene.index].runs[view.blendRun].count));
+    }
+
+    // The sort of a SceneData's blend run (a view's, or a pick's: picking.cpp), whose sort buffers hold capacity keys.
+    void Renderer::recordBlendSort(uint64_t sceneDataAddress, uint32_t capacity)
+    {
+        const auto commandBuffer = frameResources[frameCount].commandBuffer;
         BlendSortDispatch dispatches[MAX_BLEND_SORT_DISPATCHES];
         const uint32_t dispatchCount = getBlendSortDispatches(capacity, dispatches, MAX_BLEND_SORT_DISPATCHES);
         // A cut plan would leave the draws half sorted or skip the write; unsorted draws are still valid. Every
@@ -2104,7 +2109,7 @@ namespace rasm
         }
 
         const uint32_t timer = beginGpuTimer(commandBuffer, "Blend Sort");
-        gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, frame, viewIndex)};
+        gfx::PushConstants pushConstants{.scene = sceneDataAddress};
         for (uint32_t i = 0; i < dispatchCount; ++i)
         {
             if (i > 0)
