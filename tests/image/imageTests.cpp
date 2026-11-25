@@ -140,6 +140,7 @@ namespace
         double time = 0.0;                   // the animation clock of every frame, in seconds
         glm::dvec3 origin = glm::dvec3(0.0); // the scene, its lights and the camera moved here by a translation
         rasm::MeshletPath meshlets = rasm::MeshletPath::OFF;
+        bool computePoints = true;    // small points by the compute rasterizer where the device has 64-bit atomics
         uint32_t threshold = 3;       // a channel differs when it is off by more than this (0-255)
         double fraction = 0.001;      // the test fails when more of the pixels than this differ
         bool views = false;           // drawn by Engine::render with the content's views instead of a graph
@@ -1060,11 +1061,19 @@ namespace
         {.name = "grid_ortho",    .build = buildGridOrtho},
         {.name = "grid_msaa4",    .build = buildGrid,          .samples = 4},
         {.name = "grid_taa",      .build = buildGrid,          .taa = true, .frames = 16},
-        // Point clouds: a triangle a point, cut to its shape; LOD by prefix; colormaps; picks of single points.
+        // Point clouds: a triangle a point, cut to its shape, or the compute path for the small ones; LOD by prefix;
+        // colormaps; picks of single points.
         {.name = "points",        .build = buildPoints,        .picks = true},
         {.name = "points_msaa4",  .build = buildPoints,        .samples = 4, .picks = true},
         {.name = "points_taa",    .build = buildPoints,        .taa = true, .frames = 16, .picks = true},
         {.name = "points_ortho",  .build = buildPointsOrtho,   .picks = true},
+        // The same points by triangles only, as a device without 64-bit atomics draws them: both paths take the same
+        // pixels, so the image matches the one the compute path drew. Under MSAA a view without the compute path keeps
+        // the points' triangles as they are, which leave out the samples of a pixel's edge past the square's left,
+        // bottom and diagonal sides (0.7% of the pixels here), where the compute path covers them all.
+        {.name = "points_triangles", .build = buildPoints,     .computePoints = false, .sameAs = "points", .picks = true},
+        {.name = "points_msaa4_triangles", .build = buildPoints, .samples = 4, .computePoints = false, .fraction = 0.01, .sameAs = "points_msaa4", .picks = true},
+        {.name = "points_taa_triangles", .build = buildPoints, .taa = true, .frames = 16, .computePoints = false, .sameAs = "points_taa", .picks = true},
         // The same images drawn by meshlets: the same triangles, so the same pixels. The mesh_ tests take the mesh shaders
         // where the device has them (lavapipe and the desktop GPUs do), else vertex pulling. lavapipe's mesh shaders round a
         // few positions differently from its vertex shaders: up to 3 levels on 0.2% of the pixels after TAA, and a few edge
@@ -1317,6 +1326,7 @@ namespace
         engine.resetCameraHistory(camera);
         engine.setDebugView(test.view);
         engine.setMeshletPath(test.meshlets);
+        engine.setComputePoints(test.computePoints);
 
         // A views test draws through Engine::render: the view texture first, then the split screen, the map, and the
         // security camera in the second window.

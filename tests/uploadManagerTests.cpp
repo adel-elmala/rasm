@@ -201,6 +201,7 @@ namespace
         Queue *getQueue(QueueType) override { return &queue; }
         bool hasAsyncCompute() const override { return false; }
         bool hasMeshShaders() const override { return false; }
+        bool hasBufferInt64Atomics() const override { return false; }
         bool hasTransferQueue() const override { return false; }
         bool hasTimestamps(QueueType) const override { return false; }
         bool fillBuffer(Buffer *buffer, const void *data, size_t size, size_t offset) override

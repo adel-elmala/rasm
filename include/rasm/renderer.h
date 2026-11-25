@@ -269,6 +269,8 @@ namespace rasm
         void                        setCullingFrozen(bool frozen);
         void                        setMeshletPath(MeshletPath path);
         MeshletPath                 getMeshletPath() const;
+        void                        setComputePoints(bool on);
+        bool                        getComputePoints() const;
         // What the RASM window's Buffers section shows, as picking it there does (RendererConfig::ui). The pass that
         // copies it runs only while that section is open.
         void                        setInspection(const Inspection& inspection);
@@ -540,6 +542,10 @@ namespace rasm
         void                        recordBlendSort(uint32_t view);
         void                        recordBlendSort(uint64_t sceneDataAddress, uint32_t capacity);
         void                        drawSceneView(uint32_t view, uint32_t phase);
+        void                        preparePointRaster(uint32_t view, gfx::SceneData& sceneData);
+        void                        recordPointReset(uint32_t view);
+        void                        recordPointRaster(uint32_t view);
+        void                        drawPointResolve(uint32_t view);
         void                        drawTransparent(uint32_t view);
         void                        drawCullingGhosts(uint32_t view);
         void                        drawFrozenFrustums(CameraHandle camera);

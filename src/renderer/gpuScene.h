@@ -103,6 +103,9 @@ namespace rasm
         BufferHandle                    visibility                                                          = {};
         BufferHandle                    sortBuffers[MAX_FRAMES_IN_FLIGHT]                                   = {};   // a shaded view's: the blend sort's keys, then its copy of the draws
         uint32_t                        sortCapacity[MAX_FRAMES_IN_FLIGHT]                                  = {};
+        BufferHandle                    pointRaster[MAX_FRAMES_IN_FLIGHT]                                   = {};   // a shaded view's compute path for small points (getPointRasterLayout), grown under the same handle
+        uint64_t                        pointRasterBytes[MAX_FRAMES_IN_FLIGHT]                              = {};
+        bool                            rasterPoints                                                        = false;    // this frame's culls send small points to the compute path
         uint32_t                        graphs                                                              = 0;    // graphs that hold it; 0 is a free slot
         bool                            ready                                                               = false;
         bool                            culled                                                              = false;
@@ -163,6 +166,7 @@ namespace rasm
         PipelineHandle                  skyPipeline                                                         = {};
         PipelineHandle                  gridPipeline                                                        = {};
         PipelineHandle                  pointPipeline                                                       = {};       // the point run's (passes/points.slang), alpha-to-coverage with more than one sample
+        PipelineHandle                  pointResolvePipeline                                                = {};       // the compute path's points into the target (passes/pointRaster.slang)
         PipelineHandle                  meshPipeline                                                        = {};       // the opaque and MASK runs' meshlets, with mesh shaders
         PipelineHandle                  meshMaskPipeline                                                    = {};
         DebugPipelines                  debug;
@@ -187,6 +191,9 @@ namespace rasm
         PipelineHandle                  labelDepthPipeline                                                  = {};
         PipelineHandle                  meshletCountPipeline                                                = {};
         PipelineHandle                  meshletWritePipeline                                                = {};
+        PipelineHandle                  pointResetPipeline                                                  = {};
+        PipelineHandle                  pointClearPipeline                                                  = {};
+        PipelineHandle                  pointRasterPipeline                                                 = {};
         BufferHandle                    cullStats[MAX_FRAMES_IN_FLIGHT]                                     = {};
         SceneView                       views[MAX_SCENE_VIEWS];
         DrawTotals                      drawTotals[MAX_FRAMES_IN_FLIGHT]                                    = {};
@@ -213,6 +220,8 @@ namespace rasm
         SceneDrawList                   drawLists[MAX_SCENES];
     };
 
+    ShadedPipelines&                    getShadedPipelines(GpuScene& gpuScene, RenderContext& ctx, const SceneView& view);
+    const char*                         getMotionDefine(RenderContext& ctx, const SceneView& view);
     // The device address of a view's SceneData in a frame slot's buffer; a pick's is at MAX_SCENE_VIEWS + its index.
     uint64_t                            getSceneDataAddress(RenderContext& ctx, const GpuScene& gpuScene, uint32_t frame, uint32_t view);
     // The six planes of a view-projection's frustum, normalized (an infinite far plane gives (0, 0, 0, nearZ)).

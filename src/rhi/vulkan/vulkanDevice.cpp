@@ -585,6 +585,10 @@ namespace rasm::rhi
         // A UNORM view of the sRGB swapchain lets the UI blend on the stored sRGB numbers, as Dear ImGui is designed for.
         swapchainMutable = surface != VK_NULL_HANDLE && physicalDevice.enable_extension_if_present(VK_KHR_SWAPCHAIN_MUTABLE_FORMAT_EXTENSION_NAME);
         meshShaders = enableMeshShaders();
+        // 64-bit atomics on buffers: the compute point rasterizer's depth | point words. Without them (MoltenVK, some
+        // mobile GPUs) every point is drawn by triangles.
+        bufferInt64Atomics = physicalDevice.enable_extension_features_if_present(VkPhysicalDeviceVulkan12Features{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, .shaderBufferInt64Atomics = VK_TRUE});
+        spdlog::info("64-bit buffer atomics: {}.", bufferInt64Atomics ? "yes" : "no");
         if (meshShaders)
             pushConstantStages |= MESH_SHADER_STAGES;
 
@@ -1512,6 +1516,11 @@ namespace rasm::rhi
     bool VulkanDevice::hasMeshShaders() const
     {
         return meshShaders;
+    }
+
+    bool VulkanDevice::hasBufferInt64Atomics() const
+    {
+        return bufferInt64Atomics;
     }
 
     // Every pipeline layout's push-constant range, which every push must name (vkCmdPushConstants).

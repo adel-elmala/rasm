@@ -150,6 +150,7 @@ namespace rasm
         bool                                submit(const SubmitInfo& info);
         bool                                hasAsyncCompute() const;
         bool                                hasMeshShaders() const;
+        bool                                hasBufferInt64Atomics() const;
         void                                discardRecording();
         [[nodiscard]] SwapchainStatus       present(const WindowHandle& window = {});
         // The handle is invalid at once; the GPU object, and a texture's bindless slot, are freed once the GPU is done

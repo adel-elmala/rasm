@@ -56,3 +56,23 @@ try
     return RASM_OK;
 }
 RASM_C_CATCH_RESULT
+
+rasm_result RASM_CALL rasm_set_compute_points(rasm_renderer *renderer, rasm_bool on)
+try
+{
+    Renderer *r = c::getRenderer(renderer, __func__);
+    if (r == nullptr)
+        return RASM_ERROR_INVALID_ARGUMENT;
+    const c::CallErrors errors;
+    r->setComputePoints(on != 0);
+    return errors.result();
+}
+RASM_C_CATCH_RESULT
+
+rasm_bool RASM_CALL rasm_get_compute_points(rasm_renderer *renderer)
+try
+{
+    Renderer *r = c::getRenderer(renderer, __func__);
+    return r != nullptr && r->getComputePoints() ? RASM_TRUE : RASM_FALSE;
+}
+RASM_C_CATCH(RASM_FALSE)

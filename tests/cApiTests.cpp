@@ -856,6 +856,16 @@ TEST_CASE("the 1.10 structs start from the C++ defaults, and a point cloud chunk
     CHECK(rasm_create_colormap_preset(nullptr, RASM_COLORMAP_TURBO).id == 0);
 }
 
+TEST_CASE("the 1.11 config field starts from the C++ default, and the compute points calls check their renderer")
+{
+    rasm_renderer_config config;
+    REQUIRE(rasm_renderer_config_init(&config, sizeof(config)) == RASM_OK);
+    CHECK(config.compute_points == (rasm::RendererConfig{}.computePoints ? RASM_TRUE : RASM_FALSE));
+    CHECK(rasm_set_compute_points(nullptr, RASM_FALSE) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(contains(rasm_get_last_error(), "renderer is NULL"));
+    CHECK(rasm_get_compute_points(nullptr) == RASM_FALSE);
+}
+
 TEST_CASE("a C rig zooms an orthographic box at the pointer, and a mapped button pans")
 {
     rasm_camera_controller controller;

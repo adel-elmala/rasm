@@ -182,6 +182,23 @@ struct VectorData
     float               distanceRange;      // the atlas's: a texel holds 0.5 + distance / distanceRange
 };
 
+// The head of a view's point raster buffer (passes/pointRaster.slang): the raster and clear dispatches' group counts,
+// indirect, and the pixels the compute path's chunks can reach. Must match rasm::gfx::PointRasterHeader.
+struct PointRasterHeader
+{
+    uint32_t            rasterGroups;
+    uint32_t            rasterY;
+    uint32_t            rasterZ;
+    uint32_t            clearGroups;
+    uint32_t            clearY;
+    uint32_t            clearZ;
+    uint32_t            rectMinX;
+    uint32_t            rectMinY;
+    uint32_t            rectMaxX;
+    uint32_t            rectMaxY;
+    uint32_t            padding[2];
+};
+
 // A POINTS material's style (lib/points.slang); zero for the others. Must match rasm::gfx::PointData.
 struct PointData
 {
@@ -308,6 +325,11 @@ struct SceneData
     float               labelFadeStep;          // the fade's change this frame
     uint32_t            labelSlotCount;         // slots the Label Depth pass tests: 0 to this
     uint2*              pointsPtr;              // the point pool in 8 B units: each chunk's header, positions and colors (lib/points.slang)
+    PointRasterHeader*  pointRasterPtr;         // the view's point raster buffer; null: every point by triangles (passes/pointRaster.slang)
+    uint2*              pointBatchesPtr;        // per batch: the instance row, first point | count << 16
+    uint64_t*           pointPixelsPtr;         // per pixel: depth << 32 | instance row << 16 | point, 0 where no point
+    uint32_t            pointBatchCapacity;
+    uint32_t            pointRasterPadding;
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.

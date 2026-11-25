@@ -57,6 +57,7 @@ TEST_CASE("The config conversions copy every field")
         .bloom = true,
         .ui = true,
         .antiAliasing = rasm::AntiAliasing::TAA,
+        .computePoints = false,
     };
     const rasm::RendererConfig defaults = {};
     const rasm::RendererConfig renderer = rasm::toRendererConfig(engine);
@@ -107,6 +108,7 @@ TEST_CASE("The config conversions copy every field")
     CHECK(renderer.bloom != defaults.bloom);
     CHECK(renderer.ui != defaults.ui);
     CHECK(renderer.antiAliasing == rasm::AntiAliasing::TAA);
+    CHECK(renderer.computePoints != defaults.computePoints);
 
     const rasm::AssetLoaderConfig loader = rasm::toAssetLoaderConfig(engine);
     CHECK(loader.assetRoot == "assets here");

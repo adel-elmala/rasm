@@ -1,5 +1,6 @@
 #include "rasm/pointCloud.h"
 #include "assets/meshBuild.h"
+#include "renderer/pointRaster.h"
 #include "renderer/uberMaterialTypes.h"
 
 #include "doctest/doctest.h"
@@ -139,4 +140,20 @@ TEST_CASE("a point cloud chunk of one point, or of points in a plane, has steps 
     REQUIRE(single.isValid());
     CHECK(getHeader(single).boxStep == glm::vec3(0.0f));
     CHECK(decode(single, 0).position == one);
+}
+
+// The compute path's buffer: the header, a batch for each 1024 points a chunk may draw (up to the dispatch's group
+// limit), then a 64-bit word per pixel, 8-byte aligned for the atomics.
+TEST_CASE("a view's point raster buffer holds every batch and an aligned word per pixel")
+{
+    CHECK(rasm::getPointBatchCapacity(0) == 0);
+    CHECK(rasm::getPointBatchCapacity(3) == 3 * rasm::gfx::POINT_BATCHES_PER_CHUNK);
+    CHECK(rasm::getPointBatchCapacity(100000) == rasm::gfx::POINT_MAX_BATCHES);
+    CHECK(rasm::gfx::POINT_BATCHES_PER_CHUNK * rasm::gfx::POINT_BATCH_POINTS == rasm::MAX_POINT_CHUNK_POINTS);
+
+    const rasm::PointRasterLayout layout = rasm::getPointRasterLayout(rasm::gfx::POINT_MAX_BATCHES, 1921, 1081);
+    CHECK(layout.batches == sizeof(rasm::gfx::PointRasterHeader));
+    CHECK(layout.pixels == layout.batches + uint64_t(rasm::gfx::POINT_MAX_BATCHES) * 8);
+    CHECK(layout.pixels % 8 == 0);
+    CHECK(layout.size == layout.pixels + uint64_t(1921) * 1081 * 8);
 }

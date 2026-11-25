@@ -369,6 +369,7 @@ public:
     bool         bloom                   = false;
     bool         ui                      = false;
     AntiAliasing antiAliasing            = AntiAliasing::NONE;
+    bool         computePoints           = true;
 };</pre>
   <div class="body">
     <p>The engine's settings, given to its constructor. Every field is explained on the <a href="engine.html#EngineConfig">Engine page</a>. A field goes in this struct and in its part's, <code>RendererConfig</code> or <code>AssetLoaderConfig</code>, and into the conversions below.</p>

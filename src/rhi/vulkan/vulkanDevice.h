@@ -53,6 +53,7 @@ namespace rasm::rhi
         bool                        hasAsyncCompute() const override;
         bool                        hasTransferQueue() const override;
         bool                        hasMeshShaders() const override;
+        bool                        hasBufferInt64Atomics() const override;
         VkShaderStageFlags          getPushConstantStages() const;
         bool                        hasTimestamps(QueueType queueType) const override;
         bool                        fillBuffer(Buffer* buffer, const void* data, size_t size, size_t offset) override;
@@ -128,6 +129,7 @@ namespace rasm::rhi
         uint32_t                        maxSampledImages    = 0;    // update-after-bind combined image samplers in a set and in a stage
         uint32_t                        sampleCounts        = VK_SAMPLE_COUNT_1_BIT;
         bool                            meshShaders         = false;    // VK_EXT_mesh_shader, with limits that hold the meshlet passes' workgroups
+        bool                            bufferInt64Atomics  = false;    // shaderBufferInt64Atomics: the compute point rasterizer
         VkShaderStageFlags              pushConstantStages  = PUSH_CONSTANT_STAGES;
     };
 

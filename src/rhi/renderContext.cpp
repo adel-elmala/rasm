@@ -2330,6 +2330,11 @@ namespace rasm
         return impl->device->hasMeshShaders();
     }
 
+    bool RenderContext::hasBufferInt64Atomics() const
+    {
+        return impl->device->hasBufferInt64Atomics();
+    }
+
     // For commands that were recorded but will not run, a failed submit included: the textures go back to
     // the states they had before them, which is still what the GPU has.
     void RenderContext::discardRecording()

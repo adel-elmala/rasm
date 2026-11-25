@@ -8,7 +8,9 @@
 // The point run's pipeline (gpuScene.cpp): every point a triangle around its square, pulled from the point pool, unlit,
 // cut to its shape here. One pipeline for every shape: a point writes its depth with SV_DepthLessEqual, so the early depth
 // test still culls, and a SPHERE point pushes its rim back from the triangle, which lies at the sphere's front. With several
-// samples per pixel (RASM_ALPHA_TO_COVERAGE) a round edge covers samples by its distance instead of discarding.
+// samples per pixel (RASM_ALPHA_TO_COVERAGE) an edge covers samples by its distance instead of discarding, but for a
+// point of POINT_RASTER_MAX_SIZE pixels or less: it covers the whole pixels whose centre it holds, as the compute path
+// (pointRaster.slang) writes it, so the two paths draw the same pixels.
 
 [[vk::binding(0, 0)]]
 Sampler2D gTextures[];
@@ -18,7 +20,7 @@ struct PointVertex
     float4 clipPosition                 : SV_POSITION;
     float2 corner                       : TEXCOORD0;    // -1 to 1 across the point's square, to 3 at the triangle's corners
     nointerpolation float4 color        : COLOR;
-    nointerpolation float3 sphere       : TEXCOORD1;    // the sphere's centre depth and radius in view units, and the shape: 0 square, 1 round, 2 sphere
+    nointerpolation float3 sphere       : TEXCOORD1;    // the sphere's centre depth and radius in view units, and the shape: 0 square, 1 round, 2 sphere, 3 a square of whole pixels
 #if defined(RASM_MOTION_VECTORS)
     nointerpolation float4 currentClip  : TEXCOORD2;    // the point's centre, without jitter
     nointerpolation float4 previousClip : TEXCOORD3;
@@ -30,32 +32,6 @@ struct PointVertex
     nointerpolation uint materialIndex;
 #endif
 };
-
-float4 getPointColor(SceneData *scene, PointData style, PointChunk chunk, uint base, uint point, uint scalarStep)
-{
-    float4 color = style.color;
-    if ((style.flags & POINT_SCALAR) != 0)
-    {
-        if ((chunk.flags & POINT_CHUNK_SCALARS) == 0 || style.colormap == INVALID_TEXTURE_INDEX)
-            return color;
-        float value = chunk.scalarMin + float(scalarStep) * chunk.scalarStep;
-        if ((style.flags & POINT_LOG) != 0)
-            value = value > 0.0 ? log(value) : -1e30;
-        float span  = style.rangeMax - style.rangeMin;
-        float t     = span != 0.0 ? (value - style.rangeMin) / span : 0.0;
-        if ((style.flags & POINT_CLAMP) == 0 && !(t >= 0.0 && t <= 1.0))
-            return float4(0.0);
-        t           = saturate(t);
-        return color * gTextures[style.colormap].SampleLevel(float2((t * 255.0 + 0.5) / 256.0, 0.5), 0.0);
-    }
-    if ((chunk.flags & POINT_CHUNK_COLORS) == 0)
-        return color;
-    uint2 pair      = scene->pointsPtr[base + chunk.colorOffset / 2 + point / 2];
-    uint packed     = (point & 1) != 0 ? pair.y : pair.x;
-    float4 decoded  = float4(packed & 0xFF, (packed >> 8) & 0xFF, (packed >> 16) & 0xFF, packed >> 24) / 255.0;
-    // Points are opaque: the colors' alpha is not read, so colors packed without one (0) still draw.
-    return color * float4(decodeSrgb(decoded.r), decodeSrgb(decoded.g), decodeSrgb(decoded.b), 1.0);
-}
 
 // SV_VertexID is the raw index (Slang subtracts BaseVertex): point p's corner c is 3p + c, of a triangle around the
 // square from (-1, -1) to (1, 1) that the fragment stage cuts to the point's shape.
@@ -78,14 +54,21 @@ PointVertex vertMain(uint vertexID : SV_VertexID)
     float3 position         = mul(world, float4(local, 1.0)).xyz;
     float4 viewPosition     = mul(scene->view, float4(position, 1.0));
     float4 clip             = mul(scene->projection, viewPosition);
-    // A point is at least a pixel across, so it neither vanishes nor flickers; its size in the world at its depth.
+    float diameter          = getPointDiameter(scene, style, clip.w);
     float pixelWorld        = 2.0 * max(abs(clip.w), 1e-6) / (abs(scene->projection[1][1]) * float(scene->viewportHeight));
-    bool metres             = (style.flags & POINT_METRES) != 0;
-    float diameter          = max(metres ? style.size / pixelWorld : style.size, 1.0);
     float radius            = 0.5 * diameter * pixelWorld;
     // A round point under 3 pixels is drawn square: its disc would miss the pixel centres it covers.
     float shape             = (style.flags & POINT_SPHERE) != 0 ? 2.0 : ((style.flags & POINT_ROUND) != 0 ? 1.0 : 0.0);
-    shape                   = diameter < 3.0 ? 0.0 : shape;
+    shape                   = diameter <= POINT_RASTER_MAX_SIZE ? 3.0 : (diameter < 3.0 ? 0.0 : shape);
+#if defined(RASM_ALPHA_TO_COVERAGE)
+    // Where the view also has the compute path, whose chunks switch paths as they move on screen, such a square covers
+    // every sample of the pixels whose centre it holds, as the compute path writes them: its triangle reaches half a
+    // pixel past the square, so that no sample of those pixels lies outside it. That costs about a fifth more for these
+    // points (twice the triangle's area), so a view drawn by triangles only keeps the triangle, which leaves out the
+    // samples of a pixel's edge beyond the square's left, bottom and diagonal sides.
+    if (shape == 3.0 && scene->pointRasterPtr != nullptr)
+        corner             *= 1.0 + 1.0 / diameter;
+#endif
 
     PointVertex output;
     output.sphere           = float3(-viewPosition.z, radius, shape);
@@ -94,7 +77,12 @@ PointVertex vertMain(uint vertexID : SV_VertexID)
     clip.xy                += corner * diameter / float2(scene->viewportWidth, scene->viewportHeight) * clip.w;
     output.clipPosition     = clip;
     output.corner           = corner;
-    output.color            = getPointColor(scene, style, chunk, base, point, packed.y >> 16);
+    float colormapAt        = getPointColormapPosition(style, chunk, packed.y >> 16);
+    output.color            = getPointBaseColor(scene, style, chunk, base, point);
+    if (colormapAt >= 0.0)
+        output.color *= gTextures[style.colormap].SampleLevel(getColormapCoordinate(colormapAt), 0.0);
+    if (colormapAt == POINT_OUT_OF_RANGE)
+        output.color = float4(0.0);
     // An out-of-range scalar without clamp draws nothing.
     if (output.color.a <= 0.0)
         output.clipPosition = float4(0.0, 0.0, -1.0, 1.0);
@@ -126,9 +114,11 @@ float getPointDepth(SceneData *scene, PointVertex input, float distance2)
 
 float getPointCoverage(PointVertex input, float distance2)
 {
-    float distance  = input.sphere.z == 0.0 ? max(abs(input.corner.x), abs(input.corner.y)) : sqrt(distance2);
+    bool square     = input.sphere.z == 0.0 || input.sphere.z == 3.0;
+    float distance  = square ? max(abs(input.corner.x), abs(input.corner.y)) : sqrt(distance2);
 #if defined(RASM_ALPHA_TO_COVERAGE)
-    return saturate((1.0 - distance) / max(fwidth(distance), 1e-4) + 0.5);
+    float soft      = saturate((1.0 - distance) / max(fwidth(distance), 1e-4) + 0.5);
+    return input.sphere.z == 3.0 ? (distance <= 1.0 ? 1.0 : 0.0) : soft;
 #else
     return distance <= 1.0 ? 1.0 : 0.0;
 #endif

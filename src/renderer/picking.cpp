@@ -481,6 +481,11 @@ namespace rasm
             sceneData.sortCapacity = sortCapacity;
             sceneData.blendRun = sorted ? view.blendRun : gfx::MAX_DRAW_RUNS;
             sceneData.debugView = 0;
+            // A pick draws every point by triangles, which take the same pixels as the compute path.
+            sceneData.pointRasterPtr = 0;
+            sceneData.pointBatchesPtr = 0;
+            sceneData.pointPixelsPtr = 0;
+            sceneData.pointBatchCapacity = 0;
             const uint32_t sceneDataIndex = MAX_SCENE_VIEWS + i;
             ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), static_cast<size_t>(sceneDataIndex) * sizeof(gfx::SceneData));
             const uint64_t sceneAddress = getSceneDataAddress(ctx, *gpuScene, frame, sceneDataIndex);

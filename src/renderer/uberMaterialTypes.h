@@ -43,6 +43,11 @@ namespace rasm::gfx
     constexpr uint32_t      POINT_CHUNK_HEADER_WORDS    = 12;
     constexpr uint32_t      POINT_INDICES               = 3;        // a triangle a point, around its square
 
+    // The compute point rasterizer's batches (shaders/passes/pointRaster.slang). Must match shaders/lib/points.slang.
+    constexpr uint32_t      POINT_BATCH_POINTS          = 1024;     // points of a batch: a group of the raster dispatch
+    constexpr uint32_t      POINT_BATCHES_PER_CHUNK     = 64;       // MAX_POINT_CHUNK_POINTS / POINT_BATCH_POINTS
+    constexpr uint32_t      POINT_MAX_BATCHES           = 65535;    // a view's batches a frame: the raster dispatch's groups (maxComputeWorkGroupCount)
+
     // VectorData::flags. Must match shaders/lib/vector.slang.
     constexpr uint32_t      VECTOR_METRES               = 1u << 0;  // width and dashes in metres, else pixels
     constexpr uint32_t      VECTOR_GROUND               = 1u << 1;  // spread in the ground's plane, else across the screen
@@ -232,6 +237,25 @@ namespace rasm::gfx
         float               scalarStep;
         uint32_t            colorOffset;                            // words from the header to the colors
         uint32_t            padding;
+    };
+
+    // A view's point raster buffer starts with it: the raster and clear dispatches' group counts, indirect, and the
+    // pixels the compute path's chunks can reach, which the clear and the resolve cover, so a frame with no chunk on
+    // the compute path runs no group and draws no pixel. The batches follow, a uint2 each (instance row, first point |
+    // count << 16), then a 64-bit word per pixel.
+    struct PointRasterHeader
+    {
+        uint32_t            rasterGroups;                           // a group a batch
+        uint32_t            rasterY;
+        uint32_t            rasterZ;
+        uint32_t            clearGroups;                            // 0 until a chunk takes the compute path
+        uint32_t            clearY;
+        uint32_t            clearZ;
+        uint32_t            rectMinX;                               // inclusive pixels; min past max: none
+        uint32_t            rectMinY;
+        uint32_t            rectMaxX;
+        uint32_t            rectMaxY;
+        uint32_t            padding[2];
     };
 
     struct MaterialData
@@ -512,6 +536,11 @@ namespace rasm::gfx
         float            labelFadeStep;             // the fade's change this frame
         uint32_t         labelSlotCount;            // slots the Label Depth pass tests: 0 to this
         uint64_t         pointsPtr;                 // the point pool, in 8 B units (GeometryData::vertexOffset of a chunk)
+        uint64_t         pointRasterPtr;            // PointRasterHeader of the view's point raster buffer; 0: every point by triangles
+        uint64_t         pointBatchesPtr;           // uint2 per batch, POINT_BATCH_POINTS points of a chunk each
+        uint64_t         pointPixelsPtr;            // a 64-bit word per pixel: depth << 32 | instance row << 16 | point
+        uint32_t         pointBatchCapacity;        // batches the buffer holds
+        uint32_t         pointRasterPadding;        // keeps the size a multiple of 8
     };
 
     struct PushConstants
@@ -683,7 +712,13 @@ namespace rasm::gfx
     static_assert(offsetof(SceneData, pointRun) == 428, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, padding) == 2028, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, pointsPtr) == 2272, "SceneData must match the shader's scalar layout");
-    static_assert(sizeof(SceneData) == 2280, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, pointRasterPtr) == 2280, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, pointPixelsPtr) == 2296, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, pointBatchCapacity) == 2304, "SceneData must match the shader's scalar layout");
+    static_assert(sizeof(SceneData) == 2312, "SceneData must match the shader's scalar layout");
+    static_assert(sizeof(PointRasterHeader) == 48, "PointRasterHeader must match shaders/lib/core.slang");
+    static_assert(offsetof(PointRasterHeader, clearGroups) == 12, "PointRasterHeader must match shaders/lib/core.slang");
+    static_assert(POINT_BATCHES_PER_CHUNK * POINT_BATCH_POINTS == 65536, "a chunk's points must fill its batches");
     static_assert(offsetof(SceneData, meshletDataPtr) == 2032, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, originLow) == 2040, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, previousSkinnedVertsPtr) == 1824, "SceneData must match the shader's scalar layout");
