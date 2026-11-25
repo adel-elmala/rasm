@@ -25,7 +25,18 @@ namespace rasm::gfx
     constexpr uint32_t      MATERIAL_NORMAL_XY          = 1u << 2;  // the normal map has x and y only (BC5, EAC RG11): z is rebuilt
 
     // Selects how the uber shader's fragMain shades a model. Must match shaders/lib/core.slang.
-    enum class MaterialId : uint32_t { PBR, UNLIT, TERRAIN };
+    enum class MaterialId : uint32_t { PBR, UNLIT, TERRAIN, VECTOR };
+
+    // VectorData::flags. Must match shaders/lib/vector.slang.
+    constexpr uint32_t      VECTOR_METRES               = 1u << 0;  // width and dashes in metres, else pixels
+    constexpr uint32_t      VECTOR_GROUND               = 1u << 1;  // spread in the ground's plane, else across the screen
+    constexpr uint32_t      VECTOR_OVERLAY              = 1u << 2;  // over everything: no depth test, no occlusion culling
+    constexpr uint32_t      VECTOR_ICON                 = 1u << 3;  // points read their icon from the albedo texture
+    // A blended draw's order in the Transparent pass: VECTOR_ORDER_SCENE + VectorData::drawOrder, the scene's see-through
+    // draws at VECTOR_ORDER_SCENE. Must match shaders/lib/vector.slang.
+    constexpr int32_t       VECTOR_ORDER_SCENE          = 128;
+    // SceneData::viewFlags. Must match shaders/lib/core.slang.
+    constexpr uint32_t      VIEW_DEPTH_ONLY             = 1u << 0;  // a shadow map's view: it draws no VECTOR material
 
     // TerrainData::heightKind. Must match shaders/lib/terrain.slang.
     constexpr uint32_t      TERRAIN_HEIGHTS_UNORM16     = 0;        // a sample is its integer, 0 to 65535
@@ -138,6 +149,19 @@ namespace rasm::gfx
         float               sphereRadius;                           // 0: flat
     };
 
+    // A VECTOR material's style (rasm::VectorMaterial); zero for the others.
+    struct VectorData
+    {
+        glm::vec4           color;                                  // linear, straight alpha
+        glm::vec4           outlineColor;
+        float               width;                                  // in pixels or metres (VECTOR_METRES)
+        float               outlineWidth;
+        float               dashLength;
+        float               gapLength;
+        uint32_t            flags;                                  // VECTOR_*
+        int32_t             drawOrder;
+    };
+
     struct MaterialData
     {
         Material            material;
@@ -147,6 +171,7 @@ namespace rasm::gfx
         uint32_t            flags;
         TextureTransform    textureTransforms[TEXTURE_TRANSFORMS];  // read only with MATERIAL_TEXTURE_TRANSFORM
         TerrainData         terrain;
+        VectorData          vector;
     };
 
     struct InstanceData
@@ -400,7 +425,7 @@ namespace rasm::gfx
         uint32_t         runMeshletBudget[MAX_DRAW_RUNS];
         uint32_t         meshletRuns;               // a bit per run whose big draws are drawn by meshlets
         uint32_t         coneRuns;                  // a bit per run culled by face, where the cone test holds
-        uint32_t         padding;
+        uint32_t         viewFlags;                 // VIEW_*
         uint64_t         meshletDataPtr;            // the meshlets' vertices and triangles, for the mesh shaders; 0 without them
         glm::vec3        originLow;                 // the origin is originHigh + originLow (splitPosition)
         uint32_t         zero;                      // always 0: the shaders' render-space sums keep their order (renderSpace.slang)
@@ -525,7 +550,9 @@ namespace rasm::gfx
     static_assert(sizeof(TextureTransform) == 24, "TextureTransform must match the shader's scalar layout");
     static_assert(sizeof(Material) == 84, "Material must match the shader's scalar layout");
     static_assert(sizeof(TerrainData) == 28, "TerrainData must match the shader's scalar layout");
-    static_assert(sizeof(MaterialData) == 248, "MaterialData must match the shader's scalar layout");
+    static_assert(sizeof(VectorData) == 56, "VectorData must match the shader's scalar layout");
+    static_assert(sizeof(MaterialData) == 304, "MaterialData must match the shader's scalar layout");
+    static_assert(offsetof(MaterialData, vector) == 248, "MaterialData must match the shader's scalar layout");
     static_assert(offsetof(MaterialData, terrain) == 220, "MaterialData must match the shader's scalar layout");
     static_assert(offsetof(MaterialData, materialId) == 84, "MaterialData must match the shader's scalar layout");
     static_assert(offsetof(MaterialData, alphaMode) == 88, "MaterialData must match the shader's scalar layout");

@@ -5,6 +5,7 @@
 #include "shadow.slang"
 #include "meshletTask.slang"
 #include "terrain.slang"
+#include "vector.slang"
 #if defined(RASM_DEBUG_VIEW)
 #include "debugViews.slang"
 #endif
@@ -65,6 +66,32 @@ VSOutput getVertexOutput(InstanceData *instance, int vertexOffset, uint vertexID
     }
 
     VSOutput output = {};
+    if (model->materialId == MaterialId.VECTOR)
+    {
+        // A line, polygon or point spread by its style (lib/vector.slang). The varyings carry what fragMain needs:
+        // uv0 the offset to the edge, uv1 an icon's coordinates, uv2 the metric and the fade, worldTangent.x the dash.
+        VectorVertex feature        = getVectorVertex(pc.scene, model->vector, modelMat, vert);
+        output.clipPosition         = feature.clipPosition;
+        output.worldPosition        = feature.anchor;
+        output.worldNormal          = float3(0.0, 1.0, 0.0);
+        output.worldTangent         = float4(feature.dash, 0.0, 0.0, 0.0);
+        output.color                = getVertexColor(pc.scene, instance->geometryIndex, vertexID);
+        output.uv0                  = feature.edge;
+        output.uv1                  = vert.uv[1];
+        output.uv2                  = float2(feature.metric, feature.fade);
+        output.materialIndex        = instance->materialIndex;
+        output.handedness           = 1.0;
+#if defined(RASM_MOTION_VECTORS)
+        // The anchor's motion: the spread follows the camera, the feature does not move.
+        output.currentClip          = removeJitter(pc.scene, mul(projectionMat, mul(viewMat, float4(feature.anchor, 1.0))));
+        output.previousClip         = mul(pc.scene->previousViewProjection, float4(getPreviousWorldPosition(pc.scene, instance, vert.pos), 1.0));
+#endif
+#if defined(RASM_DEBUG_VIEW)
+        output.lod                  = lod;
+        output.meshlet              = meshletKey;
+#endif
+        return output;
+    }
     output.clipPosition         = mul(projectionMat, mul(viewMat, mul(modelMat, float4(vert.pos, 1.0))));
     output.worldPosition        = mul(modelMat, float4(vert.pos, 1.0)).xyz;
     output.worldNormal          = mul(normalMat, vert.normal);
@@ -183,8 +210,24 @@ FragmentOutput toOutput(float4 color, float4 currentClip, float4 previousClip)
     return output;
 }
 #define TO_OUTPUT(color) toOutput(color, input.currentClip, input.previousClip)
+
+// A vector feature writes its own motion, by its coverage: the blend keeps (1 - alpha) of the motion behind, so TAA
+// moves an edge pixel by the share of each surface in it, and a line over the sky does not smear.
+FragmentOutput toVectorOutput(float4 color, float4 currentClip, float4 previousClip)
+{
+    FragmentOutput output;
+    output.color = color;
+#if defined(RASM_ALPHA_BLEND)
+    output.motion = float4(getMotion(currentClip, previousClip) * color.a, 0.0, color.a);
+#else
+    output.motion = float4(getMotion(currentClip, previousClip), 0.0, 0.0);
+#endif
+    return output;
+}
+#define VECTOR_OUTPUT(color) toVectorOutput(color, input.currentClip, input.previousClip)
 #else
 #define TO_OUTPUT(color) (color)
+#define VECTOR_OUTPUT(color) (color)
 #endif
 
 // A cut-out's alpha made sharp around the cutoff: 0.5 exactly at alphaCutoff, and from 0 to 1 over one pixel's change
@@ -237,6 +280,15 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     return TO_OUTPUT(getDebugColor(gTextures, pc.scene, model, input.worldPosition, input.worldNormal, input.worldTangent, input.uv0, input.uv1, input.uv2,
                                    input.clipPosition.xy, isBackFace(input.handedness, isFrontFace), input.lod, input.meshlet));
 #else
+    if (model->materialId == MaterialId.VECTOR)
+    {
+        VectorData style = model->vector;
+        float4 color = shadeVector(style, input.color, input.uv0, input.uv2.x, input.uv2.y, input.worldTangent.x);
+        uint icon = model->material.metallicRoughness.baseColorTextureIndex;
+        if ((style.flags & VECTOR_ICON) != 0 && icon != INVALID_TEXTURE_INDEX)
+            color *= sampleMaterial(gTextures[icon], input.uv1);
+        return VECTOR_OUTPUT(toTarget(color, 1.0));
+    }
     if (model->materialId == MaterialId.UNLIT)
     {
         MetallicRoughnessMaterial metallicRoughness = model->material.metallicRoughness;

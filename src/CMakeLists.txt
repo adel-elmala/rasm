@@ -13,6 +13,7 @@ find_package(Tracy CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_path(TINYGLTF_INCLUDE_DIRS "tiny_gltf.h" REQUIRED)
+find_path(EARCUT_HPP_INCLUDE_DIRS "mapbox/earcut.hpp" REQUIRED)
 find_package(tinyobjloader CONFIG REQUIRED)
 find_package(meshoptimizer CONFIG REQUIRED)
 find_package(slang CONFIG REQUIRED)
@@ -60,6 +61,7 @@ target_sources(rasm_renderer PRIVATE
     "scene/light.cpp"
     "scene/transform.cpp"
     "scene/terrain.cpp"
+    "scene/vector.cpp"
     "scene/tileResidency.cpp"
     "scene/tileStreamer.cpp"
     "renderer/blendSort.cpp"
@@ -164,14 +166,15 @@ target_compile_definitions(rasm_renderer PRIVATE RASM_SHADER_DIR="${RASM_SHADER_
 # RASM never defines them (a platform's functions would need volk::volk_headers and VOLK_IMPLEMENTATION instead).
 target_compile_definitions(rasm_renderer PRIVATE VK_NO_PROTOTYPES VOLK_NO_DEVICE_PROTOTYPES VMA_STATIC_VULKAN_FUNCTIONS=0 VMA_DYNAMIC_VULKAN_FUNCTIONS=0)
 
-# What both libraries share: the private headers under src/, stb and tinygltf (header-only: the renderer compiles
-# stb_image, stb_image_write and stb_image_resize2, rasm tinygltf, which calls stb_image), spdlog, Tracy, the flags.
+# What both libraries share: the private headers under src/, stb, tinygltf and earcut (header-only: the renderer
+# compiles stb_image, stb_image_write and stb_image_resize2 and the vector builders' earcut, rasm tinygltf, which calls
+# stb_image), spdlog, Tracy, the flags.
 foreach (rasm_target rasm_renderer rasm)
     target_link_libraries(${rasm_target} PRIVATE Tracy::TracyClient spdlog::spdlog)
     target_compile_definitions(${rasm_target} PRIVATE STBI_WINDOWS_UTF8 GLM_FORCE_EXPLICIT_CTOR)
     target_include_directories(${rasm_target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     # SYSTEM, like the imported targets' directories, so RASM_WARNINGS does not report warnings inside these headers.
-    target_include_directories(${rasm_target} SYSTEM PRIVATE ${Stb_INCLUDE_DIR} ${TINYGLTF_INCLUDE_DIRS})
+    target_include_directories(${rasm_target} SYSTEM PRIVATE ${Stb_INCLUDE_DIR} ${TINYGLTF_INCLUDE_DIRS} ${EARCUT_HPP_INCLUDE_DIRS})
     # The instrumented static library needs the sanitizer runtime in whatever links it, including find_package(rasm) consumers.
     if (RASM_SANITIZERS)
         target_link_options(${rasm_target} INTERFACE -fsanitize=${rasm_sanitizers})
@@ -194,7 +197,7 @@ if (RASM_C_API)
     # Linked into the shared libraries, so their code must be position independent where that is not the default.
     set_target_properties(rasm_renderer rasm PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-    add_library(rasm_c_objects OBJECT "c/cApi.cpp" "c/cRenderer.cpp" "c/cScene.cpp" "c/cInput.cpp" "c/cViews.cpp" "c/cAnimation.cpp" "c/cTiles.cpp" "c/cTerrain.cpp")
+    add_library(rasm_c_objects OBJECT "c/cApi.cpp" "c/cRenderer.cpp" "c/cScene.cpp" "c/cInput.cpp" "c/cViews.cpp" "c/cAnimation.cpp" "c/cTiles.cpp" "c/cTerrain.cpp" "c/cVector.cpp")
     target_link_libraries(rasm_c_objects PRIVATE rasm_renderer spdlog::spdlog)
 
     add_library(rasm_c_renderer SHARED)

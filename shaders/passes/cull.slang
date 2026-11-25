@@ -126,7 +126,8 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
     {
         DrawInfo draw   = scene->allDrawsPtr[drawIndex];
         Sphere sphere   = getWorldSphere(scene, draw);
-        bool inFrustum  = isInFrustum(scene, sphere);
+        uint vector     = getVectorFlags(scene, draw);
+        bool inFrustum  = isInFrustum(scene, sphere) && !(vector != 0 && (scene->viewFlags & VIEW_DEPTH_ONLY) != 0);
         bool candidate  = false;
         uint earlyFlags = 0;                            // late phase: what the early phase drew of it
         if (scene->hizLevelCount == 0)
@@ -144,7 +145,7 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
             uint early      = scene->cullSlotsPtr[drawIndex];
             if (early != CULLED)
                 earlyFlags  = (early & CULL_MESHLETS) != 0 && (early & CULL_WHOLE) == 0 ? CULL_EARLY_MESHLETS : CULL_DRAWN_EARLY;
-            bool seen       = inFrustum && !isOccluded(scene, sphere);
+            bool seen       = inFrustum && ((vector & VECTOR_OVERLAY) != 0 || !isOccluded(scene, sphere));
             scene->visibilityPtr[draw.firstInstance] = seen ? 1 : 0;
             candidate       = seen;
         }
@@ -152,7 +153,7 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
         {
             GeometryData *geometry = getDrawGeometry(scene, draw);
             lod             = selectLod(scene, geometry, sphere);
-            bool byMeshlets = isMeshletRun(scene, group.run) && geometry->lods[lod].meshletCount >= MESHLET_MIN_DRAW;
+            bool byMeshlets = isMeshletRun(scene, group.run) && geometry->lods[lod].meshletCount >= MESHLET_MIN_DRAW && vector == 0;
             // A draw drawn by meshlets goes to the late phase also when the early one drew some of them: the late
             // phase tests each meshlet.
             counted         = earlyFlags == 0;

@@ -42,6 +42,7 @@ add_executable(rasm_tests
             "textureStatesTests.cpp"
             "textureUploadTests.cpp"
             "terrainTests.cpp"
+            "vectorTests.cpp"
             "tileResidencyTests.cpp"
             "transformTests.cpp"
             "uiTests.cpp"

@@ -55,6 +55,12 @@ namespace rasm
         case MaterialType::TERRAIN:
             material.name = "terrain";
             break;
+        case MaterialType::VECTOR:
+            // Vector features blend their anti-aliased edges, in the Transparent pass, and have no back.
+            material.name = "vector";
+            material.alphaMode = AlphaMode::BLEND;
+            material.doubleSided = true;
+            break;
 
         default:
             spdlog::error("Unknown material template type.");
@@ -153,8 +159,14 @@ namespace rasm
         texturesLoading = texturesLoading || (heights.isValid() && !isLoaded(heights));
 
         Material &materialRef = registry.materials[material.index];
-        const bool runChanged = materialRef.doubleSided != values.doubleSided || materialRef.alphaMode != values.alphaMode;
-        materialRef = values;
+        Material updated = values;
+        if (updated.type == MaterialType::VECTOR)
+        {
+            updated.alphaMode = AlphaMode::BLEND;
+            updated.doubleSided = true;
+        }
+        const bool runChanged = materialRef.doubleSided != updated.doubleSided || materialRef.alphaMode != updated.alphaMode;
+        materialRef = updated;
         materialRef.handle = material;
         materialRef.terrain.heights = heights;
         writeMaterialRow(material);
