@@ -635,6 +635,13 @@ namespace rasm::gfx
     static_assert(sizeof(VectorData) == 64, "VectorData must match the shader's scalar layout");
     static_assert(sizeof(PointData) == 40, "PointData must match the shader's scalar layout");
     static_assert(sizeof(PointChunkHeader) == POINT_CHUNK_HEADER_WORDS * sizeof(uint32_t), "PointChunkHeader must match shaders/lib/points.slang");
+    // loadPointChunk (shaders/lib/points.slang) reads the header as words: these are its offsets.
+    static_assert(offsetof(PointChunkHeader, pointCount) == 12, "PointChunkHeader must match loadPointChunk");
+    static_assert(offsetof(PointChunkHeader, boxStep) == 16, "PointChunkHeader must match loadPointChunk");
+    static_assert(offsetof(PointChunkHeader, flags) == 28, "PointChunkHeader must match loadPointChunk");
+    static_assert(offsetof(PointChunkHeader, scalarMin) == 32, "PointChunkHeader must match loadPointChunk");
+    static_assert(offsetof(PointChunkHeader, scalarStep) == 36, "PointChunkHeader must match loadPointChunk");
+    static_assert(offsetof(PointChunkHeader, colorOffset) == 40, "PointChunkHeader must match loadPointChunk");
     static_assert(offsetof(MaterialData, points) == 312, "MaterialData must match the shader's scalar layout");
     static_assert(sizeof(MaterialData) == 352, "MaterialData must match the shader's scalar layout");
     static_assert(offsetof(MaterialData, vector) == 248, "MaterialData must match the shader's scalar layout");

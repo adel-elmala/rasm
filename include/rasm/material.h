@@ -122,7 +122,7 @@ namespace rasm
 
     struct PointMaterial
     {
-        glm::vec4      color        = glm::vec4(1.0f);  // linear RGB and alpha; times the point's color
+        glm::vec4      color        = glm::vec4(1.0f);  // linear RGB, times the point's color; points are opaque, alpha 0 hides them
         float          size         = 2.0f;             // the diameter, in sizeUnit; at least 1 pixel
         VectorUnit     sizeUnit     = VectorUnit::PIXELS;
         PointShape     shape        = PointShape::ROUND;

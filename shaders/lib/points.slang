@@ -23,7 +23,8 @@ static const uint   POINT_CHUNK_HEADER_UNITS = 6;
 static const uint   POINT_INDICES           = 3;        // a triangle a point
 static const float  POINT_STEP_SCALE        = 1.0 / 65535.0;
 
-// rasm::gfx::PointChunkHeader, read as three 16-byte pairs of units.
+// rasm::gfx::PointChunkHeader, read as words: boxMin 0, pointCount 12, boxStep 16, flags 28, scalarMin 32, scalarStep 36,
+// colorOffset 40 (bytes), which uberMaterialTypes.h asserts.
 struct PointChunk
 {
     float3          boxMin;

@@ -312,6 +312,8 @@ namespace rasm
         void writeScalarRange(const ScalarRange &range, gfx::PointData &points)
         {
             const bool log = range.log && range.min > 0.0f && range.max > 0.0f;
+            if (range.log && !log)
+                spdlog::warn("A POINTS material's range is logarithmic with an end at or below 0 ({} to {}): it is drawn linear.", range.min, range.max);
             points.rangeMin = log ? std::log(range.min) : range.min;
             points.rangeMax = log ? std::log(range.max) : range.max;
             points.flags |= (log ? gfx::POINT_LOG : 0u) | (range.clamp ? gfx::POINT_CLAMP : 0u);
@@ -567,6 +569,8 @@ namespace rasm
                         if ((subMesh.geometry.vertexCount == 0 && subMesh.geometry.pointCount == 0) || subMesh.geometry.indexCount == 0)
                             spdlog::warn("Skipping a mesh of entity {}: it has {} vertices and {} indices, and drawing needs both.",
                                          entity.index, subMesh.geometry.vertexCount, subMesh.geometry.indexCount);
+                        if (subMesh.geometry.pointCount > 0 && getSubMeshMaterial(*this, entityRef, subMesh).type != MaterialType::POINTS)
+                            spdlog::warn("Entity {} draws a point cloud chunk without a POINTS material: its points are not drawn.", entity.index);
                     }
 
                     // The rows go back when the entity or its mesh is destroyed (releaseEntityRows).
@@ -575,7 +579,7 @@ namespace rasm
                     EntityDrawState &state = gpuScene->entities[entity.index];
                     state.firstInstance = static_cast<uint32_t>(firstRow);
                     state.instanceCount = rowCount;
-                    picks->owners.assign(state.firstInstance, rowCount, entity);
+                    picks->owners.assign(state.firstInstance, rowCount, entity, entityRef.mesh);
                     state.waitingForTextures = !texturesLoaded(*this, entityRef, mesh);
                     for (uint32_t r = 0; r < rowCount; ++r)
                     {
@@ -738,9 +742,10 @@ namespace rasm
             AlphaMode &storedAlphaMode = gpuScene->instanceAlphaModes[state.firstInstance + i];
             // A point cloud chunk is drawn only with a POINTS material, by the point run, which is not culled by face.
             const auto points = static_cast<uint8_t>(subMesh.geometry.pointCount > 0 && material.type == MaterialType::POINTS ? 1 : 0);
+            const CullMode wantedCullMode = points != 0 ? CullMode::NONE : cullMode;
             uint8_t &storedPoints = gpuScene->instancePoints[state.firstInstance + i];
-            changed = changed || storedCullMode != cullMode || storedAlphaMode != material.alphaMode || storedPoints != points;
-            storedCullMode = points != 0 ? CullMode::NONE : cullMode;
+            changed = changed || storedCullMode != wantedCullMode || storedAlphaMode != material.alphaMode || storedPoints != points;
+            storedCullMode = wantedCullMode;
             storedAlphaMode = material.alphaMode;
             storedPoints = points;
         }

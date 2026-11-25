@@ -67,9 +67,9 @@ namespace rasm
     bool GeometryPool::create(RenderContext &ctx, const RendererConfig &config)
     {
         if (config.geometryPoolVertices == 0 || config.geometryPoolIndices == 0 || config.geometryPoolColors == 0 || config.geometryPoolSkins == 0 ||
-            config.geometryPoolMorphs == 0 || config.geometryPoolSubMeshes == 0 || config.geometryPoolMeshlets == 0 || config.geometryPoolPoints == 0)
+            config.geometryPoolMorphs == 0 || config.geometryPoolSubMeshes == 0 || config.geometryPoolMeshlets == 0)
         {
-            spdlog::error("The geometry pool needs room for at least one vertex, one index, one color, one skin, one morph delta, one meshlet, one point and one sub-mesh.");
+            spdlog::error("The geometry pool needs room for at least one vertex, one index, one color, one skin, one morph delta, one meshlet and one sub-mesh.");
             return false;
         }
 

@@ -26,6 +26,7 @@ namespace rasm
         uint32_t                    entityIndex             = 0;
         uint32_t                    entityGeneration        = 0;    // 0: no entity yet
         uint32_t                    subMesh                 = 0;
+        MeshHandle                  mesh;                           // the entity's mesh when it got the rows: a point's index maps through it
     };
 
     // The owner of every instance row as each frame slot's copy of the instance table holds it. Rows are given to
@@ -36,7 +37,7 @@ namespace rasm
     public:
         void                        reset(uint32_t rows);
         // syncGpuScene gives rows first .. first + count - 1 to the entity's sub-meshes 0 .. count - 1.
-        void                        assign(uint32_t first, uint32_t count, EntityHandle entity);
+        void                        assign(uint32_t first, uint32_t count, EntityHandle entity, MeshHandle mesh);
         // Before the slot's instance rows go up: the slot takes the rows assigned since its last sync.
         void                        sync(uint32_t slot);
         InstanceOwner               get(uint32_t slot, uint32_t row) const;

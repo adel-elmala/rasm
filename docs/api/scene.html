@@ -931,7 +931,7 @@ struct PointCloudChunkDesc
   <div class="body">
     <dl>
       <dt>positions</dt><dd>Offsets from the entity's origin, in metres. Keep a chunk small (tens of metres): its points are 16-bit steps of its box, and it is culled and given a level of detail as a whole.</dd>
-      <dt>colors</dt><dd>RGBA8 with RGB sRGB-encoded (<a href="#packVertexColor"><code>packVertexColor</code></a>), one per point, for <code>PointColorMode::COLOR</code>; null: none.</dd>
+      <dt>colors</dt><dd>RGBA8 with RGB sRGB-encoded (<a href="#packVertexColor"><code>packVertexColor</code></a>), one per point, for <code>PointColorMode::COLOR</code>; the alpha is not read (points are opaque); null: none.</dd>
       <dt>scalars</dt><dd>A value per point (height, intensity, ...), for a colormap (<code>PointColorMode::SCALAR</code>); null: none. Stored as 16-bit steps of the chunk's range.</dd>
       <dt>count</dt><dd>1 to <code>MAX_POINT_CHUNK_POINTS</code>.</dd>
     </dl>
@@ -941,7 +941,7 @@ struct PointCloudChunkDesc
 <div class="api" id="buildPointCloudChunk">
   <pre class="sig">MeshBuild           buildPointCloudChunk(const PointCloudChunkDesc&amp; desc);</pre>
   <div class="body">
-    <p>Checks the points (a count in range, positions and scalars finite; an error and an invalid build otherwise) and builds the chunk, on any thread: the points in an order whose every prefix is an even sample (a Morton order read in bit-reversed steps), 8 B a point with no colors, 12 B with them. <a href="#createMesh"><code>createMesh</code></a> uploads it into the point pool (<code>RendererConfig::geometryPoolPoints</code>, made with the first chunk). A pick's <code>PickHit::feature</code> is the point's index in <code>desc</code>'s arrays (<code>PICK_HIT_POINT</code>).</p>
+    <p>Checks the points (a count in range, positions and scalars finite; an error and an invalid build otherwise) and builds the chunk, on any thread: the points in an order whose every prefix is an even sample (a Morton order read in bit-reversed steps), 8 B a point with no colors, 12 B with them. <a href="#createMesh"><code>createMesh</code></a> uploads it into the point pool (<code>RendererConfig::geometryPoolPoints</code>, made with the first chunk). A pick's <code>PickHit::feature</code> is the point's index in <code>desc</code>'s arrays (<code>PICK_HIT_POINT</code>), mapped through the mesh the entity drew; a mesh destroyed before the pick's answer leaves no feature (<code>PICK_HIT_FEATURE</code> cleared). An entity that draws a chunk without a <code>POINTS</code> material draws nothing, with a warning.</p>
     <pre><code>// On a worker thread:
 rasm::MeshBuild build = rasm::buildPointCloudChunk({.positions = points.data(), .scalars = heights.data(), .count = count});
 // Later, on the renderer's thread:

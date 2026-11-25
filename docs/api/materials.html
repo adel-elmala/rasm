@@ -330,7 +330,7 @@ struct PointMaterial
   <div class="body">
     <p>The style of point cloud chunks (<a href="../guides/point-clouds.html">Point clouds</a>). Each point is drawn as one triangle cut to its shape, unlit.</p>
     <dl>
-      <dt>color</dt><dd>Linear RGB and alpha, times the point's color or its colormap color. A point whose color has alpha 0 is not drawn.</dd>
+      <dt>color</dt><dd>Linear RGB, times the point's color or its colormap color. Points are opaque: alpha 0 hides them, any other alpha draws them whole, and the points' own colors' alpha is not read.</dd>
       <dt>size, sizeUnit</dt><dd>The diameter in pixels (the same at every distance) or metres; at least one pixel.</dd>
       <dt>shape</dt><dd><code>SQUARE</code>; <code>ROUND</code>, a disc, smooth-edged with MSAA; <code>SPHERE</code>, a disc that writes a sphere's depth, so points meet as balls would. Points under 3 pixels are drawn square.</dd>
       <dt>colorMode</dt><dd><code>COLOR</code>: the chunk's own colors (white without them). <code>SCALAR</code>: each point's value through <code>range</code> and <code>colormap</code> (<code>color</code> alone without either).</dd>

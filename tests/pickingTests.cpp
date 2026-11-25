@@ -114,20 +114,24 @@ TEST_CASE("InstanceOwners: a frame slot keeps a row's owner until its own sync, 
     const EntityHandle a{3, 1};
     const EntityHandle b{3, 2}; // a's index again, after a was destroyed
     // Slot 0's frame gives rows 5 and 6 to a, and uploads them.
-    owners.assign(5, 2, a);
+    owners.assign(5, 2, a, rasm::MeshHandle{7, 1});
     owners.sync(0);
     CHECK(owners.get(0, 5).entityGeneration == 1);
     CHECK(owners.get(0, 6).subMesh == 1);
+    // The row keeps the mesh it was given for: a point's index maps through it.
+    CHECK(owners.get(0, 6).mesh == rasm::MeshHandle{7, 1});
     // Slot 1 has not synced yet: its copy of the table does not hold a's rows.
     CHECK(owners.get(1, 5).entityGeneration == 0);
     owners.sync(1);
     CHECK(owners.get(1, 5).entityGeneration == 1);
     // a is destroyed and b takes row 5 in slot 0's next frame: slot 1's copy still holds a until its own sync.
-    owners.assign(5, 1, b);
+    owners.assign(5, 1, b, rasm::MeshHandle{8, 1});
     owners.sync(0);
     CHECK(owners.get(0, 5).entityGeneration == 2);
     CHECK(owners.get(1, 5).entityGeneration == 1);
     CHECK(owners.get(1, 5).entityIndex == 3);
+    CHECK(owners.get(1, 5).mesh == rasm::MeshHandle{7, 1});
+    CHECK(owners.get(0, 5).mesh == rasm::MeshHandle{8, 1});
     owners.sync(1);
     CHECK(owners.get(1, 5).entityGeneration == 2);
     // A row past the table has no owner.

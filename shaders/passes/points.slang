@@ -53,7 +53,8 @@ float4 getPointColor(SceneData *scene, PointData style, PointChunk chunk, uint b
     uint2 pair      = scene->pointsPtr[base + chunk.colorOffset / 2 + point / 2];
     uint packed     = (point & 1) != 0 ? pair.y : pair.x;
     float4 decoded  = float4(packed & 0xFF, (packed >> 8) & 0xFF, (packed >> 16) & 0xFF, packed >> 24) / 255.0;
-    return color * float4(decodeSrgb(decoded.r), decodeSrgb(decoded.g), decodeSrgb(decoded.b), decoded.a);
+    // Points are opaque: the colors' alpha is not read, so colors packed without one (0) still draw.
+    return color * float4(decodeSrgb(decoded.r), decodeSrgb(decoded.g), decodeSrgb(decoded.b), 1.0);
 }
 
 // SV_VertexID is the raw index (Slang subtracts BaseVertex): point p's corner c is 3p + c, of a triangle around the

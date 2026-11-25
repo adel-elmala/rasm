@@ -91,12 +91,12 @@ namespace rasm
         }
     }
 
-    void InstanceOwners::assign(uint32_t first, uint32_t count, EntityHandle entity)
+    void InstanceOwners::assign(uint32_t first, uint32_t count, EntityHandle entity, MeshHandle mesh)
     {
         if (first + count > current.size())
             return;
         for (uint32_t i = 0; i < count; ++i)
-            current[first + i] = {.entityIndex = static_cast<uint32_t>(entity.index), .entityGeneration = static_cast<uint32_t>(entity.generation), .subMesh = i};
+            current[first + i] = {.entityIndex = static_cast<uint32_t>(entity.index), .entityGeneration = static_cast<uint32_t>(entity.generation), .subMesh = i, .mesh = mesh};
         for (auto &ranges : pending)
             ranges.push_back({.first = first, .count = count});
     }
@@ -633,12 +633,13 @@ namespace rasm
                 hit.entity = {owner.entityIndex, owner.entityGeneration};
                 hit.subMesh = owner.subMesh;
                 hit.feature = (group.nearest.flags & PICK_HIT_FEATURE) != 0 ? group.nearest.feature : 0;
-                // A point's index in its chunk's drawn order goes back to the application's (Mesh::pointOrder).
-                if ((group.nearest.flags & PICK_HIT_POINT) != 0 && isLive(hit.entity))
+                // A point's index in its chunk's drawn order goes back to the application's (Mesh::pointOrder), through the
+                // mesh the rows were given for. Once that mesh is destroyed the index cannot be mapped: no feature then.
+                if ((group.nearest.flags & PICK_HIT_POINT) != 0)
                 {
-                    const MeshHandle mesh = registry.entities[hit.entity.index].mesh;
-                    if (isLive(mesh) && hit.feature < registry.meshes[mesh.index].pointOrder.size())
-                        hit.feature = registry.meshes[mesh.index].pointOrder[hit.feature];
+                    const bool mapped = isLive(owner.mesh) && hit.feature < registry.meshes[owner.mesh.index].pointOrder.size();
+                    hit.feature = mapped ? registry.meshes[owner.mesh.index].pointOrder[hit.feature] : 0;
+                    hit.flags = mapped ? hit.flags : hit.flags & ~PICK_HIT_FEATURE;
                 }
                 hit.flags = group.nearest.flags;
                 hit.pixels = group.pixels;

@@ -15,7 +15,7 @@ namespace rasm
     struct PointCloudChunkDesc
     {
         const glm::vec3*    positions   = nullptr;      // offsets from the entity's origin
-        const uint32_t*     colors      = nullptr;      // RGBA8, RGB sRGB-encoded (packVertexColor); null: none
+        const uint32_t*     colors      = nullptr;      // RGB8 in RGBA8, sRGB-encoded (packVertexColor), alpha ignored; null: none
         const float*        scalars     = nullptr;      // null: none
         uint32_t            count       = 0;
     };

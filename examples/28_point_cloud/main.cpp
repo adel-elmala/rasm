@@ -83,6 +83,16 @@ namespace
         std::vector<uint32_t> colors;
     };
 
+    // Each tile has one building (a box on the ground) and a few trees (spheres of leaves on a trunk).
+    struct TileLayout
+    {
+        glm::vec2 buildingMin;
+        glm::vec2 buildingMax;
+        float roof;
+        glm::vec3 trees[4];
+        float crowns[4];
+    };
+
     struct Rng
     {
         uint64_t state;
@@ -109,16 +119,6 @@ namespace
     {
         return static_cast<float>(14.0 * std::sin(x / 95.0) * std::cos(z / 120.0) + 5.0 * std::sin((x + z) / 47.0) + 1.5 * std::sin(x / 13.0) * std::sin(z / 17.0));
     }
-
-    // Each tile has one building (a box on the ground) and a few trees (spheres of leaves on a trunk).
-    struct TileLayout
-    {
-        glm::vec2 buildingMin;
-        glm::vec2 buildingMax;
-        float roof;
-        glm::vec3 trees[4];
-        float crowns[4];
-    };
 
     TileLayout getTileLayout(int tx, int tz)
     {
