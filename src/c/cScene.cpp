@@ -2,6 +2,7 @@
 
 #include "rasm/mesh.h"
 #include "rasm/renderer.h"
+#include "rasm/renderSpace.h"
 
 #include <cstring>
 #include <vector>
@@ -384,8 +385,16 @@ try
     rasm_light_desc values = c::toC(r->getLight(c::toCpp(light)));
     if (errors.result() != RASM_OK)
         return RASM_ERROR_FAILED;
+    const rasm_light_desc current = values;
     if (!c::readSized(desc, c::LIGHT_DESC_SIZE_1_0, &values, sizeof(values), __func__, "desc") || !c::checkEnum(values.type, RASM_LIGHT_TYPE_SPOT + 1, __func__, "desc->type"))
         return RASM_ERROR_INVALID_ARGUMENT;
+    // A caller without position_d (1.1) gives the position in floats: it is that float position, or the light's exact
+    // one when the caller left the float part as rasm_get_light gave it.
+    if (desc->size < c::LIGHT_DESC_SIZE_1_2)
+    {
+        const bool unchanged = std::memcmp(&values.position, &current.position, sizeof(rasm_vec3)) == 0;
+        values.position_d = unchanged ? current.position_d : rasm_dvec3{0.0, 0.0, 0.0};
+    }
     Light updated = c::toCpp(values);
     updated.handle = c::toCpp(light);
     r->updateLight(c::toCpp(light), updated);
@@ -404,6 +413,75 @@ try
     return errors.result();
 }
 RASM_C_CATCH_RESULT
+
+rasm_result RASM_CALL rasm_get_transform_d(rasm_renderer *renderer, rasm_entity entity, rasm_transform_d *transform)
+try
+{
+    Renderer *r = c::getRenderer(renderer, __func__);
+    if (r == nullptr || !c::checkHandle(entity.id, __func__, "entity") || !c::checkPointer(transform, __func__, "transform"))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    const c::CallErrors errors;
+    *transform = c::toTransformD(r->getTransform(c::toCpp(entity)));
+    return errors.result();
+}
+RASM_C_CATCH_RESULT
+
+rasm_result RASM_CALL rasm_update_transform_d(rasm_renderer *renderer, rasm_entity entity, const rasm_transform_d *transform)
+try
+{
+    Renderer *r = c::getRenderer(renderer, __func__);
+    if (r == nullptr || !c::checkHandle(entity.id, __func__, "entity") || !c::checkPointer(transform, __func__, "transform"))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    const c::CallErrors errors;
+    r->updateTransform(c::toCpp(entity), c::toCpp(*transform));
+    return errors.result();
+}
+RASM_C_CATCH_RESULT
+
+rasm_result RASM_CALL rasm_get_light_position_d(rasm_renderer *renderer, rasm_light light, rasm_dvec3 *position)
+try
+{
+    Renderer *r = c::getRenderer(renderer, __func__);
+    if (r == nullptr || !c::checkHandle(light.id, __func__, "light") || !c::checkPointer(position, __func__, "position"))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    const c::CallErrors errors;
+    const Light values = r->getLight(c::toCpp(light));
+    if (errors.result() != RASM_OK)
+        return RASM_ERROR_FAILED;
+    *position = c::toC(values.position);
+    return RASM_OK;
+}
+RASM_C_CATCH_RESULT
+
+rasm_result RASM_CALL rasm_set_light_position_d(rasm_renderer *renderer, rasm_light light, const rasm_dvec3 *position)
+try
+{
+    Renderer *r = c::getRenderer(renderer, __func__);
+    if (r == nullptr || !c::checkHandle(light.id, __func__, "light") || !c::checkPointer(position, __func__, "position"))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    const c::CallErrors errors;
+    Light values = r->getLight(c::toCpp(light));
+    if (errors.result() != RASM_OK)
+        return RASM_ERROR_FAILED;
+    values.position = c::toCpp(*position);
+    r->updateLight(c::toCpp(light), values);
+    return errors.result();
+}
+RASM_C_CATCH_RESULT
+
+rasm_vec3 RASM_CALL rasm_to_render_position(rasm_dvec3 world_position, rasm_dvec3 origin)
+try
+{
+    return c::toC(toRenderPosition(c::toCpp(world_position), c::toCpp(origin)));
+}
+RASM_C_CATCH({})
+
+rasm_dvec3 RASM_CALL rasm_to_world_position(rasm_vec3 render_position, rasm_dvec3 origin)
+try
+{
+    return c::toC(toWorldPosition(c::toCpp(render_position), c::toCpp(origin)));
+}
+RASM_C_CATCH({})
 
 rasm_camera RASM_CALL rasm_create_camera(rasm_renderer *renderer, const rasm_camera_projection *projection, const rasm_transform *transform)
 try
@@ -442,6 +520,30 @@ try
 RASM_C_CATCH_RESULT
 
 rasm_result RASM_CALL rasm_set_camera_transform(rasm_renderer *renderer, rasm_camera camera, const rasm_transform *transform)
+try
+{
+    Renderer *r = c::getRenderer(renderer, __func__);
+    if (r == nullptr || !c::checkHandle(camera.id, __func__, "camera") || !c::checkPointer(transform, __func__, "transform"))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    const c::CallErrors errors;
+    r->setCameraTransform(c::toCpp(camera), c::toCpp(*transform));
+    return errors.result();
+}
+RASM_C_CATCH_RESULT
+
+rasm_result RASM_CALL rasm_get_camera_transform_d(rasm_renderer *renderer, rasm_camera camera, rasm_transform_d *transform)
+try
+{
+    Renderer *r = c::getRenderer(renderer, __func__);
+    if (r == nullptr || !c::checkHandle(camera.id, __func__, "camera") || !c::checkPointer(transform, __func__, "transform"))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    const c::CallErrors errors;
+    *transform = c::toTransformD(r->getCameraTransform(c::toCpp(camera)));
+    return errors.result();
+}
+RASM_C_CATCH_RESULT
+
+rasm_result RASM_CALL rasm_set_camera_transform_d(rasm_renderer *renderer, rasm_camera camera, const rasm_transform_d *transform)
 try
 {
     Renderer *r = c::getRenderer(renderer, __func__);

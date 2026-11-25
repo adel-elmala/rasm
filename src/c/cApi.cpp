@@ -5,6 +5,7 @@
 #include "spdlog/spdlog.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -492,6 +493,30 @@ namespace rasm::c
                 .scale = toC(transform.scale)};
     }
 
+    Transform toCpp(const rasm_transform_d &transform)
+    {
+        return {.position = toCpp(transform.position),
+                .rotation = glm::quat(transform.rotation.w, transform.rotation.x, transform.rotation.y, transform.rotation.z),
+                .scale = toCpp(transform.scale)};
+    }
+
+    rasm_transform_d toTransformD(const Transform &transform)
+    {
+        return {.position = toC(transform.position),
+                .rotation = {transform.rotation.x, transform.rotation.y, transform.rotation.z, transform.rotation.w},
+                .scale = toC(transform.scale)};
+    }
+
+    rasm_vec3 toFloatPart(const glm::dvec3 &v)
+    {
+        return toC(glm::vec3(v));
+    }
+
+    rasm_dvec3 toRemainder(const glm::dvec3 &v)
+    {
+        return toC(v - glm::dvec3(glm::vec3(v)));
+    }
+
     rasm_mat4 toC(const glm::mat4 &matrix)
     {
         rasm_mat4 result = {};
@@ -641,7 +666,7 @@ namespace rasm::c
                 .intensity = light.intensity,
                 .range = light.range,
                 .color = toCpp(light.color),
-                .position = glm::dvec3(toCpp(light.position)),
+                .position = glm::dvec3(toCpp(light.position)) + toCpp(light.position_d),
                 .direction = toCpp(light.direction),
                 .innerConeAngle = light.inner_cone_angle,
                 .outerConeAngle = light.outer_cone_angle};
@@ -654,10 +679,11 @@ namespace rasm::c
                 .intensity = light.intensity,
                 .range = light.range,
                 .color = toC(light.color),
-                .position = toC(glm::vec3(light.position)),
+                .position = toFloatPart(light.position),
                 .direction = toC(light.direction),
                 .inner_cone_angle = light.innerConeAngle,
-                .outer_cone_angle = light.outerConeAngle};
+                .outer_cone_angle = light.outerConeAngle,
+                .position_d = toRemainder(light.position)};
     }
 
     // The name and the handle stay the current material's.
@@ -700,7 +726,11 @@ namespace rasm::c
 
     SceneEnvironment toCpp(const rasm_scene_environment &environment)
     {
-        return {.environment = toCpp(environment.environment), .intensity = environment.intensity, .rotation = environment.rotation, .sky = environment.sky != 0};
+        return {.environment = toCpp(environment.environment),
+                .intensity = environment.intensity,
+                .rotation = environment.rotation,
+                .sky = environment.sky != 0,
+                .orientation = glm::quat(environment.orientation.w, environment.orientation.x, environment.orientation.y, environment.orientation.z)};
     }
 
     rasm_scene_environment toC(const SceneEnvironment &environment)
@@ -709,7 +739,8 @@ namespace rasm::c
                 .environment = toC(environment.environment),
                 .intensity = environment.intensity,
                 .rotation = environment.rotation,
-                .sky = environment.sky ? RASM_TRUE : RASM_FALSE};
+                .sky = environment.sky ? RASM_TRUE : RASM_FALSE,
+                .orientation = {environment.orientation.x, environment.orientation.y, environment.orientation.z, environment.orientation.w}};
     }
     bool checkInputEvent(const rasm_input_event &event, const char *function)
     {
@@ -720,6 +751,12 @@ namespace rasm::c
 
     bool checkCameraController(const rasm_camera_controller &controller, const char *function)
     {
+        const glm::vec3 up = toCpp(controller.free_fly_up);
+        if (!std::isfinite(up.x) || !std::isfinite(up.y) || !std::isfinite(up.z))
+        {
+            reportError(function, "controller->free_fly_up is not finite.");
+            return false;
+        }
         return checkEnum(controller.type, RASM_CAMERA_CONTROLLER_TYPE_NONE + 1, function, "controller->type");
     }
 
@@ -789,9 +826,15 @@ namespace rasm::c
     {
         CameraController result = {.type = static_cast<CameraController::Type>(controller.type), .easingSpeed = controller.easing_speed};
         if (result.type == CameraController::Type::TRACK_BALL)
-            result.trackBall = {.radius = controller.track_ball_radius, .center = glm::dvec3(toCpp(controller.track_ball_center)), .orbitSensitivity = controller.track_ball_orbit_sensitivity};
+            result.trackBall = {.radius = controller.track_ball_radius,
+                                .center = glm::dvec3(toCpp(controller.track_ball_center)) + toCpp(controller.track_ball_center_d),
+                                .orbitSensitivity = controller.track_ball_orbit_sensitivity};
         else if (result.type == CameraController::Type::FREE_FLY)
-            result.freeFly = {.yaw = controller.free_fly_yaw, .pitch = controller.free_fly_pitch, .speed = controller.free_fly_speed, .lookSensitivity = controller.free_fly_look_sensitivity};
+            result.freeFly = {.yaw = controller.free_fly_yaw,
+                              .pitch = controller.free_fly_pitch,
+                              .speed = controller.free_fly_speed,
+                              .lookSensitivity = controller.free_fly_look_sensitivity,
+                              .up = toCpp(controller.free_fly_up)};
         return result;
     }
 
@@ -806,7 +849,9 @@ namespace rasm::c
                 .free_fly_yaw = 0.0f,
                 .free_fly_pitch = 0.0f,
                 .free_fly_speed = 5.0f,
-                .free_fly_look_sensitivity = 1.0f};
+                .free_fly_look_sensitivity = 1.0f,
+                .track_ball_center_d = {0.0, 0.0, 0.0},
+                .free_fly_up = {0.0f, 1.0f, 0.0f}};
     }
 
     // The other type's fields keep their defaults, so a caller that switches the type gets a working controller.
@@ -818,7 +863,8 @@ namespace rasm::c
         if (controller.type == CameraController::Type::TRACK_BALL)
         {
             result.track_ball_radius = controller.trackBall.radius;
-            result.track_ball_center = toC(glm::vec3(controller.trackBall.center));
+            result.track_ball_center = toFloatPart(controller.trackBall.center);
+            result.track_ball_center_d = toRemainder(controller.trackBall.center);
             result.track_ball_orbit_sensitivity = controller.trackBall.orbitSensitivity;
         }
         else if (controller.type == CameraController::Type::FREE_FLY)
@@ -827,6 +873,8 @@ namespace rasm::c
             result.free_fly_pitch = controller.freeFly.pitch;
             result.free_fly_speed = controller.freeFly.speed;
             result.free_fly_look_sensitivity = controller.freeFly.lookSensitivity;
+            if (glm::dot(controller.freeFly.up, controller.freeFly.up) > 0.0f)
+                result.free_fly_up = toC(controller.freeFly.up);
         }
         return result;
     }

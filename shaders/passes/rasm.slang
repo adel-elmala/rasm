@@ -269,6 +269,7 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     info.environment.brdfLut        = pc.scene->brdfLut;
     info.environment.intensity      = pc.scene->environmentIntensity;
     info.environment.rotation       = pc.scene->environmentRotation;
+    info.environment.orientation    = pc.scene->environmentOrientation;
 
     return TO_OUTPUT(toTarget(shadePBR(gTextures, gCubeTextures, info), coverage));
 #endif

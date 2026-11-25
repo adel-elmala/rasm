@@ -387,6 +387,7 @@ namespace rasm::gfx
         uint64_t         meshletDataPtr;            // the meshlets' vertices and triangles, for the mesh shaders; 0 without them
         glm::vec3        originLow;                 // the origin is originHigh + originLow (splitPosition)
         uint32_t         zero;                      // always 0: the shaders' render-space sums keep their order (renderSpace.slang)
+        glm::vec4        environmentOrientation;    // quaternion (x, y, z, w): SceneEnvironment::orientation
     };
 
     struct PushConstants
@@ -531,7 +532,8 @@ namespace rasm::gfx
     static_assert(offsetof(GeometryData, boundsRadius) == 16, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, lodCount) == 20, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, lods) == 24, "GeometryData must match the shader's scalar layout");
-    static_assert(sizeof(SceneData) == 2032, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, environmentOrientation) == 2032, "SceneData must match the shader's scalar layout");
+    static_assert(sizeof(SceneData) == 2048, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, meshletDataPtr) == 2008, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, originLow) == 2016, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, previousSkinnedVertsPtr) == 1816, "SceneData must match the shader's scalar layout");

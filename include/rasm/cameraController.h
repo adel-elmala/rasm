@@ -38,6 +38,7 @@ namespace rasm
             float pitch;
             float speed;            // units per second
             float lookSensitivity;  // radians per NDC unit
+            glm::vec3 up;           // the axis yaw turns around and pitch is measured from (a globe's local up); zero: +Y
         };
 
         Type type;

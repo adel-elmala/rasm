@@ -15,14 +15,18 @@ struct EnvironmentLight
     uint        irradiance;     // bindless cube: the cosine-weighted light from each normal's hemisphere, divided by pi
     uint        brdfLut;        // bindless 2D: the split sum's scale (x) and bias (y) of f0, at (n.v, roughness)
     float       intensity;
-    float2      rotation;       // cos and sin of the environment's turn around +Y
+    float2      rotation;       // cos and sin of the environment's turn around its +Y
+    float4      orientation;    // quaternion (x, y, z, w): the environment's frame in the world, after the turn
 };
 
-// The environment turned by its rotation (counter-clockwise around +Y, seen from above): a world direction looks up
-// the unturned environment at the direction turned back.
-float3 toEnvironment(float3 d, float2 rotation)
+// The environment turned by its rotation (counter-clockwise around its +Y, seen from above), then placed in the world
+// by its orientation (a globe's local frame): a world direction looks up the unturned environment at the direction
+// turned back, first out of the orientation, then by the rotation. The identity orientation adds 0 exactly.
+float3 toEnvironment(float3 d, float2 rotation, float4 orientation)
 {
-    return float3(d.x * rotation.x - d.z * rotation.y, d.y, d.x * rotation.y + d.z * rotation.x);
+    float3 axis = -orientation.xyz;
+    float3 local = d + 2.0 * cross(axis, cross(axis, d) + orientation.w * d);
+    return float3(local.x * rotation.x - local.z * rotation.y, local.y, local.x * rotation.y + local.z * rotation.x);
 }
 
 // Equirectangular image coordinates of a direction: -Z at the image's centre, +X a quarter to its right, +Y at its
@@ -38,12 +42,12 @@ float2 getEquirectUV(float3 d)
 // from the LUT. Diffuse reads the irradiance cube at the normal.
 float3 getEnvironmentLight(SamplerCube cubes[], Sampler2D textures[], EnvironmentLight environment, float3 n, float3 v, float NoV, float roughness, float3 f0, float3 diffuseColor)
 {
-    float3 r            = toEnvironment(reflect(-v, n), environment.rotation);
+    float3 r            = toEnvironment(reflect(-v, n), environment.rotation, environment.orientation);
     float lod           = roughness * float(environment.specularMips - 1);
     float3 prefiltered  = cubes[environment.specular].SampleLevel(r, lod).rgb;
     float2 dfg          = textures[environment.brdfLut].SampleLevel(float2(NoV, roughness), 0.0).xy;
     float3 specular     = prefiltered * (f0 * dfg.x + dfg.y);
-    float3 diffuse      = cubes[environment.irradiance].SampleLevel(toEnvironment(n, environment.rotation), 0.0).rgb * diffuseColor;
+    float3 diffuse      = cubes[environment.irradiance].SampleLevel(toEnvironment(n, environment.rotation, environment.orientation), 0.0).rgb * diffuseColor;
     return (diffuse + specular) * environment.intensity;
 }
 

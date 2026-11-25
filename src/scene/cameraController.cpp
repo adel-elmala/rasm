@@ -1,5 +1,7 @@
 #include "rasm/cameraController.h"
 
+#include "glm/gtc/constants.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -30,12 +32,28 @@ namespace rasm
             return glm::vec3(x, y, z);
         }
 
+        // The frame whose +Y is the free-fly controller's up: the shortest turn from +Y to it. A zero up, or +Y, is no
+        // frame at all, so a controller without an up turns exactly as it always did.
+        bool getUpFrame(const glm::vec3 &up, glm::quat &frame)
+        {
+            const glm::vec3 worldUp(0.0f, 1.0f, 0.0f);
+            if (glm::dot(up, up) < 1e-12f || up == worldUp)
+                return false;
+            const glm::vec3 axis = glm::normalize(up);
+            const float cosine = glm::dot(worldUp, axis);
+            if (cosine < -0.999999f)
+                frame = glm::angleAxis(glm::pi<float>(), glm::vec3(1.0f, 0.0f, 0.0f));
+            else
+                frame = glm::normalize(glm::quat(1.0f + cosine, glm::cross(worldUp, axis)));
+            return true;
+        }
+
         void updateFreeFly(CameraRig &rig, const CameraInput &input)
         {
             auto &freeFly = rig.controller.freeFly;
             auto &transform = rig.targetTransform;
 
-            // Look: yaw around world up, pitch around the camera's local right axis.
+            // Look: yaw around the controller's up, pitch around the camera's local right axis.
             // Rebuilding the rotation from yaw/pitch keeps the horizon level.
             const float deltaX = input.mouseEnd.x - input.mouseStart.x;
             const float deltaY = input.mouseEnd.y - input.mouseStart.y;
@@ -48,6 +66,9 @@ namespace rasm
 
             transform.rotation = glm::normalize(glm::angleAxis(freeFly.yaw, glm::vec3(0.0f, 1.0f, 0.0f)) *
                                                 glm::angleAxis(freeFly.pitch, glm::vec3(1.0f, 0.0f, 0.0f)));
+            glm::quat frame;
+            if (getUpFrame(freeFly.up, frame))
+                transform.rotation = glm::normalize(frame * transform.rotation);
 
             // Movement: held keys, frame-time based.
             const glm::vec3 forward = transform.rotation * glm::vec3(0.0f, 0.0f, -1.0f);
@@ -167,7 +188,10 @@ namespace rasm
         {
             // Seed the free-fly angles from the current orientation so switching
             // controllers does not snap the view. Roll is intentionally discarded.
-            const glm::vec3 forward = transform.rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+            glm::vec3 forward = transform.rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+            glm::quat frame;
+            if (getUpFrame(controller.freeFly.up, frame))
+                forward = glm::conjugate(frame) * forward;
             rig.controller.freeFly.pitch = std::asin(glm::clamp(forward.y, -1.0f, 1.0f));
             rig.controller.freeFly.yaw = std::atan2(-forward.x, -forward.z);
         }

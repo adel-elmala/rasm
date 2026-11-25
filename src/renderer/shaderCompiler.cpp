@@ -603,7 +603,8 @@ namespace rasm
                                      {"coneRuns", offsetof(gfx::SceneData, coneRuns)},
                                      {"meshletDataPtr", offsetof(gfx::SceneData, meshletDataPtr)},
                                      {"originLow", offsetof(gfx::SceneData, originLow)},
-                                     {"zero", offsetof(gfx::SceneData, zero)}});
+                                     {"zero", offsetof(gfx::SceneData, zero)},
+                                     {"environmentOrientation", offsetof(gfx::SceneData, environmentOrientation)}});
 
             valid &= validateStruct(fieldStruct(layouts, scene, "meshletsPtr"), "GeometryMeshlet", sizeof(gfx::GeometryMeshlet),
                                     {{"center", offsetof(gfx::GeometryMeshlet, center)},

@@ -289,6 +289,31 @@ try
 }
 RASM_C_CATCH_RESULT
 
+rasm_camera_rig *RASM_CALL rasm_camera_rig_create_d(const rasm_camera_controller *controller, const rasm_transform_d *transform)
+try
+{
+    rasm_camera_controller values = c::getControllerDefaults();
+    if (!c::readSized(controller, c::CAMERA_CONTROLLER_SIZE_1_1, &values, sizeof(values), __func__, "controller") || !c::checkCameraController(values, __func__))
+        return nullptr;
+    auto rig = std::make_unique<rasm_camera_rig>();
+    rig->rig = createCameraRig(c::toCpp(values), transform != nullptr ? c::toCpp(*transform) : Transform{});
+    return rig.release();
+}
+RASM_C_CATCH(nullptr)
+
+rasm_result RASM_CALL rasm_camera_rig_get_transform_d(const rasm_camera_rig *rig, rasm_transform_d *transform, rasm_transform_d *target_transform)
+try
+{
+    if (!c::checkPointer(rig, __func__, "rig"))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    if (transform != nullptr)
+        *transform = c::toTransformD(rig->rig.transform);
+    if (target_transform != nullptr)
+        *target_transform = c::toTransformD(rig->rig.targetTransform);
+    return RASM_OK;
+}
+RASM_C_CATCH_RESULT
+
 rasm_result RASM_CALL rasm_camera_rig_get_transform(const rasm_camera_rig *rig, rasm_transform *transform, rasm_transform *target_transform)
 try
 {
