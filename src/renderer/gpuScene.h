@@ -1,6 +1,7 @@
 // clang-format off
 #pragma once
 
+#include "renderer/labelPlacement.h"
 #include "rasm/handle.h"
 #include "rasm/scene.h"
 #include "rasm/types.h"
@@ -39,6 +40,8 @@ namespace rasm
         uint32_t                        movedSync                                                           = UINT32_MAX;   // GpuScene::syncCount when its rows last changed
         Transform                       syncedTransform                                                     = {};   // the entity transform the last synced frame drew
         uint32_t                        listStamp                                                           = 0;    // the draw list rebuild that last met it, so it is drawn once
+        int32_t                         firstLabel                                                          = -1;   // its first label slot (GpuScene::labelSlots), -1 without labels
+        uint32_t                        labelCount                                                          = 0;
     };
 
     struct DrawRun
@@ -69,6 +72,7 @@ namespace rasm
         uint32_t                        bufferCapacity[MAX_FRAMES_IN_FLIGHT]                                = {};
         uint8_t                         staleSlots                                                          = 0;
         bool                            rebuild                                                             = false;
+        std::vector<EntityHandle>       labelEntities;                                                              // drawn entities with labels, for each view's placement
     };
 
     struct SceneView
@@ -120,6 +124,10 @@ namespace rasm
         bool                            jitter                                                              = false;    // addTaaPass: the projection takes a sub-pixel offset per frame
         uint32_t                        jitterFrame                                                         = 0;        // counts the jittered frames, for getTaaJitter
         bool                            hasPrevious                                                         = false;
+        LabelPlacement                  labels;                                                                     // a shaded view's labels over frames
+        std::vector<LabelCandidate>     labelCandidates;                                                            // scratch, keeps its capacity
+        BufferHandle                    labelBuffers[MAX_FRAMES_IN_FLIGHT]                                  = {};   // each label slot's alpha, which the vertex stage reads
+        uint32_t                        labelCapacity[MAX_FRAMES_IN_FLIGHT]                                 = {};
     };
 
     // A shaded view's pipelines for one sample count of its target: they must match the attachments they draw into.
@@ -176,6 +184,9 @@ namespace rasm
         std::vector<int32_t>            instanceMeshletWords;                                                       // per instance row: its first word, -1 for none
         std::vector<uint32_t>           instanceMeshletWordCounts;
         bool                            meshletWordsFullLogged                                              = false;
+        RangeAllocator                  labelSlots;                                                                 // MAX_LABELS: a range per entity with labels
+        std::vector<uint32_t>           labelStamps;                                                                // per slot: counts its labels, so a view sees a new one start hidden
+        bool                            labelSlotsFullLogged                                                = false;
         std::vector<EntityHandle>       entitiesWaitingForMesh;
         std::vector<EntityHandle>       entitiesWaitingForTextures;
         std::vector<EntityHandle>       movedEntities;          // rows written since the last sync: their previousWorld is the last synced matrix

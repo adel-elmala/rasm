@@ -19,6 +19,7 @@ add_executable(rasm_tests
             "importMeshText.cpp"
             "inputTests.cpp"
             "inspectorTests.cpp"
+            "labelPlacementTests.cpp"
             "ktxImageTests.cpp"
             "lightClustersTests.cpp"
             "localShadowsTests.cpp"
@@ -42,6 +43,7 @@ add_executable(rasm_tests
             "textureStatesTests.cpp"
             "textureUploadTests.cpp"
             "terrainTests.cpp"
+            "textTests.cpp"
             "vectorTests.cpp"
             "tileResidencyTests.cpp"
             "transformTests.cpp"
@@ -56,7 +58,8 @@ target_link_libraries(rasm_tests PRIVATE rasm::rasm doctest::doctest KTX::ktx)
 # Private classes such as rhi::UploadManager are tested against a fake rhi::Device.
 target_include_directories(rasm_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_compile_definitions(rasm_tests PRIVATE RASM_TEST_EXECUTABLE_DIR="$<TARGET_FILE_DIR:rasm_tests>"
-                                              RASM_TEST_DEFAULT_SHADER_DIR="${RASM_SHADER_DIR}")
+                                              RASM_TEST_DEFAULT_SHADER_DIR="${RASM_SHADER_DIR}"
+                                              RASM_TEST_FONT="${PROJECT_SOURCE_DIR}/assets/fonts/Roboto-Medium.ttf")
 rasm_copy_runtime_dlls(rasm_tests)
 
 add_test(NAME rasm_tests COMMAND rasm_tests)
@@ -68,7 +71,8 @@ if (RASM_C_API)
     target_link_libraries(rasm_c_tests PRIVATE rasm::c doctest::doctest glm::glm)
     target_include_directories(rasm_c_tests PRIVATE "${PROJECT_SOURCE_DIR}/include")
     target_compile_definitions(rasm_c_tests PRIVATE RASM_TEST_GOLDEN_DIR="${PROJECT_SOURCE_DIR}/tests/golden/lavapipe"
-                                                    RASM_TEST_C_LIBRARY_NAME="$<TARGET_FILE_NAME:rasm_c>")
+                                                    RASM_TEST_C_LIBRARY_NAME="$<TARGET_FILE_NAME:rasm_c>"
+                                                    RASM_TEST_FONT="${PROJECT_SOURCE_DIR}/assets/fonts/Roboto-Medium.ttf")
     rasm_copy_runtime_dlls(rasm_c_tests)
     add_test(NAME rasm_c_tests COMMAND rasm_c_tests)
 

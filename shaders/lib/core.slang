@@ -151,6 +151,8 @@ struct VectorData
     float               gapLength;
     uint32_t            flags;              // VECTOR_*
     int32_t             drawOrder;
+    uint32_t            font;               // the font atlas's bindless index, INVALID_TEXTURE_INDEX without a font
+    float               distanceRange;      // the atlas's: a texel holds 0.5 + distance / distanceRange
 };
 
 // The texture transforms come after the rest, so a shader copies Material without them and reads them only for a
@@ -176,7 +178,7 @@ struct InstanceData
     uint32_t        materialIndex;
     float4          previousWorld[3];   // the rows the frame before drew, for motion; w: its translation minus this one
     int32_t         animationRow;       // its InstanceTransform in SceneData::animatedTransformsPtr, -1: the matrices above
-    int32_t         meshletVisibility;  // its first word in each view's meshlet visibility bits, -1: none
+    int32_t         meshletVisibility;  // its first word in each view's meshlet visibility bits, -1: none; a VECTOR mesh with labels (no meshlets): its first label slot
 };
 
 struct SceneData
@@ -257,6 +259,7 @@ struct SceneData
     float3              originLow;              // the origin is originHigh + originLow
     uint32_t            zero;                   // 0, which the shader compiler cannot know (renderSpace.slang)
     float4              environmentOrientation; // quaternion (x, y, z, w): the environment's frame in the world (environment.slang)
+    float*              labelsPtr;              // a shaded view's label slots' alpha (lib/vector.slang); null: every label shown
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.

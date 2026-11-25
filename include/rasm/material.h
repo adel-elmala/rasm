@@ -102,6 +102,7 @@ namespace rasm
         float          outlineWidth = 0.0f;             // in widthUnit, inside width; 0: none
         int32_t        drawOrder    = 0;                // -127 to 127: blended draws of a lower order come first; 0 sorts with the scene's see-through draws
         VectorDepth    depth        = VectorDepth::TESTED;
+        FontHandle     font;                            // labels: their glyphs' atlas (Renderer::createFont); width is the text's size, outline its halo
     };
 
     constexpr uint32_t MAX_TEXTURE_SLOTS = static_cast<uint32_t>(PbrSlot::COUNT);

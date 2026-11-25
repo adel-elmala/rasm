@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Scenes and Meshes · RASM</title>
 <meta name="description" content="Scenes, entities, Transform, meshes (createMesh, loadMesh, loadGLTF, Vertex, SubMesh, MeshLod), animation and morph targets, lights, adding objects to scenes, when changes reach the GPU, and the limits.">
-<meta name="rasm-sources" content="include/rasm/scene.h include/rasm/terrain.h src/scene/terrain.cpp include/rasm/vector.h src/scene/vector.cpp include/rasm/animation.h src/renderer/animation.cpp src/assets/morphImport.cpp src/assets/environment.cpp src/renderer/environmentBake.cpp include/rasm/entity.h include/rasm/mesh.h include/rasm/light.h include/rasm/transform.h include/rasm/renderer.h include/rasm/types.h src/scene/scene.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/transform.cpp src/assets/mesh.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/material.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/gpuTable.cpp src/renderer/geometryPool.cpp src/core/handle.cpp shaders/lib/pbr.slang shaders/lib/core.slang examples/00_hello_scene/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp examples/05_city/main.cpp examples/14_morph_targets/main.cpp src/assets/meshData.h">
+<meta name="rasm-sources" content="include/rasm/scene.h include/rasm/terrain.h src/scene/terrain.cpp include/rasm/vector.h src/scene/vector.cpp include/rasm/text.h src/scene/text.cpp include/rasm/animation.h src/renderer/animation.cpp src/assets/morphImport.cpp src/assets/environment.cpp src/renderer/environmentBake.cpp include/rasm/entity.h include/rasm/mesh.h include/rasm/light.h include/rasm/transform.h include/rasm/renderer.h include/rasm/types.h src/scene/scene.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/transform.cpp src/assets/mesh.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/material.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/gpuTable.cpp src/renderer/geometryPool.cpp src/core/handle.cpp shaders/lib/pbr.slang shaders/lib/core.slang examples/00_hello_scene/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp examples/05_city/main.cpp examples/14_morph_targets/main.cpp src/assets/meshData.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -720,8 +720,9 @@ const glm::dvec3 ground = rasm::getTerrainPosition(tile, {.unorm16 = samples.dat
 {
     std::vector&lt;Vertex&gt;         vertices;
     std::vector&lt;uint32_t&gt;       indices;
+    std::vector&lt;MeshLabel&gt;      labels;
 };</pre>
-  <div class="body"><p>What the add functions append to. Build it into a mesh with <a href="#buildVectorMesh"><code>buildVectorMesh</code></a>. The vertex layout is <code>shaders/lib/vector.slang</code>'s; the bits of each vertex's feature id are in <code>tangent.w</code> (read them with <code>std::bit_cast&lt;uint32_t&gt;</code>), exact for any 32-bit id.</p></div>
+  <div class="body"><p>What the add functions append to; <code>labels</code> holds <a href="#addVectorLabels"><code>addVectorLabels</code></a>' boxes. Build it into a mesh with <a href="#buildVectorMesh"><code>buildVectorMesh</code></a>. The vertex layout is <code>shaders/lib/vector.slang</code>'s; the bits of each vertex's feature id are in <code>tangent.w</code> (read them with <code>std::bit_cast&lt;uint32_t&gt;</code>), exact for any 32-bit id.</p></div>
 </div>
 
 <div class="api" id="addVectorLines">
@@ -781,6 +782,127 @@ constexpr float MAX_VECTOR_MITER = 2.0f;</pre>
     TerrainHeights              drapeHeights    = {};
 };</pre>
   <div class="body"><p>Without a drape, features sit at their points' heights on a ground whose up is <code>up</code> (world space). With <code>drapeTile</code> and <code>drapeHeights</code> (the tile's desc and the samples of its heights texture), they are placed across the tile, their own height ignored, cut where they cross the terrain's grid lines and cell diagonals, and lifted by <a href="#sampleTerrainHeight"><code>sampleTerrainHeight</code></a>'s rule, so they lie exactly on the drawn ground. Draped features must lie within the tile; make them content of the same tile as its terrain, so both are drawn together.</p></div>
+</div>
+
+<h3 id="labels">Labels</h3>
+
+<p>Names at points of the world, drawn as text that faces the screen (<a href="../guides/text-and-labels.html">Text and labels</a>). <code>addVectorLabels</code> lays each label's text out into the geometry with a font's metrics; the mesh is drawn with a <code>VECTOR</code> material whose <a href="materials.html#VectorMaterial"><code>font</code></a> is the atlas's <a href="#createFont"><code>createFont</code></a>, its <code>width</code> the text's size and its outline the halo. Each frame, each shaded view places the labels of every entity it draws: the higher <code>priority</code> first, never two over each other, fading in and out over a quarter second. Like the other builders, it touches no renderer.</p>
+
+<pre><code>rasm::FontAtlas atlas;
+engine.loadFont("fonts/Roboto-Medium.ttf", atlas);
+const rasm::FontHandle font = engine.createFont(atlas);
+const rasm::MaterialHandle names = engine.createMaterial(rasm::MaterialType::VECTOR);
+rasm::Material style = engine.getMaterial(names);
+style.vector = {.color = glm::vec4(0.1f, 0.1f, 0.1f, 1.0f), .width = 14.0f, .outlineColor = glm::vec4(1.0f), .outlineWidth = 2.0f, .font = font};
+engine.updateMaterial(names, style);
+
+const rasm::LabelDesc label = {.position = {120.0, 0.0, 40.0}, .text = "Harbour", .priority = 5.0f};
+rasm::VectorGeometry geometry;
+rasm::addVectorLabels(geometry, glm::dvec3(0.0), atlas, &amp;label, 1);
+const rasm::EntityHandle entity = engine.createEntity("names", engine.createMesh(rasm::buildVectorMesh(std::move(geometry))), names);</code></pre>
+
+<div class="api" id="addVectorLabels">
+  <pre class="sig">void addVectorLabels(VectorGeometry&amp; geometry, const glm::dvec3&amp; origin, const FontAtlas&amp; font, const LabelDesc* labels, uint32_t labelCount,
+                     const VectorPlacement&amp; placement = {});</pre>
+  <div class="body">
+    <p>Each label's text decoded from UTF-8 (<a href="#decodeUtf8"><code>decodeUtf8</code></a>), each codepoint's glyph (<a href="#findGlyph"><code>findGlyph</code></a>, the font's fallback for one it lacks), kerned (<a href="#findGlyph"><code>getKerning</code></a>), each line centred under the first. A glyph is a quad twice, its halo's first, in ems from the anchor; the label's box goes in <code>VectorGeometry::labels</code> (<a href="#MeshLabel"><code>MeshLabel</code></a>) for placement. A label with no text is left out. Shaping (ligatures, right-to-left, complex scripts) is not done (<code>D46</code>). Keep the text within <a href="#MAX_LABEL_REACH"><code>MAX_LABEL_REACH</code></a> ems of its anchor. Draped, an anchor lies on the drawn ground like a point.</p>
+  </div>
+</div>
+
+<div class="api" id="LabelDesc">
+  <pre class="sig">struct LabelDesc
+{
+    glm::dvec3                  position        = glm::dvec3(0.0);
+    const char*                 text            = nullptr;
+    float                       priority        = 0.0f;
+    LabelAnchor                 anchor          = LabelAnchor::CENTER;
+    glm::vec2                   offset          = glm::vec2(0.0f);
+    uint32_t                    featureId       = 0;
+};
+enum class LabelAnchor : uint32_t { CENTER, BOTTOM, TOP, LEFT, RIGHT };</pre>
+  <div class="body">
+    <dl>
+      <dt>position</dt><dd>The anchor, in world space, in doubles.</dd>
+      <dt>text</dt><dd>UTF-8, read during the call. A line feed starts a new line.</dd>
+      <dt>priority</dt><dd>Placement keeps the higher first; among equals, the one placed last frame, then the first built.</dd>
+      <dt>anchor</dt><dd>Where the text sits: its middle on the anchor (<code>CENTER</code>), above it (<code>BOTTOM</code>), below it (<code>TOP</code>), right of it (<code>LEFT</code>) or left of it (<code>RIGHT</code>), a quarter em away.</dd>
+      <dt>offset</dt><dd>Moves the text further, in ems, +y up.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="MeshLabel">
+  <pre class="sig">struct MeshLabel
+{
+    glm::vec3           anchor          = glm::vec3(0.0f);
+    glm::vec2           center          = glm::vec2(0.0f);
+    glm::vec2           halfSize        = glm::vec2(0.0f);
+    float               priority        = 0.0f;
+    uint32_t            featureId       = 0;
+};</pre>
+  <div class="body"><p>A label of a mesh (<code>Mesh::labels</code>, and <code>VectorGeometry::labels</code> before the build): its anchor in the mesh's space, and its text's box on the screen, in ems from the anchor (+y up). Each entity drawn with the mesh holds one of the renderer's <a href="#MAX_LABEL_REACH"><code>MAX_LABELS</code></a> slots per label.</p></div>
+</div>
+
+<div class="api" id="FontAtlas">
+  <pre class="sig">struct FontAtlas
+{
+    std::string                 name;
+    std::vector&lt;uint8_t&gt;        pixels;
+    uint32_t                    width           = 0;
+    uint32_t                    height          = 0;
+    float                       distanceRange   = 16.0f;
+    float                       ascent          = 0.8f;
+    float                       descent         = 0.2f;
+    float                       lineHeight      = 1.2f;
+    std::vector&lt;GlyphMetrics&gt;   glyphs;
+    std::vector&lt;KerningPair&gt;    kerning;
+    uint32_t                    fallback        = '?';
+};
+struct GlyphMetrics
+{
+    uint32_t                    codepoint       = 0;
+    float                       advance         = 0.0f;
+    glm::vec2                   offset          = glm::vec2(0.0f);
+    glm::vec2                   size            = glm::vec2(0.0f);
+    glm::vec4                   uv              = glm::vec4(0.0f);
+};
+struct KerningPair
+{
+    uint32_t                    left            = 0;
+    uint32_t                    right           = 0;
+    float                       advance         = 0.0f;
+};</pre>
+  <div class="body"><p>A font as a signed distance field atlas on the CPU: <code>width</code> × <code>height</code> bytes, each <code class="lang-text">0.5 + distance / distanceRange</code> (atlas pixels, inside positive), and the metrics in ems (1 is the text's size). A glyph's quad sits <code>offset</code> from the pen on the baseline (its bottom-left corner, +y up), <code>size</code> large, at <code>uv</code> (u0, v0, u1, v1) in the atlas; the pen then moves by <code>advance</code>, plus a kerning pair's. <code>glyphs</code> is sorted by codepoint, <code>kerning</code> by left, then right. <a href="engine.html#loadFont"><code>loadFont</code></a> and <a href="engine.html#buildFontAtlas"><code>buildFontAtlas</code></a> build one from a font file; an application can bring its own, made by any tool with this contract. Keep it after <code>createFont</code> to lay labels out.</p></div>
+</div>
+
+<div class="api" id="findGlyph">
+  <pre class="sig">const GlyphMetrics*             findGlyph(const FontAtlas&amp; font, uint32_t codepoint);
+float                           getKerning(const FontAtlas&amp; font, uint32_t left, uint32_t right);</pre>
+  <div class="body"><p>The glyph of a codepoint, or its <code>fallback</code>'s when the atlas lacks it, or null when it lacks both. The kerning of a pair in ems, 0 for none.</p></div>
+</div>
+
+<div class="api" id="decodeUtf8">
+  <pre class="sig">uint32_t                        decodeUtf8(const char* text, std::vector&lt;uint32_t&gt;&amp; codepoints);</pre>
+  <div class="body"><p>Appends the codepoints of UTF-8 text and returns how many. A malformed sequence (a stray byte, an overlong form, a surrogate, a value past U+10FFFF) becomes U+FFFD and takes one byte, so decoding goes on.</p></div>
+</div>
+
+<div class="api" id="createFont">
+  <pre class="sig">FontHandle                  createFont(const FontAtlas&amp; atlas);
+void                        destroyFont(FontHandle font);
+struct Font
+{
+    FontHandle                  handle;
+    TextureHandle               atlas;
+    float                       distanceRange   = 0.0f;
+};
+constexpr uint32_t          MAX_FONTS               = 64;</pre>
+  <div class="body"><p><code>Renderer</code> methods. <code>createFont</code> uploads the atlas as an <code>R8_UNORM</code> texture in its own bindless slot, sampled clamped, and returns its handle; invalid, with an error, for an atlas whose pixels are not one byte per texel, a range not above 0, or when <code>MAX_FONTS</code> are alive. <code>destroyFont</code> releases the texture through the release queue; materials that name the font lose it, and their labels draw nothing. <code>Font</code> is the renderer's record of it.</p></div>
+</div>
+
+<div class="api" id="MAX_LABEL_REACH">
+  <pre class="sig">constexpr uint32_t          MAX_LABELS              = 1u &lt;&lt; 16;
+constexpr float             MAX_LABEL_REACH         = 12.0f;</pre>
+  <div class="body"><p><code>MAX_LABELS</code>: label slots of a renderer, for the labels of every entity alive at once; an entity that finds none left draws no labels (one warning). <code>MAX_LABEL_REACH</code>: the ems a label's text may reach from its anchor; culling pads a label draw by this times its size, so text farther out may vanish with its draw near the screen's edge.</p></div>
 </div>
 
 <h2 id="animation"><span class="n">7</span>Animation</h2>

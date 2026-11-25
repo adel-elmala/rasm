@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Text and Labels · RASM</title>
+<meta name="description" content="How a map engine draws text: glyphs stored as signed distances so they stay sharp at any size, a halo from the same distances, text laid out from a font's metrics and kerning, labels anchored in the world but sized on the screen, placed each frame by priority so they never overlap, hidden by depth, sharp under MSAA and TAA. Then how RASM does it.">
+<meta name="rasm-sources" content="include/rasm/text.h include/rasm/vector.h include/rasm/assetLoader.h include/rasm/material.h include/rasm/mesh.h src/scene/text.cpp src/scene/vector.cpp src/assets/fontLoad.cpp src/assets/meshBuild.h src/renderer/labelPlacement.h src/renderer/labelPlacement.cpp src/renderer/gpuScene.cpp shaders/lib/vector.slang shaders/passes/rasm.slang src/c/cText.cpp src/c/cVector.cpp src/c/cLoader.cpp include/rasm/rasm_c.h examples/25_vector_map/main.cpp tests/textTests.cpp tests/labelPlacementTests.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/text-and-labels.js"></script>
+</head>
+<body data-root="../" data-page="guides/text-and-labels.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>Text and labels</h1>
+<p class="lead">A map names its places: towns, streets, mountains. The names stand at points in the world, but they are read on the screen: they keep their size in pixels, face the viewer, stay sharp at any size, and never cover each other. This page shows how: glyphs stored as distances to their edge, a halo from the same distances, text laid out from the font's metrics, labels spread across the screen from a world anchor, a placement each frame that keeps the most important names, and what depth, MSAA and TAA need. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>A font's glyphs go into an <b>atlas</b> of <b>signed distances</b> to their edge, not of coverage. Distances blend into straight lines, so a magnified edge stays one pixel wide.</li>
+    <li>A fragment turns the distance into screen pixels and covers what is inside: <code class="lang-text">coverage = saturate(distance + 0.5)</code>. A <b>halo</b> is the same test a few pixels further out.</li>
+    <li>Text is laid out with a <b>pen</b>: each glyph moves it by its <b>advance</b>, and <b>kerning</b> moves pairs such as "AV" closer.</li>
+    <li>A label has a <b>world anchor</b>; its glyph quads are spread around the anchor's point <b>on the screen</b>, in pixels.</li>
+    <li>Each frame, each view <b>places</b> its labels: the highest priority first, each one only where no placed box is. Equal labels keep the winner of the last frame, and labels <b>fade</b> in and out.</li>
+    <li>A label takes the depth of its anchor, so the ground and nearer objects <b>hide</b> it. It moves with its anchor and has no TAA jitter, so it stays sharp.</li>
+  </ul>
+</div>
+
+<h2 id="problem"><span class="n">1</span>The problem</h2>
+
+<p>Text on a map has three needs that ordinary textures do not meet. (The stats overlay's text is another case: fixed-size debug text from bits, see <a href="bitmap-text.html">Text from a bitmap font</a>.)</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The same word small and large: the large one has a blurry edge when it is a scaled bitmap, a sharp one when it is drawn from distances.">
+      <text x="20" y="40" class="small">12 px</text><text x="70" y="42" class="small">Harbour</text>
+      <text x="20" y="100" class="small">40 px</text>
+      <rect x="70" y="70" width="150" height="40" rx="6" class="gpu o-25"/><text x="145" y="98" class="mid big title">Harbour</text>
+    </svg>
+    <h4>Sharp at any size</h4>
+    <p>One atlas serves 10 px and 60 px text. A scaled bitmap blurs; distances do not.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A tilted map with a point on it; the name next to the point faces the viewer and is upright.">
+      <path d="M20,120 L80,40 L230,40 L220,120 Z" class="paper"/>
+      <circle cx="120" cy="80" r="5" class="hot"/>
+      <rect x="128" y="66" width="80" height="22" rx="4" class="cpu o-25"/><text x="168" y="82" class="mid">Marlow</text>
+    </svg>
+    <h4>In the world, on the screen</h4>
+    <p>The name stands at a world point but faces the viewer, upright, at a size in pixels.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Three names over each other become unreadable; after placement only the most important one is drawn.">
+      <text x="30" y="50" class="o-75">Old Town</text><text x="44" y="56" class="o-75">Harbour</text><text x="38" y="62" class="o-75">Quay</text>
+      <text x="140" y="56" class="title t-ok">Harbour</text>
+      <line x1="112" y1="52" x2="132" y2="52" class="arrow" marker-end="url(#ah)"/>
+      <text x="30" y="100" class="small t-bad">overlap</text><text x="140" y="100" class="small t-ok">placed by priority</text>
+    </svg>
+    <h4>Never on top of each other</h4>
+    <p>A dense map has more names than room. Each frame keeps the important ones that fit.</p>
+  </div>
+</div>
+
+<h2 id="distance"><span class="n">2</span>Glyphs as distances</h2>
+
+<p>An atlas texel can store how much of it the glyph covers (a <b>bitmap</b>), or its <b>signed distance</b> to the glyph's edge: positive inside, negative outside. The texture filter blends neighbour texels in a straight line. A blend of coverage is a soft ramp; a blend of distances is still a distance, so the edge, where the distance is 0, stays a sharp line between the texels.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 240" role="img" aria-label="A row of five atlas texels across a glyph's edge. As coverage they hold 0, 0, 0.4, 1, 1: bilinear filtering makes a ramp several screen pixels wide. As distances they hold minus 2, minus 1, 0.2, 1.2, 2.2 texels: the filter gives a straight line that crosses 0 at one point, the edge.">
+    <text x="20" y="30" class="title">coverage (bitmap)</text>
+    <g>
+      <rect x="40" y="44" width="60" height="40" class="paper"/><rect x="100" y="44" width="60" height="40" class="paper"/><rect x="160" y="44" width="60" height="40" class="gpu o-50"/><rect x="220" y="44" width="60" height="40" class="gpu"/><rect x="280" y="44" width="60" height="40" class="gpu"/>
+      <text x="70" y="70" class="mid mono">0</text><text x="130" y="70" class="mid mono">0</text><text x="190" y="70" class="mid mono">0.4</text><text x="250" y="70" class="mid mono">1</text><text x="310" y="70" class="mid mono">1</text>
+    </g>
+    <path d="M70,190 L130,190 L190,166 L250,130 L310,130" class="arrow"/>
+    <line x1="40" y1="160" x2="340" y2="160" class="arrow dashed"/>
+    <text x="350" y="164" class="small">0.5</text>
+    <text x="190" y="215" class="mid small t-bad">magnified: a ramp many pixels wide, a blurry edge</text>
+
+    <text x="420" y="30" class="title">signed distance</text>
+    <g>
+      <rect x="420" y="44" width="60" height="40" class="paper"/><rect x="480" y="44" width="60" height="40" class="paper"/><rect x="540" y="44" width="60" height="40" class="gpu o-50"/><rect x="600" y="44" width="60" height="40" class="gpu"/><rect x="660" y="44" width="60" height="40" class="gpu"/>
+      <text x="450" y="70" class="mid mono">−2</text><text x="510" y="70" class="mid mono">−1</text><text x="570" y="70" class="mid mono">0.2</text><text x="630" y="70" class="mid mono">1.2</text><text x="690" y="70" class="mid mono">2.2</text>
+    </g>
+    <path d="M450,200 L690,104" class="arrow gpu thick"/>
+    <line x1="420" y1="160" x2="720" y2="160" class="arrow dashed"/>
+    <text x="730" y="164" class="small">0</text>
+    <circle cx="550" cy="160" r="6" class="hot"/>
+    <text x="570" y="215" class="mid small t-ok">the line crosses 0 at one point: the edge, sharp</text>
+  </svg>
+  <figcaption>The atlas stores <code class="lang-text">0.5 + distance / range</code> in 8 bits: 0.5 on the edge. <b>range</b> is how many atlas texels the stored values span; distances farther out are clamped to 0 or 1.</figcaption>
+</figure>
+
+<p>The fragment shader turns the stored value back into a distance in <b>screen pixels</b>, then covers the part of the pixel that is inside. How many screen pixels one atlas texel spans comes from how fast the atlas coordinate moves across the screen (<code class="lang-text">fwidth</code>), so it works for any size and any tilt:</p>
+
+<div class="formula">
+  <p class="eq">screenRange = range · (screen pixels per atlas texel)</p>
+  <p class="eq">distance = (value − 0.5) · screenRange</p>
+  <p class="eq">coverage = saturate(distance + 0.5)</p>
+  <dl>
+    <dt>value</dt><dd>the bilinear sample of the atlas, 0 to 1</dd>
+    <dt>screen pixels per atlas texel</dt><dd>1 / fwidth(texel coordinate): 2 when the text is drawn twice as large as the atlas</dd>
+    <dt>coverage</dt><dd>the fragment's alpha: 1 more than half a pixel inside, 0 more than half a pixel outside, a one-pixel ramp across the edge</dd>
+  </dl>
+</div>
+
+<figure class="lab" data-lab="sdf-glyph" data-title="Sharpen a glyph">
+  <figcaption>Make the text large: the bitmap blurs, the distance field stays sharp. Then add a halo and make the text small: past the range the atlas holds, the halo is cut.</figcaption>
+</figure>
+
+<p>A distance atlas is small: 32 texels per em is enough for map text from 8 to 60 pixels. Very large text shows the atlas's own limits: the corners of a glyph become slightly round, because one distance per texel cannot hold a sharp corner. A <b>multi-channel</b> distance field (MSDF) stores three distances per texel and keeps the corners; it reads the same way, through the median of the three.</p>
+
+<h2 id="halo"><span class="n">3</span>The halo</h2>
+
+<p>A label over a busy map needs a <b>halo</b>: a band of a second color around each glyph, so the text reads over roads and water. It is the same test, further out: <code class="lang-text">saturate(distance + halo + 0.5)</code>. It can reach only as far as the atlas stores distances: half the range, in screen pixels.</p>
+
+<div class="split">
+  <div class="bad">
+    <h4>Halo with each glyph</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="Glyphs drawn one by one, each with its halo: the halo of the second glyph covers the right side of the first glyph's fill.">
+      <rect x="40" y="30" width="110" height="80" rx="16" class="mem o-50"/>
+      <rect x="62" y="48" width="66" height="44" rx="6" class="solid"/>
+      <rect x="104" y="30" width="110" height="80" rx="16" class="mem"/>
+      <rect x="126" y="48" width="66" height="44" rx="6" class="solid"/>
+      <text x="160" y="130" class="mid small t-bad">glyph 2's halo is drawn over glyph 1</text>
+    </svg>
+    <p>Close glyphs overlap: a halo drawn after a neighbour's fill covers part of it.</p>
+  </div>
+  <div class="good">
+    <h4>All halos, then all fills</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="First every glyph's halo is drawn, then every glyph's fill on top: no fill is covered.">
+      <rect x="40" y="30" width="110" height="80" rx="16" class="mem"/>
+      <rect x="104" y="30" width="110" height="80" rx="16" class="mem"/>
+      <rect x="62" y="48" width="66" height="44" rx="6" class="solid"/>
+      <rect x="126" y="48" width="66" height="44" rx="6" class="solid"/>
+      <text x="160" y="130" class="mid small t-ok">halo quads first, fill quads second</text>
+    </svg>
+    <p>Each label emits its glyph quads twice: the halo's first, in the outline color, then the fill's.</p>
+  </div>
+</div>
+
+<h2 id="layout"><span class="n">4</span>Laying out a line of text</h2>
+
+<p>Text arrives as UTF-8 bytes. They are decoded into <b>codepoints</b> (one to four bytes each), and each codepoint picks its glyph in the atlas. A glyph knows its quad (where it sits from the pen, and its size) and its <b>advance</b>, how far it moves the pen. A <b>kerning</b> pair moves two glyphs closer or apart.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="The word AVe on a baseline. The pen starts at the left. A's quad sits from the pen by its offset; the pen moves by A's advance, then the kerning of A and V moves it back a little; V and e follow. Ascent above the baseline and descent below it give the line's box; the next line's baseline is a line height lower.">
+    <line x1="60" y1="160" x2="700" y2="160" class="arrow dashed"/><text x="708" y="164" class="small">baseline</text>
+    <line x1="60" y1="70" x2="700" y2="70" class="arrow dashed o-50"/><text x="708" y="74" class="small">ascent</text>
+    <line x1="60" y1="190" x2="700" y2="190" class="arrow dashed o-50"/><text x="708" y="194" class="small">descent</text>
+    <rect x="96" y="78" width="96" height="88" class="gpu o-25"/><text x="144" y="150" class="mid big">A</text>
+    <rect x="178" y="78" width="96" height="88" class="gpu o-25"/><text x="226" y="150" class="mid big">V</text>
+    <rect x="286" y="104" width="76" height="90" class="gpu o-25"/><text x="324" y="150" class="mid big">e</text>
+    <circle cx="90" cy="160" r="5" class="hot"/><text x="90" y="215" class="mid small">pen</text>
+    <line x1="90" y1="228" x2="196" y2="228" class="arrow" marker-end="url(#ah)"/><text x="143" y="244" class="mid small">advance of A</text>
+    <line x1="196" y1="214" x2="176" y2="214" class="arrow hot" marker-end="url(#ah-hot)"/><text x="206" y="218" class="small t-hot">kerning A, V</text>
+    <line x1="96" y1="44" x2="192" y2="44" class="arrow" marker-end="url(#ah)"/><line x1="192" y1="44" x2="96" y2="44" class="arrow" marker-end="url(#ah)"/><text x="144" y="38" class="mid small">quad: offset and size</text>
+    <rect x="460" y="70" width="210" height="120" rx="6" class="zone"/>
+    <text x="565" y="100" class="mid small">box: the widest line,</text><text x="565" y="116" class="mid small">ascent to the last line's</text><text x="565" y="132" class="mid small">descent; each new line a</text><text x="565" y="148" class="mid small">line height lower,</text><text x="565" y="164" class="mid small">centred</text>
+  </svg>
+  <figcaption>Metrics are in <b>ems</b>, the font's size: an em of 1 is the text's size in pixels. The box around the text is what placement tests for overlap.</figcaption>
+</figure>
+
+<p>Where the text sits around its anchor is a choice of the style:</p>
+
+<div class="vgrid three">
+  <div class="vcard"><svg viewBox="0 0 240 130" role="img" aria-label="Center: the text's middle on the anchor."><rect x="70" y="50" width="100" height="30" rx="4" class="cpu o-25"/><text x="120" y="70" class="mid">Center</text><circle cx="120" cy="65" r="5" class="hot"/></svg><h4>Center</h4><p>A region's name over its middle.</p></div>
+  <div class="vcard"><svg viewBox="0 0 240 130" role="img" aria-label="Bottom: the text above the anchor."><rect x="70" y="40" width="100" height="30" rx="4" class="cpu o-25"/><text x="120" y="60" class="mid">Above</text><circle cx="120" cy="82" r="5" class="hot"/></svg><h4>Bottom</h4><p>The text's bottom over the point: a summit's name.</p></div>
+  <div class="vcard"><svg viewBox="0 0 240 130" role="img" aria-label="Left: the text right of the anchor."><circle cx="60" cy="65" r="5" class="hot"/><rect x="72" y="50" width="110" height="30" rx="4" class="cpu o-25"/><text x="127" y="70" class="mid">Beside</text></svg><h4>Left</h4><p>The text's left beside the point: a shop's name by its marker.</p></div>
+</div>
+
+<h2 id="anchor"><span class="n">5</span>In the world, on the screen</h2>
+
+<p>Every vertex of a label holds the same world point, its <b>anchor</b>, and its glyph corner in ems. The vertex shader projects the anchor, then moves the vertex across the screen by the corner times the text's size in pixels. The text faces the screen and keeps its size whatever the distance. A size in <b>metres</b> instead divides by the size of a pixel at the anchor, so the text shrinks with distance like the ground does.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 220" role="img" aria-label="The camera projects the world anchor to a point on the screen; the glyph corners are added there in pixels, in the screen's own x and y.">
+    <path d="M40,190 L190,120 L330,190 Z" class="paper"/>
+    <circle cx="190" cy="160" r="6" class="hot"/><text x="200" y="176" class="small">anchor (world)</text>
+    <circle cx="60" cy="40" r="10" class="cpu"/><text x="80" y="36" class="small">camera</text>
+    <line x1="68" y1="48" x2="186" y2="154" class="arrow dashed"/>
+    <rect x="440" y="30" width="290" height="170" rx="6" class="zone"/><text x="585" y="22" class="mid small">screen</text>
+    <circle cx="520" cy="130" r="6" class="hot"/>
+    <rect x="532" y="104" width="150" height="40" rx="4" class="cpu o-25"/><text x="607" y="130" class="mid big">Marlow</text>
+    <line x1="520" y1="130" x2="532" y2="104" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="600" y="176" class="mid small">corner (ems) × text size (px)</text>
+    <line x1="340" y1="110" x2="430" y2="110" class="arrow" marker-end="url(#ah)"/><text x="385" y="100" class="mid small">project</text>
+  </svg>
+  <figcaption>The anchor alone goes through the camera; the text is drawn in the screen's own axes. A large world needs no care beyond the anchor's: it is projected like any vertex in render space.</figcaption>
+</figure>
+
+<h2 id="placement"><span class="n">6</span>Placing labels</h2>
+
+<p>Each frame and each view, the labels' boxes are projected to the screen and placed <b>greedily</b>: sort them, then walk the list and place each one whose box touches nothing placed before it. A grid of small cells makes the test cheap: a placed box marks its cells, and a later box is free when none of its cells is marked.</p>
+
+<ol class="flow">
+  <li class="cpu"><b>Project</b>each label's anchor, and its box in pixels from the text's size</li>
+  <li class="cpu"><b>Sort</b>higher priority first; among equals, the ones placed last frame first</li>
+  <li class="cpu"><b>Test</b>the box's cells: all free, or one taken by a placed box</li>
+  <li class="cpu"><b>Mark and fade</b>a placed box marks its cells; each label fades toward shown or hidden</li>
+</ol>
+
+<figure class="lab" data-lab="place-labels" data-title="Place labels">
+  <figcaption>Zoom out: the names keep their size, so they collide and the small places go first. Switch to list order and watch a city lose its name to a village.</figcaption>
+</figure>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two labels of equal priority overlap: frame after frame, the one placed last frame stays.">
+      <rect x="90" y="56" width="110" height="28" rx="4" class="paper"/><text x="145" y="77" class="mid t-faint">Lindholm</text>
+      <rect x="40" y="36" width="110" height="28" rx="4" class="ok"/><text x="95" y="55" class="mid">Ashby</text>
+      <text x="120" y="112" class="mid small">equal: last frame's winner stays</text>
+    </svg>
+    <h4>Stable</h4>
+    <p>Equal labels keep last frame's winner, then a fixed order. A moving camera does not make them swap every frame.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A label's opacity over frames: it rises from 0 to 1 over a quarter second when it is placed, and falls when it is not.">
+      <path d="M20,100 L80,100 L130,40 L190,40 L230,90" class="arrow gpu thick"/>
+      <line x1="20" y1="110" x2="230" y2="110" class="arrow dashed"/>
+      <text x="160" y="30" class="mid small">placed</text><text x="226" y="74" class="end small">hidden</text>
+    </svg>
+    <h4>Fade</h4>
+    <p>A label fades in and out over a fraction of a second, so a change of placement never pops.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two views of the same map, each with its own placement: the main view and an overview map in the corner.">
+      <rect x="20" y="20" width="200" height="100" rx="6" class="zone"/>
+      <rect x="140" y="28" width="72" height="44" rx="4" class="paper"/>
+      <text x="80" y="76" class="mid small">main view</text><text x="176" y="54" class="mid small">map</text>
+    </svg>
+    <h4>Per view</h4>
+    <p>Each view has its own screen, so each places its labels itself, and remembers its own fades.</p>
+  </div>
+</div>
+
+<h2 id="depth"><span class="n">7</span>Hidden by depth</h2>
+
+<p>A label takes the depth of its anchor, moved a little toward the camera so it is not cut by the ground it stands on. The depth test then hides it behind a hill or a nearer building, pixel by pixel. Below the anchor on the screen the ground is nearer than the anchor, so there a corner takes the depth of the ground under it instead, and the text is not cut at its bottom.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="Side view: the camera sees a label whose anchor is behind a building. The building is nearer, so the label's pixels where the building is drawn fail the depth test; the rest of the label is drawn.">
+    <line x1="20" y1="170" x2="740" y2="170" class="surface"/>
+    <circle cx="60" cy="40" r="10" class="cpu"/><text x="80" y="36" class="small">camera</text>
+    <rect x="330" y="90" width="80" height="80" class="solid"/><text x="370" y="82" class="mid small">building</text>
+    <circle cx="560" cy="170" r="6" class="hot"/><text x="560" y="194" class="mid small">anchor</text>
+    <line x1="68" y1="46" x2="556" y2="166" class="arrow dashed"/>
+    <line x1="68" y1="46" x2="600" y2="110" class="arrow dashed o-50"/>
+    <text x="600" y="100" class="small t-ok">above the roof: drawn</text>
+    <text x="440" y="194" class="end small t-bad">hidden: the building is nearer</text>
+  </svg>
+  <figcaption>The test is per pixel, so a label half behind a building shows its other half. Placement on the CPU does not know about depth: a hidden label still takes its room.</figcaption>
+</figure>
+
+<h2 id="aa"><span class="n">8</span>Sharp under MSAA and TAA</h2>
+
+<p>The glyph's edge is smoothed by its own distance, so MSAA adds nothing and takes nothing away. TAA is the risk: it moves the camera by a sub-pixel <b>jitter</b> each frame and blends the frames, which softens edges that already are smooth. So text is drawn without the jitter, on the same pixels every frame, and the blend of identical frames is the frame itself. When the camera moves, each glyph writes the motion of its anchor, so the history follows the text instead of smearing it.</p>
+
+<h2 id="culling"><span class="n">9</span>Culling text measured in pixels</h2>
+
+<p>A label's draw is culled by the bounds of its anchors. Its text reaches past them, in pixels, so the cull test pads the bounds by the farthest the text may reach (a number of ems) times the text's size, at the far side of the bounds. A label whose anchor is just off screen keeps its draw while its text may still show.</p>
+
+<h2 id="pitfalls"><span class="n">10</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>Large text is blurry</dt><dd>The atlas holds coverage. Store distances and turn them into coverage over one screen pixel.</dd></div>
+  <div><dt>The halo is cut off in a box around each letter</dt><dd>The halo reaches past the distances the atlas stores. Use a larger range, or a thinner halo for small text.</dd></div>
+  <div><dt>A letter's right side is covered by its neighbour's halo</dt><dd>Halo and fill are drawn glyph by glyph. Draw all of a label's halo quads first, then its fills.</dd></div>
+  <div><dt>Labels flicker when the camera moves</dt><dd>Equal labels swap places frame to frame. Prefer last frame's winner among equals, fade, and sort with a fixed tie-break.</dd></div>
+  <div><dt>Text shimmers or looks soft with TAA</dt><dd>It takes the jitter and the history blends it. Draw it without the jitter, and give it its anchor's motion.</dd></div>
+  <div><dt>Text is cut along its bottom on a tilted map</dt><dd>The quad below the anchor sinks into the ground. Give those corners the depth of the ground under them.</dd></div>
+  <div><dt>Names in Arabic or Devanagari look wrong</dt><dd>Those scripts need shaping: glyphs that change by their neighbours, joined, reordered. A codepoint-to-glyph layout cannot do it.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">11</span>In RASM</h2>
+
+<p>Labels are vector features (<a href="vector-rendering.html">Vector lines, polygons and points</a>): a mesh built by <code>addVectorLabels</code> and drawn with a <code>MaterialType::VECTOR</code> material whose <code>VectorMaterial::font</code> names a font. Its <code>width</code> is the text's size, its <code>outlineColor</code> and <code>outlineWidth</code> the halo. So labels go through the GPU culling, the blend sort, MSAA and TAA like the other vectors, and are a <a href="tile-streaming.html">TileStreamer</a> tile's content like any mesh. What is new is the font atlas and the placement each view runs on the CPU.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>any thread</span>
+  <span><i class="mem"></i>the renderer's thread, each frame</span>
+  <span><i class="shader"></i>shaders</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="On any thread: loadFont or buildFontAtlas makes a FontAtlas with stb_truetype; addVectorLabels lays the text out into a VectorGeometry with a MeshLabel per label; buildVectorMesh. On the renderer's thread: createFont uploads the atlas; each entity with labels gets a range of label slots; each shaded view projects the labels, places them with placeLabels and uploads each slot's alpha (labelsPtr). In the shaders: getVectorVertex spreads the glyph quads and collapses hidden ones; shadeGlyph turns the distance into coverage and the halo.">
+    <rect x="20" y="20" width="230" height="260" rx="8" class="zone"/>
+    <text x="135" y="42" class="mid title t-cpu">any thread</text>
+    <rect x="36" y="58" width="198" height="54" rx="6" class="cpu"/><text x="135" y="80" class="mid small mono">loadFont / buildFontAtlas</text><text x="135" y="98" class="mid small">FontAtlas: distances, metrics</text>
+    <rect x="36" y="124" width="198" height="70" rx="6" class="cpu"/><text x="135" y="146" class="mid small mono">addVectorLabels</text><text x="135" y="164" class="mid small">glyph quads (halo, fill)</text><text x="135" y="180" class="mid small">and a MeshLabel each</text>
+    <rect x="36" y="206" width="198" height="56" rx="20" class="cpu"/><text x="135" y="230" class="mid small mono">buildVectorMesh</text><text x="135" y="247" class="mid small">labels kept in the build</text>
+
+    <rect x="280" y="20" width="220" height="260" rx="8" class="zone"/>
+    <text x="390" y="42" class="mid title t-mem">renderer</text>
+    <rect x="296" y="58" width="188" height="40" rx="6" class="mem"/><text x="390" y="76" class="mid small mono">createFont</text><text x="390" y="91" class="mid small">R8_UNORM atlas, clamped</text>
+    <rect x="296" y="110" width="188" height="40" rx="6" class="mem"/><text x="390" y="128" class="mid small">an entity's labels:</text><text x="390" y="143" class="mid small">a range of label slots</text>
+    <rect x="296" y="162" width="188" height="56" rx="6" class="mem"/><text x="390" y="182" class="mid small">each view: project,</text><text x="390" y="198" class="mid small mono">placeLabels</text><text x="390" y="212" class="mid small">fade</text>
+    <rect x="296" y="230" width="188" height="40" rx="6" class="mem"/><text x="390" y="248" class="mid small">alpha per slot</text><text x="390" y="263" class="mid small mono">labelsPtr</text>
+    <line x1="234" y1="234" x2="292" y2="130" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="234" y1="85" x2="292" y2="78" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="530" y="20" width="210" height="260" rx="8" class="zone"/>
+    <text x="635" y="42" class="mid title t-shader">shaders</text>
+    <rect x="546" y="58" width="178" height="40" rx="6" class="shader"/><text x="635" y="76" class="mid small">cull: pad by</text><text x="635" y="91" class="mid small mono">VECTOR_LABEL_REACH</text>
+    <rect x="546" y="110" width="178" height="56" rx="6" class="shader"/><text x="635" y="130" class="mid small mono">getVectorVertex</text><text x="635" y="146" class="mid small">spread, no jitter, alpha 0:</text><text x="635" y="160" class="mid small">collapsed</text>
+    <rect x="546" y="178" width="178" height="40" rx="6" class="shader"/><text x="635" y="196" class="mid small mono">shadeGlyph</text><text x="635" y="211" class="mid small">coverage, halo</text>
+    <line x1="484" y1="250" x2="542" y2="140" class="arrow mem dashed" marker-end="url(#ah-mem)"/>
+  </svg>
+  <figcaption>The atlas and the layout touch no renderer, so a map builds its tiles' labels on its own threads; the renderer only uploads them and places them each frame.</figcaption>
+</figure>
+
+<pre><code>// From examples/25_vector_map/main.cpp: the font once, a label layer, then a tile's names on a server thread.
+rasm::FontAtlas fontAtlas;
+if (!engine.loadFont("fonts/Roboto-Medium.ttf", fontAtlas))
+    return 1;
+const rasm::FontHandle font = engine.createFont(fontAtlas);
+layers[PLACE_NAMES] =
+    makeLayer(engine, {.color = glm::vec4(0.15f, 0.12f, 0.1f, 1.0f), .width = 13.0f, .outlineColor = glm::vec4(1.0f, 1.0f, 1.0f, 0.9f), .outlineWidth = 2.0f, .drawOrder = 40, .font = font});
+// ... on a server thread:
+names.push_back({.position = place, .text = features.placeNames[p].c_str(), .priority = 1.0f, .anchor = rasm::LabelAnchor::LEFT, .offset = glm::vec2(0.2f, 0.0f)});
+rasm::addVectorLabels(geometry[PLACE_NAMES], origin, *features.font, names.data(), static_cast&lt;uint32_t&gt;(names.size()));</code></pre>
+
+<h3>Where RASM follows this page, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Topic</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>The atlas</td><td>signed distances</td><td><code>FontAtlas</code>: one byte a texel holding <code>0.5 + distance / distanceRange</code>, <code>GlyphMetrics</code> sorted by codepoint, <code>KerningPair</code>s, <code>ascent</code>, <code>descent</code>, <code>lineHeight</code>, a <code>fallback</code> glyph. <code>buildFontAtlas</code> makes one with stb_truetype's SDF (<code>FontLoadOptions</code>: 32 texels per em and a range of 16 by default; ASCII and Latin-1 unless the codepoints are given), packed in rows into an atlas 512 texels wide (wider when it must, up to 4096). <code>Renderer::createFont</code> takes any atlas with that contract, so an application can bring its own; an MSDF atlas would need only a shader change.</td></tr>
+  <tr><td>Coverage, halo</td><td>distance and <code class="lang-text">fwidth</code></td><td><code>shadeGlyph</code>: the screen range from <code class="lang-text">fwidth(uv)</code>; the halo is cut at half the range less a pixel. <code>addVectorLabels</code> emits each label's halo quads (<code>uv[2].y</code> = 1), then its fill quads; the halo quads collapse when <code>outlineWidth</code> is 0.</td></tr>
+  <tr><td>Layout</td><td>pen, advance, kerning</td><td><code>decodeUtf8</code> (a malformed byte becomes U+FFFD), <code>findGlyph</code>, <code>getKerning</code>. Lines split at a line feed and are centred; other control characters are not drawn. <code>LabelAnchor</code> places the box around the anchor with a gap of a quarter em; <code>LabelDesc::offset</code> moves it in ems. No shaping (<code>D46</code>).</td></tr>
+  <tr><td>Anchor</td><td>world point, screen offsets</td><td>Every glyph vertex: <code>pos</code> the anchor, <code>uv[0]</code> the corner in ems, <code>uv[1]</code> the atlas coordinate, <code>tangent.x</code> the label's index in the mesh. The size is <code>VectorMaterial::width</code> in <code>PIXELS</code> or <code>METRES</code>; text always faces the screen.</td></tr>
+  <tr><td>Placement</td><td>greedy, by priority, stable, fading</td><td><code>placeViewLabels</code> in <code>prepareSceneView</code>, for each shaded view: each label's box from its anchor in doubles (<code>MeshLabel</code>), then <code>placeLabels</code> on cells of <code>LABEL_CELL_PIXELS</code> (8). Order: <code>LabelDesc::priority</code>, then placed last frame, then slot. Fade over <code>LABEL_FADE_SECONDS</code> (0.25 s) of the frame's step; a view's first placement shows at once. Each entity with labels holds a range of the renderer's <code>MAX_LABELS</code> slots (one that finds none left draws no labels); a slot's stamp tells a view that a new label took it, which then starts hidden. The scratch vectors keep their capacity: a steady frame allocates nothing.</td></tr>
+  <tr><td>To the GPU</td><td>—</td><td>A buffer per view and frame slot of one float per slot (<code>SceneData::labelsPtr</code>); the instance's first slot in <code>InstanceData::meshletVisibility</code>, free on a mesh with no meshlets. Alpha 0 collapses the quad.</td></tr>
+  <tr><td>Depth</td><td>the anchor's, per pixel</td><td>As for points: <code>VECTOR_DEPTH_BIAS</code> and <code>getGroundPoint</code>. A label hidden by depth still takes its room in placement (<code>D47</code>).</td></tr>
+  <tr><td>MSAA, TAA</td><td>no jitter, the anchor's motion</td><td><code>removeJitter</code> on each glyph vertex; <code>toVectorOutput</code> writes the anchor's motion times coverage. Image tests <code>labels_msaa4</code> and <code>labels_taa</code>.</td></tr>
+  <tr><td>Culling</td><td>pad by the reach</td><td><code>getVectorPadding</code> with <code>VECTOR_TEXT</code>: <code>VECTOR_LABEL_REACH</code> (= <code>MAX_LABEL_REACH</code>, 12 ems) times the text's size, plus the halo.</td></tr>
+</table>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Fonts</td><td><code>FontAtlas</code>, <code>GlyphMetrics</code>, <code>KerningPair</code>, <code>findGlyph</code>, <code>getKerning</code>, <code>decodeUtf8</code> in <code>include/rasm/text.h</code>, <code>src/scene/text.cpp</code> (with <code>Renderer::createFont</code>, <code>Renderer::destroyFont</code>); <code>buildFontAtlas</code>, <code>FontLoadOptions</code>, <code>AssetLoader::loadFont</code> in <code>src/assets/fontLoad.cpp</code> (<code>rasm::rasm</code> only)</td></tr>
+  <tr><td>Labels</td><td><code>LabelDesc</code>, <code>LabelAnchor</code>, <code>addVectorLabels</code> in <code>include/rasm/vector.h</code>, <code>src/scene/vector.cpp</code>; <code>MeshLabel</code>, <code>Mesh::labels</code></td></tr>
+  <tr><td>Placement</td><td><code>placeLabels</code>, <code>LabelPlacement</code>, <code>LabelCandidate</code> in <code>src/renderer/labelPlacement.cpp</code>; <code>placeViewLabels</code> and the label slots in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Shaders</td><td><code>getVectorVertex</code> (<code>VECTOR_KIND_GLYPH</code>), <code>shadeGlyph</code>, <code>getVectorPadding</code> in <code>shaders/lib/vector.slang</code>; <code>rasm.slang</code></td></tr>
+  <tr><td>The C API (1.6)</td><td><code>rasm_build_font_atlas</code>, <code>rasm_asset_loader_load_font</code>, <code>rasm_create_font</code>, <code>rasm_destroy_font</code>, <code>rasm_vector_add_labels</code>, <code>rasm_label_desc</code>, <code>rasm_material_desc</code>'s <code>font</code> in <code>src/c/cText.cpp</code>, <code>src/c/cVector.cpp</code>, <code>src/c/cLoader.cpp</code></td></tr>
+  <tr><td>Tests</td><td><code>tests/textTests.cpp</code> (UTF-8, glyphs, kerning, the layout, Roboto's atlas), <code>tests/labelPlacementTests.cpp</code>; image tests <code>labels</code>, <code>labels_msaa4</code>, <code>labels_taa</code>, <code>far_labels</code></td></tr>
+  <tr><td>Example</td><td><code>examples/25_vector_map</code>: place names beside their points and district names over the map, in both views; the font in <samp>assets/fonts</samp> (Roboto, Apache 2.0)</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>No glyph corner reaches past <code>MAX_LABEL_REACH</code> ems from its anchor, or culling may drop its draw at the screen's edge. It must equal <code>VECTOR_LABEL_REACH</code>.</li>
+    <li>A label's halo quads come before its fill quads in the index buffer.</li>
+    <li>A mesh with labels has no meshlets (<code>buildVectorMesh</code>): its instance's <code>meshletVisibility</code> holds its first label slot.</li>
+    <li>stb_truetype trusts a font's tables: load only fonts you trust.</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <strong>Not done yet</strong>
+  <p>Shaping for complex scripts and right-to-left text (<code>D46</code>). Labels hidden by depth still take their room, and a label half behind an object shows half (<code>D47</code>). Labels along lines (a road's name that follows its curve) and labels that rotate with the map. MSDF atlases. A font file is trusted (<code>B34</code>). Pipelines compiled on first use still stall the frame (<code>P31</code>); labels add no pipeline of their own.</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Chris Green, <i>Improved Alpha-Tested Magnification for Vector Textures and Special Effects</i> (Valve, SIGGRAPH 2007): distance fields for text and decals.</li>
+  <li>Viktor Chlumský, <i>Shape Decomposition for Multi-channel Distance Fields</i> (2015), and msdfgen.</li>
+  <li>Mapbox GL, <i>symbol placement</i>: collision grids, priorities and fading labels.</li>
+  <li>Sean Barrett, stb_truetype.h: glyph metrics, kerning and SDF glyphs.</li>
+  <li>HarfBuzz: text shaping for complex scripts.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

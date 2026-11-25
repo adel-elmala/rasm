@@ -38,6 +38,11 @@ namespace rasm
         return loader.loadTexture(path, format);
     }
 
+    bool Engine::loadFont(const std::string &path, FontAtlas &atlas, const FontLoadOptions &options)
+    {
+        return loader.loadFont(path, atlas, options);
+    }
+
     EnvironmentHandle Engine::loadEnvironment(const std::string &path)
     {
         return loader.loadEnvironment(path);

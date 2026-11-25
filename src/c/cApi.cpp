@@ -112,6 +112,7 @@ namespace rasm::c
         static_assert(RASM_FORMAT_R16G16_SFLOAT == asNumber(Format::R16G16_SFLOAT));
         static_assert(RASM_FORMAT_R16_UNORM == asNumber(Format::R16_UNORM));
         static_assert(RASM_FORMAT_R32_SFLOAT == asNumber(Format::R32_SFLOAT));
+        static_assert(RASM_FORMAT_R8_UNORM == asNumber(Format::R8_UNORM));
         static_assert(RASM_PLATFORM_TYPE_SDL == asNumber(PlatformType::SDL));
         static_assert(RASM_PLATFORM_TYPE_HEADLESS == asNumber(PlatformType::HEADLESS));
         static_assert(RASM_PLATFORM_TYPE_NATIVE == asNumber(PlatformType::NATIVE));
@@ -744,6 +745,7 @@ namespace rasm::c
         result.alphaCutoff = material.alpha_cutoff;
         result.terrain = toCpp(material.terrain);
         result.vector = toCpp(material.vector);
+        result.vector.font = toCpp(material.font);
         return result;
     }
 
@@ -764,6 +766,7 @@ namespace rasm::c
         result.alpha_cutoff = material.alphaCutoff;
         result.terrain = toC(material.terrain);
         result.vector = toC(material.vector);
+        result.font = toC(material.vector.font);
         return result;
     }
 

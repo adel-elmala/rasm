@@ -362,7 +362,7 @@ namespace rasm
         }
 
         // Most materials have no texture transform, so their shading skips the transforms and does not load them.
-        gfx::MaterialData toMaterialData(Renderer &engine, const Material &mat, Format normalMapFormat, Format heightsFormat)
+        gfx::MaterialData toMaterialData(Renderer &engine, const Material &mat, Format normalMapFormat, Format heightsFormat, uint32_t fontSlot, float fontRange)
         {
             gfx::MaterialData row{.material = convertToGfxMaterial(engine, mat),
                                   .materialId = getGfxMaterialId(mat.type),
@@ -404,7 +404,14 @@ namespace rasm
                               .gapLength = vector.gapLength,
                               .flags = (vector.widthUnit == VectorUnit::METRES ? gfx::VECTOR_METRES : 0u) | (vector.facing == VectorFacing::GROUND ? gfx::VECTOR_GROUND : 0u) |
                                        (vector.depth == VectorDepth::OVERLAY ? gfx::VECTOR_OVERLAY : 0u) | (icon ? gfx::VECTOR_ICON : 0u),
-                              .drawOrder = std::clamp(vector.drawOrder, -127, 127)};
+                              .drawOrder = std::clamp(vector.drawOrder, -127, 127),
+                              .font = INVALID_TEXTURE_INDEX};
+                if (fontSlot != INVALID_TEXTURE_INDEX)
+                {
+                    row.vector.font = fontSlot;
+                    row.vector.distanceRange = fontRange;
+                    row.vector.flags |= gfx::VECTOR_TEXT;
+                }
             }
             return row;
         }
@@ -442,6 +449,8 @@ namespace rasm
         // A word of meshlet visibility bits per instance row on average: 32 meshlets. Each view with occlusion culling
         // has this many words (createSceneView); a row that finds none left has no bits, and is only culled less.
         gpuScene->meshletWords.reset(config.maxInstances);
+        gpuScene->labelSlots.reset(MAX_LABELS);
+        gpuScene->labelStamps.assign(MAX_LABELS, 0);
         gpuScene->instanceMeshlets.assign(config.maxInstances, 0);
         gpuScene->instanceMeshletWords.assign(config.maxInstances, -1);
         gpuScene->instanceMeshletWordCounts.assign(config.maxInstances, 0);
@@ -555,6 +564,23 @@ namespace rasm
                         gpuScene->instanceMeshletWords[firstRow + r] = bits ? static_cast<int32_t>(firstWord) : -1;
                         gpuScene->instanceMeshletWordCounts[firstRow + r] = bits ? words : 0;
                     }
+                    // Its labels' slots: each view keeps their visibility by slot.
+                    state.firstLabel = -1;
+                    state.labelCount = 0;
+                    uint64_t firstLabel = 0;
+                    const auto labelCount = static_cast<uint32_t>(mesh.labels.size());
+                    if (labelCount > 0 && gpuScene->labelSlots.allocate(labelCount, firstLabel))
+                    {
+                        state.firstLabel = static_cast<int32_t>(firstLabel);
+                        state.labelCount = labelCount;
+                        for (uint32_t l = 0; l < labelCount; ++l)
+                            ++gpuScene->labelStamps[firstLabel + l];
+                    }
+                    else if (labelCount > 0 && !gpuScene->labelSlotsFullLogged)
+                    {
+                        spdlog::warn("The label slots are full (MAX_LABELS, {}): entity {}'s {} labels are not drawn.", MAX_LABELS, entity.index, labelCount);
+                        gpuScene->labelSlotsFullLogged = true;
+                    }
                     state.syncedTransform = entityRef.transform;
                     writeInstanceRows(entity, false);
                     startPendingAnimation(entity);
@@ -650,7 +676,7 @@ namespace rasm
                                   .geometryIndex = subMesh.geometry.geometryIndex,
                                   .materialIndex = static_cast<uint32_t>(getSubMeshMaterial(*this, entityRef, subMesh).handle.index),
                                   .animationRow = getAnimationRow(entity, i),
-                                  .meshletVisibility = gpuScene->instanceMeshletWords[state.firstInstance + i]};
+                                  .meshletVisibility = state.labelCount > 0 ? state.firstLabel : gpuScene->instanceMeshletWords[state.firstInstance + i]};
             writeWorldRows(model, row.world, row.translationLow);
             writePreviousRows(syncedMatrix * glm::dmat4(subMesh.transform), model, row.previousWorld);
             gpuScene->instances.setRow(state.firstInstance + i, &row);
@@ -715,7 +741,15 @@ namespace rasm
         const Format normalMapFormat = normalMap.isValid() ? ctx.getTextureDesc(normalMap).format : Format::UNKNOWN;
         const TextureHandle heights = materialRef.terrain.heights;
         const Format heightsFormat = heights.isValid() ? ctx.getTextureDesc(heights).format : Format::UNKNOWN;
-        const gfx::MaterialData row = toMaterialData(*this, materialRef, normalMapFormat, heightsFormat);
+        uint32_t fontSlot = INVALID_TEXTURE_INDEX;
+        float fontRange = 0.0f;
+        if (materialRef.type == MaterialType::VECTOR && isLive(materialRef.vector.font))
+        {
+            const Font &font = registry.fonts[materialRef.vector.font.index];
+            fontSlot = getBindlessTextureIndex(font.atlas);
+            fontRange = font.distanceRange;
+        }
+        const gfx::MaterialData row = toMaterialData(*this, materialRef, normalMapFormat, heightsFormat, fontSlot, fontRange);
         gpuScene->materials.setRow(static_cast<uint32_t>(material.index), &row);
     }
 
@@ -739,6 +773,10 @@ namespace rasm
                 gpuScene->instanceMeshletWordCounts[row] = 0;
             }
         }
+        if (state.labelCount > 0)
+            gpuScene->labelSlots.free(static_cast<uint64_t>(state.firstLabel), state.labelCount);
+        state.firstLabel = -1;
+        state.labelCount = 0;
         state.firstInstance = 0;
         state.instanceCount = 0;
         state.waitingForTextures = false;
@@ -796,6 +834,7 @@ namespace rasm
         drawList.rebuild = false;
         drawList.draws.clear();
         drawList.runs.clear();
+        drawList.labelEntities.clear();
         drawList.triangleCount = 0;
 
         compactSceneEntities(scene);
@@ -806,6 +845,8 @@ namespace rasm
                 continue;
 
             const Mesh &mesh = registry.meshes[registry.entities[entity.index].mesh.index];
+            if (state.labelCount > 0)
+                drawList.labelEntities.push_back(entity);
             for (uint32_t i = 0; i < state.instanceCount; ++i)
             {
                 const MeshGeometry &geometry = mesh.subMeshes[i].geometry;
@@ -1360,6 +1401,7 @@ namespace rasm
             destroyViewBuffer(ctx, view.visibleDraws[i]);
             destroyViewBuffer(ctx, view.hiz[i]);
             destroyViewBuffer(ctx, view.sortBuffers[i]);
+            destroyViewBuffer(ctx, view.labelBuffers[i]);
         }
         destroyViewBuffer(ctx, view.visibility);
         destroyViewBuffer(ctx, view.meshletVisibility);
@@ -1869,6 +1911,8 @@ namespace rasm
             sceneData.lodDepthPlane = moveRenderPlane(frozenReader->frozenLodDepthPlane, frozenReader->frozenOrigin, origin);
         }
         sceneData.debugView = static_cast<uint32_t>(view.debugView);
+        if (!view.depthOnly && !drawList.labelEntities.empty())
+            placeViewLabels(viewIndex, cameraProjection, worldCameraView, width, height, sceneData);
         ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), viewIndex * sizeof(gfx::SceneData));
 
         // cull.slang's groups each lie inside one run.
@@ -1893,6 +1937,84 @@ namespace rasm
         view.culled = culled;
         view.sky = sky;
         view.ready = true;
+    }
+
+    // A shaded view's labels for this frame (src/renderer/labelPlacement.cpp): each label's box on screen from its
+    // anchor (doubles, world space) and its material's text size, the greedy placement with its fade, then the slots'
+    // alpha into the view's buffer for this frame slot, which the vertex stage reads (labelsPtr). Allocates nothing once
+    // the vectors and the buffer have grown.
+    void Renderer::placeViewLabels(uint32_t viewIndex, const glm::mat4 &projection, const glm::dmat4 &worldView, uint32_t width, uint32_t height, gfx::SceneData &sceneData)
+    {
+        ZoneScoped;
+        SceneView &view = gpuScene->views[viewIndex];
+        const SceneDrawList &drawList = gpuScene->drawLists[view.scene.index];
+        const uint32_t frame = static_cast<uint32_t>(frameCount);
+        const glm::dmat4 worldViewProjection = glm::dmat4(projection) * worldView;
+        const bool perspective = projection[3][3] == 0.0f;
+        const double pixelScale = 2.0 / (std::abs(static_cast<double>(projection[1][1])) * height);
+        std::vector<LabelCandidate> &candidates = view.labelCandidates;
+        candidates.clear();
+        uint32_t lowSlot = UINT32_MAX;
+        uint32_t highSlot = 0;
+        for (const EntityHandle entity : drawList.labelEntities)
+        {
+            if (!isLive(entity))
+                continue;
+            const EntityDrawState &state = gpuScene->entities[entity.index];
+            const Entity &entityRef = registry.entities[entity.index];
+            if (state.labelCount == 0 || !isLive(entityRef.mesh))
+                continue;
+            const Mesh &mesh = registry.meshes[entityRef.mesh.index];
+            const Material &material = getMaterial(entityRef.material);
+            const VectorMaterial &style = material.vector;
+            // Labels that draw nothing (no VECTOR material, no live font) take no room.
+            if (material.type != MaterialType::VECTOR || !isLive(style.font))
+                continue;
+            const glm::dmat4 model = entityRef.transform.toMatrix();
+            for (uint32_t l = 0; l < state.labelCount && l < mesh.labels.size(); ++l)
+            {
+                const MeshLabel &label = mesh.labels[l];
+                const glm::dvec4 clip = worldViewProjection * (model * glm::dvec4(glm::dvec3(label.anchor), 1.0));
+                const auto slot = static_cast<uint32_t>(state.firstLabel) + l;
+                LabelCandidate candidate{.slot = slot, .priority = label.priority};
+                if (clip.w > 0.0)
+                {
+                    const glm::dvec2 ndc = glm::dvec2(clip) / clip.w;
+                    // The text's size in pixels: the style's, or its metres at the anchor's depth.
+                    const double pixelWorld = pixelScale * (perspective ? clip.w : 1.0);
+                    const bool metres = style.widthUnit == VectorUnit::METRES;
+                    const double textPixels = metres ? style.width / pixelWorld : style.width;
+                    const double haloPixels = metres ? style.outlineWidth / pixelWorld : style.outlineWidth;
+                    const auto center = glm::vec2((ndc.x * 0.5 + 0.5) * width, (0.5 - ndc.y * 0.5) * height);
+                    const auto halfSize = glm::vec2(glm::dvec2(label.halfSize) * textPixels + haloPixels);
+                    const auto boxCenter = center + glm::vec2(label.center.x, -label.center.y) * static_cast<float>(textPixels);
+                    candidate.low = boxCenter - halfSize;
+                    candidate.high = boxCenter + halfSize;
+                    candidate.inView = std::abs(ndc.x) <= 1.0 && std::abs(ndc.y) <= 1.0;
+                }
+                candidates.push_back(candidate);
+                lowSlot = std::min(lowSlot, slot);
+                highSlot = std::max(highSlot, slot);
+            }
+        }
+        if (candidates.empty())
+            return;
+        placeLabels(view.labels, candidates.data(), static_cast<uint32_t>(candidates.size()), gpuScene->labelStamps.data(), MAX_LABELS, width, height, deltaTime / LABEL_FADE_SECONDS);
+
+        // The buffer holds every slot up to the highest in use; it grows to twice that.
+        const uint32_t needed = highSlot + 1;
+        if (view.labelCapacity[frame] < needed)
+        {
+            if (view.labelBuffers[frame].isValid())
+                ctx.destroyBuffer(view.labelBuffers[frame]);
+            const uint32_t capacity = std::min(std::max(needed * 2, 1024u), MAX_LABELS);
+            view.labelBuffers[frame] = ctx.createBuffer({.name = "Label Visibility Buffer", .usage = BufferUsage::STORAGE, .size = capacity * sizeof(float)});
+            view.labelCapacity[frame] = view.labelBuffers[frame].isValid() ? capacity : 0;
+        }
+        if (view.labelCapacity[frame] < needed ||
+            !ctx.fillBuffer(view.labelBuffers[frame], view.labels.alpha.data() + lowSlot, static_cast<size_t>(needed - lowSlot) * sizeof(float), static_cast<size_t>(lowSlot) * sizeof(float)))
+            return;
+        sceneData.labelsPtr = ctx.getBufferDeviceAddress(view.labelBuffers[frame]);
     }
 
     // countMain, then writeMain, which reads the counts and slots countMain wrote. The early phase draws what was

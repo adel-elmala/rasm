@@ -52,6 +52,27 @@ namespace
         return loader->loader;
     }
 
+    rasm_font_load_options toC(const FontLoadOptions &options)
+    {
+        return {.size = sizeof(rasm_font_load_options),
+                .em_size = options.emSize,
+                .distance_range = options.distanceRange,
+                .codepoints = options.codepoints,
+                .codepoint_count = options.codepointCount};
+    }
+
+    // The options a font call reads, from its sized struct or the defaults.
+    bool readFontOptions(const rasm_font_load_options *options, FontLoadOptions &result, const char *function)
+    {
+        rasm_font_load_options values = toC(FontLoadOptions{});
+        if (options != nullptr && !c::readSized(options, c::FONT_LOAD_OPTIONS_SIZE_1_6, &values, sizeof(values), function, "options"))
+            return false;
+        if (values.codepoint_count > 0 && !c::checkPointer(values.codepoints, function, "options->codepoints"))
+            return false;
+        result = {.emSize = values.em_size, .distanceRange = values.distance_range, .codepoints = values.codepoints, .codepointCount = values.codepoint_count};
+        return true;
+    }
+
     bool checkPath(const char *path, const char *function)
     {
         if (path != nullptr)
@@ -233,6 +254,49 @@ try
         return RASM_ERROR_INVALID_ARGUMENT;
     const rasm_load_stats values = c::toC(l->getLoadStats());
     return c::writeSized(stats, c::LOAD_STATS_SIZE_1_1, &values, sizeof(values), __func__, "stats") ? RASM_OK : RASM_ERROR_INVALID_ARGUMENT;
+}
+RASM_C_CATCH_RESULT
+
+rasm_result RASM_CALL rasm_font_load_options_init(rasm_font_load_options *options, uint32_t size)
+try
+{
+    const rasm_font_load_options defaults = toC(FontLoadOptions{});
+    return c::initSized(options, size, c::FONT_LOAD_OPTIONS_SIZE_1_6, &defaults, sizeof(defaults), __func__, "options");
+}
+RASM_C_CATCH_RESULT
+
+rasm_result RASM_CALL rasm_build_font_atlas(const void *data, uint64_t data_size, const rasm_font_load_options *options, rasm_font_atlas **atlas)
+try
+{
+    FontLoadOptions fontOptions;
+    if (!c::checkPointer(atlas, __func__, "atlas"))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    *atlas = nullptr;
+    if (!c::checkPointer(data, __func__, "data") || !readFontOptions(options, fontOptions, __func__))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    auto made = std::make_unique<rasm_font_atlas>();
+    if (!buildFontAtlas(static_cast<const uint8_t *>(data), static_cast<size_t>(data_size), fontOptions, made->atlas))
+        return RASM_ERROR_FAILED;
+    *atlas = made.release();
+    return RASM_OK;
+}
+RASM_C_CATCH_RESULT
+
+rasm_result RASM_CALL rasm_asset_loader_load_font(rasm_asset_loader *loader, const char *path, const rasm_font_load_options *options, rasm_font_atlas **atlas)
+try
+{
+    FontLoadOptions fontOptions;
+    if (!c::checkPointer(atlas, __func__, "atlas"))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    *atlas = nullptr;
+    AssetLoader *l = getLoader(loader, __func__);
+    if (l == nullptr || !checkPath(path, __func__) || !readFontOptions(options, fontOptions, __func__))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    auto made = std::make_unique<rasm_font_atlas>();
+    if (!l->loadFont(path, made->atlas, fontOptions))
+        return RASM_ERROR_FAILED;
+    *atlas = made.release();
+    return RASM_OK;
 }
 RASM_C_CATCH_RESULT
 // NOLINTEND(readability-identifier-naming)

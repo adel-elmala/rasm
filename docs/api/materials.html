@@ -233,6 +233,7 @@ rasm::MaterialHandle brick = engine.createMaterial(rasm::MaterialType::PBR, text
     float          outlineWidth = 0.0f;
     int32_t        drawOrder    = 0;
     VectorDepth    depth        = VectorDepth::TESTED;
+    FontHandle     font;
 };</pre>
   <div class="body">
     <p>A layer's style. Every feature is at least one pixel wide; a thinner one keeps one pixel and fades by its coverage, so it neither vanishes nor shimmers.</p>
@@ -244,6 +245,7 @@ rasm::MaterialHandle brick = engine.createMaterial(rasm::MaterialType::PBR, text
       <dt>outlineColor, outlineWidth</dt><dd>A band along a line's or point's edge, inside <code>width</code>: a road's casing, a marker's ring.</dd>
       <dt>drawOrder</dt><dd>−127 to 127: blended draws of a lower order are drawn first; the scene's other see-through draws sort at 0, by depth. It holds while the GPU blend sort runs; with frozen culling (<a href="engine.html#setCullingFrozen"><code>setCullingFrozen</code></a>) the blended draws go in list order.</dd>
       <dt>depth</dt><dd><code>VectorDepth::TESTED</code>: hidden behind what is in front, nearer than the ground it lies on by 1/4096 of its distance, whatever the projection. <code>VectorDepth::OVERLAY</code>: over everything, never occlusion culled.</dd>
+      <dt>font</dt><dd>Labels (<a href="scene.html#addVectorLabels"><code>addVectorLabels</code></a>): the font whose atlas their glyphs come from (<a href="scene.html#createFont"><code>createFont</code></a>). <code>width</code> is then the text's size (an em), <code>outlineColor</code> and <code>outlineWidth</code> its halo, which reaches at most half the atlas's distance range; <code>facing</code> and <code>dashLength</code> do not apply: text always faces the screen. Without a live font, labels draw nothing.</dd>
     </dl>
     <pre><code>// examples/25_vector_map: roads 7 px wide with a 1.5 px casing.
 rasm::Material values = engine.getMaterial(material);

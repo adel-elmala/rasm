@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>C API · RASM</title>
 <meta name="description" content="RASM from C and from other languages: the rasm_c and rasm_c_renderer shared libraries, rasm_c.h, its ABI rules (versions, sized structs, handles, errors, memory, threads), every function, and the map from the C++ API.">
-<meta name="rasm-sources" content="include/rasm/rasm_c.h src/c/cApi.h src/c/cApi.cpp src/c/cRenderer.cpp src/c/cScene.cpp src/c/cInput.cpp src/c/cViews.cpp src/c/cAnimation.cpp src/c/cTiles.cpp src/c/cTerrain.cpp src/c/cVector.cpp src/c/cLoader.cpp src/CMakeLists.txt cmake/RasmInstall.cmake cmake/rasmConfig.cmake.in examples/22_c_api/main.c tests/cApiTests.cpp tests/c_api/ctypes_smoke.py tests/consumer/CMakeLists.txt tools/check_install.py src/platform/paths.cpp include/rasm/handle.h">
+<meta name="rasm-sources" content="include/rasm/rasm_c.h src/c/cApi.h src/c/cApi.cpp src/c/cRenderer.cpp src/c/cScene.cpp src/c/cInput.cpp src/c/cViews.cpp src/c/cAnimation.cpp src/c/cTiles.cpp src/c/cTerrain.cpp src/c/cVector.cpp src/c/cText.cpp src/c/cLoader.cpp src/CMakeLists.txt cmake/RasmInstall.cmake cmake/rasmConfig.cmake.in examples/22_c_api/main.c tests/cApiTests.cpp tests/c_api/ctypes_smoke.py tests/consumer/CMakeLists.txt tools/check_install.py src/platform/paths.cpp include/rasm/handle.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -159,7 +159,7 @@ lib.rasm_renderer_create((1 &lt;&lt; 16) | 0, ctypes.byref(config), ctypes.byref
 <h2 id="rules"><span class="n">3</span>The rules of the header</h2>
 
 <h3 id="versions">Versions</h3>
-<p><code>RASM_C_API_VERSION</code> is <code>major &lt;&lt; 16 | minor</code>: <code>RASM_C_API_VERSION_MAJOR</code> and <code>RASM_C_API_VERSION_MINOR</code>, 1.5 today: 1.1 added windows, input, views, render targets, camera helpers, animation and stats to 1.0, 1.2 added positions in doubles (<a href="#rasm_get_transform_d">below</a>), a free-fly controller's up axis and an environment's orientation, 1.3 tile streaming (<a href="#rasm_tile_streamer_create">below</a>) and the renderer config's <code>max_bindless_textures</code>, and 1.4 terrain tiles (<a href="#rasm_create_terrain_tile">below</a>), the formats <code>RASM_FORMAT_R16_UNORM</code> and <code>RASM_FORMAT_R32_SFLOAT</code>, the material type <code>RASM_MATERIAL_TYPE_TERRAIN</code> and the material desc's <code>terrain</code>, and 1.5 meshes built on any thread and vector features (<a href="#rasm_build_mesh">below</a>), <code>RASM_MATERIAL_TYPE_VECTOR</code> and the material desc's <code>vector</code>, all at the end of the header. Within one major version the API only grows at its end: new functions, new enum constants, new struct fields after the last one. Nothing is renumbered, reordered or removed. <a href="#rasm_renderer_create"><code>rasm_renderer_create</code></a> and <a href="#rasm_engine_create"><code>rasm_engine_create</code></a> take your <code>RASM_C_API_VERSION</code> and fail with <code>RASM_ERROR_VERSION</code> when the major versions differ, or when your minor version is newer than the library's: a newer header may use fields or functions the library does not have.</p>
+<p><code>RASM_C_API_VERSION</code> is <code>major &lt;&lt; 16 | minor</code>: <code>RASM_C_API_VERSION_MAJOR</code> and <code>RASM_C_API_VERSION_MINOR</code>, 1.6 today: 1.1 added windows, input, views, render targets, camera helpers, animation and stats to 1.0, 1.2 added positions in doubles (<a href="#rasm_get_transform_d">below</a>), a free-fly controller's up axis and an environment's orientation, 1.3 tile streaming (<a href="#rasm_tile_streamer_create">below</a>) and the renderer config's <code>max_bindless_textures</code>, and 1.4 terrain tiles (<a href="#rasm_create_terrain_tile">below</a>), the formats <code>RASM_FORMAT_R16_UNORM</code> and <code>RASM_FORMAT_R32_SFLOAT</code>, the material type <code>RASM_MATERIAL_TYPE_TERRAIN</code> and the material desc's <code>terrain</code>, and 1.5 meshes built on any thread and vector features (<a href="#rasm_build_mesh">below</a>), <code>RASM_MATERIAL_TYPE_VECTOR</code> and the material desc's <code>vector</code>, and 1.6 fonts and labels (<a href="#rasm_build_font_atlas">below</a>), <code>RASM_FORMAT_R8_UNORM</code> and the material desc's <code>font</code>, all at the end of the header. Within one major version the API only grows at its end: new functions, new enum constants, new struct fields after the last one. Nothing is renumbered, reordered or removed. <a href="#rasm_renderer_create"><code>rasm_renderer_create</code></a> and <a href="#rasm_engine_create"><code>rasm_engine_create</code></a> take your <code>RASM_C_API_VERSION</code> and fail with <code>RASM_ERROR_VERSION</code> when the major versions differ, or when your minor version is newer than the library's: a newer header may use fields or functions the library does not have.</p>
 
 <h3 id="sized">Structs that grow</h3>
 
@@ -596,6 +596,28 @@ rasm_mesh roads = rasm_create_mesh_from_build(renderer, build); // on the render
   </div>
 </div>
 
+<div class="api" id="rasm_build_font_atlas">
+  <pre class="sig">rasm_result      rasm_font_load_options_init(rasm_font_load_options* options, uint32_t size);
+rasm_result      rasm_label_desc_init(rasm_label_desc* desc, uint32_t size);
+rasm_result      rasm_build_font_atlas(const void* data, uint64_t data_size, const rasm_font_load_options* options, rasm_font_atlas** atlas);
+rasm_result      rasm_asset_loader_load_font(rasm_asset_loader* loader, const char* path, const rasm_font_load_options* options, rasm_font_atlas** atlas);
+void             rasm_font_atlas_destroy(rasm_font_atlas* atlas);
+rasm_font        rasm_create_font(rasm_renderer* renderer, const rasm_font_atlas* atlas);
+rasm_result      rasm_destroy_font(rasm_renderer* renderer, rasm_font font);
+rasm_result      rasm_vector_add_labels(rasm_vector_geometry* geometry, rasm_dvec3 origin, const rasm_font_atlas* atlas, const rasm_label_desc* labels, uint32_t label_count, const rasm_vector_placement* placement);</pre>
+  <div class="body">
+    <p>1.6. <a href="scene.html#labels">Labels</a> and their fonts. <code>rasm_font_atlas</code> is opaque (<a href="scene.html#FontAtlas"><code>FontAtlas</code></a>); <code>rasm_font</code> a handle (<code>FontHandle</code>). <code>rasm_build_font_atlas</code> (<a href="engine.html#buildFontAtlas"><code>buildFontAtlas</code></a>, any thread) and <code>rasm_asset_loader_load_font</code> (<a href="engine.html#loadFont"><code>loadFont</code></a>) are in <code>rasm_c</code> only and return <code>RASM_ERROR_FAILED</code> for data that is no font; the others are in both libraries. <code>rasm_vector_add_labels</code> lays the labels out on any thread, one thread per geometry; <code>labels</code> is an array of sized structs, each the size of the first. <code>rasm_font_load_options</code> (<code>em_size</code>, <code>distance_range</code>, <code>codepoints</code>, <code>codepoint_count</code>) and <code>rasm_label_desc</code> (<code>position</code> a <code>rasm_dvec3</code>, <code>text</code> UTF-8, <code>priority</code>, <code>anchor</code> one of <code>RASM_LABEL_ANCHOR_CENTER</code>, <code>RASM_LABEL_ANCHOR_BOTTOM</code>, <code>RASM_LABEL_ANCHOR_TOP</code>, <code>RASM_LABEL_ANCHOR_LEFT</code> and <code>RASM_LABEL_ANCHOR_RIGHT</code>, <code>offset</code>, <code>feature_id</code>) are sized. The material desc's last field, <code>font</code>, names a <code>VECTOR</code> material's font. <code>RASM_MAX_FONTS</code>, <code>RASM_MAX_LABELS</code> and <code>RASM_MAX_LABEL_REACH</code> mirror the C++ constants; <code>RASM_FORMAT_R8_UNORM</code> is the atlas's format.</p>
+    <pre><code>rasm_font_atlas *atlas = NULL;
+rasm_asset_loader_load_font(loader, "fonts/Roboto-Medium.ttf", NULL, &amp;atlas);
+rasm_font font = rasm_create_font(renderer, atlas);
+rasm_label_desc label;
+rasm_label_desc_init(&amp;label, sizeof(label));
+label.position = place;
+label.text = "Harbour";
+rasm_vector_add_labels(geometry, origin, atlas, &amp;label, 1, NULL); // on a worker thread</code></pre>
+  </div>
+</div>
+
 <h2 id="map"><span class="n">5</span>From C++ to C</h2>
 
 <div class="table-wrap">
@@ -614,6 +636,7 @@ rasm_mesh roads = rasm_create_mesh_from_build(renderer, build); // on the render
   <tr><td><code>getInputEvents(count)</code></td><td><code>rasm_get_input_event_count</code>, then <code>rasm_get_input_event</code> by index</td></tr>
   <tr><td><code>TileStreamer</code>, <code>TileContent</code></td><td><code>rasm_tile_streamer</code>, an object with create and destroy; <code>rasm_tile_content</code> with arrays of C handles</td></tr>
   <tr><td><code>CameraRig</code>, <code>CameraInputState</code></td><td><code>rasm_camera_rig</code>, <code>rasm_camera_input_state</code>: objects with create and destroy</td></tr>
+  <tr><td><code>FontAtlas</code></td><td><code>rasm_font_atlas</code>, an object made by <code>rasm_build_font_atlas</code> or <code>rasm_asset_loader_load_font</code>, destroyed by <code>rasm_font_atlas_destroy</code></td></tr>
   <tr><td><code>std::string</code>, <code>std::vector</code></td><td><code>const char*</code>; a pointer and a count</td></tr>
 </table>
 </div>

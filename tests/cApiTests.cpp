@@ -1,4 +1,6 @@
 #include "rasm/rasm_c.h"
+#include "rasm/assetLoader.h"
+#include "rasm/vector.h"
 #include "rasm/light.h"
 #include "rasm/scene.h"
 #include "rasm/input.h"
@@ -10,6 +12,8 @@
 #include "glm/gtc/quaternion.hpp"
 
 #include <cmath>
+#include <fstream>
+#include <iterator>
 #include <cstddef>
 #include <cstring>
 #include <filesystem>
@@ -698,6 +702,83 @@ TEST_CASE("meshes and vector features build on any thread, with no renderer")
     CHECK(rasm_vector_add_points(other, origin, points, 3, &placement, nullptr, nullptr) == RASM_ERROR_INVALID_ARGUMENT);
     CHECK(contains(rasm_get_last_error(), "drape_heights"));
     rasm_vector_geometry_destroy(other);
+}
+
+TEST_CASE("the 1.6 structs start from the C++ defaults")
+{
+    const rasm::FontLoadOptions fontDefaults;
+    rasm_font_load_options options;
+    REQUIRE(rasm_font_load_options_init(&options, sizeof(options)) == RASM_OK);
+    CHECK(options.em_size == fontDefaults.emSize);
+    CHECK(options.distance_range == fontDefaults.distanceRange);
+    CHECK(options.codepoints == nullptr);
+    const rasm::LabelDesc labelDefaults;
+    rasm_label_desc label;
+    REQUIRE(rasm_label_desc_init(&label, sizeof(label)) == RASM_OK);
+    CHECK(label.size == sizeof(label));
+    CHECK(label.anchor == RASM_LABEL_ANCHOR_CENTER);
+    CHECK(label.priority == labelDefaults.priority);
+    CHECK(label.text == nullptr);
+    CHECK(offsetof(rasm_material_desc, font) > offsetof(rasm_material_desc, vector));
+    CHECK(RASM_MAX_LABEL_REACH == rasm::MAX_LABEL_REACH);
+}
+
+TEST_CASE("a font atlas and labels build on any thread, with no renderer")
+{
+    std::ifstream file(RASM_TEST_FONT, std::ios::binary);
+    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    REQUIRE(!bytes.empty());
+
+    rasm_font_atlas *atlas = nullptr;
+    const uint32_t letters[3] = {'A', 'B', 'C'};
+    rasm_font_load_options options;
+    rasm_font_load_options_init(&options, sizeof(options));
+    options.codepoints = letters;
+    options.codepoint_count = 3;
+    std::thread worker([&]()
+                       { CHECK(rasm_build_font_atlas(bytes.data(), bytes.size(), &options, &atlas) == RASM_OK); });
+    worker.join();
+    REQUIRE(atlas != nullptr);
+
+    rasm_vector_geometry *geometry = nullptr;
+    REQUIRE(rasm_vector_geometry_create(&geometry) == RASM_OK);
+    rasm_label_desc labels[2];
+    rasm_label_desc_init(&labels[0], sizeof(labels[0]));
+    rasm_label_desc_init(&labels[1], sizeof(labels[1]));
+    labels[0].text = "AB";
+    labels[1].text = "C";
+    labels[1].anchor = RASM_LABEL_ANCHOR_LEFT;
+    const rasm_dvec3 origin = {1000.0, 0.0, 1000.0};
+    CHECK(rasm_vector_add_labels(geometry, origin, atlas, labels, 2, nullptr) == RASM_OK);
+    uint32_t vertices = 0;
+    uint32_t indices = 0;
+    REQUIRE(rasm_vector_geometry_get_size(geometry, &vertices, &indices) == RASM_OK);
+    // Three glyphs, each a halo's quad and a fill's.
+    CHECK(vertices == 3 * 2 * 4);
+    CHECK(indices == 3 * 2 * 6);
+
+    labels[1].anchor = 9;
+    CHECK(rasm_vector_add_labels(geometry, origin, atlas, labels, 2, nullptr) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(contains(rasm_get_last_error(), "anchor"));
+    labels[1].anchor = RASM_LABEL_ANCHOR_CENTER;
+    labels[1].size = 8;
+    CHECK(rasm_vector_add_labels(geometry, origin, atlas, labels, 2, nullptr) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(contains(rasm_get_last_error(), "labels[1].size"));
+    CHECK(rasm_vector_add_labels(geometry, origin, nullptr, labels, 1, nullptr) == RASM_ERROR_INVALID_ARGUMENT);
+    rasm_mesh_build *build = nullptr;
+    REQUIRE(rasm_build_vector_mesh(geometry, &build) == RASM_OK);
+    rasm_mesh_build_destroy(build);
+    rasm_vector_geometry_destroy(geometry);
+
+    // Without a renderer nothing is uploaded; junk is no font.
+    CHECK(rasm_create_font(nullptr, atlas).id == 0);
+    rasm_font_atlas_destroy(atlas);
+    const uint8_t junk[32] = {};
+    atlas = reinterpret_cast<rasm_font_atlas *>(&bytes);
+    CHECK(rasm_build_font_atlas(junk, sizeof(junk), nullptr, &atlas) == RASM_ERROR_FAILED);
+    CHECK(atlas == nullptr);
+    CHECK(rasm_asset_loader_load_font(nullptr, "fonts/Roboto-Medium.ttf", nullptr, &atlas) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(rasm_destroy_font(nullptr, rasm_font{}) == RASM_ERROR_INVALID_ARGUMENT);
 }
 
 TEST_CASE("a tile streamer call with a bad argument gives a code and a last error")

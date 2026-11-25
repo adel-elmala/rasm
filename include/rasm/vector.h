@@ -3,6 +3,7 @@
 
 #include "rasm/mesh.h"
 #include "rasm/terrain.h"
+#include "rasm/text.h"
 
 #include "glm/glm.hpp"
 
@@ -53,6 +54,27 @@ namespace rasm
     {
         std::vector<Vertex>         vertices;
         std::vector<uint32_t>       indices;
+        std::vector<MeshLabel>      labels;                             // addVectorLabels'
+    };
+
+    // Where a label's text sits around its anchor on screen.
+    enum class LabelAnchor : uint32_t
+    {
+        CENTER,         // the text's middle on the anchor
+        BOTTOM,         // the text above the anchor (a place's name over its point)
+        TOP,            // the text below the anchor
+        LEFT,           // the text right of the anchor
+        RIGHT,          // the text left of the anchor
+    };
+
+    struct LabelDesc
+    {
+        glm::dvec3                  position        = glm::dvec3(0.0);  // the anchor, world space
+        const char*                 text            = nullptr;          // UTF-8; a line feed starts a new line
+        float                       priority        = 0.0f;             // collision keeps the higher first
+        LabelAnchor                 anchor          = LabelAnchor::CENTER;
+        glm::vec2                   offset          = glm::vec2(0.0f);  // ems from the anchor, +y up
+        uint32_t                    featureId       = 0;
     };
 
     // origin: the world position of the entity that will draw the mesh (no rotation, scale 1); the vertices are offsets
@@ -68,7 +90,13 @@ namespace rasm
     // Points or markers: a disc each, or with iconRects (u0, v0, u1, v1 in the material's albedo texture) a square icon.
     void                            addVectorPoints(VectorGeometry& geometry, const glm::dvec3& origin, const glm::dvec3* points, uint32_t pointCount, const VectorPlacement& placement = {},
                                                     const uint32_t* featureIds = nullptr, const glm::vec4* iconRects = nullptr);
-    // buildMesh with no LODs and no meshlets (the shader spreads the vertices). Safe on any thread.
+    // Labels: each text laid out with the font's metrics (kerning included, lines centred), a quad per glyph spread
+    // across the screen from its anchor by the material's width (the text's size in pixels or metres). Each label is one
+    // for collision: per view and frame the renderer keeps the higher-priority labels that do not overlap, fading them
+    // in and out. Draw the mesh with a VECTOR material whose font is the atlas's Renderer::createFont.
+    void                            addVectorLabels(VectorGeometry& geometry, const glm::dvec3& origin, const FontAtlas& font, const LabelDesc* labels, uint32_t labelCount,
+                                                    const VectorPlacement& placement = {});
+    // buildMesh with no LODs and no meshlets (the shader spreads the vertices), and the labels. Safe on any thread.
     MeshBuild                       buildVectorMesh(VectorGeometry geometry);
 
 }

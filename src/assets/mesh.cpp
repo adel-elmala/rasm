@@ -1,5 +1,6 @@
 #include "rasm/mesh.h"
 #include "rasm/renderer.h"
+#include "assets/meshBuild.h"
 #include "assets/meshData.h"
 #include "assets/meshLod.h"
 #include "assets/meshlets.h"
@@ -36,11 +37,6 @@ namespace rasm
     {
         return toUnorm8(encodeSrgb(linearColor.r)) | toUnorm8(encodeSrgb(linearColor.g)) << 8 | toUnorm8(encodeSrgb(linearColor.b)) << 16 | toUnorm8(linearColor.a) << 24;
     }
-
-    struct MeshBuild::Data
-    {
-        ObjRaw raw;
-    };
 
     MeshBuild::MeshBuild() = default;
     MeshBuild::~MeshBuild() = default;
@@ -117,6 +113,7 @@ namespace rasm
             return {};
         }
 
+        mesh.labels = std::move(data->labels);
         const HandleSlot slot = registry.meshHandles.allocate();
         const MeshHandle handle{slot.index, slot.generation};
         registry.meshes.resize(registry.meshHandles.size());

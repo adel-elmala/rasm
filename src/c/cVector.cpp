@@ -4,6 +4,7 @@
 #include "rasm/vector.h"
 
 #include <cstring>
+#include <string>
 #include <vector>
 
 using namespace rasm;
@@ -90,6 +91,37 @@ namespace
     bool checkArray(const void *array, uint32_t count, const char *function, const char *name)
     {
         return count == 0 || c::checkPointer(array, function, name);
+    }
+
+    // A sized rasm_label_desc array, each element the size of the first, into labels.
+    bool readLabels(const rasm_label_desc *labels, uint32_t labelCount, std::vector<LabelDesc> &converted, const char *function)
+    {
+        uint32_t stride = 0;
+        if (labelCount > 0)
+            std::memcpy(&stride, labels, sizeof(stride));
+        converted.resize(labelCount);
+        for (uint32_t i = 0; i < labelCount; ++i)
+        {
+            const auto *element = reinterpret_cast<const uint8_t *>(labels) + static_cast<size_t>(i) * stride;
+            uint32_t size = 0;
+            std::memcpy(&size, element, sizeof(size));
+            if (size != stride)
+            {
+                c::reportError(function, ("labels[" + std::to_string(i) + "].size is " + std::to_string(size) + ", not the first label's " + std::to_string(stride) + ".").c_str());
+                return false;
+            }
+            rasm_label_desc values = {};
+            if (!c::readSized(element, c::LABEL_DESC_SIZE_1_6, &values, sizeof(values), function, "label") || !c::checkEnum(values.anchor, RASM_LABEL_ANCHOR_RIGHT + 1, function, "label->anchor") ||
+                !c::checkFinite(values.position, function, "label->position"))
+                return false;
+            converted[i] = {.position = c::toCpp(values.position),
+                            .text = values.text,
+                            .priority = values.priority,
+                            .anchor = static_cast<LabelAnchor>(values.anchor),
+                            .offset = c::toCpp(values.offset),
+                            .featureId = values.feature_id};
+        }
+        return true;
     }
 
     // The sum of a count array: the points or rings it covers.
@@ -244,6 +276,21 @@ try
         !readPlacement(placement, place, tile, __func__))
         return RASM_ERROR_INVALID_ARGUMENT;
     addVectorPoints(geometry->geometry, c::toCpp(origin), toCpp(points), point_count, place, feature_ids, reinterpret_cast<const glm::vec4 *>(icon_rects));
+    return RASM_OK;
+}
+RASM_C_CATCH_RESULT
+
+rasm_result RASM_CALL rasm_vector_add_labels(rasm_vector_geometry *geometry, rasm_dvec3 origin, const rasm_font_atlas *atlas, const rasm_label_desc *labels, uint32_t label_count,
+                                             const rasm_vector_placement *placement)
+try
+{
+    VectorPlacement place;
+    TerrainTileDesc tile;
+    std::vector<LabelDesc> converted;
+    if (!c::checkPointer(geometry, __func__, "geometry") || !c::checkPointer(atlas, __func__, "atlas") || !checkArray(labels, label_count, __func__, "labels") ||
+        !c::checkFinite(origin, __func__, "origin") || !readPlacement(placement, place, tile, __func__) || !readLabels(labels, label_count, converted, __func__))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    addVectorLabels(geometry->geometry, c::toCpp(origin), atlas->atlas, converted.data(), label_count, place);
     return RASM_OK;
 }
 RASM_C_CATCH_RESULT

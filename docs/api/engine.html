@@ -81,6 +81,7 @@
   <tr><td><a href="scene.html#setSceneEnvironment"><code>setSceneEnvironment</code></a></td><td>light a scene with an environment, show its sky</td><td>scene.html</td></tr>
   <tr><td><a href="scene.html#createMesh"><code>createMesh</code></a></td><td>mesh from your vertices</td><td>scene.html</td></tr>
   <tr><td><a href="scene.html#buildMesh"><code>createMesh(MeshBuild&amp;&amp;)</code></a></td><td>upload a mesh built on another thread</td><td>scene.html</td></tr>
+  <tr><td><a href="#loadFont"><code>loadFont</code></a> / <a href="scene.html#createFont"><code>createFont</code></a></td><td>a font's distance atlas, for labels</td><td>this page, scene.html</td></tr>
   <tr><td><a href="scene.html#createTerrainTile"><code>createTerrainTile</code></a></td><td>a terrain tile from its heights and image</td><td>scene.html</td></tr>
   <tr><td><a href="scene.html#getTerrainMesh"><code>getTerrainMesh</code></a></td><td>the grid terrain tiles share</td><td>scene.html</td></tr>
   <tr><td><a href="scene.html#loadMesh"><code>loadMesh</code></a> / <a href="scene.html#loadGLTF"><code>loadGLTF</code></a></td><td>mesh from a file, in the background</td><td>scene.html</td></tr>
@@ -864,6 +865,7 @@ MeshHandle        loadMesh(const std::string&amp; path);
 MeshHandle        loadGLTF(const std::string&amp; path);
 TextureHandle     loadTexture(const std::string&amp; path, Format format = Format::R8G8B8A8_SRGB);
 EnvironmentHandle loadEnvironment(const std::string&amp; path);
+bool              loadFont(const std::string&amp; path, FontAtlas&amp; atlas, const FontLoadOptions&amp; options = {});
 void              waitForLoads();
 LoadStats         getLoadStats() const;
 std::string       resolveAssetPath(const std::string&amp; path) const;
@@ -875,6 +877,31 @@ AssetLoaderConfig getConfig() const;</pre>
 rasm::Renderer renderer(config);
 rasm::AssetLoader loader(renderer, {.assetRoot = RASM_EXAMPLE_ASSET_ROOT});
 const rasm::MeshHandle helmet = loader.loadGLTF("models/gltf/DamagedHelmet/DamagedHelmet.gltf");</code></pre>
+  </div>
+</div>
+
+<div class="api" id="loadFont">
+  <pre class="sig">bool                        loadFont(const std::string&amp; path, FontAtlas&amp; atlas, const FontLoadOptions&amp; options = {});</pre>
+  <div class="body">
+    <p>Reads a TrueType or OpenType file (the path resolved like the other loads) and builds its distance atlas with <a href="#buildFontAtlas"><code>buildFontAtlas</code></a>, on the calling thread: it takes a few milliseconds for the 190 glyphs of ASCII and Latin-1. Upload the atlas with <a href="scene.html#createFont"><code>createFont</code></a> and keep it to lay labels out (<a href="scene.html#addVectorLabels"><code>addVectorLabels</code></a>). False, with an error, when the file cannot be read or is no font. <code>AssetLoader</code> and <code>Engine</code>.</p>
+    <pre><code>rasm::FontAtlas atlas;
+if (!engine.loadFont("fonts/Roboto-Medium.ttf", atlas))
+    return 1;
+const rasm::FontHandle font = engine.createFont(atlas);</code></pre>
+  </div>
+</div>
+
+<div class="api" id="buildFontAtlas">
+  <pre class="sig">bool                            buildFontAtlas(const uint8_t* data, size_t size, const FontLoadOptions&amp; options, FontAtlas&amp; atlas);
+struct FontLoadOptions
+{
+    float                       emSize          = 32.0f;
+    float                       distanceRange   = 16.0f;
+    const uint32_t*             codepoints      = nullptr;
+    uint32_t                    codepointCount  = 0;
+};</pre>
+  <div class="body">
+    <p>A font file's bytes into a <a href="scene.html#FontAtlas"><code>FontAtlas</code></a>, with stb_truetype: each codepoint's signed distance glyph, its metrics, and the kerning of every pair the atlas holds (the font's <samp>kern</samp> table or GPOS pairs). Any thread. <code>emSize</code> is the atlas's pixels per em (8 to 256): larger is sharper for very large text and a larger atlas. <code>distanceRange</code> is the atlas pixels the stored distance spans (1 to <code>emSize</code>): a halo reaches half of it, scaled to the text's size. <code>codepoints</code>: the characters to hold; null gives ASCII and Latin-1 (32 to 126, 160 to 255). The fallback <samp>?</samp> is always added. The atlas is 512 texels wide (1024 past 64 texels per em), packed in rows, and twice as wide while a glyph or the rows do not fit; past 4096 × 4096 the call fails. Kerning is looked up for every pair, so thousands of codepoints take seconds. stb_truetype trusts the font's tables: load only fonts you trust (<code>B34</code>). In <code>rasm::rasm</code>; a <code>rasm::renderer</code> program brings its own atlas.</p>
   </div>
 </div>
 

@@ -1,4 +1,5 @@
 #include "rasm/vector.h"
+#include "assets/meshBuild.h"
 
 #include "mapbox/earcut.hpp"
 
@@ -6,6 +7,7 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace rasm
@@ -18,6 +20,7 @@ namespace rasm
             FILL = 1,
             LINE = 2,
             POINT = 3,
+            GLYPH = 4,
         };
 
         enum class Metric : uint32_t
@@ -42,6 +45,7 @@ namespace rasm
     namespace
     {
         constexpr double PI = 3.14159265358979323846;
+        constexpr uint32_t LINE_FEED = 0x0A;
         // Round joins and caps: a vertex every 1/16 of a turn at most.
         constexpr double ROUND_STEP = PI / 8.0;
 
@@ -358,6 +362,54 @@ namespace rasm
         {
             pushVertex(geometry, origin, point, getGroundAxis(point.up), glm::dvec2(0.0), glm::vec2(0.0f), Kind::FILL, Metric::FILL, featureId);
         }
+
+        // C0 and C1 control characters other than the line feed (a carriage return, a tab) are not drawn.
+        bool isControl(uint32_t codepoint)
+        {
+            return codepoint < 0x20 || (codepoint >= 0x7F && codepoint < 0xA0);
+        }
+
+        // A label's glyph quads, laid out line by line from its first baseline and moved by shift (ems). halo: the halo's
+        // quads (uv[2].y = 1), which the label draws first, so no glyph's halo covers a neighbour's fill.
+        void pushLabelGlyphs(VectorGeometry &geometry, const glm::dvec3 &origin, const GroundPoint &anchor, const FontAtlas &font, const std::vector<uint32_t> &codepoints,
+                             const std::vector<float> &lineWidths, const glm::vec2 &shift, uint32_t labelIndex, uint32_t featureId, bool halo)
+        {
+            uint32_t line = 0;
+            glm::vec2 pen(-0.5f * lineWidths[0], 0.0f);
+            uint32_t previous = 0;
+            for (const uint32_t codepoint : codepoints)
+            {
+                if (codepoint == LINE_FEED)
+                {
+                    ++line;
+                    pen = glm::vec2(-0.5f * lineWidths[line], -static_cast<float>(line) * font.lineHeight);
+                    previous = 0;
+                    continue;
+                }
+                const GlyphMetrics *glyph = isControl(codepoint) ? nullptr : findGlyph(font, codepoint);
+                if (glyph == nullptr)
+                    continue;
+                pen.x += previous != 0 ? getKerning(font, previous, glyph->codepoint) : 0.0f;
+                previous = glyph->codepoint;
+                if (glyph->size.x > 0.0f && glyph->size.y > 0.0f)
+                {
+                    // The quad's corners in ems from the anchor, and their atlas coordinates (v grows downward).
+                    const glm::vec2 low = pen + glyph->offset + shift;
+                    const glm::vec2 high = low + glyph->size;
+                    const glm::vec2 corners[4] = {low, glm::vec2(high.x, low.y), glm::vec2(low.x, high.y), high};
+                    const glm::vec2 uvs[4] = {{glyph->uv.x, glyph->uv.w}, {glyph->uv.z, glyph->uv.w}, {glyph->uv.x, glyph->uv.y}, {glyph->uv.z, glyph->uv.y}};
+                    const auto first = static_cast<uint32_t>(geometry.vertices.size());
+                    for (uint32_t c = 0; c < 4; ++c)
+                        geometry.vertices.push_back({.pos = glm::vec3(anchor.position - origin),
+                                                     .normal = glm::vec3(anchor.up),
+                                                     .uv = {corners[c], uvs[c], glm::vec2(static_cast<float>(Kind::GLYPH), halo ? 1.0f : 0.0f)},
+                                                     .tangent = glm::vec4(std::bit_cast<float>(labelIndex), 0.0f, 0.0f, std::bit_cast<float>(featureId))});
+                    pushTriangle(geometry, first, first + 1, first + 2);
+                    pushTriangle(geometry, first + 2, first + 1, first + 3);
+                }
+                pen.x += glyph->advance;
+            }
+        }
     }
 
     void addVectorLines(VectorGeometry &geometry, const glm::dvec3 &origin, const glm::dvec3 *points, const uint32_t *lineSizes, uint32_t lineCount, const LineShape &shape, const VectorPlacement &placement,
@@ -460,8 +512,69 @@ namespace rasm
         }
     }
 
+    void addVectorLabels(VectorGeometry &geometry, const glm::dvec3 &origin, const FontAtlas &font, const LabelDesc *labels, uint32_t labelCount, const VectorPlacement &placement)
+    {
+        // A label's gap from its anchor, in ems, when the text sits beside it.
+        constexpr float GAP = 0.25f;
+        const glm::dvec3 up = normalizeOr(glm::dvec3(placement.up), glm::dvec3(0.0, 1.0, 0.0));
+        std::vector<uint32_t> codepoints;
+        std::vector<float> lineWidths;
+        for (uint32_t l = 0; l < labelCount; ++l)
+        {
+            const LabelDesc &label = labels[l];
+            codepoints.clear();
+            if (decodeUtf8(label.text, codepoints) == 0)
+                continue;
+            // The lines' widths, with kerning.
+            lineWidths.assign(1, 0.0f);
+            uint32_t previous = 0;
+            for (uint32_t codepoint : codepoints)
+            {
+                if (codepoint == LINE_FEED)
+                {
+                    lineWidths.push_back(0.0f);
+                    previous = 0;
+                    continue;
+                }
+                const GlyphMetrics *glyph = isControl(codepoint) ? nullptr : findGlyph(font, codepoint);
+                if (glyph == nullptr)
+                    continue;
+                lineWidths.back() += (previous != 0 ? getKerning(font, previous, glyph->codepoint) : 0.0f) + glyph->advance;
+                previous = glyph->codepoint;
+            }
+            const float width = *std::max_element(lineWidths.begin(), lineWidths.end());
+            const float height = font.ascent + font.descent + static_cast<float>(lineWidths.size() - 1) * font.lineHeight;
+            // The box from the first baseline: x from -width / 2, y from the last line's descent to the first's ascent.
+            glm::vec2 boxCenter(0.0f, font.ascent - 0.5f * height);
+            glm::vec2 shift = -boxCenter;
+            if (label.anchor == LabelAnchor::BOTTOM)
+                shift.y += 0.5f * height + GAP;
+            else if (label.anchor == LabelAnchor::TOP)
+                shift.y -= 0.5f * height + GAP;
+            else if (label.anchor == LabelAnchor::LEFT)
+                shift.x += 0.5f * width + GAP;
+            else if (label.anchor == LabelAnchor::RIGHT)
+                shift.x -= 0.5f * width + GAP;
+            // A priority or offset that is not finite (bad data) would break placement's sort: such a label sorts last.
+            if (std::isfinite(label.offset.x) && std::isfinite(label.offset.y))
+                shift += label.offset;
+            const float priority = std::isfinite(label.priority) ? label.priority : -std::numeric_limits<float>::max();
+
+            const GroundPoint anchor = isDraped(placement) ? liftOnGrid(placement, toGrid(placement, label.position)) : GroundPoint{.position = label.position, .up = up};
+            const auto labelIndex = static_cast<uint32_t>(geometry.labels.size());
+            geometry.labels.push_back({.anchor = glm::vec3(anchor.position - origin), .center = boxCenter + shift, .halfSize = 0.5f * glm::vec2(width, height), .priority = priority, .featureId = label.featureId});
+
+            pushLabelGlyphs(geometry, origin, anchor, font, codepoints, lineWidths, shift, labelIndex, label.featureId, true);
+            pushLabelGlyphs(geometry, origin, anchor, font, codepoints, lineWidths, shift, labelIndex, label.featureId, false);
+        }
+    }
+
     MeshBuild buildVectorMesh(VectorGeometry geometry)
     {
-        return buildMesh(std::move(geometry.vertices), std::move(geometry.indices), {}, {.lods = false, .meshlets = false});
+        std::vector<MeshLabel> labels = std::move(geometry.labels);
+        MeshBuild build = buildMesh(std::move(geometry.vertices), std::move(geometry.indices), {}, {.lods = false, .meshlets = false});
+        if (build.isValid())
+            build.data->labels = std::move(labels);
+        return build;
     }
 }

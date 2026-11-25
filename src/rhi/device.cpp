@@ -33,6 +33,8 @@ namespace rasm::rhi
             return {.bytes = 4};
         case Format::R8G8B8_UNORM:
             return {.bytes = 3};
+        case Format::R8_UNORM:
+            return {.bytes = 1};
         case Format::U16_UINT:
         case Format::R16_UNORM:
             return {.bytes = 2};

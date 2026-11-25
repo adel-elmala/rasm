@@ -15,6 +15,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -29,6 +30,10 @@
 // - A route drawn as an OVERLAY stays over everything; it is one entity outside the tiles.
 // - Two views: the camera, which circles the city at 400 to 1600 m and looks down at 40 degrees, and the whole map,
 //   orthographic, in the corner.
+// - Names: each place's beside its point and each district's over its middle, laid out with a font atlas built from a
+//   TrueType file (Engine::loadFont, Renderer::createFont) on the server threads (addVectorLabels). Each view places them
+//   every frame: the higher priority first, never overlapping, fading in and out, hidden where the ground or a nearer
+//   object covers them.
 // Every frame it checks the budget and, after the first frames, that no wanted tile is a hole; a headless run that
 // broke a check exits with 1.
 //   --culling        DebugView::CULLING: drawn draws green or yellow, culled ones as ghosts (their padded spheres)
@@ -55,6 +60,8 @@ namespace
         ROADS,
         RAIL,
         PLACES,
+        PLACE_NAMES,
+        DISTRICT_NAMES,
         LAYER_COUNT,
     };
 
@@ -68,6 +75,10 @@ namespace
         std::vector<std::vector<std::vector<glm::dvec3>>> lakes; // outline, then an island
         std::vector<std::vector<glm::dvec3>> parks;
         std::vector<glm::dvec3> places;
+        std::vector<std::string> placeNames;
+        std::vector<glm::dvec3> districts;
+        std::vector<std::string> districtNames;
+        const rasm::FontAtlas *font = nullptr;
     };
 
     struct TileData
@@ -180,8 +191,20 @@ namespace
             const double h = 150.0 + 350.0 * random01(seed);
             f.parks.push_back({corner, corner + glm::dvec3(w, 0.0, 30.0), corner + glm::dvec3(w + 40.0, 0.0, h), corner + glm::dvec3(-20.0, 0.0, h * 0.8)});
         }
+        // Places with names, some with letters past ASCII (UTF-8), and districts over the whole map.
+        const char *kinds[8] = {"Café", "Bäckerei", "Museum", "Park", "Straße", "Ålesund Hall", "Library", "Market"};
         for (int32_t p = 0; p < 300; ++p)
+        {
             f.places.push_back({2048.0 + 4096.0 * random01(seed), 0.0, 2048.0 + 4096.0 * random01(seed)});
+            f.placeNames.push_back(std::string(kinds[p % 8]) + " " + std::to_string(p));
+        }
+        const char *districts[16] = {"Northgate", "Old Town", "Riverside", "Harbour", "Hillcrest", "Market Square", "Westend", "Lakeview",
+                                     "Ironworks", "Greenfield", "Château Ville", "Eastport", "Millbrook", "Stonebridge", "Ashford", "Sunfield"};
+        for (int32_t d = 0; d < 16; ++d)
+        {
+            f.districts.push_back({(0.15 + 0.7 * (d % 4) / 3.0) * WORLD_SIZE, 0.0, (0.15 + 0.7 * (d / 4) / 3.0) * WORLD_SIZE});
+            f.districtNames.push_back(districts[d]);
+        }
         return f;
     }
 
@@ -336,6 +359,24 @@ namespace
                     points.push_back(place);
             rasm::addVectorPoints(geometry[PLACES], origin, points.data(), static_cast<uint32_t>(points.size()));
         }
+        // Names: a place's beside its point at the finest level, a district's over its middle at every level, each in
+        // the one tile of a level that holds its anchor. Districts outrank places in collision.
+        std::vector<rasm::LabelDesc> names;
+        for (size_t p = 0; data.level == MAX_LEVEL && p < features.places.size(); ++p)
+        {
+            const glm::dvec3 &place = features.places[p];
+            if (place.x >= low.x && place.x < high.x && place.z >= low.y && place.z < high.y)
+                names.push_back({.position = place, .text = features.placeNames[p].c_str(), .priority = 1.0f, .anchor = rasm::LabelAnchor::LEFT, .offset = glm::vec2(0.2f, 0.0f), .featureId = static_cast<uint32_t>(p)});
+        }
+        rasm::addVectorLabels(geometry[PLACE_NAMES], origin, *features.font, names.data(), static_cast<uint32_t>(names.size()));
+        names.clear();
+        for (size_t d = 0; d < features.districts.size(); ++d)
+        {
+            const glm::dvec3 &district = features.districts[d];
+            if (district.x >= low.x && district.x < high.x && district.z >= low.y && district.z < high.y)
+                names.push_back({.position = district, .text = features.districtNames[d].c_str(), .priority = 10.0f, .featureId = static_cast<uint32_t>(d)});
+        }
+        rasm::addVectorLabels(geometry[DISTRICT_NAMES], origin, *features.font, names.data(), static_cast<uint32_t>(names.size()));
         for (uint32_t layer = 0; layer < LAYER_COUNT; ++layer)
             if (!geometry[layer].indices.empty())
                 data.layers[layer] = rasm::buildVectorMesh(std::move(geometry[layer]));
@@ -507,6 +548,14 @@ int main(int argc, char **argv)
     const rasm::EntityHandle ground = engine.createEntity("ground", engine.createMesh(quad, {0, 2, 1, 1, 2, 3}), groundMaterial);
     engine.addEntityToScene(scene, ground);
 
+    // The font: a distance atlas built from the TrueType file, uploaded once; the server threads lay labels out with it.
+    rasm::FontAtlas fontAtlas;
+    if (!engine.loadFont("fonts/Roboto-Medium.ttf", fontAtlas))
+        return 1;
+    const rasm::FontHandle font = engine.createFont(fontAtlas);
+    Features features = makeFeatures();
+    features.font = &fontAtlas;
+
     // The layers, shared by every tile: the order a lower one is drawn under a higher one.
     rasm::MaterialHandle layers[LAYER_COUNT];
     layers[PARKS] = makeLayer(engine, {.color = glm::vec4(0.36f, 0.62f, 0.32f, 1.0f), .drawOrder = -40});
@@ -516,9 +565,13 @@ int main(int argc, char **argv)
     layers[ROADS] = makeLayer(engine, {.color = glm::vec4(1.0f, 0.75f, 0.25f, 1.0f), .width = 7.0f, .outlineColor = glm::vec4(0.55f, 0.32f, 0.08f, 1.0f), .outlineWidth = 1.5f, .drawOrder = -10});
     layers[RAIL] = makeLayer(engine, {.color = glm::vec4(0.15f, 0.15f, 0.15f, 1.0f), .width = 2.5f, .dashLength = 10.0f, .gapLength = 6.0f, .drawOrder = -5});
     layers[PLACES] = makeLayer(engine, {.color = glm::vec4(0.85f, 0.12f, 0.15f, 1.0f), .width = 11.0f, .outlineColor = glm::vec4(1.0f), .outlineWidth = 2.0f, .drawOrder = 10});
+    // Labels: the text's size in pixels, a halo in the outline color around it.
+    layers[PLACE_NAMES] =
+        makeLayer(engine, {.color = glm::vec4(0.15f, 0.12f, 0.1f, 1.0f), .width = 13.0f, .outlineColor = glm::vec4(1.0f, 1.0f, 1.0f, 0.9f), .outlineWidth = 2.0f, .drawOrder = 40, .font = font});
+    layers[DISTRICT_NAMES] =
+        makeLayer(engine, {.color = glm::vec4(0.25f, 0.2f, 0.45f, 1.0f), .width = 22.0f, .outlineColor = glm::vec4(1.0f, 1.0f, 1.0f, 0.9f), .outlineWidth = 3.0f, .drawOrder = 50, .font = font});
 
     // The route: an overlay over everything, one entity outside the tiles.
-    const Features features = makeFeatures();
     const rasm::MaterialHandle routeMaterial = makeLayer(engine, {.color = glm::vec4(0.75f, 0.1f, 0.85f, 0.9f), .width = 5.0f, .drawOrder = 60, .depth = rasm::VectorDepth::OVERLAY});
     {
         std::vector<glm::dvec3> route;

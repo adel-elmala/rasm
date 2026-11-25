@@ -29,6 +29,11 @@ struct rasm_camera_input_state
     rasm::CameraInputState              state;
 };
 
+struct rasm_font_atlas
+{
+    rasm::FontAtlas                     atlas;
+};
+
 namespace rasm::c
 {
 
@@ -83,6 +88,7 @@ namespace rasm::c
     inline WindowHandle     toCpp(rasm_window h)            { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
     inline RenderTargetHandle toCpp(rasm_render_target h)   { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
     inline TileHandle       toCpp(rasm_tile h)              { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
+    inline FontHandle       toCpp(rasm_font h)              { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
 
     inline rasm_scene       toC(SceneHandle h)              { return {packHandle(h.index, h.generation)}; }
     inline rasm_entity      toC(EntityHandle h)             { return {packHandle(h.index, h.generation)}; }
@@ -96,6 +102,7 @@ namespace rasm::c
     inline rasm_window      toC(WindowHandle h)             { return {packHandle(h.index, h.generation)}; }
     inline rasm_render_target toC(RenderTargetHandle h)     { return {packHandle(h.index, h.generation)}; }
     inline rasm_tile        toC(TileHandle h)               { return {packHandle(h.index, h.generation)}; }
+    inline rasm_font        toC(FontHandle h)               { return {packHandle(h.index, h.generation)}; }
 
     inline glm::vec2        toCpp(const rasm_vec2& v)       { return {v.x, v.y}; }
     inline glm::vec3        toCpp(const rasm_vec3& v)       { return {v.x, v.y, v.z}; }
@@ -208,6 +215,9 @@ namespace rasm::c
     constexpr size_t        TILE_DESC_SIZE_1_3              = offsetof(rasm_tile_desc, estimated_bytes) + sizeof(uint64_t);
     constexpr size_t        TILE_CONTENT_SIZE_1_3           = offsetof(rasm_tile_content, texture_count) + sizeof(uint32_t);
     constexpr size_t        TILE_STREAMER_STATS_SIZE_1_3    = offsetof(rasm_tile_streamer_stats, total_drops) + sizeof(uint64_t);
+    // The structs of version 1.6.
+    constexpr size_t        FONT_LOAD_OPTIONS_SIZE_1_6      = offsetof(rasm_font_load_options, codepoint_count) + sizeof(uint32_t);
+    constexpr size_t        LABEL_DESC_SIZE_1_6             = offsetof(rasm_label_desc, feature_id) + sizeof(uint32_t);
 
 }
 
