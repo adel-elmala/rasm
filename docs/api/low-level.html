@@ -77,7 +77,7 @@
 <div class="api" id="getBindlessDescriptorSet">
   <pre class="sig">DescriptorSetHandle getBindlessDescriptorSet();</pre>
   <div class="body">
-    <p>The renderer's bindless texture set, which its <code>RenderContext</code> made (<code>RenderContext::getBindlessDescriptorSet</code> returns the same handle, and <code>getBindlessDescriptorSetLayout</code> its layout): <code>MAX_BINDLESS_TEXTURES</code> combined image samplers at set 0, binding 0, visible to every shader stage (<code>ShaderType::ALL</code>). Pipelines from <code>createPipeline</code> and <code>createComputePipeline</code> use its layout. Bind it with <code>bindDescriptorSet(commandBuffer, pipeline, set, 0)</code> before drawing or dispatching with a pipeline that samples textures. See <a href="materials.html">Materials and textures</a> for how textures get a slot.</p>
+    <p>The renderer's bindless texture set, which its <code>RenderContext</code> made (<code>RenderContext::getBindlessDescriptorSet</code> returns the same handle, and <code>getBindlessDescriptorSetLayout</code> its layout): <code>RendererConfig::maxBindlessTextures</code> combined image samplers (<code>getBindlessTextureCapacity</code>) at set 0, binding 0, visible to every shader stage (<code>ShaderType::ALL</code>). Pipelines from <code>createPipeline</code> and <code>createComputePipeline</code> use its layout. Bind it with <code>bindDescriptorSet(commandBuffer, pipeline, set, 0)</code> before drawing or dispatching with a pipeline that samples textures. See <a href="materials.html">Materials and textures</a> for how textures get a slot.</p>
   </div>
 </div>
 
@@ -777,7 +777,7 @@ float takeUploadGpuMs();</pre>
     <dl>
       <dt>slot</dt><dd><code>MAX_BINDLESS_TEXTURES</code> (the default): the texture's own slot when it has one, unchanged (a frame in flight may sample it; another sampler logs an error: make a second texture), else a freed slot, else the next one never used. A smaller value takes that slot: the texture that held it loses it, and the texture gives back the slot it had. A slot that waits for the GPU after a destroy is refused. Only name a slot no frame in flight samples.</dd>
     </dl>
-    <p><span class="tag">errors</span> When every slot is held or still waits for the GPU, it logs how many wait and returns <code>UINT32_MAX</code>, as does a slot above <code>MAX_BINDLESS_TEXTURES</code> or an unknown set or texture.</p>
+    <p><span class="tag">errors</span> When every slot is held or still waits for the GPU, it logs how many wait and returns <code>UINT32_MAX</code>, as does a slot past the set's slots (other than <code>MAX_BINDLESS_TEXTURES</code>) or an unknown set or texture.</p>
   </div>
 </div>
 
@@ -914,7 +914,7 @@ float takeUploadGpuMs();</pre>
   <div class="body">
     <dl>
       <dt>stage</dt><dd>Which shaders see the array. The engine's layout uses <code>ALL</code>, so compute shaders can sample too.</dd>
-      <dt>count</dt><dd>Array size. The engine's layout uses <code>MAX_BINDLESS_TEXTURES</code>.</dd>
+      <dt>count</dt><dd>Array size. The engine's layout uses <code>getBindlessTextureCapacity</code>.</dd>
       <dt>storageImageCount</dt><dd>Size of binding 1, of <code>STORAGE_IMAGE</code>s; 0 leaves it out. The engine's layout uses <code>MAX_BINDLESS_STORAGE_IMAGES</code>.</dd>
     </dl>
   </div>
@@ -1291,9 +1291,11 @@ void collectReleases();</pre>
   <pre class="sig">void releaseAfterGpu(std::function&lt;void()&gt; free);
 uint32_t getReleasesWaiting() const;
 uint32_t getTextureCount() const;
-uint32_t getBindlessTextureCount() const;</pre>
+uint32_t getBindlessTextureCount() const;
+uint32_t getBindlessTextureCapacity() const;
+uint64_t getTextureMemoryBytes(const TextureHandle&amp; texture) const;</pre>
   <div class="body">
-    <p><code>releaseAfterGpu</code> runs <code>free</code> once the GPU has finished every frame that may still use what it frees, through the same release queue as the <code>destroy*</code> calls: for your own ranges of a buffer, for example. <code>getReleasesWaiting</code> counts what waits; <code>getTextureCount</code> the live textures; <code>getBindlessTextureCount</code> the bindless slots a texture holds.</p>
+    <p><code>releaseAfterGpu</code> runs <code>free</code> once the GPU has finished every frame that may still use what it frees, through the same release queue as the <code>destroy*</code> calls: for your own ranges of a buffer, for example. <code>getReleasesWaiting</code> counts what waits; <code>getTextureCount</code> the live textures; <code>getBindlessTextureCount</code> the bindless slots a texture holds; <code>getBindlessTextureCapacity</code> the slots the set has (<code>RendererConfig::maxBindlessTextures</code>, lowered to the device's limit). <code>getTextureMemoryBytes</code> is the size of a texture's own memory allocation, its alignment and padding included (0 for a transient target placed in a shared heap): what a <a href="engine.html#TileStreamer">TileStreamer</a> counts for a tile's textures.</p>
   </div>
 </div>
 

@@ -759,7 +759,7 @@ void bindTexture(TextureHandle texture);</code></pre>
   <tr><td><code>Light</code></td><td><code>EngineConfig::maxLights</code> = 16384</td><td><code>include/rasm/types.h</code></td></tr>
   <tr><td><code>Scene</code></td><td><code>MAX_SCENES</code> = 16 (15 alive at once)</td><td><code>include/rasm/scene.h</code></td></tr>
   <tr><td><code>Engine</code> readbacks</td><td><code>PendingReadback</code></td><td>no count limit; <code>takeReadback</code> releases its handle</td><td><code>src/renderer/readback.h</code></td></tr>
-  <tr><td><code>RenderContext</code> tables</td><td>buffers, textures, pipelines, ...</td><td>no count limit; at most <code>MAX_BINDLESS_TEXTURES</code> = 1024 textures hold a bindless slot at once</td><td><code>include/rasm/types.h</code></td></tr>
+  <tr><td><code>RenderContext</code> tables</td><td>buffers, textures, pipelines, ...</td><td>no count limit; at most <code>RendererConfig::maxBindlessTextures</code> (16384 by default) textures hold a bindless slot at once</td><td><code>include/rasm/types.h</code></td></tr>
 </table>
 </div>
 
@@ -806,7 +806,7 @@ void bindTexture(TextureHandle texture);</code></pre>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Handle layout</td><td>index + generation, often packed in 32 or 64 bits</td><td>Two separate <code>uint64_t</code> fields: 16 bytes per handle. The C API packs them into one 64-bit id, <code>generation &lt;&lt; 32 | index</code> (<a href="stable-c-abi.html#objects">A stable C ABI</a>).</td></tr>
   <tr><td>Invalid handle</td><td>generation 0</td><td>The same: <code>isValid</code> is <code>generation != 0</code>, so <code>{}</code> is invalid.</td></tr>
-  <tr><td>Type safety</td><td>tag types</td><td>The same: <code>Handle&lt;Tag&gt;</code> with 22 tags, from <code>MeshHandle</code> to <code>ReadbackHandle</code>. It is the only template RASM code may define.</td></tr>
+  <tr><td>Type safety</td><td>tag types</td><td>The same: <code>Handle&lt;Tag&gt;</code> with 23 tags, from <code>MeshHandle</code> to <code>TileHandle</code>. It is the only template RASM code may define.</td></tr>
   <tr><td>Making a handle</td><td>pop the free list, or add a slot</td><td>The same: <code>HandlePool::allocate</code> pops the free list (last released, first reused), or adds an index. The stack keeps the indices low, so the tables indexed by handle stay short.</td></tr>
   <tr><td>Generation bump on destroy</td><td>yes</td><td>The same: <code>HandlePool::release</code> adds 1. A slot whose generation reaches <code>MAX_HANDLE_GENERATION</code> (2<sup>32</sup> − 1) is retired, never reused, so every generation fits in 32 bits.</td></tr>
   <tr><td>Stale handle detection</td><td>compare generations</td><td>The same: <code>isAlive</code> (also false for a free slot). <code>RenderContext</code> lookups log an error and fail; <code>Engine</code>'s public calls check <code>isLive</code>.</td></tr>

@@ -1,0 +1,521 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tile Streaming · RASM</title>
+<meta name="description" content="How a map engine or an open world keeps a large set of tiles streaming in and out under a GPU memory budget: a tree of tiles, the screen-space error and the cut, hysteresis, a parent that stands in for children that are not ready, the residency cache and its eviction order, bounded work per frame, and how RASM does it.">
+<meta name="rasm-sources" content="include/rasm/tileStreamer.h src/scene/tileStreamer.cpp src/scene/tileResidency.h src/scene/tileResidency.cpp examples/24_map_tiles/main.cpp src/c/cTiles.cpp include/rasm/rasm_c.h examples/22_c_api/main.c tests/tileResidencyTests.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/tile-streaming.js"></script>
+</head>
+<body data-root="../" data-page="guides/tile-streaming.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">GPU data</p>
+<h1>Tile streaming under a memory budget</h1>
+<p class="lead">A map of a country, or an open-world level, does not fit in GPU memory. So it is cut into tiles, and only the tiles the camera needs are in memory. This page explains how an engine decides which tiles to load, which to keep and which to drop while the camera moves, with a fixed memory budget and no long frames: a tree of tiles, the screen-space error, the cut, a parent that stands in for its children, and the residency cache. The <a href="#in-rasm">last part</a> shows how RASM does it. Loading one file without freezing the frame is in <a href="asset-streaming.html">Streaming assets in the background</a>.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>The world is a <b>tree of tiles</b>: the root covers everything coarsely, each child covers a quarter of its parent with more detail.</li>
+    <li>Each tile has a <b>geometric error</b>: how far it is from the full detail, in world units. Seen from the camera, it is a number of pixels: the <b>screen-space error</b>.</li>
+    <li>Walk the tree from the root and refine a tile while its error is over a limit <var>τ</var>. The tiles where the walk stops are the <b>cut</b>: what should be drawn.</li>
+    <li>Refine above <var>τ</var>, merge back only below about 0.8 <var>τ</var> (<b>hysteresis</b>), or a tile at the edge flickers.</li>
+    <li>Until all its children are in memory, a tile's <b>parent stands in</b> for them. So the parents load first, and stay longest.</li>
+    <li>A <b>byte budget</b> counts what the tiles really hold. To make room, drop tiles nobody wants (the oldest first), then wanted tiles of a lower error. A tile that does not fit waits.</li>
+    <li>Bound the work per frame: a few loads started, a few in flight, a few drops. Never wait for the GPU.</li>
+  </ul>
+</div>
+
+<h2 id="problem"><span class="n">1</span>The problem</h2>
+
+<p>A map of 32 × 32 km with 256 m tiles at its finest level has 16 384 tiles there, and 21 845 with the coarser levels above them. At 200 KiB each (a mesh and an image) that is over 4 GiB. The GPU has room for a few hundred.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Left: the whole map from above, cut into small tiles everywhere; 4 GiB. Right: the same map with small tiles only near the camera and large tiles far away; 40 MiB, which fits the budget bar.">
+    <text x="20" y="22" class="title">Every tile at full detail</text>
+    <rect x="20" y="34" width="180" height="180" class="zone"/>
+    <path d="M20,45.25H200M20,56.5H200M20,67.75H200M20,79H200M20,90.25H200M20,101.5H200M20,112.75H200M20,124H200M20,135.25H200M20,146.5H200M20,157.75H200M20,169H200M20,180.25H200M20,191.5H200M20,202.75H200M31.25,34V214M42.5,34V214M53.75,34V214M65,34V214M76.25,34V214M87.5,34V214M98.75,34V214M110,34V214M121.25,34V214M132.5,34V214M143.75,34V214M155,34V214M166.25,34V214M177.5,34V214M188.75,34V214" class="grid"/>
+    <text x="110" y="236" class="mid small t-bad">21 845 tiles: over 4 GiB</text>
+
+    <text x="280" y="22" class="title">Only what the camera needs</text>
+    <rect x="280" y="34" width="180" height="180" class="zone"/>
+    <rect x="281" y="35" width="88" height="88" rx="2" class="gpu o-25"/>
+    <rect x="371" y="35" width="88" height="88" rx="2" class="gpu o-25"/>
+    <rect x="281" y="125" width="88" height="88" rx="2" class="gpu o-25"/>
+    <rect x="371" y="125" width="43" height="43" rx="2" class="gpu o-50"/>
+    <rect x="416" y="125" width="43" height="43" rx="2" class="gpu o-50"/>
+    <rect x="416" y="170" width="43" height="43" rx="2" class="gpu o-50"/>
+    <rect x="371" y="170" width="21" height="21" rx="1" class="gpu o-75"/>
+    <rect x="393" y="170" width="21" height="21" rx="1" class="gpu o-75"/>
+    <rect x="371" y="192" width="21" height="21" rx="1" class="gpu o-75"/>
+    <rect x="393" y="192" width="10" height="10" class="gpu"/>
+    <rect x="404" y="192" width="10" height="10" class="gpu"/>
+    <rect x="393" y="203" width="10" height="10" class="gpu"/>
+    <rect x="404" y="203" width="10" height="10" class="gpu"/>
+    <circle cx="402" cy="202" r="6" class="cpu"/>
+    <text x="370" y="236" class="mid small t-ok">13 tiles: small near the camera</text>
+
+    <text x="520" y="22" class="title">GPU memory</text>
+    <rect x="520" y="34" width="220" height="26" rx="3" class="zone"/>
+    <rect x="520" y="34" width="150" height="26" rx="3" class="gpu"/>
+    <text x="595" y="52" class="mid small">the tiles' budget</text>
+    <text x="520" y="80" class="small">The budget is a number of bytes the</text>
+    <text x="520" y="96" class="small">application sets, or a share of what</text>
+    <text x="520" y="112" class="small">the device says it can spare.</text>
+    <circle cx="530" cy="140" r="6" class="cpu"/>
+    <text x="544" y="144" class="small">the camera</text>
+  </svg>
+  <figcaption>Far from the camera a tile covers few pixels, so a coarse tile looks the same as fine ones. Only near the camera do the fine tiles matter. The question is which tiles to hold, as the camera moves, without going over the budget and without a long frame.</figcaption>
+</figure>
+
+<h2 id="tree"><span class="n">2</span>A tree of tiles</h2>
+
+<p>The usual tree is a <b>quadtree</b>: level 0 is one tile for the whole world, and each tile has four children, each a quarter of it. A tile's mesh has the same number of vertices at every level, and its image the same number of pixels. So a child shows its quarter with twice the detail.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="Three levels of a quadtree side by side. Level 0 is one tile of size S with error e. Level 1 is four tiles of size S/2 with error e/2. Level 2 is sixteen tiles of size S/4 with error e/4. Arrows go from a tile to its four children.">
+    <rect x="30" y="40" width="140" height="140" rx="3" class="gpu o-25"/>
+    <text x="100" y="114" class="mid title">0</text>
+    <text x="100" y="200" class="mid small">size S, error e</text>
+
+    <rect x="290" y="40" width="68" height="68" rx="3" class="gpu o-50"/>
+    <rect x="362" y="40" width="68" height="68" rx="3" class="gpu o-50"/>
+    <rect x="290" y="112" width="68" height="68" rx="3" class="gpu o-50"/>
+    <rect x="362" y="112" width="68" height="68" rx="3" class="gpu o-50"/>
+    <text x="324" y="78" class="mid">1</text><text x="396" y="78" class="mid">1</text><text x="324" y="150" class="mid">1</text><text x="396" y="150" class="mid">1</text>
+    <text x="360" y="200" class="mid small">size S/2, error e/2</text>
+
+    <path d="M550,40h140v140h-140z" class="gpu o-75"/>
+    <path d="M550,75H690M550,110H690M550,145H690M585,40V180M620,40V180M655,40V180" class="grid"/>
+    <text x="620" y="200" class="mid small">size S/4, error e/4</text>
+
+    <line x1="180" y1="110" x2="280" y2="110" class="arrow" marker-end="url(#ah)"/>
+    <text x="230" y="100" class="mid small">4 children</text>
+    <line x1="440" y1="110" x2="540" y2="110" class="arrow" marker-end="url(#ah)"/>
+    <text x="490" y="100" class="mid small">16 children</text>
+    <text x="20" y="22" class="small">The root covers everything coarsely; each level halves the tiles and their error.</text>
+  </svg>
+  <figcaption>The geometric error of a tile: how far its surface and its colors may be from the full detail, in world units. With a fixed grid per tile it halves at each level. A leaf (the finest level) has an error of 0.</figcaption>
+</figure>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A square split in four, and one quarter split again: a quadtree.">
+      <rect x="60" y="10" width="110" height="110" rx="2" class="gpu o-25"/>
+      <path d="M115,10V120M60,65H170M142.5,65V120M115,92.5H170" class="arrow"/>
+    </svg>
+    <h4>Quadtree</h4>
+    <p>A 2D map, terrain, imagery: four children per tile. Web map tiles (zoom / x / y) are one.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A cube split in eight: an octree.">
+      <path d="M80,40 L140,20 L190,40 L130,60 Z M80,40 V100 L130,120 V60 M190,40 V100 L130,120" class="arrow"/>
+      <path d="M110,30 L160,50 M135,30 L105,50 M80,70 L130,90 L190,70 M105,110 V50 M160,110 V50" class="arrow thin dashed"/>
+    </svg>
+    <h4>Octree</h4>
+    <p>A city in 3D, a point cloud: eight children per tile.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An irregular tree: a tile with three children of different sizes, one of which has two children of its own.">
+      <rect x="20" y="14" width="200" height="30" rx="3" class="gpu o-25"/>
+      <rect x="20" y="54" width="90" height="26" rx="3" class="gpu o-50"/><rect x="116" y="54" width="50" height="26" rx="3" class="gpu o-50"/><rect x="172" y="54" width="48" height="26" rx="3" class="gpu o-50"/>
+      <rect x="20" y="90" width="42" height="24" rx="3" class="gpu o-75"/><rect x="68" y="90" width="42" height="24" rx="3" class="gpu o-75"/>
+    </svg>
+    <h4>Any tree</h4>
+    <p>3D Tiles and similar formats: each tile names its children, its bounds and its error.</p>
+  </div>
+</div>
+
+<p>What the streamer needs from a tile is the same in all three: its parent, a bounding sphere, and its geometric error. What a tile <i>is</i> (a file name, a mesh made from a height map, buildings from a vector tile) belongs to the application.</p>
+
+<h2 id="cut"><span class="n">3</span>The screen-space error and the cut</h2>
+
+<p>A tile's geometric error, seen from the camera, is a number of pixels. It is the same rule as picking a mesh's level of detail (<a href="lod-selection.html">LOD selection</a>): the error times the pixels per world unit, which shrink with the depth.</p>
+
+<div class="formula">
+  <p class="eq">pixels = <var>e</var> × <var>P</var><sub>11</sub> × <var>H</var> / 2 / (<var>w</var> − <var>r</var>)</p>
+  <dl>
+    <dt><var>e</var></dt><dd>the tile's geometric error, in world units</dd>
+    <dt><var>P</var><sub>11</sub> × <var>H</var> / 2</dt><dd>pixels per world unit at depth 1: the projection's <var>P</var><sub>11</sub> and the view's height in pixels</dd>
+    <dt><var>w</var> − <var>r</var></dt><dd>the view depth of the bounding sphere's nearest point (an orthographic view has no division)</dd>
+  </dl>
+</div>
+
+<p>The <b>walk</b>: start at the root; if its error on screen is over a limit <var>τ</var>, go into its children, else stop. The tiles where the walk stops are the <b>cut</b>. A tile outside every view has an error of 0, so the walk stops there at once: far and unseen places stay coarse.</p>
+
+<figure class="lab" data-lab="tile-cut" data-title="Find the cut">
+  <figcaption>Drag the camera over the map and change its height and the pixel limit. Near the camera the walk goes deep; far away one coarse tile covers a large area. Raise τ: fewer, coarser tiles.</figcaption>
+</figure>
+
+<div class="callout">
+  <strong>Several views</strong>
+  <p>With two views (the camera and a map in a corner), a tile's error is the <b>largest</b> over the views that see it. One cut then serves both: the map view does not need the fine tiles, but they are not wrong there, only finer.</p>
+</div>
+
+<h2 id="hysteresis"><span class="n">4</span>Hysteresis: refine above, merge below</h2>
+
+<p>A tile whose error is close to <var>τ</var> crosses it back and forth as the camera moves a little. With one limit it refines, merges, refines: its children load, go, load again.</p>
+
+<div class="split">
+  <div class="bad">
+    <h4>One limit</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="A tile's error over time wobbles around the limit tau. Each crossing changes the cut: refine, merge, refine.">
+      <line x1="20" y1="60" x2="300" y2="60" class="hot dashed"/>
+      <text x="300" y="52" class="end small t-hot">τ</text>
+      <polyline points="20,80 60,66 90,56 120,64 150,54 180,66 210,57 240,63 270,55 300,62" class="arrow"/>
+      <text x="90" y="40" class="mid small t-bad">refine</text><text x="120" y="88" class="mid small t-bad">merge</text><text x="150" y="40" class="mid small t-bad">refine</text><text x="180" y="88" class="mid small t-bad">merge</text>
+      <text x="160" y="124" class="mid small t-bad">the children load and go, frame after frame</text>
+    </svg>
+    <p>Each change starts loads, or drops tiles that were just loaded.</p>
+  </div>
+  <div class="good">
+    <h4>Two limits</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="The same error with two limits: refine above tau, merge only below 0.8 tau. The wobble stays between them, so the cut changes once.">
+      <line x1="20" y1="60" x2="300" y2="60" class="hot dashed"/>
+      <line x1="20" y1="84" x2="300" y2="84" class="ok dashed"/>
+      <text x="300" y="52" class="end small t-hot">τ: refine</text>
+      <text x="300" y="98" class="end small t-ok">0.8 τ: merge</text>
+      <polyline points="20,80 60,66 90,56 120,64 150,54 180,66 210,57 240,63 270,55 300,62" class="arrow"/>
+      <text x="90" y="40" class="mid small t-ok">refine, once</text>
+      <text x="160" y="124" class="mid small t-ok">the cut stays put while the error wobbles</text>
+    </svg>
+    <p>A tile refined last frame stays refined until its error falls under the lower limit.</p>
+  </div>
+</div>
+
+<p>The walk keeps one flag per tile: was it refined last frame. It is the application's walk, so the flag is the application's too.</p>
+
+<h2 id="stand-in"><span class="n">5</span>A parent stands in</h2>
+
+<p>The cut says what <i>should</i> be drawn. Some of it is not in memory yet. Drawing a hole there looks broken. Drawing the children that are ready next to their parent overlaps it. The answer: while any child is missing, draw the parent in place of all of them.</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>The cut wants four children</h4>
+    <svg viewBox="0 0 760 150" role="img" aria-label="Tile A is in memory and drawn. Its four children are wanted; none of them is in memory yet.">
+      <rect x="40" y="20" width="110" height="110" rx="3" class="accent"/>
+      <text x="95" y="80" class="mid title">A</text>
+      <text x="95" y="146" class="mid small">drawn in their place</text>
+      <rect x="260" y="20" width="53" height="53" rx="2" class="ghost"/><rect x="317" y="20" width="53" height="53" rx="2" class="ghost"/>
+      <rect x="260" y="77" width="53" height="53" rx="2" class="ghost"/><rect x="317" y="77" width="53" height="53" rx="2" class="ghost"/>
+      <text x="315" y="146" class="mid small">A1 to A4: asked for</text>
+      <text x="420" y="60" class="small">The camera came closer. The walk goes into A,</text>
+      <text x="420" y="78" class="small">but its children are still on their way.</text>
+    </svg>
+    <p>A is in memory, so it stands in. Nothing flickers and nothing is missing.</p>
+  </div>
+  <div class="step">
+    <h4>Three of them arrive</h4>
+    <svg viewBox="0 0 760 150" role="img" aria-label="Three children are in memory, one is not. A is still drawn; the three ready children wait, not drawn.">
+      <rect x="40" y="20" width="110" height="110" rx="3" class="accent"/>
+      <text x="95" y="80" class="mid title">A</text>
+      <text x="95" y="146" class="mid small">still drawn</text>
+      <rect x="260" y="20" width="53" height="53" rx="2" class="gpu o-25"/><rect x="317" y="20" width="53" height="53" rx="2" class="gpu o-25"/>
+      <rect x="260" y="77" width="53" height="53" rx="2" class="gpu o-25"/><rect x="317" y="77" width="53" height="53" rx="2" class="ghost"/>
+      <text x="315" y="146" class="mid small">ready, not drawn · A4 on its way</text>
+      <text x="420" y="60" class="small">Drawing A1 to A3 with A would overlap;</text>
+      <text x="420" y="78" class="small">drawing them alone leaves a hole at A4.</text>
+    </svg>
+    <p>The ready children wait. A still fills the whole place.</p>
+  </div>
+  <div class="step">
+    <h4>The last one arrives</h4>
+    <svg viewBox="0 0 760 150" role="img" aria-label="All four children are in memory. In the same frame they are drawn and A is hidden; A stays in memory.">
+      <rect x="40" y="20" width="110" height="110" rx="3" class="ghost"/>
+      <text x="95" y="80" class="mid title t-faint">A</text>
+      <text x="95" y="146" class="mid small">hidden, kept in memory</text>
+      <rect x="260" y="20" width="53" height="53" rx="2" class="gpu"/><rect x="317" y="20" width="53" height="53" rx="2" class="gpu"/>
+      <rect x="260" y="77" width="53" height="53" rx="2" class="gpu"/><rect x="317" y="77" width="53" height="53" rx="2" class="gpu"/>
+      <text x="315" y="146" class="mid small">all four drawn</text>
+      <text x="420" y="60" class="small">The swap happens in one frame: the children</text>
+      <text x="420" y="78" class="small">show and A hides, never both, never neither.</text>
+    </svg>
+    <p>A stays in memory: when the camera backs off, it is drawn again at once.</p>
+  </div>
+</div>
+
+<p>The rule, for any tree: for each wanted tile that is not ready, draw its <b>nearest ready ancestor</b>, and hide everything under that ancestor. For this to work, the parents must be in memory before their children. So the parents of the cut are wanted too, and rank at least as high as their children.</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Replace: a coarse terrain tile and its four finer children; the children replace it.">
+      <rect x="20" y="20" width="80" height="80" rx="3" class="gpu o-25"/>
+      <line x1="108" y1="60" x2="134" y2="60" class="arrow" marker-end="url(#ah)"/>
+      <rect x="140" y="20" width="38" height="38" rx="2" class="gpu"/><rect x="182" y="20" width="38" height="38" rx="2" class="gpu"/>
+      <rect x="140" y="62" width="38" height="38" rx="2" class="gpu"/><rect x="182" y="62" width="38" height="38" rx="2" class="gpu"/>
+      <text x="120" y="122" class="mid small">children instead of the parent</text>
+    </svg>
+    <h4>Replace</h4>
+    <p>The children are the parent again, finer: terrain, imagery. The parent is hidden once they are ready.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Add: a ground tile, and buildings on it as its children; the ground stays drawn with them.">
+      <rect x="20" y="70" width="200" height="30" rx="3" class="gpu o-25"/>
+      <rect x="50" y="34" width="26" height="36" class="solid"/><rect x="100" y="20" width="22" height="50" class="solid"/><rect x="150" y="44" width="40" height="26" class="solid"/>
+      <text x="120" y="122" class="mid small">children on top of the parent</text>
+    </svg>
+    <h4>Add</h4>
+    <p>The children add what the parent does not have: buildings on a district. The parent stays drawn.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A hole: a wanted tile with no ready ancestor; nothing is drawn there.">
+      <rect x="60" y="20" width="120" height="80" rx="3" class="ghost"/>
+      <text x="120" y="66" class="mid small t-bad">nothing here yet</text>
+      <text x="120" y="122" class="mid small">a hole</text>
+    </svg>
+    <h4>A hole</h4>
+    <p>Only when no ancestor is ready either: at the very start, before the root is in.</p>
+  </div>
+</div>
+
+<h2 id="budget"><span class="n">6</span>The residency budget</h2>
+
+<p>The tiles in memory are a <b>cache</b>: the wanted ones, and some the camera left, kept in case it comes back. A budget limits it. Count what is really there, not what was guessed:</p>
+
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A texture's allocation: its pixels, all its mips, and the driver's alignment padding at the end.">
+      <rect x="20" y="30" width="120" height="60" class="mem"/><rect x="140" y="30" width="40" height="60" class="mem o-75"/><rect x="180" y="30" width="16" height="60" class="mem o-50"/><rect x="196" y="30" width="24" height="60" class="zone"/>
+      <text x="80" y="64" class="mid small">mip 0</text><text x="160" y="64" class="mid small">1</text>
+      <text x="208" y="108" class="mid small">pad</text>
+      <text x="120" y="122" class="mid small">the allocation's size</text>
+    </svg>
+    <h4>Textures: the allocation</h4>
+    <p>The memory allocator's size of each image: every mip, and the alignment the driver adds. Width × height × 4 is only an estimate.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A shared vertex buffer with ranges taken by several tiles; one tile's ranges are marked.">
+      <rect x="20" y="40" width="200" height="30" class="mem o-25"/>
+      <rect x="40" y="40" width="40" height="30" class="mem"/><rect x="120" y="40" width="24" height="30" class="mem"/>
+      <text x="120" y="96" class="mid small">its ranges of the shared pools</text>
+    </svg>
+    <h4>Meshes: their share of the pools</h4>
+    <p>In a GPU-driven renderer a mesh is ranges of big shared buffers. Its bytes are its vertices, indices and other streams there.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Fixed tables: bindless slots, material rows and instance rows, each with a limit.">
+      <rect x="20" y="20" width="200" height="18" class="zone"/><rect x="20" y="20" width="130" height="18" class="shader"/><text x="230" y="33" class="end small">slots</text>
+      <rect x="20" y="50" width="200" height="18" class="zone"/><rect x="20" y="50" width="90" height="18" class="mem"/><text x="230" y="63" class="end small">rows</text>
+      <rect x="20" y="80" width="200" height="18" class="zone"/><rect x="20" y="80" width="160" height="18" class="mem"/><text x="230" y="93" class="end small">rows</text>
+    </svg>
+    <h4>Every fixed pool</h4>
+    <p>Texture slots, material and instance rows, the vertex and index pools: each is a second budget. A tile that does not fit one must wait like one over the bytes.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The device's memory budget: what other programs and the rest of the engine use, and the share left for tiles.">
+      <rect x="20" y="40" width="200" height="30" class="zone"/>
+      <rect x="20" y="40" width="70" height="30" class="cpu o-50"/><rect x="90" y="40" width="104" height="30" class="gpu"/>
+      <text x="55" y="92" class="mid small">others</text><text x="142" y="92" class="mid small">80% of the rest</text>
+    </svg>
+    <h4>A budget from the device</h4>
+    <p>The driver says how much memory the program may use now (Vulkan: <samp>VK_EXT_memory_budget</samp>). Take a share of what the rest leaves.</p>
+  </div>
+</div>
+
+<p>Before a tile is loaded its cost is a guess: its own last measured cost if it was in memory before, else what the application says, else the mean of the tiles measured so far. Once its content exists, the real number replaces the guess.</p>
+
+<h3>The order tiles go in</h3>
+
+<ol class="flow">
+  <li class="mem"><b>nobody wants it</b>The oldest first: the camera left it longest ago (least recently used).</li>
+  <li class="gpu"><b>wanted, lower error</b>A wanted tile whose error ranks below the one that needs the room, the lowest first, the deepest first.</li>
+  <li class="cpu"><b>else it waits</b>The new tile does not load; its parent stands in. Nothing is dropped for it.</li>
+</ol>
+
+<div class="callout rule">
+  <strong>A tile is ranked by its parent's error</strong>
+  <p>A tile is wanted because its parent was too coarse. So rank it by its parent's error, seen at the tile's own bounds. Ranked by its own error, every leaf (error 0) would come last. And a parent ranks at least as high as its wanted children: they need it to stand in.</p>
+</div>
+
+<figure class="lab" data-lab="tile-budget" data-title="Fly under a budget">
+  <figcaption>The camera flies a circle. Lower the budget until the wanted tiles do not fit: the far ones wait, their parents stand in, and the memory stays under the budget. Raise it: the tiles the camera left stay as a cache. With 1 load per frame, children arrive late and the parents stand in longer.</figcaption>
+</figure>
+
+<h2 id="limits"><span class="n">7</span>Bounded work per frame</h2>
+
+<p>A frame that loads or drops a hundred tiles is a long frame. Each step gets a limit, and what is over waits for the next frame.</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A queue of wanted tiles sorted by error; only the first four are handed out this frame.">
+      <rect x="20" y="40" width="36" height="36" rx="3" class="cpu"/><rect x="62" y="40" width="36" height="36" rx="3" class="cpu"/><rect x="104" y="40" width="36" height="36" rx="3" class="cpu"/><rect x="146" y="40" width="36" height="36" rx="3" class="cpu"/><rect x="188" y="40" width="36" height="36" rx="3" class="ghost"/>
+      <text x="100" y="96" class="mid small">4 this frame</text><text x="206" y="96" class="mid small t-faint">next</text>
+    </svg>
+    <h4>Loads started</h4>
+    <p>A few tiles handed out per frame, the largest error first: making a tile's content takes main-thread time.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Loads in flight: a fixed number of slots, one taken by a tile nobody wants any more, which is cancelled for a wanted one.">
+      <rect x="20" y="40" width="40" height="30" rx="3" class="cpu"/><rect x="66" y="40" width="40" height="30" rx="3" class="cpu"/><rect x="112" y="40" width="40" height="30" rx="3" class="cpu"/><rect x="158" y="40" width="40" height="30" rx="3" class="bad"/>
+      <text x="178" y="90" class="mid small t-bad">unwanted: cancel</text>
+    </svg>
+    <h4>Loads in flight</h4>
+    <p>So the loader's queue stays short and new priorities count soon. A load nobody wants any more gives its place up.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Drops: a few tiles destroyed this frame; their memory is freed later, when the GPU is done with them.">
+      <rect x="40" y="40" width="40" height="30" rx="3" class="mem"/><rect x="90" y="40" width="40" height="30" rx="3" class="mem"/>
+      <line x1="140" y1="55" x2="180" y2="55" class="arrow dashed" marker-end="url(#ah)"/>
+      <text x="190" y="59" class="small">later</text>
+      <text x="120" y="96" class="mid small">destroy now, free later</text>
+    </svg>
+    <h4>Drops</h4>
+    <p>A few destroyed per frame. The memory comes back once the GPU is done with it (<a href="resource-lifetime.html">deferred destruction</a>), with no wait.</p>
+  </div>
+</div>
+
+<h2 id="pitfalls"><span class="n">8</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>Tiles flicker between two levels at one place</dt><dd>One limit for refine and merge. Merge only under a lower limit (hysteresis).</dd></div>
+  <div><dt>Holes appear when the camera dives in</dt><dd>The children were wanted, the parents were not. Keep the parents of the cut wanted, and rank them at least as high as their children.</dd></div>
+  <div><dt>The leaves load last, or never</dt><dd>Tiles ranked by their own error: a leaf's is 0. Rank by the parent's error.</dd></div>
+  <div><dt>Memory goes over the budget for a moment</dt><dd>A tile's real size was only known once its file was read. Count what its content holds as soon as it exists (a texture is allocated before its pixels come), and drop at once to get under again.</dd></div>
+  <div><dt>One huge tile empties the cache</dt><dd>It is larger than the whole budget, so dropping everything else still does not make room. Drop it first; it then waits with its measured size and never pushes others out.</dd></div>
+  <div><dt>A load nobody wants holds its place for seconds</dt><dd>Loads keep running after the camera turned away. Cancel a load that is no longer wanted when a wanted one needs its place.</dd></div>
+  <div><dt>A shared mesh is destroyed with a tile</dt><dd>Two tiles listed the same mesh (or a loader returned the same handle for the same file). A tile owns only what is its own; shared content stays outside the tiles.</dd></div>
+  <div><dt>The pools fill although the bytes fit</dt><dd>Texture slots or table rows ran out first. Every fixed pool is a budget too.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
+
+<p><code>TileStreamer</code> (<code>include/rasm/tileStreamer.h</code>, in the <code>rasm::renderer</code> library) keeps one scene's tiles under a byte budget. The application owns its tree and what a tile is; the streamer owns the budget, the residency, the eviction order, the limits per frame and what is drawn. The two talk through handles and arrays, with no callbacks, so the <a href="stable-c-abi.html">C API</a> has the same calls (<code>rasm_tile_streamer_*</code>).</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>the application</span>
+  <span><i class="gpu"></i>TileStreamer</span>
+  <span><i class="mem"></i>the renderer's objects</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 330" role="img" aria-label="Each frame: the application sets the views, walks its tree with getScreenError and passes its cut to update. update polls the loading tiles, reads the budget and the pools, decides loads and drops, and adds or removes the drawn tiles' entities in the scene. The application then gives each handed-out tile its content with setTileContent, and renders.">
+    <rect x="20" y="20" width="200" height="290" rx="8" class="zone"/>
+    <text x="120" y="42" class="mid title t-cpu">application</text>
+    <rect x="36" y="58" width="168" height="40" rx="20" class="cpu"/><text x="120" y="83" class="mid mono small">setViews(views)</text>
+    <rect x="36" y="110" width="168" height="52" rx="20" class="cpu"/><text x="120" y="132" class="mid small">walk its tree:</text><text x="120" y="150" class="mid mono small">getScreenError(tile)</text>
+    <rect x="36" y="174" width="168" height="40" rx="20" class="cpu"/><text x="120" y="199" class="mid mono small">update(cut)</text>
+    <rect x="36" y="226" width="168" height="52" rx="20" class="cpu"/><text x="120" y="248" class="mid mono small">getTilesToLoad</text><text x="120" y="266" class="mid mono small">setTileContent</text>
+
+    <rect x="270" y="20" width="250" height="290" rx="8" class="zone"/>
+    <text x="395" y="42" class="mid title t-gpu">TileStreamer::update</text>
+    <rect x="286" y="58" width="218" height="40" rx="6" class="gpu"/><text x="395" y="83" class="mid small">poll loads: ready, failed, size so far</text>
+    <rect x="286" y="110" width="218" height="40" rx="6" class="gpu"/><text x="395" y="135" class="mid small">limits: budget, free pool rows</text>
+    <rect x="286" y="162" width="218" height="40" rx="6" class="gpu"/><text x="395" y="187" class="mid small">drop, hand out (by error)</text>
+    <rect x="286" y="214" width="218" height="40" rx="6" class="gpu"/><text x="395" y="239" class="mid small">drawn set: stand-ins</text>
+    <rect x="286" y="266" width="218" height="34" rx="6" class="gpu"/><text x="395" y="288" class="mid small">hide, destroy, show</text>
+
+    <rect x="570" y="20" width="170" height="290" rx="8" class="zone"/>
+    <text x="655" y="42" class="mid title t-mem">renderer</text>
+    <rect x="586" y="58" width="138" height="40" rx="6" class="mem"/><text x="655" y="76" class="mid small">isLoaded, mesh</text><text x="655" y="91" class="mid small">state, entity rows</text>
+    <rect x="586" y="110" width="138" height="40" rx="6" class="mem"/><text x="655" y="128" class="mid small">getPoolStats,</text><text x="655" y="143" class="mid small">queryMemoryStats</text>
+    <rect x="586" y="266" width="138" height="34" rx="6" class="mem"/><text x="655" y="281" class="mid small">scene membership,</text><text x="655" y="295" class="mid small">destroy*</text>
+
+    <line x1="204" y1="194" x2="282" y2="78" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="504" y1="78" x2="582" y2="78" class="arrow" marker-end="url(#ah)"/>
+    <line x1="504" y1="130" x2="582" y2="130" class="arrow" marker-end="url(#ah)"/>
+    <line x1="504" y1="283" x2="582" y2="283" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="286" y1="182" x2="208" y2="246" class="arrow gpu dashed" marker-end="url(#ah-gpu)"/>
+    <text x="212" y="280" class="small t-gpu">handed out</text>
+  </svg>
+  <figcaption>Call order in a frame: <code>setViews</code>, the walk, <code>update</code>, then <code>getTilesToLoad</code> and <code>setTileContent</code> (now or in a later frame), then <code>Renderer::render</code>. The policy itself is plain data with no renderer, in <code>TileResidency</code>, so it is unit-tested.</figcaption>
+</figure>
+
+<pre><code>// From examples/24_map_tiles/main.cpp, shortened: the frame of a map engine.
+streamer.setViews(views.data(), static_cast&lt;uint32_t&gt;(views.size()));
+world.cut.clear();
+visit(world, streamer, 0, 0, 0, rasm::TileHandle{}); // refines over 24 px, merges under 0.8 × 24 px
+streamer.update(world.cut.data(), static_cast&lt;uint32_t&gt;(world.cut.size()));
+uint32_t count = 0;
+const rasm::TileHandle *toLoad = streamer.getTilesToLoad(count);
+// ... ask the server for each; when one arrives:
+streamer.setTileContent(node.tile, {.entities = entities, .entityCount = 1, .meshes = meshes, .meshCount = 1, .materials = materials, .materialCount = 1, .textures = textures, .textureCount = 1});
+engine.render(views.data(), static_cast&lt;uint32_t&gt;(views.size()));</code></pre>
+
+<h3>Where RASM follows this page, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Tree</td><td>any tree; the application's</td><td>The application makes tile records with <code>createTile</code> (<code>TileDesc</code>: <code>parent</code>, a sphere <code>center</code> in doubles and <code>radius</code>, <code>geometricError</code>, <code>refine</code>, <code>estimatedBytes</code>) as its walk reaches new places, and <code>destroyTile</code> when it forgets them (its children become roots). At most <code>TileStreamerConfig::maxTiles</code>.</td></tr>
+  <tr><td>Screen error</td><td>the largest over the views; 0 outside all of them</td><td><code>getScreenError</code> with the views of <code>setViews</code> (views of other scenes are skipped): |<var>P</var><sub>11</sub>| × the view's height in pixels / 2, over the depth of the sphere's near side, the four side planes of each view's frustum. The same rule as <code>selectLod</code> (<a href="lod-selection.html#in-rasm">LOD selection</a>).</td></tr>
+  <tr><td>The cut, hysteresis</td><td>the application's walk</td><td>The application's. <code>examples/24_map_tiles</code> refines over 24 px and merges under 0.8 × 24 px.</td></tr>
+  <tr><td>Stand-ins</td><td>nearest ready ancestor</td><td>The same, with <code>TileRefine::REPLACE</code> (the default) and <code>TileRefine::ADD</code> per tile. The cut's ancestors are wanted too. One drawn set per scene: every view of the scene draws it.</td></tr>
+  <tr><td>Rank</td><td>the parent's error at the tile's bounds; a parent at least its children's</td><td>The same, the shallower tile first among equals.</td></tr>
+  <tr><td>Bytes</td><td>what is really held</td><td>Textures: the allocation's size (<code>RenderContext::getTextureMemoryBytes</code>, VMA's). Meshes: their vertices, colors, skins, morph deltas, indices and meshlets in the geometry pools; a glTF mesh's own materials and textures count with it. Measured once the tile is ready, and while it loads.</td></tr>
+  <tr><td>Pools</td><td>each a budget</td><td>Vertices, indices, sub-meshes, meshlets, instance rows, materials and bindless slots (<code>RendererConfig::maxBindlessTextures</code>), each limited to its capacity minus what is not a tile's (<code>getPoolStats</code>).</td></tr>
+  <tr><td>Budget</td><td>a share of what the device leaves</td><td><code>TileStreamerConfig::memoryBudget</code> in bytes; 0: <code>deviceShare</code> (0.8) of the device-local budget left after everything that is not a tile (<code>queryMemoryStats</code>, <samp>VK_EXT_memory_budget</samp>), read every 30 updates.</td></tr>
+  <tr><td>Estimate</td><td>its last cost, the application's, the mean</td><td>The same, in that order. A tile dropped while it loaded keeps what it held as its estimate.</td></tr>
+  <tr><td>Order of drops</td><td>unwanted oldest first, then wanted of a lower rank</td><td>The same. First of all, a tile that alone is over a limit. A tile that cannot fit even so waits, and the next ones still try (at most 16 misses an update).</td></tr>
+  <tr><td>Limits per frame</td><td>loads started, in flight, drops</td><td><code>maxLoadsPerFrame</code> (4), <code>maxLoadsInFlight</code> (16), <code>maxDropsPerFrame</code> (32). An unwanted load in flight is cancelled for a wanted one: its content is destroyed, which drops an <code>AssetLoader</code> load at once.</td></tr>
+  <tr><td>Content</td><td>the application's</td><td><code>setTileContent</code> with <code>TileContent</code> (entities, meshes, materials, textures): the streamer owns them from then on and destroys them, entities first, when it drops the tile. The entities must not be in a scene: the streamer adds them while the tile is drawn.</td></tr>
+  <tr><td>Ready</td><td>its data is in</td><td>The renderer's own state: every mesh <code>READY</code> with its import's textures filled (<code>isLoaded</code>), every texture out of the loading set, every entity with its instance rows and its textures. A mesh that <code>FAILED</code> fails the tile (<code>TileState::FAILED</code>), handed out again after <code>retryFailedAfter</code> updates.</td></tr>
+</table>
+</div>
+
+<div class="stats">
+  <div><b>48 MiB</b><span>the budget of <code>examples/24_map_tiles</code>, held on every frame of a 1500-frame flight</span><small>Release, headless, RTX 3060</small></div>
+  <div><b>0.03 ms</b><span><code>update</code> on average, with up to 190 tiles drawn (0.6 ms at most)</span><small>about 230 tiles in memory, 1300 records</small></div>
+  <div><b>2.7 ms</b><span>the longest frame after the first 30, with 4 tiles uploaded per frame</span><small>the tiles' data made on 3 threads</small></div>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The API</td><td><code>TileStreamer</code>, <code>TileDesc</code>, <code>TileContent</code>, <code>TileStreamerConfig</code>, <code>TileStreamerStats</code>, <code>TileState</code>, <code>TileRefine</code> in <code>include/rasm/tileStreamer.h</code></td></tr>
+  <tr><td>The policy: wanted set, ranks, budget, drops, loads, stand-ins</td><td><code>TileResidency::update</code>, <code>getTileScreenError</code> in <code>src/scene/tileResidency.cpp</code></td></tr>
+  <tr><td>Measuring, polling, the budget, scene membership</td><td><code>TileStreamer::Impl</code> (<code>measure</code>, <code>poll</code>, <code>getLimits</code>, <code>makeView</code>) in <code>src/scene/tileStreamer.cpp</code></td></tr>
+  <tr><td>A texture's allocation size</td><td><code>RenderContext::getTextureMemoryBytes</code>; <code>rhi::Texture::memoryBytes</code> set in <code>VulkanDevice::createTexture</code></td></tr>
+  <tr><td>The C API</td><td><code>rasm_tile_streamer_*</code> in <code>include/rasm/rasm_c.h</code>, <code>src/c/cTiles.cpp</code>; <code>examples/22_c_api</code> streams its ground as five tiles</td></tr>
+  <tr><td>Tests</td><td><code>tests/tileResidencyTests.cpp</code>; the image test <code>tile_streaming</code> (<code>tests/image/imageTests.cpp</code>)</td></tr>
+  <tr><td>Example</td><td><code>examples/24_map_tiles</code>: a 32 km quadtree of terrain tiles and glTF landmarks, two views</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li><code>TileResidency</code> stays plain data: no renderer, so every rule of the policy has a unit test.</li>
+    <li>A frame where no tile changes allocates nothing: every list keeps its capacity (the image test <code>tile_streaming</code> counts).</li>
+    <li>Hide before destroy, and show in the same update that hides the stand-in, so a tile and its stand-in never draw together and never both go missing.</li>
+    <li>A tile owns only what is listed in its content. Never list content another tile or the application still uses.</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <strong>Not done yet</strong>
+  <p>One drawn set per scene: two views of a scene cannot draw different cuts; two scenes and two streamers can (<code>D43</code>). <code>createMesh</code> builds the meshlets of a mesh of 1024 triangles or more on the main thread, so an application that makes large tiles itself pays for it in the frame (<code>P30</code>). No cross-fade when a parent and its children swap. No partial residency of one texture (only its high mips).</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Open Geospatial Consortium, <i>3D Tiles Specification</i> 1.1: tile trees, geometric error, replace and add refinement.</li>
+  <li>Thatcher Ulrich, <i>Rendering Massive Terrains using Chunked Level of Detail Control</i>, SIGGRAPH 2002 course notes.</li>
+  <li>Patrick Cozzi and Kevin Ring, <i>3D Engine Design for Virtual Globes</i> (2011): terrain and imagery tiles, out-of-core rendering.</li>
+  <li>Cesium, <i>Tile traversal and loading</i> in the CesiumJS and Cesium Native sources: the cut, the load queue and the cache.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

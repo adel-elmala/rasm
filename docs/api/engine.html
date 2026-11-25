@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Engine and Renderer · RASM</title>
 <meta name="description" content="Renderer, the renderer alone, and Engine, a Renderer that opens its own window: construction and shutdown, the frame functions, loading, frame stats, paths and the window, plus an index of every method.">
-<meta name="rasm-sources" content="include/rasm/renderer.h include/rasm/engine.h src/engine.cpp include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h src/renderer/renderer.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/platform/headlessPlatform.cpp src/platform/nativePlatform.cpp include/rasm/input.h examples/19_embedding/main.cpp src/renderer/readback.cpp include/rasm/readback.h src/platform/paths.cpp src/renderer/frameStats.cpp src/renderer/gpuScene.cpp src/renderer/renderGraph.cpp src/renderer/viewGraph.cpp src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/msaaResolve.cpp src/renderer/taa.cpp src/renderer/engineUi.cpp src/renderer/debugViews.cpp src/renderer/inspector.cpp src/rhi/renderContext.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.cpp src/assets/mesh.cpp src/assets/texture.cpp src/renderer/geometryPool.cpp src/renderer/gpuTable.cpp CMakeLists.txt shaders/lib/shadow.slang shaders/passes/shadow.slang examples/06_shadows/main.cpp examples/21_renderer/main.cpp include/rasm/assetLoader.h src/assets/assetLoader.cpp">
+<meta name="rasm-sources" content="include/rasm/renderer.h include/rasm/tileStreamer.h include/rasm/engine.h src/engine.cpp include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h src/renderer/renderer.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/platform/headlessPlatform.cpp src/platform/nativePlatform.cpp include/rasm/input.h examples/19_embedding/main.cpp src/renderer/readback.cpp include/rasm/readback.h src/platform/paths.cpp src/renderer/frameStats.cpp src/renderer/gpuScene.cpp src/renderer/renderGraph.cpp src/renderer/viewGraph.cpp src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/msaaResolve.cpp src/renderer/taa.cpp src/renderer/engineUi.cpp src/renderer/debugViews.cpp src/renderer/inspector.cpp src/rhi/renderContext.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.cpp src/assets/mesh.cpp src/assets/texture.cpp src/renderer/geometryPool.cpp src/renderer/gpuTable.cpp CMakeLists.txt shaders/lib/shadow.slang shaders/passes/shadow.slang examples/06_shadows/main.cpp examples/21_renderer/main.cpp include/rasm/assetLoader.h src/assets/assetLoader.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -60,6 +60,7 @@
   <tr><td><a href="#recreateSwapchain"><code>recreateSwapchain</code></a></td><td>rebuild after a resize</td><td>this page</td></tr>
   <tr><td><a href="#waitForLoads"><code>waitForLoads</code></a></td><td>finish every background load now</td><td>this page</td></tr>
   <tr><td><a href="#AssetLoader"><code>AssetLoader</code></a> / <a href="#getAssetLoader"><code>getAssetLoader</code></a></td><td>load files on worker threads, for a Renderer or an Engine</td><td>this page</td></tr>
+  <tr><td><a href="#TileStreamer"><code>TileStreamer</code></a></td><td>keep a map's or a world's tiles in memory under a byte budget</td><td>this page</td></tr>
   <tr><td><a href="#readFrame"><code>readFrame</code></a> / <a href="#readTexture"><code>readTexture</code></a></td><td>copy the frame or a texture to the CPU (screenshots, thumbnails, tests)</td><td>this page</td></tr>
   <tr><td><a href="#isReadbackReady"><code>isReadbackReady</code></a> / <a href="#takeReadback"><code>takeReadback</code></a></td><td>is the copy done, take its pixels</td><td>this page</td></tr>
   <tr><td><a href="#getFrameStats"><code>getFrameStats</code></a></td><td>frame times, draws, memory</td><td>this page</td></tr>
@@ -276,6 +277,7 @@ if (!engine.running())
   <tr><td><code>geometryPoolMeshlets</code></td><td>2<sup>17</sup> = 131,072</td><td>Meshlets of all meshes together, every LOD included, 48 bytes each (6 MiB). Every sub-mesh of 1024 triangles or more that is not skinned or morphed gets about one per 124 triangles of each LOD as it loads. A sub-mesh whose meshlets do not fit loads without them and is drawn whole, with one warning that names this setting. See <a href="../guides/meshlets.html">meshlets</a>.</td></tr>
   <tr><td><code>maxInstances</code></td><td>2<sup>16</sup> = 65,536</td><td>Instance rows: one per sub-mesh of every entity. 164 bytes each, two copies (one per frame slot). Each scene view with occlusion culling also keeps this many words of meshlet visibility bits (4 bytes each).</td></tr>
   <tr><td><code>maxLights</code></td><td>2<sup>14</sup> = 16,384</td><td>Lights in total (<a href="scene.html#createLight"><code>createLight</code></a>). 56 bytes each, two copies (about 1.8 MiB). 0, or a table larger than the GPU allows, logs an error and the engine does not start.</td></tr>
+  <tr><td><code>maxBindlessTextures</code></td><td>2<sup>14</sup> = 16,384</td><td>Sampled textures at once: slots of the bindless set, which materials, glTF images, render targets and the UI take. Lowered with a warning to what the device allows and to <a href="types.html#MAX_BINDLESS_TEXTURES"><code>MAX_BINDLESS_TEXTURES</code></a>; <code>getConfig</code> gives the count the renderer got. A texture past it logs an error that names this setting and samples nothing.</td></tr>
   <tr><td><code>maxMaterials</code></td><td>2<sup>12</sup> = 4,096</td><td>Materials alive at once (<a href="materials.html#createMaterial"><code>createMaterial</code></a>, and each glTF material), one material table row each: 220 bytes, two copies. A material past it is refused with an error that names this setting. 0 logs an error and the engine does not start.</td></tr>
   <tr><td><code>maxAnimatedEntities</code></td><td>2<sup>14</sup> = 16,384</td><td>Entities that have played a clip (<a href="scene.html#playAnimation"><code>playAnimation</code></a>), and entities of a skinned or morphed mesh, which are posed at rest; each keeps its row. 120 bytes each, two copies. A play past it is refused with an error. 0, or more than 65,535 (one Animate group per row), logs an error and the engine does not start.</td></tr>
   <tr><td><code>animationPoolBytes</code></td><td>16 MiB</td><td>The kept nodes, samplers, channel tables and keys of every loaded mesh with clips, uploaded once per mesh. A mesh that does not fit fails to load with an error that names this setting.</td></tr>
@@ -888,6 +890,116 @@ const rasm::MeshHandle helmet = loader.loadGLTF("models/gltf/DamagedHelmet/Damag
     <pre><code>auto mesh = engine.loadGLTF("models/gltf/coffee-room/scene.gltf");
 engine.waitForLoads();
 bool ok = engine.isLoaded(mesh); // false if the file failed to parse</code></pre>
+  </div>
+</div>
+
+<h3 id="tile-streaming">Streaming tiles under a memory budget</h3>
+
+<p>A map, a globe or an open world too big for memory is cut into tiles, and a <code>TileStreamer</code> keeps one scene's tiles in GPU memory under a byte budget. Your application owns its tree and what a tile is; each frame it sets the views, walks its tree with <code>getScreenError</code>, and passes the tiles it wants drawn (its cut) to <code>update</code>. The streamer decides what loads, what is dropped and what is drawn, and hands you the tiles to load. The ideas, with labs: <a href="../guides/tile-streaming.html">Tile streaming under a memory budget</a>.</p>
+
+<div class="api" id="TileStreamer">
+  <pre class="sig">TileStreamer(Renderer&amp; renderer, SceneHandle scene, const TileStreamerConfig&amp; config = {});
+~TileStreamer();
+TileHandle                  createTile(const TileDesc&amp; desc);
+void                        destroyTile(TileHandle tile);
+void                        setViews(const View* views, uint32_t viewCount);
+double                      getScreenError(const glm::dvec3&amp; center, double radius, double geometricError) const;
+double                      getScreenError(TileHandle tile) const;
+void                        update(const TileHandle* wanted, uint32_t wantedCount);
+const TileHandle*           getTilesToLoad(uint32_t&amp; count) const;
+bool                        setTileContent(TileHandle tile, const TileContent&amp; content);
+TileState                   getTileState(TileHandle tile) const;
+bool                        isTileDrawn(TileHandle tile) const;
+const TileStreamerStats&amp;    getStats() const;
+TileStreamerConfig          getConfig() const;</pre>
+  <div class="body">
+    <p>In <code>rasm/tileStreamer.h</code> and the <code>rasm::renderer</code> library: it works on a <code>Renderer</code> alone, and with an <code>AssetLoader</code>. <span class="tag main-thread">main thread</span> The renderer must outlive the streamer; destroying the streamer destroys every tile's content.</p>
+    <ul>
+      <li><code>createTile</code> makes a record of your tree (<a href="#TileDesc"><code>TileDesc</code></a>); <code>destroyTile</code> destroys its content and the record, and its children become roots. At most <code>TileStreamerConfig::maxTiles</code>.</li>
+      <li><code>setViews</code>: the views that draw the scene this frame (views of other scenes are skipped). <code>getScreenError</code> is then a sphere's or a tile's geometric error in pixels, the largest over the views whose frustum touches it, 0 outside all of them: the number your walk compares with its limit.</li>
+      <li><code>update</code> takes the cut. The cut's ancestors are wanted too. It polls the loads, reads the budget and the pools, drops and hands out tiles within the config's limits, and adds or removes the drawn tiles' entities in the scene. Call it before <a href="#render"><code>render</code></a>; with no tile change it allocates nothing.</li>
+      <li><code>getTilesToLoad</code>: the tiles the last <code>update</code> handed out (<code>TileState::REQUESTED</code>), valid until the next <code>update</code>. Make each one's content, now or in a later frame, and give it with <code>setTileContent</code> (<a href="#TileContent"><code>TileContent</code></a>). The streamer owns it from then on, also when the call returns false (then it destroys it): false for a tile that has content already, an invalid tile, or an invalid handle in the content (the tile then fails).</li>
+      <li>A tile is <code>READY</code> when the renderer's own state says so: every mesh <code>READY</code> with its import's textures filled, every texture filled, every entity with its instance rows and textures. A failed mesh fails the tile (<code>FAILED</code>), which is handed out again after <code>TileStreamerConfig::retryFailedAfter</code> updates. <code>isTileDrawn</code>: drawn now, as itself or in place of children.</li>
+    </ul>
+    <pre><code>// A sketch of a frame with glTF files as tiles; examples/24_map_tiles is a whole program.
+rasm::TileStreamer streamer(engine, scene, {.memoryBudget = 48ull &lt;&lt; 20});
+// each frame:
+streamer.setViews(views.data(), static_cast&lt;uint32_t&gt;(views.size()));
+world.cut.clear();
+visit(world, streamer, 0, 0, 0, rasm::TileHandle{}); // refine while getScreenError(tile) &gt; 24 px
+streamer.update(world.cut.data(), static_cast&lt;uint32_t&gt;(world.cut.size()));
+uint32_t count = 0;
+const rasm::TileHandle *toLoad = streamer.getTilesToLoad(count);
+for (uint32_t i = 0; i &lt; count; ++i)
+{
+    const rasm::MeshHandle mesh = engine.loadGLTF(pathOf(toLoad[i]));
+    const rasm::EntityHandle entity = engine.createEntity("tile", mesh, {}, placeOf(toLoad[i]));
+    streamer.setTileContent(toLoad[i], {.entities = &amp;entity, .entityCount = 1, .meshes = &amp;mesh, .meshCount = 1});
+}
+engine.render(views.data(), static_cast&lt;uint32_t&gt;(views.size()));</code></pre>
+  </div>
+</div>
+
+<div class="api" id="TileDesc">
+  <pre class="sig">enum class TileRefine { REPLACE, ADD };
+enum class TileState  { EMPTY, REQUESTED, LOADING, READY, FAILED };
+
+struct TileDesc
+{
+    TileHandle                  parent;
+    glm::dvec3                  center                  = glm::dvec3(0.0);
+    double                      radius                  = 0.0;
+    double                      geometricError          = 0.0;
+    TileRefine                  refine                  = TileRefine::REPLACE;
+    uint64_t                    estimatedBytes          = 0;
+};</pre>
+  <div class="body">
+    <p>A node of your tree: its parent (invalid for a root), the bounding sphere of its content in world space (in doubles, so a tile at Earth-centred coordinates works), and its geometric error: how many world units it is off from the full detail (a leaf's is 0). A tile is ranked by its parent's error seen at its own bounds, and a parent at least as high as its wanted children, so parents load first and are dropped last. <code>REPLACE</code>: the children stand in for the tile, which is drawn only while one of them is not ready (terrain, imagery). <code>ADD</code>: the children add to it, and it stays drawn with them (buildings on a district). <code>estimatedBytes</code>: what the tile will hold, used until it is measured once; 0 takes the mean of the tiles measured so far.</p>
+  </div>
+</div>
+
+<div class="api" id="TileContent">
+  <pre class="sig">struct TileContent
+{
+    const EntityHandle*         entities                = nullptr;
+    uint32_t                    entityCount             = 0;
+    const MeshHandle*           meshes                  = nullptr;
+    uint32_t                    meshCount               = 0;
+    const MaterialHandle*       materials               = nullptr;
+    uint32_t                    materialCount           = 0;
+    const TextureHandle*        textures                = nullptr;
+    uint32_t                    textureCount            = 0;
+};</pre>
+  <div class="body">
+    <p>What a tile owns: the streamer adds the entities to its scene while the tile is drawn (so do not add them yourself), and destroys everything listed, the entities first, when it drops the tile. List only what is the tile's own: content several tiles share (one tree mesh, a common material) stays outside. A mesh from <a href="#AssetLoader"><code>loadGLTF</code></a> brings its import's materials and textures, which count with it; destroying a mesh that still loads drops its load, so a tile dropped while it loads cancels it. The same file loaded by two tiles is one mesh (the loader caches by path): give such a file to one tile only.</p>
+  </div>
+</div>
+
+<div class="api" id="TileStreamerConfig">
+  <pre class="sig">struct TileStreamerConfig
+{
+    uint64_t                    memoryBudget            = 0;
+    float                       deviceShare             = 0.8f;
+    uint32_t                    maxTiles                = 1u &lt;&lt; 16;
+    uint32_t                    maxLoadsPerFrame        = 4;
+    uint32_t                    maxLoadsInFlight        = 16;
+    uint32_t                    maxDropsPerFrame        = 32;
+    uint32_t                    retryFailedAfter        = 120;
+};</pre>
+  <div class="body">
+    <p><code>memoryBudget</code>: bytes the tiles may hold in GPU memory: their textures' allocations (<a href="low-level.html#releaseAfterGpu"><code>getTextureMemoryBytes</code></a>) and their meshes' share of the geometry pools. 0: <code>deviceShare</code> of the device-local memory budget left after everything that is not a tile (<a href="#queryMemoryStats"><code>queryMemoryStats</code></a>, <samp>VK_EXT_memory_budget</samp>), read every 30 updates. The fixed pools are limits too: vertices, indices, sub-meshes, meshlets, instance rows, materials and bindless slots, each its capacity minus what is not a tile's. The limits per update: tiles handed out, tiles <code>REQUESTED</code> or <code>LOADING</code> at once (a load nobody wants any more gives its place up), and tiles dropped. <code>retryFailedAfter</code>: updates before a failed tile is handed out again (0: never).</p>
+  </div>
+</div>
+
+<div class="api" id="TileStreamerStats">
+  <pre class="sig">struct TileStreamerStats
+{
+    uint32_t                    tiles, wanted, ready, loading, failed, drawn;
+    uint32_t                    fallbacks, holes, waitingForBudget, loadsStarted, dropped;
+    uint64_t                    bytes, peakBytes, budget, deviceBudget, deviceUsage, totalLoads, totalDrops;
+};</pre>
+  <div class="body">
+    <p>After the last <code>update</code>: the records, the wanted tiles (the cut and its ancestors), the ready and loading ones (<code>REQUESTED</code> and <code>LOADING</code>), the wanted ones that failed, the drawn ones, the parents drawn in place of children (<code>fallbacks</code>), the wanted tiles with nothing drawn in their place (<code>holes</code>), the wanted tiles that did not fit (<code>waitingForBudget</code>), and the loads and drops of that update. <code>bytes</code>: the ready tiles' measured bytes and the loading ones' reserved bytes, which the update keeps under <code>budget</code>; <code>deviceBudget</code> and <code>deviceUsage</code> are the device-local heaps' budget and the process's use.</p>
   </div>
 </div>
 
