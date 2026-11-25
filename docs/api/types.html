@@ -141,11 +141,13 @@ struct Handle
     uint64_t    generation  = 0;
 };
 
+constexpr uint64_t MAX_HANDLE_GENERATION = UINT32_MAX;
+
 class HandlePool
 {
 public:
                 HandlePool() = default;
-    explicit    HandlePool(uint64_t limit);                         // indices 1 .. limit - 1
+    explicit    HandlePool(uint64_t limit, uint64_t maxGeneration = MAX_HANDLE_GENERATION); // indices 1 .. limit - 1
 
     HandleSlot  allocate();                                         // {0, 0} when every index is in use
     bool        release(uint64_t index, uint64_t generation);       // false for a stale or invalid handle
@@ -157,7 +159,7 @@ public:
     <p>Where handles come from. Each of the engine's tables has one: the registry's entities, meshes, materials, cameras, lights, scenes, environments and readbacks, and each kind of <code>RenderContext</code> object. Applications never use one: the create functions do.</p>
     <dl>
       <dt>allocate</dt><dd>The index released last, if there is one (a stack), else a new index. The handle takes the slot's current generation. Index 0 means the pool is full: a pool made with a <code>limit</code> holds at most <code>limit</code> − 1 live indices, which is how the <code>MAX_*</code> limits work.</dd>
-      <dt>release</dt><dd>Frees the index and adds 1 to its generation, so every handle made for it before is stale. A slot whose generation reaches the maximum is never reused.</dd>
+      <dt>release</dt><dd>Frees the index and adds 1 to its generation, so every handle made for it before is stale. A slot whose generation reaches <code>maxGeneration</code> (<code>MAX_HANDLE_GENERATION</code>, 2<sup>32</sup> − 1) is never reused: it costs one index after four billion reuses of it, and every handle fits the C API's 64-bit id (<a href="c-api.html#types">c-api.html</a>).</dd>
       <dt>isAlive</dt><dd>True only for the handle the slot gave out last, while it is not released. Generation 0 is never alive.</dd>
       <dt>size</dt><dd>One past the highest index handed out: a table indexed by handle needs this many rows. Reuse keeps it at the peak number of live objects.</dd>
     </dl>

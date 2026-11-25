@@ -30,8 +30,10 @@ set_target_properties(rasm_renderer PROPERTIES EXPORT_NAME renderer)
 add_library(rasm STATIC)
 add_library(rasm::rasm ALIAS rasm)
 
-# Every header in include/ is public and installed, so a new one needs no list entry.
+# Every header in include/ is public and installed, so a new one needs no list entry. The C API's header belongs to its
+# shared libraries.
 file(GLOB_RECURSE RASM_PUBLIC_HEADERS CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/include/*.h")
+list(FILTER RASM_PUBLIC_HEADERS EXCLUDE REGEX "/rasm_c\.h$")
 target_sources(rasm_renderer PUBLIC FILE_SET HEADERS BASE_DIRS "${PROJECT_SOURCE_DIR}/include" FILES ${RASM_PUBLIC_HEADERS})
 
 target_sources(rasm_renderer PRIVATE
@@ -180,6 +182,42 @@ foreach (rasm_target rasm_renderer rasm)
         endif()
     endif()
 endforeach()
+
+# The C API (include/rasm/rasm_c.h): two shared libraries for C programs and language bindings, each with a static RASM
+# inside. rasm_c_renderer holds the renderer alone (rasm::renderer); rasm_c adds the Engine and the AssetLoader (rasm::rasm).
+# They export only the rasm_* functions.
+if (RASM_C_API)
+    # Linked into the shared libraries, so their code must be position independent where that is not the default.
+    set_target_properties(rasm_renderer rasm PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+    add_library(rasm_c_objects OBJECT "c/cApi.cpp" "c/cRenderer.cpp" "c/cScene.cpp")
+    target_link_libraries(rasm_c_objects PRIVATE rasm_renderer spdlog::spdlog)
+
+    add_library(rasm_c_renderer SHARED)
+    add_library(rasm::c_renderer ALIAS rasm_c_renderer)
+    target_link_libraries(rasm_c_renderer PRIVATE rasm_c_objects rasm_renderer)
+    add_library(rasm_c SHARED "c/cLoader.cpp")
+    add_library(rasm::c ALIAS rasm_c)
+    target_link_libraries(rasm_c PRIVATE rasm_c_objects rasm spdlog::spdlog)
+    set_target_properties(rasm_c_renderer PROPERTIES EXPORT_NAME c_renderer)
+    set_target_properties(rasm_c PROPERTIES EXPORT_NAME c)
+
+    foreach (rasm_target rasm_c_objects rasm_c_renderer rasm_c)
+        target_compile_definitions(${rasm_target} PRIVATE RASM_C_BUILD)
+        target_include_directories(${rasm_target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_target_properties(${rasm_target} PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON POSITION_INDEPENDENT_CODE ON)
+    endforeach()
+    foreach (rasm_target rasm_c_renderer rasm_c)
+        target_sources(${rasm_target} PUBLIC FILE_SET HEADERS BASE_DIRS "${PROJECT_SOURCE_DIR}/include" FILES "${PROJECT_SOURCE_DIR}/include/rasm/rasm_c.h")
+        set_target_properties(${rasm_target} PROPERTIES DEBUG_POSTFIX "d")
+        # The static libraries inside have default visibility: only the C functions leave the library.
+        if (APPLE)
+            target_link_options(${rasm_target} PRIVATE "LINKER:-exported_symbol,_rasm_*")
+        elseif (UNIX)
+            target_link_options(${rasm_target} PRIVATE "LINKER:--exclude-libs,ALL")
+        endif()
+    endforeach()
+endif()
 
 # They hold only the third-party *_IMPLEMENTATION code, so clang-tidy has nothing of RASM's to check there.
 set_source_files_properties("thirdparty_impl.cpp" "thirdparty_loaders_impl.cpp" PROPERTIES SKIP_LINTING ON)

@@ -19,18 +19,25 @@ namespace rasm
 {
     namespace
     {
-        // The executable's folder, as SDL_GetBasePath gave it: in a macOS app bundle, Contents/Resources beside the
-        // executable's Contents/MacOS.
-        std::filesystem::path getExecutableDir()
+        // The C API's shared library's folder, absolute (setBaseModule); empty for a static application. dladdr gives the
+        // path the library was opened with, which may be relative to a working directory that changes later.
+        std::filesystem::path baseModuleFolder; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables): set once, before any path resolves
+
+        // The folder of the binary that holds RASM. A static application's is the executable's, as SDL_GetBasePath gave
+        // it: in a macOS app bundle, Contents/Resources beside the executable's Contents/MacOS. The C API's is the shared
+        // library's, so its shaders beside it are found under any host process (python.exe).
+        std::filesystem::path getBaseFolder()
         {
-            const std::string executable = getModulePath(nullptr);
-            if (executable.empty())
+            if (!baseModuleFolder.empty())
+                return baseModuleFolder;
+            const std::string binary = getModulePath(nullptr);
+            if (binary.empty())
             {
                 // An empty result leaves callers relative to the working directory, which is the best guess left.
-                spdlog::error("Failed to find the executable's directory.");
+                spdlog::error("Failed to find the folder of the binary that holds RASM.");
                 return {};
             }
-            const std::filesystem::path folder = pathFromUtf8(executable).lexically_normal().parent_path();
+            const std::filesystem::path folder = pathFromUtf8(binary).lexically_normal().parent_path();
 #if defined(__APPLE__)
             if (folder.filename() == "MacOS" && folder.parent_path().filename() == "Contents")
                 return folder.parent_path() / "Resources";
@@ -117,10 +124,27 @@ namespace rasm
         return std::string(reinterpret_cast<const char *>(text.c_str()), text.size());
     }
 
-    std::string resolveFromExecutableDir(const std::string &path)
+    void setBaseModule(const void *address)
+    {
+        const std::string binary = getModulePath(address);
+        if (binary.empty())
+        {
+            spdlog::error("Failed to find the shared library that holds RASM; relative paths resolve against the executable.");
+            return;
+        }
+        std::error_code error;
+        baseModuleFolder = std::filesystem::absolute(pathFromUtf8(binary), error).lexically_normal().parent_path();
+    }
+
+    std::string getBaseDir()
+    {
+        return pathToUtf8(getBaseFolder());
+    }
+
+    std::string resolveFromBaseDir(const std::string &path)
     {
         // operator/ keeps an absolute right-hand side as it is.
-        return pathToUtf8((getExecutableDir() / pathFromUtf8(path)).lexically_normal());
+        return pathToUtf8((getBaseFolder() / pathFromUtf8(path)).lexically_normal());
     }
 
     std::string resolveCacheDir(const std::string &cacheDir)
@@ -128,7 +152,7 @@ namespace rasm
         if (cacheDir.empty())
             return {};
         const std::filesystem::path configured = pathFromUtf8(cacheDir);
-        const std::filesystem::path folder = (getExecutableDir() / configured).lexically_normal();
+        const std::filesystem::path folder = (getBaseFolder() / configured).lexically_normal();
         if (isWritableFolder(folder))
             return pathToUtf8(folder);
         // An installed application's folder is often read-only; a relative folder then goes to the user's cache folder.

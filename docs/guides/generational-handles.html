@@ -804,11 +804,11 @@ void bindTexture(TextureHandle texture);</code></pre>
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>Handle layout</td><td>index + generation, often packed in 32 or 64 bits</td><td>Two separate <code>uint64_t</code> fields: 16 bytes per handle. They never wrap in practice.</td></tr>
+  <tr><td>Handle layout</td><td>index + generation, often packed in 32 or 64 bits</td><td>Two separate <code>uint64_t</code> fields: 16 bytes per handle. The C API packs them into one 64-bit id, <code>generation &lt;&lt; 32 | index</code> (<a href="stable-c-abi.html#objects">A stable C ABI</a>).</td></tr>
   <tr><td>Invalid handle</td><td>generation 0</td><td>The same: <code>isValid</code> is <code>generation != 0</code>, so <code>{}</code> is invalid.</td></tr>
   <tr><td>Type safety</td><td>tag types</td><td>The same: <code>Handle&lt;Tag&gt;</code> with 22 tags, from <code>MeshHandle</code> to <code>ReadbackHandle</code>. It is the only template RASM code may define.</td></tr>
   <tr><td>Making a handle</td><td>pop the free list, or add a slot</td><td>The same: <code>HandlePool::allocate</code> pops the free list (last released, first reused), or adds an index. The stack keeps the indices low, so the tables indexed by handle stay short.</td></tr>
-  <tr><td>Generation bump on destroy</td><td>yes</td><td>The same: <code>HandlePool::release</code> adds 1. A slot whose generation reaches the maximum is not reused (64-bit: never in practice).</td></tr>
+  <tr><td>Generation bump on destroy</td><td>yes</td><td>The same: <code>HandlePool::release</code> adds 1. A slot whose generation reaches <code>MAX_HANDLE_GENERATION</code> (2<sup>32</sup> − 1) is retired, never reused, so every generation fits in 32 bits.</td></tr>
   <tr><td>Stale handle detection</td><td>compare generations</td><td>The same: <code>isAlive</code> (also false for a free slot). <code>RenderContext</code> lookups log an error and fail; <code>Engine</code>'s public calls check <code>isLive</code>.</td></tr>
   <tr><td>Storage</td><td>slot array, or a slot map</td><td>A slot array: a <code>std::vector</code> per type, indexed by <code>index</code>, for CPU objects and for the <code>rhi::</code> pointers. Render targets are in a <code>std::deque</code>, so a reference survives a new target.</td></tr>
   <tr><td>Deferred destruction</td><td>a delete queue tied to the frame fence</td><td>The same: <code>destroyBuffer</code>, <code>destroyTexture</code> and <code>destroyRenderTargets</code> release the handle at once and give the free, and a texture's bindless slot, to a release queue (<a href="resource-lifetime.html">deferred destruction</a>).</td></tr>
@@ -856,7 +856,7 @@ void bindTexture(TextureHandle texture);</code></pre>
 
 <div class="callout">
   <strong>Every object can be destroyed</strong>
-  <p>Every table frees and reuses its indices. Generations are 64-bit and never wrap in practice; a slot at the maximum is retired. <code>loadMesh</code> needs its handle before the file is parsed (it returns at once), so a file that does not parse keeps its index until <code>destroyMesh</code> frees it.</p>
+  <p>Every table frees and reuses its indices. A generation never passes <code>MAX_HANDLE_GENERATION</code>: a slot that reaches it is retired, which costs one index after four billion reuses of that slot, and never wraps. <code>loadMesh</code> needs its handle before the file is parsed (it returns at once), so a file that does not parse keeps its index until <code>destroyMesh</code> frees it.</p>
 </div>
 
 <h3>Further reading</h3>

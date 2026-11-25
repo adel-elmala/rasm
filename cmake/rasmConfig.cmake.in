@@ -5,34 +5,40 @@ set_and_check(rasm_SHADER_DIR "@PACKAGE_RASM_PACKAGE_SHADER_DIR@")
 
 include(CMakeFindDependencyMacro)
 
-# Components: renderer (rasm::renderer, the renderer alone) and rasm (rasm::rasm, the Engine with the SDL platform and
-# the AssetLoader). No component asks for both. Only rasm needs SDL3, tinyobjloader and libktx.
+# Components: renderer (rasm::renderer, the renderer alone), rasm (rasm::rasm, the Engine with the SDL platform and the
+# AssetLoader), and c (rasm::c and rasm::c_renderer, the C API's shared libraries, when RASM was built with RASM_C_API).
+# No component asks for every one. Only rasm needs SDL3, tinyobjloader and libktx; c needs no dependency at all.
 set(_rasm_components ${rasm_FIND_COMPONENTS})
 if (NOT _rasm_components)
     set(_rasm_components renderer rasm)
+    if (@RASM_C_API@)
+        list(APPEND _rasm_components c)
+    endif()
 endif()
 
-# rasm is a static library, so its PRIVATE dependencies are link requirements for consumers too.
-# Stb and tinygltf are absent because rasm only uses their headers.
-find_dependency(VulkanHeaders CONFIG)
-# As in RASM's own build: otherwise volk's config adds the SDK's headers (VULKAN_SDK) to its targets.
-if (NOT DEFINED VOLK_PULL_IN_VULKAN)
-    set(VOLK_PULL_IN_VULKAN OFF)
+if ("renderer" IN_LIST _rasm_components OR "rasm" IN_LIST _rasm_components)
+    # rasm is a static library, so its PRIVATE dependencies are link requirements for consumers too.
+    # Stb and tinygltf are absent because rasm only uses their headers.
+    find_dependency(VulkanHeaders CONFIG)
+    # As in RASM's own build: otherwise volk's config adds the SDK's headers (VULKAN_SDK) to its targets.
+    if (NOT DEFINED VOLK_PULL_IN_VULKAN)
+        set(VOLK_PULL_IN_VULKAN OFF)
+    endif()
+    find_dependency(volk CONFIG)
+    find_dependency(vk-bootstrap CONFIG)
+    find_dependency(VulkanMemoryAllocator CONFIG)
+    find_dependency(glm CONFIG)
+    find_dependency(Tracy CONFIG)
+    find_dependency(spdlog CONFIG)
+    find_dependency(meshoptimizer CONFIG)
+    find_dependency(slang CONFIG)
+    # Only a rasm built with RASM_IMGUI links Dear ImGui (the vcpkg port, static).
+    if (@RASM_IMGUI@)
+        find_dependency(imgui CONFIG)
+    endif()
+    include("${CMAKE_CURRENT_LIST_DIR}/rasmRendererTargets.cmake")
+    set(rasm_renderer_FOUND TRUE)
 endif()
-find_dependency(volk CONFIG)
-find_dependency(vk-bootstrap CONFIG)
-find_dependency(VulkanMemoryAllocator CONFIG)
-find_dependency(glm CONFIG)
-find_dependency(Tracy CONFIG)
-find_dependency(spdlog CONFIG)
-find_dependency(meshoptimizer CONFIG)
-find_dependency(slang CONFIG)
-# Only a rasm built with RASM_IMGUI links Dear ImGui (the vcpkg port, static).
-if (@RASM_IMGUI@)
-    find_dependency(imgui CONFIG)
-endif()
-include("${CMAKE_CURRENT_LIST_DIR}/rasmRendererTargets.cmake")
-set(rasm_renderer_FOUND TRUE)
 
 if ("rasm" IN_LIST _rasm_components)
     find_dependency(SDL3 CONFIG)
@@ -42,15 +48,19 @@ if ("rasm" IN_LIST _rasm_components)
     set(rasm_rasm_FOUND TRUE)
 endif()
 
+if ("c" IN_LIST _rasm_components AND EXISTS "${CMAKE_CURRENT_LIST_DIR}/rasmCTargets.cmake")
+    include("${CMAKE_CURRENT_LIST_DIR}/rasmCTargets.cmake")
+    set(rasm_c_FOUND TRUE)
+endif()
+
 # Without a map these configurations take whichever library was imported first, and a Debug one can't link
 # into a release build on Windows.
-set_target_properties(rasm::renderer PROPERTIES
-    MAP_IMPORTED_CONFIG_RELWITHDEBINFO "RelWithDebInfo;Release"
-    MAP_IMPORTED_CONFIG_MINSIZEREL "MinSizeRel;Release")
-if (TARGET rasm::rasm)
-    set_target_properties(rasm::rasm PROPERTIES
-        MAP_IMPORTED_CONFIG_RELWITHDEBINFO "RelWithDebInfo;Release"
-        MAP_IMPORTED_CONFIG_MINSIZEREL "MinSizeRel;Release")
-endif()
+foreach (_rasm_target rasm::renderer rasm::rasm rasm::c rasm::c_renderer)
+    if (TARGET ${_rasm_target})
+        set_target_properties(${_rasm_target} PROPERTIES
+            MAP_IMPORTED_CONFIG_RELWITHDEBINFO "RelWithDebInfo;Release"
+            MAP_IMPORTED_CONFIG_MINSIZEREL "MinSizeRel;Release")
+    endif()
+endforeach()
 
 check_required_components(rasm)

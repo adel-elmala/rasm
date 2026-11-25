@@ -22,6 +22,14 @@ rasm_add_example(20_views)
 # The renderer alone: no window, no SDL, no loaders. It links rasm::renderer only, so the build checks that the renderer
 # needs neither the SDL platform nor the file loaders.
 rasm_add_example(21_renderer rasm::renderer)
+# A C program: compiled as C99, it reaches RASM only through rasm_c.h and the rasm_c shared library.
+if (RASM_C_API)
+    rasm_add_example(22_c_api rasm::c)
+    set_target_properties(22_c_api PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    if (UNIX AND NOT APPLE)
+        target_link_libraries(22_c_api PRIVATE m)
+    endif()
+endif()
 # Calls ImGui itself, so it needs a rasm with Dear ImGui.
 if (RASM_IMGUI)
     rasm_add_example(15_debug_ui)

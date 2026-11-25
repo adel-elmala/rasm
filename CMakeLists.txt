@@ -19,6 +19,11 @@ option(RASM_ENABLE_AVX2 "Build the engine for AVX2-capable x86 CPUs" OFF)
 option(RASM_BUILD_EXAMPLES "Build the example applications" ${PROJECT_IS_TOP_LEVEL})
 option(RASM_BUILD_TESTS "Build the unit tests" ${PROJECT_IS_TOP_LEVEL})
 option(RASM_INSTALL "Generate the install and export rules" ${PROJECT_IS_TOP_LEVEL})
+option(RASM_C_API "Build the C API's shared libraries, rasm_c and rasm_c_renderer (include/rasm/rasm_c.h)" ${PROJECT_IS_TOP_LEVEL})
+# C for the C API's example and header checks, which compile as C. The libraries themselves are C++.
+if (RASM_C_API AND (RASM_BUILD_EXAMPLES OR RASM_BUILD_TESTS))
+    enable_language(C)
+endif()
 set(RASM_SHADER_DIR "shaders" CACHE STRING "Default shader directory, resolved against the executable's directory if relative")
 # The value ends up in a C string literal, where a Windows backslash would start an escape sequence.
 cmake_path(CONVERT "${RASM_SHADER_DIR}" TO_CMAKE_PATH_LIST RASM_SHADER_DIR)

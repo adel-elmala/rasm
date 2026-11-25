@@ -1,0 +1,317 @@
+#include "rasm/rasm_c.h"
+#include "rasm/light.h"
+#include "rasm/scene.h"
+#include "rasm/types.h"
+
+#include "doctest/doctest.h"
+
+#include <cstring>
+#include <filesystem>
+#include <string>
+#include <thread>
+#include <vector>
+
+// The C API as a binding sees it: these tests link only the rasm_c shared library, and need no GPU.
+
+namespace
+{
+    struct LogCapture
+    {
+        std::vector<std::string> errors;
+    };
+
+    void RASM_CALL captureLog(void *userData, rasm_log_level level, const char *message)
+    {
+        if (level >= RASM_LOG_LEVEL_ERROR)
+            static_cast<LogCapture *>(userData)->errors.emplace_back(message);
+    }
+
+    bool contains(const char *text, const char *part)
+    {
+        return std::strstr(text, part) != nullptr;
+    }
+}
+
+TEST_CASE("the library's version is the header's")
+{
+    CHECK(rasm_get_version() == RASM_C_API_VERSION);
+    CHECK(RASM_C_API_VERSION == ((RASM_C_API_VERSION_MAJOR << 16) | RASM_C_API_VERSION_MINOR));
+}
+
+TEST_CASE("the renderer config defaults are the C++ RendererConfig's")
+{
+    rasm_renderer_config config;
+    REQUIRE(rasm_renderer_config_init(&config, sizeof(config)) == RASM_OK);
+    const rasm::RendererConfig defaults;
+    CHECK(config.size == sizeof(config));
+    CHECK(config.app_name == nullptr);
+    CHECK(config.window_width == defaults.windowWidth);
+    CHECK(config.native_window.type == RASM_NATIVE_WINDOW_TYPE_NONE);
+    CHECK(config.native_window.content_scale == defaults.nativeWindow.contentScale);
+    CHECK(config.enable_validation == RASM_FALSE);
+    CHECK(config.shader_dir == nullptr);
+    CHECK(std::string(config.cache_dir) == defaults.cacheDir);
+    CHECK(config.geometry_pool_vertices == defaults.geometryPoolVertices);
+    CHECK(config.geometry_pool_meshlet_data == defaults.geometryPoolMeshletData);
+    CHECK(config.max_instances == defaults.maxInstances);
+    CHECK(config.max_morph_weights == defaults.maxMorphWeights);
+    CHECK(config.occlusion_culling == RASM_TRUE);
+    CHECK(config.mesh_lods == RASM_TRUE);
+    CHECK(config.lod_error_pixels == defaults.lodErrorPixels);
+    CHECK(config.forced_lod == defaults.forcedLod);
+    CHECK(config.meshlet_path == RASM_MESHLET_PATH_AUTO);
+    CHECK(config.max_view_meshlets == defaults.maxViewMeshlets);
+    CHECK(config.transfer_queue == RASM_TRUE);
+    CHECK(config.clustered_lighting == RASM_TRUE);
+    CHECK(config.host_image_copy == RASM_TRUE);
+    CHECK(config.ui == RASM_FALSE);
+    CHECK(config.anti_aliasing == RASM_ANTI_ALIASING_NONE);
+}
+
+TEST_CASE("the other sized structs start from the C++ defaults")
+{
+    rasm_asset_loader_config loader;
+    REQUIRE(rasm_asset_loader_config_init(&loader, sizeof(loader)) == RASM_OK);
+    CHECK(loader.asset_root == nullptr);
+    CHECK(loader.load_threads == rasm::AssetLoaderConfig{}.loadThreads);
+    CHECK(loader.load_memory_budget == rasm::AssetLoaderConfig{}.loadMemoryBudget);
+
+    rasm_engine_config engine;
+    REQUIRE(rasm_engine_config_init(&engine, sizeof(engine)) == RASM_OK);
+    CHECK(engine.platform == RASM_PLATFORM_TYPE_SDL);
+    CHECK(engine.renderer == nullptr);
+    CHECK(engine.loader == nullptr);
+
+    rasm_light_desc light;
+    REQUIRE(rasm_light_desc_init(&light, sizeof(light)) == RASM_OK);
+    const rasm::Light lightDefaults{.type = rasm::LightType::DIRECTIONAL};
+    CHECK(light.type == RASM_LIGHT_TYPE_DIRECTIONAL);
+    CHECK(light.intensity == lightDefaults.intensity);
+    CHECK(light.range == lightDefaults.range);
+    CHECK(light.direction.y == lightDefaults.direction.y);
+    CHECK(light.outer_cone_angle == lightDefaults.outerConeAngle);
+
+    rasm_scene_environment environment;
+    REQUIRE(rasm_scene_environment_init(&environment, sizeof(environment)) == RASM_OK);
+    CHECK(environment.environment.id == 0);
+    CHECK(environment.intensity == rasm::SceneEnvironment{}.intensity);
+    CHECK(environment.sky == RASM_TRUE);
+
+    rasm_texture_desc texture;
+    REQUIRE(rasm_texture_desc_init(&texture, sizeof(texture)) == RASM_OK);
+    CHECK(texture.format == RASM_FORMAT_R8G8B8A8_SRGB);
+}
+
+TEST_CASE("an init writes only the size it is given, and a newer caller's extra fields are zero")
+{
+    // A caller built against a header with more fields passes a bigger struct.
+    struct Bigger
+    {
+        rasm_light_desc light;
+        float newField;
+    };
+    Bigger bigger;
+    std::memset(&bigger, 0xAB, sizeof(bigger));
+    REQUIRE(rasm_light_desc_init(&bigger.light, sizeof(bigger)) == RASM_OK);
+    CHECK(bigger.light.size == sizeof(bigger));
+    CHECK(bigger.newField == 0.0f);
+
+    rasm_light_desc light;
+    CHECK(rasm_light_desc_init(&light, 8) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(contains(rasm_get_last_error(), "rasm_light_desc_init"));
+    CHECK(rasm_light_desc_init(nullptr, sizeof(light)) == RASM_ERROR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("creation checks the caller's version before anything else")
+{
+    rasm_renderer_config config;
+    rasm_renderer_config_init(&config, sizeof(config));
+    rasm_renderer *renderer = reinterpret_cast<rasm_renderer *>(&config);
+
+    const uint32_t nextMajor = static_cast<uint32_t>(RASM_C_API_VERSION_MAJOR + 1) << 16;
+    CHECK(rasm_renderer_create(nextMajor, &config, &renderer) == RASM_ERROR_VERSION);
+    CHECK(renderer == nullptr);
+    CHECK(contains(rasm_get_last_error(), "major versions must match"));
+
+    const uint32_t newerMinor = RASM_C_API_VERSION + 1;
+    CHECK(rasm_renderer_create(newerMinor, &config, &renderer) == RASM_ERROR_VERSION);
+
+    rasm_engine *engine = nullptr;
+    rasm_engine_config engineConfig;
+    rasm_engine_config_init(&engineConfig, sizeof(engineConfig));
+    engineConfig.renderer = &config;
+    CHECK(rasm_engine_create(0, &engineConfig, &engine) == RASM_ERROR_VERSION);
+    CHECK(engine == nullptr);
+}
+
+TEST_CASE("bad arguments give a code and a last error, and never crash")
+{
+    rasm_clear_last_error();
+    CHECK(std::string(rasm_get_last_error()).empty());
+
+    rasm_renderer *renderer = nullptr;
+    CHECK(rasm_renderer_create(RASM_C_API_VERSION, nullptr, &renderer) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(contains(rasm_get_last_error(), "config is NULL"));
+    CHECK(rasm_renderer_create(RASM_C_API_VERSION, nullptr, nullptr) == RASM_ERROR_INVALID_ARGUMENT);
+
+    rasm_renderer_config config;
+    rasm_renderer_config_init(&config, sizeof(config));
+    config.size = 4;
+    CHECK(rasm_renderer_create(RASM_C_API_VERSION, &config, &renderer) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(contains(rasm_get_last_error(), "config->size is 4"));
+
+    rasm_engine_config engineConfig;
+    rasm_engine_config_init(&engineConfig, sizeof(engineConfig));
+    rasm_engine *engine = nullptr;
+    CHECK(rasm_engine_create(RASM_C_API_VERSION, &engineConfig, &engine) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(contains(rasm_get_last_error(), "config->renderer is NULL"));
+
+    // Every renderer call takes a NULL renderer as an error, with the function's name in the message.
+    CHECK(rasm_create_scene(nullptr).id == 0);
+    CHECK(contains(rasm_get_last_error(), "rasm_create_scene: renderer is NULL"));
+    CHECK(rasm_destroy_entity(nullptr, rasm_entity{}) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(rasm_running(nullptr) == RASM_FALSE);
+    rasm_render(nullptr, rasm_scene{}, rasm_camera{});
+    CHECK(rasm_take_readback(nullptr, rasm_readback{}, nullptr) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(rasm_asset_loader_load_mesh(nullptr, "a.obj").id == 0);
+    CHECK(contains(rasm_get_last_error(), "loader is NULL"));
+    rasm_renderer_destroy(nullptr);
+    rasm_engine_destroy(nullptr);
+    rasm_asset_loader_destroy(nullptr);
+    rasm_image_destroy(nullptr);
+}
+
+TEST_CASE("the last error belongs to the thread that made it")
+{
+    CHECK(rasm_create_scene(nullptr).id == 0);
+    CHECK(contains(rasm_get_last_error(), "rasm_create_scene"));
+    std::string otherThread = "unset";
+    std::thread thread([&otherThread]
+                       { otherThread = rasm_get_last_error(); });
+    thread.join();
+    CHECK(otherThread.empty());
+    CHECK(contains(rasm_get_last_error(), "rasm_create_scene"));
+}
+
+TEST_CASE("the log callback gets RASM's lines")
+{
+    LogCapture capture;
+    rasm_set_log_callback(captureLog, &capture);
+    rasm_destroy_scene(nullptr, rasm_scene{});
+    rasm_set_log_callback(nullptr, nullptr);
+    rasm_destroy_scene(nullptr, rasm_scene{});
+    REQUIRE(capture.errors.size() == 1);
+    CHECK(contains(capture.errors[0].c_str(), "rasm_destroy_scene: renderer is NULL"));
+}
+
+TEST_CASE("strings come back the snprintf way")
+{
+    const uint32_t length = rasm_get_base_path(nullptr, 0);
+    REQUIRE(length > 0);
+    std::vector<char> full(length + 1, 'x');
+    CHECK(rasm_get_base_path(full.data(), length + 1) == length);
+    CHECK(full[length] == '\0');
+    char small[4] = {'x', 'x', 'x', 'x'};
+    CHECK(rasm_get_base_path(small, 4) == length);
+    CHECK(small[3] == '\0');
+    CHECK(std::strncmp(small, full.data(), 3) == 0);
+}
+
+TEST_CASE("the base path is the shared library's folder")
+{
+    std::vector<char> path(rasm_get_base_path(nullptr, 0) + 1);
+    rasm_get_base_path(path.data(), static_cast<uint32_t>(path.size()));
+    const std::filesystem::path folder(reinterpret_cast<const char8_t *>(path.data()));
+    CHECK(std::filesystem::exists(folder / RASM_TEST_C_LIBRARY_NAME));
+}
+
+TEST_CASE("an image reads and writes PNGs")
+{
+    rasm_image *image = rasm_image_create();
+    REQUIRE(image != nullptr);
+    CHECK(rasm_image_get(image).pixels == nullptr);
+    CHECK(rasm_image_read_png(image, "no such file.png") == RASM_ERROR_FAILED);
+    REQUIRE(rasm_image_read_png(image, RASM_TEST_GOLDEN_DIR "/bloom.png") == RASM_OK);
+    const rasm_image_data data = rasm_image_get(image);
+    CHECK(data.width > 0);
+    CHECK(data.format == RASM_READBACK_FORMAT_RGBA8_SRGB);
+    CHECK(data.byte_size == static_cast<uint64_t>(data.width) * data.height * 4);
+    const std::vector<uint8_t> pixels(data.pixels, data.pixels + data.byte_size);
+
+    const std::filesystem::path out = std::filesystem::temp_directory_path() / "rasm_c_api_test.png";
+    REQUIRE(rasm_image_write_png(image, out.string().c_str()) == RASM_OK);
+    rasm_image *copy = rasm_image_create();
+    REQUIRE(rasm_image_read_png(copy, out.string().c_str()) == RASM_OK);
+    const rasm_image_data copied = rasm_image_get(copy);
+    CHECK(copied.width == data.width);
+    CHECK(copied.height == data.height);
+    CHECK(std::vector<uint8_t>(copied.pixels, copied.pixels + copied.byte_size) == pixels);
+    rasm_image_destroy(copy);
+    rasm_image_destroy(image);
+    std::filesystem::remove(out);
+}
+
+TEST_CASE("vertex colors pack as the C++ API packs them")
+{
+    CHECK(rasm_pack_vertex_color(rasm_vec4{1.0f, 0.0f, 0.0f, 1.0f}) == 0xFF0000FFu);
+    CHECK(rasm_pack_vertex_color(rasm_vec4{0.0f, 0.0f, 0.0f, 0.0f}) == 0u);
+}
+
+TEST_CASE("a config enum past its last constant is refused before anything starts")
+{
+    rasm_renderer_config config;
+    rasm_renderer_config_init(&config, sizeof(config));
+    config.anti_aliasing = 9;
+    rasm_renderer *renderer = nullptr;
+    CHECK(rasm_renderer_create(RASM_C_API_VERSION, &config, &renderer) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(contains(rasm_get_last_error(), "config->anti_aliasing 9"));
+    CHECK(renderer == nullptr);
+}
+
+TEST_CASE("a camera projection starts as a 45 degree perspective")
+{
+    rasm_camera_projection projection;
+    REQUIRE(rasm_camera_projection_init(&projection, sizeof(projection)) == RASM_OK);
+    CHECK(projection.size == sizeof(projection));
+    CHECK(projection.type == RASM_PROJECTION_TYPE_PERSPECTIVE);
+    CHECK(projection.fov_y == 45.0f);
+    CHECK(projection.near_z == 0.1f);
+    CHECK(projection.far_z == 0.0f);
+}
+
+namespace
+{
+    struct ReentrantLog
+    {
+        int depth = 0;
+        int calls = 0;
+    };
+
+    // Calls RASM from inside the callback, which logs again on this thread.
+    void RASM_CALL logAndCallBack(void *userData, rasm_log_level level, const char *)
+    {
+        auto *state = static_cast<ReentrantLog *>(userData);
+        ++state->calls;
+        if (level < RASM_LOG_LEVEL_ERROR || state->depth > 0)
+            return;
+        ++state->depth;
+        rasm_create_scene(nullptr);
+        --state->depth;
+    }
+}
+
+TEST_CASE("the log callback may call RASM")
+{
+    ReentrantLog state;
+    rasm_set_log_callback(logAndCallBack, &state);
+    rasm_create_scene(nullptr);
+    rasm_set_log_callback(nullptr, nullptr);
+    CHECK(state.calls == 2);
+}
+
+TEST_CASE("the base path is absolute")
+{
+    std::vector<char> path(rasm_get_base_path(nullptr, 0) + 1);
+    rasm_get_base_path(path.data(), static_cast<uint32_t>(path.size()));
+    CHECK(std::filesystem::path(reinterpret_cast<const char8_t *>(path.data())).is_absolute());
+}

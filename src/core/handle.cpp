@@ -2,7 +2,7 @@
 
 namespace rasm
 {
-    HandlePool::HandlePool(uint64_t limit) : indexLimit(limit) {}
+    HandlePool::HandlePool(uint64_t limit, uint64_t maxGeneration) : indexLimit(limit), generationLimit(maxGeneration) {}
 
     HandleSlot HandlePool::allocate()
     {
@@ -32,7 +32,7 @@ namespace rasm
             return false;
         alive[index] = 0;
         --live;
-        if (generations[index] < UINT64_MAX)
+        if (generations[index] < generationLimit)
         {
             ++generations[index];
             freeIndices.push_back(index);

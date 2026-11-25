@@ -86,14 +86,17 @@ namespace rasm
         uint64_t    generation  = 0;
     };
 
+    // A handle's generation never passes it, so the C API packs a handle into one uint64 (rasm_c.h) with no loss.
+    constexpr uint64_t              MAX_HANDLE_GENERATION   = UINT32_MAX;
+
     // Hands out handle indices from 1 to limit - 1, each with the generation its slot has now. A released index goes
     // on a free list (last released, first reused) with its generation one higher, so every handle made for it before is
-    // stale. A slot whose generation reaches the maximum is never reused, so a generation can't wrap back to an old one.
+    // stale. A slot whose generation reaches maxGeneration is never reused, so a generation can't wrap back to an old one.
     class HandlePool
     {
     public:
                                     HandlePool() = default;
-        explicit                    HandlePool(uint64_t limit);                         // indices 1 .. limit - 1
+        explicit                    HandlePool(uint64_t limit, uint64_t maxGeneration = MAX_HANDLE_GENERATION); // indices 1 .. limit - 1
 
         HandleSlot                  allocate();                                         // {0, 0} when every index is in use
         bool                        release(uint64_t index, uint64_t generation);       // false for a stale or invalid handle
@@ -102,11 +105,12 @@ namespace rasm
         uint64_t                    liveCount() const;
 
     private:
-        uint64_t                    indexLimit  = UINT32_MAX;
-        std::vector<uint64_t>       generations = {0};                                  // by index; index 0 is never handed out
-        std::vector<uint8_t>        alive       = {0};
+        uint64_t                    indexLimit      = UINT32_MAX;
+        uint64_t                    generationLimit = MAX_HANDLE_GENERATION;
+        std::vector<uint64_t>       generations     = {0};                              // by index; index 0 is never handed out
+        std::vector<uint8_t>        alive           = {0};
         std::vector<uint64_t>       freeIndices;
-        uint64_t                    live        = 0;
+        uint64_t                    live            = 0;
     };
 
 } // namespace rasm

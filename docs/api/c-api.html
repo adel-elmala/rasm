@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>C API · RASM</title>
+<meta name="description" content="RASM from C and from other languages: the rasm_c and rasm_c_renderer shared libraries, rasm_c.h, its ABI rules (versions, sized structs, handles, errors, memory, threads), every function, and the map from the C++ API.">
+<meta name="rasm-sources" content="include/rasm/rasm_c.h src/c/cApi.h src/c/cApi.cpp src/c/cRenderer.cpp src/c/cScene.cpp src/c/cLoader.cpp src/CMakeLists.txt cmake/RasmInstall.cmake cmake/rasmConfig.cmake.in examples/22_c_api/main.c tests/cApiTests.cpp tests/c_api/ctypes_smoke.py tests/consumer/CMakeLists.txt tools/check_install.py src/platform/paths.cpp include/rasm/handle.h">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="api/c-api.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">API reference</p>
+<h1>C API</h1>
+<p class="lead">RASM is a C++ library, but a C program, or a binding in Python, C#, Rust or Zig, can use it through <code>rasm/rasm_c.h</code> and one shared library. This page shows how to link it, the rules the header keeps so old programs keep working with new libraries, every function, and which C++ call each one forwards to. The ideas behind the rules are in <a href="../guides/stable-c-abi.html">A stable C ABI</a>.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>Link <b>exactly one</b> of two shared libraries: <code>rasm_c</code> (renderer, <code>Engine</code>, <code>AssetLoader</code>) or <code>rasm_c_renderer</code> (the renderer alone: no SDL3, no file loaders). Both export the same renderer functions.</li>
+    <li>Objects are opaque pointers (<code>rasm_renderer</code>, <code>rasm_engine</code>, ...). Scene objects are 64-bit handles in a typed struct, <code>{ uint64_t id; }</code>, and 0 is invalid.</li>
+    <li>A struct that starts with <code>size</code> can grow: fill it with its <samp>_init</samp> function, which sets <code>size = sizeof</code>.</li>
+    <li>A call that can fail returns a <code>rasm_result</code> (<code>RASM_OK</code> is 0), or a 0 handle. <code>rasm_get_last_error</code> says why, for this thread.</li>
+    <li>No exception, no C++ type and no allocator crosses the boundary. Your memory stays yours; the library's stays the library's.</li>
+    <li>Not in C yet: the render graph, <code>RenderContext</code>, custom passes and the UI (C++ only).</li>
+  </ul>
+</div>
+
+<h2 id="link"><span class="n">1</span>Link it</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="A C program, a Python script with ctypes, or a C# or Rust binding call the functions of rasm_c.h. They land in one shared library, rasm_c or rasm_c_renderer, which holds a thin C layer and a whole static RASM inside, and loads its shaders from the shaders folder beside it.">
+    <rect x="20"  y="14" width="150" height="40" rx="6" class="cpu"/><text x="95"  y="39" class="mid">C program</text>
+    <rect x="200" y="14" width="150" height="40" rx="6" class="cpu"/><text x="275" y="39" class="mid">Python (ctypes)</text>
+    <rect x="380" y="14" width="150" height="40" rx="6" class="cpu"/><text x="455" y="39" class="mid">C#, Rust, Zig</text>
+    <line x1="95"  y1="54" x2="270" y2="88" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="275" y1="54" x2="275" y2="88" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="455" y1="54" x2="280" y2="88" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="24" y="84" class="small t-faint">rasm_c.h: plain C types only</text>
+    <rect x="20" y="92" width="520" height="140" rx="8" class="zone"/>
+    <text x="34" y="112" class="title">rasm_c.dll / librasm_c.dylib / librasm_c.so</text>
+    <rect x="34" y="122" width="492" height="36" rx="5" class="shader"/>
+    <text x="280" y="145" class="mid">C layer (src/c/): check, convert, try / catch, forward</text>
+    <rect x="34" y="168" width="492" height="50" rx="5" class="cpu"/>
+    <text x="280" y="190" class="mid">RASM, linked in as a static library</text>
+    <text x="280" y="208" class="mid small">rasm::rasm (rasm_c) or rasm::renderer (rasm_c_renderer)</text>
+    <rect x="580" y="92" width="160" height="62" rx="6" class="mem"/>
+    <text x="660" y="116" class="mid">shaders/</text>
+    <text x="660" y="134" class="mid small">beside the library</text>
+    <line x1="540" y1="123" x2="577" y2="123" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="580" y="168" width="160" height="50" rx="6" class="mem"/>
+    <text x="660" y="190" class="mid">SDL3, slang, ...</text>
+    <text x="660" y="207" class="mid small">DLLs beside it (Windows)</text>
+  </svg>
+  <figcaption>Your program sees only C. The library holds a whole RASM, so it needs nothing from your build but its own files: the shaders beside it and, on Windows, the DLLs of its dependencies.</figcaption>
+</figure>
+
+<p>RASM builds both libraries when the CMake option <code>RASM_C_API</code> is on (the default, but off under <code>add_subdirectory</code>). <code>cmake --install</code> puts them into <samp>bin/</samp> on Windows and <samp>lib/</samp> elsewhere, with a <samp>shaders/</samp> folder beside them, the header in <samp>include/rasm/</samp>, and on Windows the DLLs they load. A CMake project finds them as the component <code>c</code>, which needs no vcpkg and no other package:</p>
+
+<pre><code>cmake_minimum_required(VERSION 3.23)
+project(my_app C)
+
+find_package(rasm 0.1 CONFIG REQUIRED COMPONENTS c)
+
+add_executable(my_app main.c)
+target_link_libraries(my_app PRIVATE rasm::c)   # or rasm::c_renderer</code></pre>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Library</th><th>CMake target</th><th>Has</th><th>Does not have</th></tr>
+  <tr><td><code>rasm_c</code></td><td><code>rasm::c</code></td><td>every function: the renderer, <code>rasm_engine_*</code> (an SDL window, native or headless) and <code>rasm_asset_loader_*</code> (glTF, OBJ, PNG, JPEG, KTX2, HDR files)</td><td>—</td></tr>
+  <tr><td><code>rasm_c_renderer</code></td><td><code>rasm::c_renderer</code></td><td>the renderer functions: your window or offscreen images, meshes and textures from memory</td><td>SDL3, the file loaders and libktx; no <code>rasm_engine_*</code> or <code>rasm_asset_loader_*</code>, and their <samp>_init</samp> functions</td></tr>
+</table>
+</div>
+
+<div class="callout warn"><strong>Link one library, not both.</strong> Both export the same <code>rasm_*</code> renderer functions, each from its own copy of RASM. A program that loads both gets whichever one the loader finds first, for each function.</div>
+
+<p><b>Relative paths</b> resolve against the folder of the binary that holds RASM. For a C++ program linked to the static libraries that is the executable's folder. For <code>rasm_c</code> and <code>rasm_c_renderer</code> it is the shared library's own folder, whatever program loaded it (<samp>python.exe</samp>, a game engine's editor). So <code>shader_dir</code> left at <code>NULL</code> finds the installed <samp>shaders/</samp> beside the library. <a href="#rasm_get_base_path"><code>rasm_get_base_path</code></a> gives that folder. Pass your own assets as absolute paths, or set <code>asset_root</code> to an absolute folder: a binding rarely ships its assets beside the library.</p>
+
+<h2 id="first"><span class="n">2</span>A first program</h2>
+
+<p>A headless renderer that draws one triangle and writes it to a PNG. It needs no file but the shaders. <samp>examples/22_c_api/main.c</samp> is the bigger version: an engine with an SDL window, files from the asset loader, a mesh and a texture from memory.</p>
+
+<pre><code>#include "rasm/rasm_c.h"
+
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    rasm_renderer_config config;
+    rasm_renderer_config_init(&amp;config, sizeof(config));
+    config.window_width = 640;
+    config.window_height = 480;
+    rasm_renderer *renderer = NULL;
+    if (rasm_renderer_create(RASM_C_API_VERSION, &amp;config, &amp;renderer) != RASM_OK)
+    {
+        fprintf(stderr, "%s\n", rasm_get_last_error());
+        return 1;
+    }
+
+    const rasm_vertex vertices[3] = {
+        {.position = {-1.0f, -1.0f, 0.0f}, .normal = {0.0f, 0.0f, 1.0f}},
+        {.position = {1.0f, -1.0f, 0.0f}, .normal = {0.0f, 0.0f, 1.0f}},
+        {.position = {0.0f, 1.0f, 0.0f}, .normal = {0.0f, 0.0f, 1.0f}},
+    };
+    const uint32_t indices[3] = {0, 1, 2};
+    const rasm_scene scene = rasm_create_scene(renderer);
+    const rasm_mesh mesh = rasm_create_mesh(renderer, vertices, 3, indices, 3, NULL);
+    rasm_add_entity_to_scene(renderer, scene, rasm_create_entity(renderer, "triangle", mesh, (rasm_material){0}, NULL));
+
+    rasm_light_desc sun;
+    rasm_light_desc_init(&amp;sun, sizeof(sun));
+    sun.direction = (rasm_vec3){0.0f, 0.0f, -1.0f};
+    sun.range = 0.0f;
+    rasm_add_light_to_scene(renderer, scene, rasm_create_light(renderer, &amp;sun));
+
+    rasm_camera_projection projection;
+    rasm_camera_projection_init(&amp;projection, sizeof(projection));
+    projection.aspect = 640.0f / 480.0f;
+    const rasm_transform eye = {{0.0f, 0.0f, 3.0f}, {0.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}};
+    const rasm_camera camera = rasm_create_camera(renderer, &amp;projection, &amp;eye);
+    rasm_add_camera_to_scene(renderer, scene, camera);
+
+    rasm_render(renderer, scene, camera);
+    const rasm_readback readback = rasm_read_frame(renderer, RASM_READBACK_FORMAT_RGBA8_SRGB);
+    rasm_render(renderer, scene, camera);
+    rasm_image *image = rasm_image_create();
+    if (rasm_take_readback(renderer, readback, image) == RASM_OK)
+        rasm_image_write_png(image, "triangle.png");
+    rasm_image_destroy(image);
+    rasm_renderer_destroy(renderer);
+    return 0;
+}</code></pre>
+
+<p>From Python, the same calls go through <samp>ctypes</samp>: declare each struct with the header's fields in order, then load the library. <samp>tests/c_api/ctypes_smoke.py</samp> is a whole script, which CI runs against the installed <code>rasm_c</code>.</p>
+
+<pre><code class="lang-text">lib = ctypes.CDLL("bin/rasm_c.dll")
+config = RendererConfig()
+lib.rasm_renderer_config_init(ctypes.byref(config), ctypes.sizeof(config))
+renderer = ctypes.c_void_p()
+lib.rasm_renderer_create((1 &lt;&lt; 16) | 0, ctypes.byref(config), ctypes.byref(renderer))</code></pre>
+
+<h2 id="rules"><span class="n">3</span>The rules of the header</h2>
+
+<h3 id="versions">Versions</h3>
+<p><code>RASM_C_API_VERSION</code> is <code>major &lt;&lt; 16 | minor</code>: <code>RASM_C_API_VERSION_MAJOR</code> and <code>RASM_C_API_VERSION_MINOR</code>, 1.0 today. Within one major version the API only grows at its end: new functions, new enum constants, new struct fields after the last one. Nothing is renumbered, reordered or removed. <a href="#rasm_renderer_create"><code>rasm_renderer_create</code></a> and <a href="#rasm_engine_create"><code>rasm_engine_create</code></a> take your <code>RASM_C_API_VERSION</code> and fail with <code>RASM_ERROR_VERSION</code> when the major versions differ, or when your minor version is newer than the library's: a newer header may use fields or functions the library does not have.</p>
+
+<h3 id="sized">Structs that grow</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 170" role="img" aria-label="A program built against version 1.0 passes a rasm_light_desc of 60 bytes with size 60. A library of version 1.1 has a longer struct, with one new field at the end. It reads the 60 bytes, and the new field takes its default.">
+    <text x="20" y="26" class="title">Your program (header 1.0)</text>
+    <rect x="20"  y="36" width="70"  height="32" class="mem"/><text x="55"  y="57" class="mid mono">size=60</text>
+    <rect x="90"  y="36" width="420" height="32" class="mem o-50"/><text x="300" y="57" class="mid">type, intensity, range, color, position, direction, cones</text>
+    <line x1="20" y1="76" x2="510" y2="76" class="arrow hot" marker-start="url(#ah-hot)" marker-end="url(#ah-hot)"/>
+    <text x="265" y="92" class="mid small t-hot">read: the first 60 bytes</text>
+    <text x="20" y="124" class="title">The library (header 1.1)</text>
+    <rect x="20"  y="134" width="70"  height="32" class="mem"/><text x="55"  y="155" class="mid mono">size</text>
+    <rect x="90"  y="134" width="420" height="32" class="mem o-50"/><text x="300" y="155" class="mid">the same fields, from your struct</text>
+    <rect x="510" y="134" width="140" height="32" class="gpu"/><text x="580" y="155" class="mid">new field</text>
+    <text x="660" y="155" class="small">its default</text>
+  </svg>
+  <figcaption>The <code>size</code> field says how much of the struct your program knows. The library never reads or writes past it. The field names are an example: a 1.1 header does not exist yet.</figcaption>
+</figure>
+
+<ul>
+  <li>Fill a sized struct with its <samp>_init</samp> function, which writes the defaults and sets <code>size</code>: <code>rasm_renderer_config_init(&amp;config, sizeof(config))</code>. The defaults are the C++ API's.</li>
+  <li><b>Create</b> (<code>rasm_create_light</code>, <code>rasm_renderer_create</code>): a field past your <code>size</code> takes its default. <b>Update</b> (<code>rasm_update_light</code>, <code>rasm_update_material</code>): it keeps its current value. <b>Get</b> (<code>rasm_get_light</code>, <code>rasm_get_material</code>): set <code>size</code> before the call; the library writes only that much.</li>
+  <li>A <code>size</code> below the struct's 1.0 size fails with <code>RASM_ERROR_INVALID_ARGUMENT</code>.</li>
+  <li>In an array of sized structs, every element must have the <code>size</code> of the first one: the library steps through the array by it.</li>
+  <li>Small value structs have no <code>size</code>: <code>rasm_vec2</code>, <code>rasm_vec3</code>, <code>rasm_vec4</code>, <code>rasm_quat</code>, <code>rasm_mat4</code> (column-major), <code>rasm_transform</code>, <code>rasm_native_window</code>, <code>rasm_vertex</code>, <code>rasm_texture_transform</code>, <code>rasm_image_data</code>. A change to one of them would be a new struct and new functions.</li>
+</ul>
+
+<h3 id="types">Types and handles</h3>
+<ul>
+  <li>Fixed sizes only: <code>uint32_t</code>, <code>int32_t</code>, <code>uint64_t</code>, <code>float</code>, <code>double</code>, pointers. An enum is a <code>typedef uint32_t</code> (<code>rasm_format</code>, <code>rasm_light_type</code>, ...) with <code>RASM_*</code> constants of fixed values, because a C <code>enum</code> has no fixed size. A boolean is <code>rasm_bool</code>, a <code>uint32_t</code> with <code>RASM_TRUE</code> and <code>RASM_FALSE</code>.</li>
+  <li>Opaque objects: <code>rasm_renderer</code>, <code>rasm_engine</code>, <code>rasm_asset_loader</code>, <code>rasm_image</code>. You hold pointers; their layout is the library's.</li>
+  <li>Handles: <code>rasm_scene</code>, <code>rasm_entity</code>, <code>rasm_mesh</code>, <code>rasm_material</code>, <code>rasm_texture</code>, <code>rasm_light</code>, <code>rasm_camera</code>, <code>rasm_environment</code>, <code>rasm_readback</code>. Each is <code>{ uint64_t id; }</code>: a distinct type in C, a plain 64-bit integer for a binding. The id is the C++ handle's <code>generation &lt;&lt; 32 | index</code> (<a href="../guides/generational-handles.html">Generational handles</a>); a generation starts at 1 and stops at <code>MAX_HANDLE_GENERATION</code>, so a valid handle is never 0 and always fits. <code>(rasm_material){0}</code> is "no material", as an invalid C++ handle is.</li>
+  <li>Every function is <code>RASM_C_API</code> (exported) and <code>RASM_CALL</code>: <code>__cdecl</code> on 32-bit Windows, the platform's C convention elsewhere. A binding declares the same; <code>rasm_log_callback</code> uses it too.</li>
+</ul>
+
+<h3 id="errors">Errors</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>Code</th><th>Value</th><th>Means</th></tr>
+  <tr><td><code>RASM_OK</code></td><td>0</td><td>done</td></tr>
+  <tr><td><code>RASM_ERROR_INVALID_ARGUMENT</code></td><td>-1</td><td>a NULL pointer, a <code>size</code> too small, a value that is none of its constants</td></tr>
+  <tr><td><code>RASM_ERROR_FAILED</code></td><td>-2</td><td>RASM refused the call or it failed: a stale handle, a GPU error. RASM logged why.</td></tr>
+  <tr><td><code>RASM_ERROR_OUT_OF_MEMORY</code></td><td>-3</td><td>an allocation failed</td></tr>
+  <tr><td><code>RASM_ERROR_INTERNAL</code></td><td>-4</td><td>an exception reached the C layer, which caught it</td></tr>
+  <tr><td><code>RASM_ERROR_VERSION</code></td><td>-5</td><td>your <code>RASM_C_API_VERSION</code> does not fit this library</td></tr>
+</table>
+</div>
+<ul>
+  <li>A call on an object rejects the handle 0 with <code>RASM_ERROR_INVALID_ARGUMENT</code>, so a failed create is not mistaken for an object.</li>
+  <li>A creation call returns a 0 handle when it fails. A call whose C++ counterpart returns nothing returns <code>RASM_ERROR_FAILED</code> when RASM logged an error during it, so <code>rasm_destroy_entity</code> of a stale handle tells you.</li>
+  <li><a href="#rasm_get_last_error"><code>rasm_get_last_error</code></a> gives the last error of the calling thread, from the C layer or from RASM's log: <i>"rasm_create_scene: renderer is NULL."</i>. A call that succeeds does not clear it; <code>rasm_clear_last_error</code> does.</li>
+</ul>
+
+<h3 id="memory">Memory and threads</h3>
+<ul>
+  <li><b>In:</b> pointers you pass are read during the call only: strings (UTF-8, NUL-terminated), arrays (a pointer and a count), structs. RASM copies what it keeps.</li>
+  <li><b>Out:</b> into your structs, or into your buffer for a string: a <code>char* buffer, uint32_t capacity</code> pair works like <code>snprintf</code>. It writes what fits with its NUL and returns the whole length, so call it with <code>NULL, 0</code> first to size the buffer.</li>
+  <li><b>Library objects:</b> what <samp>_create</samp> returns lives until its <samp>_destroy</samp>. <code>rasm_image_get</code> gives a pointer into the image, valid until the image is filled again or destroyed. An engine's renderer and loader (<code>rasm_engine_get_renderer</code>, <code>rasm_engine_get_asset_loader</code>) belong to it: <code>rasm_engine_destroy</code> destroys them, and their own destroy calls refuse.</li>
+  <li><b>Threads:</b> the rules of the C++ API. Call a renderer, its engine and its loader from one thread. The last error is per thread. The log callback can run on the loader's worker threads, and on two threads at once; RASM holds no lock while it runs, so it may call RASM on its own thread.</li>
+</ul>
+
+<h2 id="functions"><span class="n">4</span>Functions</h2>
+
+<p>Each function forwards to the C++ call of the same name, documented on the other API pages; the notes here are only what differs in C. A renderer function takes the renderer first: <code>rasm_create_entity(renderer, ...)</code> is <code>renderer.createEntity(...)</code>. A NULL renderer is an error, never a crash.</p>
+
+<div class="api" id="rasm_get_version">
+  <pre class="sig">uint32_t         rasm_get_version(void);
+const char*      rasm_get_last_error(void);
+void             rasm_clear_last_error(void);
+void             rasm_set_log_callback(rasm_log_callback callback, void* user_data);
+uint32_t         rasm_get_base_path(char* buffer, uint32_t capacity);
+typedef void (RASM_CALL* rasm_log_callback)(void* user_data, rasm_log_level level, const char* message);</pre>
+  <div class="body">
+    <p id="rasm_get_last_error"><code>rasm_get_version</code> is the library's <code>RASM_C_API_VERSION</code>. <code>rasm_get_last_error</code> never returns NULL; the text is valid until the thread's next error. <code>rasm_set_log_callback</code> gets every line RASM logs (<code>rasm_log_level</code>: <code>RASM_LOG_LEVEL_TRACE</code> 0 to <code>RASM_LOG_LEVEL_CRITICAL</code> 5), besides the console; NULL turns it off. The message is valid during the call.</p>
+    <p id="rasm_get_base_path"><code>rasm_get_base_path</code> is the folder relative paths resolve against: the shared library's folder, UTF-8 with <samp>/</samp> separators.</p>
+  </div>
+</div>
+
+<div class="api" id="rasm_renderer_create">
+  <pre class="sig">rasm_result      rasm_renderer_config_init(rasm_renderer_config* config, uint32_t size);
+rasm_result      rasm_renderer_create(uint32_t api_version, const rasm_renderer_config* config, rasm_renderer** renderer);
+void             rasm_renderer_destroy(rasm_renderer* renderer);</pre>
+  <div class="body">
+    <p>A <code>rasm::Renderer</code> (<a href="engine.html#Renderer">engine.html</a>). <code>rasm_renderer_config</code> has the fields of <a href="types.html#RendererConfig"><code>RendererConfig</code></a> in snake case, in the same order; its strings may be NULL for empty, and <code>cache_dir</code> starts as the library's <samp>"cache"</samp>. With <code>native_window.type</code> set it draws into your window; without, into offscreen images of <code>window_width</code> × <code>window_height</code> pixels. It fails with <code>RASM_ERROR_FAILED</code> and sets <code>*renderer</code> to NULL when the renderer did not start (no Vulkan 1.4 device, no shaders). Destroying an engine's renderer is refused.</p>
+  </div>
+</div>
+
+<div class="api" id="rasm_engine_create">
+  <pre class="sig">rasm_result      rasm_engine_config_init(rasm_engine_config* config, uint32_t size);
+rasm_result      rasm_asset_loader_config_init(rasm_asset_loader_config* config, uint32_t size);
+rasm_result      rasm_engine_create(uint32_t api_version, const rasm_engine_config* config, rasm_engine** engine);
+void             rasm_engine_destroy(rasm_engine* engine);
+rasm_renderer*   rasm_engine_get_renderer(rasm_engine* engine);
+rasm_asset_loader* rasm_engine_get_asset_loader(rasm_engine* engine);</pre>
+  <div class="body">
+    <p><code>rasm_c</code> only. A <code>rasm::Engine</code> (<a href="engine.html#Engine">engine.html</a>). <code>rasm_engine_config</code> is <code>{size, platform, renderer, loader}</code>: a <code>rasm_platform_type</code> (<code>RASM_PLATFORM_TYPE_SDL</code>, <code>RASM_PLATFORM_TYPE_HEADLESS</code>, <code>RASM_PLATFORM_TYPE_NATIVE</code>) and pointers to the two parts, each a sized struct of its own; a NULL <code>loader</code> takes its defaults. Every renderer function works on <code>rasm_engine_get_renderer(engine)</code>, and every load on <code>rasm_engine_get_asset_loader(engine)</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="rasm_asset_loader_create">
+  <pre class="sig">rasm_result      rasm_asset_loader_create(rasm_renderer* renderer, const rasm_asset_loader_config* config, rasm_asset_loader** loader);
+void             rasm_asset_loader_destroy(rasm_asset_loader* loader);
+rasm_mesh        rasm_asset_loader_load_mesh(rasm_asset_loader* loader, const char* path);
+rasm_mesh        rasm_asset_loader_load_gltf(rasm_asset_loader* loader, const char* path);
+rasm_texture     rasm_asset_loader_load_texture(rasm_asset_loader* loader, const char* path, rasm_format format);
+rasm_environment rasm_asset_loader_load_environment(rasm_asset_loader* loader, const char* path);
+void             rasm_asset_loader_wait_for_loads(rasm_asset_loader* loader);
+uint32_t         rasm_asset_loader_resolve_asset_path(rasm_asset_loader* loader, const char* path, char* buffer, uint32_t capacity);</pre>
+  <div class="body">
+    <p><code>rasm_c</code> only. An <a href="engine.html#AssetLoader"><code>AssetLoader</code></a> for a renderer you made with <code>rasm_renderer_create</code> (a NULL config takes the defaults); the renderer must outlive it. <code>rasm_asset_loader_config</code> is <code>{size, asset_root, load_threads, load_memory_budget}</code>. Each load returns its handle at once; <a href="#rasm_render"><code>rasm_is_mesh_loaded</code></a> says when it is in. <code>format</code> of a texture names the slot: <code>RASM_FORMAT_R8G8B8A8_SRGB</code> for color, <code>RASM_FORMAT_R8G8B8A8_UNORM</code> for data.</p>
+  </div>
+</div>
+
+<div class="api" id="rasm_render">
+  <pre class="sig">rasm_bool        rasm_running(rasm_renderer* renderer);
+void             rasm_render(rasm_renderer* renderer, rasm_scene scene, rasm_camera camera);
+void             rasm_wait_for_loads(rasm_renderer* renderer);
+rasm_bool        rasm_is_mesh_loaded(rasm_renderer* renderer, rasm_mesh mesh);
+rasm_bool        rasm_is_texture_loaded(rasm_renderer* renderer, rasm_texture texture);
+rasm_bool        rasm_is_environment_loaded(rasm_renderer* renderer, rasm_environment environment);</pre>
+  <div class="body">
+    <p>One frame of one scene through one camera into the main window, like <a href="engine.html#render"><code>render(scene, camera)</code></a>: it polls the window's events, uploads what changed, draws and presents. Loop while <code>rasm_running</code> is true; with the SDL platform it turns false when the window closes. The <code>rasm_is_*_loaded</code> calls are the overloads of <code>isLoaded</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="rasm_create_scene">
+  <pre class="sig">rasm_scene       rasm_create_scene(rasm_renderer* renderer);
+rasm_result      rasm_destroy_scene(rasm_renderer* renderer, rasm_scene scene);
+rasm_result      rasm_add_entity_to_scene(rasm_renderer* renderer, rasm_scene scene, rasm_entity entity);
+rasm_result      rasm_remove_entity_from_scene(rasm_renderer* renderer, rasm_scene scene, rasm_entity entity);
+rasm_result      rasm_add_camera_to_scene(rasm_renderer* renderer, rasm_scene scene, rasm_camera camera);
+rasm_result      rasm_add_light_to_scene(rasm_renderer* renderer, rasm_scene scene, rasm_light light);
+rasm_result      rasm_remove_light_from_scene(rasm_renderer* renderer, rasm_scene scene, rasm_light light);
+rasm_result      rasm_scene_environment_init(rasm_scene_environment* environment, uint32_t size);
+rasm_result      rasm_set_scene_environment(rasm_renderer* renderer, rasm_scene scene, const rasm_scene_environment* environment);
+rasm_result      rasm_destroy_environment(rasm_renderer* renderer, rasm_environment environment);</pre>
+  <div class="body">
+    <p>See <a href="scene.html#createScene">scene.html</a>. <code>rasm_scene_environment</code> is <a href="scene.html#setSceneEnvironment"><code>SceneEnvironment</code></a>: <code>{size, environment, intensity, rotation, sky}</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="rasm_create_entity">
+  <pre class="sig">rasm_entity      rasm_create_entity(rasm_renderer* renderer, const char* name, rasm_mesh mesh, rasm_material material, const rasm_transform* transform);
+rasm_result      rasm_destroy_entity(rasm_renderer* renderer, rasm_entity entity);
+rasm_result      rasm_get_transform(rasm_renderer* renderer, rasm_entity entity, rasm_transform* transform);
+rasm_result      rasm_update_transform(rasm_renderer* renderer, rasm_entity entity, const rasm_transform* transform);</pre>
+  <div class="body">
+    <p>See <a href="scene.html#createEntity">scene.html</a>. A NULL <code>transform</code> is the identity: position 0, rotation <code>{0, 0, 0, 1}</code> (x, y, z, w), scale 1. A 0 material draws with the mesh's own glTF materials, or the default one.</p>
+  </div>
+</div>
+
+<div class="api" id="rasm_create_mesh">
+  <pre class="sig">rasm_mesh        rasm_create_mesh(rasm_renderer* renderer, const rasm_vertex* vertices, uint32_t vertex_count, const uint32_t* indices, uint32_t index_count, const uint32_t* colors);
+rasm_result      rasm_destroy_mesh(rasm_renderer* renderer, rasm_mesh mesh);
+uint32_t         rasm_pack_vertex_color(rasm_vec4 linear_color);</pre>
+  <div class="body">
+    <p><a href="scene.html#createMesh"><code>createMesh</code></a> from your arrays. <code>rasm_vertex</code> has the layout of <code>rasm::Vertex</code> (64 bytes: <code>position</code>, <code>normal</code>, <code>uv[RASM_MAX_VERTEX_UV_SETS]</code>, <code>tangent</code>), so the library copies it as it is, once, into the vectors the C++ call takes. <code>colors</code> is NULL, or one packed color per vertex from <code>rasm_pack_vertex_color</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="rasm_create_material">
+  <pre class="sig">rasm_material    rasm_create_material(rasm_renderer* renderer, rasm_material_type type, const rasm_texture* textures, uint32_t texture_count, rasm_bool double_sided);
+rasm_result      rasm_get_material(rasm_renderer* renderer, rasm_material material, rasm_material_desc* desc);
+rasm_result      rasm_update_material(rasm_renderer* renderer, rasm_material material, const rasm_material_desc* desc);
+rasm_result      rasm_destroy_material(rasm_renderer* renderer, rasm_material material);
+rasm_result      rasm_texture_desc_init(rasm_texture_desc* desc, uint32_t size);
+rasm_texture     rasm_create_texture(rasm_renderer* renderer, const rasm_texture_desc* desc, const void* pixels);
+rasm_result      rasm_destroy_texture(rasm_renderer* renderer, rasm_texture texture);</pre>
+  <div class="body">
+    <p>See <a href="materials.html#createMaterial">materials.html</a>. <code>rasm_material_desc</code> is <a href="materials.html#Material"><code>Material</code></a> without its name and handle: <code>type</code>, <code>textures</code>, <code>tex_coords</code> and <code>texture_transforms</code> per <code>rasm_pbr_slot</code>, <code>params[RASM_MAX_PARAM_SLOTS]</code> indexed by <code>rasm_pbr_param</code> (<code>RASM_PBR_PARAM_ALBEDO</code> is 4 floats), <code>double_sided</code>, <code>alpha_mode</code>, <code>alpha_cutoff</code>. Get it, change fields, update it:</p>
+    <pre><code>rasm_material_desc desc;
+desc.size = sizeof(desc);
+rasm_get_material(renderer, material, &amp;desc);
+desc.params[RASM_PBR_PARAM_ROUGHNESS] = 0.85f;
+rasm_update_material(renderer, material, &amp;desc);</code></pre>
+    <p><code>rasm_create_texture</code> makes a texture from your RGBA8 pixels, rows top to bottom, and its mips: <code>rasm_texture_desc</code> is <code>{size, name, width, height, format}</code> with <code>RASM_FORMAT_R8G8B8A8_SRGB</code> (color, the default) or <code>RASM_FORMAT_R8G8B8A8_UNORM</code> (data). Compressed textures come from KTX2 files through the loader.</p>
+  </div>
+</div>
+
+<div class="api" id="rasm_create_light">
+  <pre class="sig">rasm_result      rasm_light_desc_init(rasm_light_desc* desc, uint32_t size);
+rasm_light       rasm_create_light(rasm_renderer* renderer, const rasm_light_desc* desc);
+rasm_result      rasm_get_light(rasm_renderer* renderer, rasm_light light, rasm_light_desc* desc);
+rasm_result      rasm_update_light(rasm_renderer* renderer, rasm_light light, const rasm_light_desc* desc);
+rasm_result      rasm_destroy_light(rasm_renderer* renderer, rasm_light light);</pre>
+  <div class="body">
+    <p>See <a href="scene.html#createLight">scene.html</a>. <code>rasm_light_desc</code> is <a href="scene.html#Light"><code>Light</code></a> without its handle: <code>type</code> (<code>RASM_LIGHT_TYPE_DIRECTIONAL</code>, <code>RASM_LIGHT_TYPE_POINT</code>, <code>RASM_LIGHT_TYPE_SPOT</code>), <code>intensity</code>, <code>range</code>, <code>color</code>, <code>position</code>, <code>direction</code>, <code>inner_cone_angle</code>, <code>outer_cone_angle</code>. Its init gives a directional light.</p>
+  </div>
+</div>
+
+<div class="api" id="rasm_create_camera">
+  <pre class="sig">rasm_result      rasm_camera_projection_init(rasm_camera_projection* projection, uint32_t size);
+rasm_camera      rasm_create_camera(rasm_renderer* renderer, const rasm_camera_projection* projection, const rasm_transform* transform);
+rasm_result      rasm_destroy_camera(rasm_renderer* renderer, rasm_camera camera);
+rasm_result      rasm_get_camera_transform(rasm_renderer* renderer, rasm_camera camera, rasm_transform* transform);
+rasm_result      rasm_set_camera_transform(rasm_renderer* renderer, rasm_camera camera, const rasm_transform* transform);
+rasm_result      rasm_get_camera_projection(rasm_renderer* renderer, rasm_camera camera, rasm_camera_projection* projection);
+rasm_result      rasm_set_camera_projection(rasm_renderer* renderer, rasm_camera camera, const rasm_camera_projection* projection);
+float            rasm_get_camera_exposure(rasm_renderer* renderer, rasm_camera camera);
+rasm_result      rasm_set_camera_exposure(rasm_renderer* renderer, rasm_camera camera, float exposure);
+float            rasm_get_camera_bloom_strength(rasm_renderer* renderer, rasm_camera camera);
+rasm_result      rasm_set_camera_bloom_strength(rasm_renderer* renderer, rasm_camera camera, float strength);
+rasm_result      rasm_reset_camera_history(rasm_renderer* renderer, rasm_camera camera);
+rasm_result      rasm_get_view_matrix(rasm_renderer* renderer, rasm_camera camera, rasm_mat4* matrix);
+rasm_result      rasm_get_projection_matrix(rasm_renderer* renderer, rasm_camera camera, float aspect, rasm_mat4* matrix);</pre>
+  <div class="body">
+    <p>See <a href="camera.html#createCamera">camera.html</a>. <code>rasm_camera_projection</code> is <a href="camera.html#CameraProjection"><code>CameraProjection</code></a> without its union, a sized struct: <code>type</code> (<code>RASM_PROJECTION_TYPE_PERSPECTIVE</code> or <code>RASM_PROJECTION_TYPE_ORTHOGRAPHIC</code>), <code>fov_y</code> (degrees) and <code>aspect</code> for a perspective, <code>left</code>, <code>right</code>, <code>bottom</code>, <code>top</code> for an orthographic one, <code>near_z</code> and <code>far_z</code> for both (a perspective <code>far_z</code> of 0 is infinite). Its init gives a perspective of 45 degrees, aspect 1, <code>near_z</code> 0.1 and an infinite far plane. A camera has no controller in C yet: place it with <code>rasm_set_camera_transform</code>. <code>rasm_get_projection_matrix</code> with an <code>aspect</code> of 0 uses the camera's own.</p>
+  </div>
+</div>
+
+<div class="api" id="rasm_read_frame">
+  <pre class="sig">rasm_readback    rasm_read_frame(rasm_renderer* renderer, rasm_readback_format format);
+rasm_bool        rasm_is_readback_ready(rasm_renderer* renderer, rasm_readback readback);
+rasm_result      rasm_take_readback(rasm_renderer* renderer, rasm_readback readback, rasm_image* image);
+rasm_image*      rasm_image_create(void);
+void             rasm_image_destroy(rasm_image* image);
+rasm_image_data  rasm_image_get(const rasm_image* image);
+rasm_result      rasm_image_write_png(const rasm_image* image, const char* path);
+rasm_result      rasm_image_read_png(rasm_image* image, const char* path);</pre>
+  <div class="body">
+    <p><a href="engine.html#readFrame"><code>readFrame</code></a> and <a href="engine.html#takeReadback"><code>takeReadback</code></a> (<a href="../guides/headless-readback.html">Headless rendering and readback</a>). The pixels go into a <code>rasm_image</code> you own and can fill again every frame: it keeps its memory, so a frame-by-frame capture allocates nothing after the first. <code>rasm_image_data</code> is <code>{width, height, format, pixels, byte_size}</code>, the rows top to bottom; <code>pixels</code> is NULL for an empty image. <code>rasm_readback_format</code> is <code>RASM_READBACK_FORMAT_RGBA8_SRGB</code> (4 bytes per pixel, what <code>rasm_image_write_png</code> writes) or <code>RASM_READBACK_FORMAT_RGBA32_FLOAT</code>.</p>
+  </div>
+</div>
+
+<h2 id="map"><span class="n">5</span>From C++ to C</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>C++</th><th>C</th></tr>
+  <tr><td><code>Renderer renderer(config)</code></td><td><code>rasm_renderer_create(RASM_C_API_VERSION, &amp;config, &amp;renderer)</code></td></tr>
+  <tr><td><code>Engine engine(config)</code></td><td><code>rasm_engine_create</code>, then <code>rasm_engine_get_renderer</code> and <code>rasm_engine_get_asset_loader</code></td></tr>
+  <tr><td><code>renderer.createEntity(name, mesh, material, transform)</code></td><td><code>rasm_create_entity(renderer, name, mesh, material, &amp;transform)</code></td></tr>
+  <tr><td><code>engine.loadGLTF(path)</code></td><td><code>rasm_asset_loader_load_gltf(loader, path)</code></td></tr>
+  <tr><td><code>isLoaded(mesh)</code>, <code>isLoaded(texture)</code></td><td><code>rasm_is_mesh_loaded</code>, <code>rasm_is_texture_loaded</code></td></tr>
+  <tr><td><code>createLight(type, color, position, ...)</code></td><td><code>rasm_create_light(renderer, &amp;desc)</code> with a <code>rasm_light_desc</code></td></tr>
+  <tr><td><code>createTexture(desc)</code> + <code>RenderContext::fillTexture</code></td><td><code>rasm_create_texture(renderer, &amp;desc, pixels)</code></td></tr>
+  <tr><td><code>ReadbackImage</code>, <code>writePng</code>, <code>readPng</code></td><td><code>rasm_image</code>, <code>rasm_image_write_png</code>, <code>rasm_image_read_png</code></td></tr>
+  <tr><td><code>MeshHandle{}</code> (invalid)</td><td><code>(rasm_mesh){0}</code></td></tr>
+  <tr><td><code>std::string</code>, <code>std::vector</code></td><td><code>const char*</code>; a pointer and a count</td></tr>
+</table>
+</div>
+
+<p>C++ only, for now: the render graph and custom passes (<a href="render-graph.html">render-graph.html</a>), <code>RenderContext</code> and buffers (<a href="low-level.html">low-level.html</a>), shadow passes, Dear ImGui and <code>setUiCallback</code>, the buffer inspector and GPU timers. They are callbacks into command recording, which need a callback ABI of their own. Windows, input events, views, render targets, camera controllers, animation and stats come next to the C API.</p>
+
+</main>
+</div>
+</body>
+</html>

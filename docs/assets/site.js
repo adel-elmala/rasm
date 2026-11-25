@@ -31,6 +31,7 @@ const SECTIONS = [
             { path: "guides/swapchain.html",             title: "The swapchain and presenting",        blurb: "The ring of images that reaches the screen." },
             { path: "guides/headless-readback.html",     title: "Headless rendering and readback",     blurb: "Render with no window, and copy the pixels back to the CPU without a stall." },
             { path: "guides/platform-layer.html",        title: "The platform layer",                  blurb: "Draw into a window the application owns: native handles, points and pixels, input as events, and what the UI takes." },
+            { path: "guides/stable-c-abi.html",          title: "A stable C ABI",                      blurb: "Offer a C++ library to C and other languages, and keep old programs working with new builds." },
             { path: "guides/gpu-sync.html",              title: "GPU synchronization: barriers, stages, layouts", blurb: "Why GPU work needs barriers, and what they say." },
             { path: "guides/generational-handles.html",  title: "Generational handles",                blurb: "Safe references: an index plus a generation." },
             { path: "guides/resource-lifetime.html",     title: "Deferred destruction",                blurb: "Destroy what the GPU may still read: the handle now, the memory later." },
@@ -122,6 +123,7 @@ const SECTIONS = [
             { path: "api/render-graph.html",          title: "Render graph and custom passes" },
             { path: "api/low-level.html",             title: "RenderContext and resources" },
             { path: "api/types.html",                 title: "Types, handles and limits" },
+            { path: "api/c-api.html",                 title: "C API" },
         ],
     },
     {
