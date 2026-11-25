@@ -1,6 +1,7 @@
 #include "rasm/rasm_c.h"
 #include "rasm/assetLoader.h"
 #include "rasm/vector.h"
+#include "rasm/picking.h"
 #include "rasm/light.h"
 #include "rasm/scene.h"
 #include "rasm/input.h"
@@ -721,6 +722,38 @@ TEST_CASE("the 1.6 structs start from the C++ defaults")
     CHECK(label.text == nullptr);
     CHECK(offsetof(rasm_material_desc, font) > offsetof(rasm_material_desc, vector));
     CHECK(RASM_MAX_LABEL_REACH == rasm::MAX_LABEL_REACH);
+}
+
+TEST_CASE("the 1.7 structs start from the C++ defaults, and a pick call with a bad argument gives a last error")
+{
+    const rasm::PickDesc defaults;
+    rasm_pick_desc desc;
+    REQUIRE(rasm_pick_desc_init(&desc, sizeof(desc)) == RASM_OK);
+    CHECK(desc.size == sizeof(desc));
+    CHECK(desc.rect.width == defaults.rect.width);
+    CHECK(desc.rect.height == defaults.rect.height);
+    CHECK(desc.min_alpha == defaults.minAlpha);
+    CHECK(desc.skip == 0);
+    rasm_pick_hit hit;
+    REQUIRE(rasm_pick_hit_init(&hit, sizeof(hit)) == RASM_OK);
+    CHECK(hit.size == sizeof(hit));
+    CHECK(hit.entity.id == 0);
+    CHECK(hit.normal.y == 1.0f);
+    CHECK(RASM_MAX_PICK_SIZE == rasm::MAX_PICK_SIZE);
+    CHECK(RASM_FORMAT_R32G32B32A32_UINT == static_cast<uint32_t>(rasm::Format::R32G32B32A32_UINT));
+
+    rasm_view view;
+    rasm_view_init(&view, sizeof(view));
+    CHECK(rasm_pick_view(nullptr, &view, &desc).id == 0);
+    CHECK(contains(rasm_get_last_error(), "renderer is NULL"));
+    CHECK(rasm_pick_target(nullptr, rasm_scene{}, rasm_camera{}, rasm_render_target{}, nullptr).id == 0);
+    CHECK(rasm_is_pick_ready(nullptr, rasm_pick{}) == RASM_FALSE);
+    uint32_t count = 7;
+    CHECK(rasm_take_pick(nullptr, rasm_pick{}, &hit, 1, &count) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(rasm_is_entity_alive(nullptr, rasm_entity{}) == RASM_FALSE);
+    uint32_t x = 0;
+    uint32_t y = 0;
+    CHECK(rasm_get_view_pixel(nullptr, rasm_window{}, nullptr, 1.0f, 1.0f, &x, &y) == RASM_FALSE);
 }
 
 TEST_CASE("a font atlas and labels build on any thread, with no renderer")

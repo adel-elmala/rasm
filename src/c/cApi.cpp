@@ -113,6 +113,7 @@ namespace rasm::c
         static_assert(RASM_FORMAT_R16_UNORM == asNumber(Format::R16_UNORM));
         static_assert(RASM_FORMAT_R32_SFLOAT == asNumber(Format::R32_SFLOAT));
         static_assert(RASM_FORMAT_R8_UNORM == asNumber(Format::R8_UNORM));
+        static_assert(RASM_FORMAT_R32G32B32A32_UINT == asNumber(Format::R32G32B32A32_UINT));
         static_assert(RASM_PLATFORM_TYPE_SDL == asNumber(PlatformType::SDL));
         static_assert(RASM_PLATFORM_TYPE_HEADLESS == asNumber(PlatformType::HEADLESS));
         static_assert(RASM_PLATFORM_TYPE_NATIVE == asNumber(PlatformType::NATIVE));

@@ -35,6 +35,8 @@ int main(void)
     rasm_dvec3 line[2] = {{0.0, 0.0, 0.0}, {10.0, 0.0, 0.0}};
     uint32_t lineSize = 2;
     rasm_label_desc label;
+    rasm_pick_desc pickDesc;
+    rasm_pick_hit pickHit;
 
     if (rasm_get_version() != RASM_C_API_VERSION)
         return 1;
@@ -82,6 +84,9 @@ int main(void)
         rasm_vector_add_labels(geometry, line[0], NULL, &label, 1, NULL) != RASM_ERROR_INVALID_ARGUMENT)
         return 15;
     rasm_vector_geometry_destroy(geometry);
+    if (rasm_pick_desc_init(&pickDesc, sizeof(pickDesc)) != RASM_OK || pickDesc.rect.width != 1 || pickDesc.min_alpha != 0.5f ||
+        rasm_pick_hit_init(&pickHit, sizeof(pickHit)) != RASM_OK || rasm_is_pick_ready(NULL, rasm_pick_view(NULL, &views[0], &pickDesc)) != RASM_FALSE)
+        return 16;
     printf("rasm_c.h %u.%u compiles as C (__STDC_VERSION__ %ld) and links rasm_c_renderer.\n", RASM_C_API_VERSION_MAJOR, RASM_C_API_VERSION_MINOR, (long)__STDC_VERSION__);
     return 0;
 }

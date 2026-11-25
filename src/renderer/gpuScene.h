@@ -128,6 +128,10 @@ namespace rasm
         std::vector<LabelCandidate>     labelCandidates;                                                            // scratch, keeps its capacity
         BufferHandle                    labelBuffers[MAX_FRAMES_IN_FLIGHT]                                  = {};   // each label slot's alpha, which the vertex stage reads
         uint32_t                        labelCapacity[MAX_FRAMES_IN_FLIGHT]                                 = {};
+        gfx::SceneData                  sceneData                                                           = {};   // this frame's, as the GPU reads it: a pick starts from it
+        glm::mat4                       projection                                                          = glm::mat4(1.0f);  // this frame's, without jitter
+        glm::dvec3                      origin                                                              = glm::dvec3(0.0);  // this frame's render space
+        uint32_t                        preparedSync                                                        = UINT32_MAX;   // GpuScene::syncCount of the frame prepareSceneView last ran in
     };
 
     // A shaded view's pipelines for one sample count of its target: they must match the attachments they draw into.
@@ -197,8 +201,10 @@ namespace rasm
         SceneDrawList                   drawLists[MAX_SCENES];
     };
 
-    // The device address of a view's SceneData in a frame slot's buffer.
+    // The device address of a view's SceneData in a frame slot's buffer; a pick's is at MAX_SCENE_VIEWS + its index.
     uint64_t                            getSceneDataAddress(RenderContext& ctx, const GpuScene& gpuScene, uint32_t frame, uint32_t view);
+    // The six planes of a view-projection's frustum, normalized (an infinite far plane gives (0, 0, 0, nearZ)).
+    void                                getFrustumPlanes(const glm::mat4& viewProjection, glm::vec4 planes[6]);
 
 }
 // clang-format on

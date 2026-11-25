@@ -184,7 +184,7 @@ namespace rasm::rhi
         virtual void                acquireTextures(Texture* const* textures, uint32_t count) = 0;
         // Copies one layer and mip of a single-sample texture to dst at dstOffset, rows tightly packed, for the host to
         // read after the submit's fence. The texture is in state before and after; a depth texture gives its depth.
-        virtual void                copyFromTexture(Texture* src, TextureUsage state, uint32_t layer, uint32_t mip, Buffer* dst, uint64_t dstOffset) = 0;
+        virtual void                copyFromTexture(Texture* src, TextureUsage state, uint32_t layer, uint32_t mip, Buffer* dst, uint64_t dstOffset, uint32_t width, uint32_t height) = 0; // the texels from (0, 0), rows packed
         virtual void                writeTimestamp(QueryPool* pool, uint32_t index) = 0;
     };
 

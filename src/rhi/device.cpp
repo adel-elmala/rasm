@@ -45,6 +45,7 @@ namespace rasm::rhi
         case Format::R32G32B32_SFLOAT:
             return {.bytes = 12};
         case Format::R32G32B32A32_SFLOAT:
+        case Format::R32G32B32A32_UINT:
             return {.bytes = 16};
         case Format::UNKNOWN:
         default:

@@ -919,12 +919,16 @@ int main(int argc, char **argv)
         engine.addLightToScene(city.scene, light);
 
     // Seconds stay a double: a float would make the cars stutter after a day of running.
-    // --freeze-culling freezes culling at frame 30, and the tour flies on past what it kept.
+    // --freeze-culling freezes culling at frame 30, and the tour flies on past what it kept. --pick picks the pixel at
+    // the window's centre every frame (Renderer::pick), so --bench measures the pick's GPU time.
     bool freezeCulling = false;
+    bool pickEveryFrame = false;
     for (int i = 1; i < argc; ++i)
     {
         freezeCulling = freezeCulling || std::strcmp(argv[i], "--freeze-culling") == 0;
+        pickEveryFrame = pickEveryFrame || std::strcmp(argv[i], "--pick") == 0;
     }
+    rasm::PickHandle picks[3]; // a pick takes a couple of frames, so up to three are in flight
 
     if (args.waitForLoads)
         engine.waitForLoads();
@@ -966,6 +970,24 @@ int main(int argc, char **argv)
             engine.updateMaterial(city.assets.aviation, values);
         }
 
+        for (rasm::PickHandle &pick : picks)
+        {
+            rasm::PickHit hit;
+            uint32_t hits = 0;
+            if (pick.isValid() && engine.isPickReady(pick))
+            {
+                engine.takePick(pick, &hit, 1, hits);
+                pick = {};
+            }
+        }
+        for (rasm::PickHandle &pick : picks)
+        {
+            if (!pickEveryFrame || pick.isValid())
+                continue;
+            const rasm::Window &window = engine.getMainWindow();
+            pick = engine.pick(rasm::View{.scene = city.scene, .camera = camera}, {.rect = {.x = window.pixelWidth / 2, .y = window.pixelHeight / 2, .width = 1, .height = 1}});
+            break;
+        }
         engine.render(city.scene, camera);
         if (bench.on)
             addBenchFrame(bench, engine.getFrameStats());

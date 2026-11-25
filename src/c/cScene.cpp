@@ -176,6 +176,14 @@ try
 }
 RASM_C_CATCH_RESULT
 
+rasm_bool RASM_CALL rasm_is_entity_alive(rasm_renderer *renderer, rasm_entity entity)
+try
+{
+    Renderer *r = c::getRenderer(renderer, __func__);
+    return r != nullptr && r->isAlive(c::toCpp(entity)) ? RASM_TRUE : RASM_FALSE;
+}
+RASM_C_CATCH(RASM_FALSE)
+
 rasm_result RASM_CALL rasm_get_transform(rasm_renderer *renderer, rasm_entity entity, rasm_transform *transform)
 try
 {

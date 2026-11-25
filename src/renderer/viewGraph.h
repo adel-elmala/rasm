@@ -44,6 +44,8 @@ namespace rasm
         void                        release(SceneHandle scene, CameraHandle camera);
         // Its graph holds the scene view of this scene and camera into this target.
         bool                        draws(SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget) const;
+        // The scene target the graph draws the view into (its HDR target), or invalid when it does not draw the view.
+        RenderTargetHandle          getSceneTarget(const View& view) const;
 
     private:
         void                        build(const View* views, uint32_t viewCount);

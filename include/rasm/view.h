@@ -69,6 +69,9 @@ namespace rasm
     ViewPixels              getViewPixels(const ViewRect& rect, uint32_t width, uint32_t height);
     // The rect in the window's points, for a CameraInputState of the view.
     InputArea               getInputArea(const Window& window, const ViewRect& rect);
+    // The pixel of a window view (rect of the window) under the point (x, y) in the window's points, like the mouse's,
+    // counted from the view's top-left corner: what Renderer::pick takes. False when the point is outside the view.
+    bool                    getViewPixel(const Window& window, const ViewRect& rect, float x, float y, uint32_t& pixelX, uint32_t& pixelY);
 
 }
 // clang-format on

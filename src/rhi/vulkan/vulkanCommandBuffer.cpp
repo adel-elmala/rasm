@@ -631,7 +631,7 @@ namespace rasm::rhi
 
     // The texture leaves its state for TRANSFER_SRC only around the copy, so the tracked state stays right. The buffer's
     // bytes are made visible to the host, which reads them once the fence of this submit is reached.
-    void VulkanCommandBuffer::copyFromTexture(Texture *src, TextureUsage state, uint32_t layer, uint32_t mip, Buffer *dst, uint64_t dstOffset)
+    void VulkanCommandBuffer::copyFromTexture(Texture *src, TextureUsage state, uint32_t layer, uint32_t mip, Buffer *dst, uint64_t dstOffset, uint32_t width, uint32_t height)
     {
         auto *texture = static_cast<VulkanTexture *>(src);
         VkImageMemoryBarrier2 toCopy = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
@@ -659,7 +659,7 @@ namespace rasm::rhi
         const VkBufferImageCopy2 region = {.sType = VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2,
                                            .bufferOffset = dstOffset,
                                            .imageSubresource = {.aspectMask = (aspect & VK_IMAGE_ASPECT_DEPTH_BIT) != 0 ? VK_IMAGE_ASPECT_DEPTH_BIT : aspect, .mipLevel = mip, .baseArrayLayer = layer, .layerCount = 1},
-                                           .imageExtent = {std::max(1u, src->desc.width >> mip), std::max(1u, src->desc.height >> mip), 1}};
+                                           .imageExtent = {width, height, 1}};
         const VkCopyImageToBufferInfo2 info = {.sType = VK_STRUCTURE_TYPE_COPY_IMAGE_TO_BUFFER_INFO_2,
                                                .srcImage = texture->image,
                                                .srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,

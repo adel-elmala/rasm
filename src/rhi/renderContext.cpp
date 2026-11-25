@@ -2054,26 +2054,40 @@ namespace rasm
     // The texture keeps its state: it goes to TRANSFER_SRC and back inside the copy.
     bool RenderContext::copyTextureToBuffer(const CommandBufferHandle &commandBuffer, const TextureHandle &texture, uint32_t layer, uint32_t mip, const BufferHandle &buffer)
     {
-        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
-        auto *rhiTexture = lookup(impl->textures, texture, __func__);
-        auto *rhiBuffer = lookup(impl->buffers, buffer, __func__);
-        if (!rhiCommandBuffer || !rhiTexture || !rhiBuffer || !checkArgument(!impl->insidePass, __func__, "copies must be recorded outside a render pass.") ||
-            !checkArgument(rhiTexture->desc.readable, __func__, "the texture is not readable (TextureDesc::readable, RenderTargetDesc::readable).") ||
-            !checkArgument(rhiTexture->desc.samples == 1, __func__, "a multisampled texture can't be copied; copy its resolve.") ||
-            !checkArgument(layer < (rhiTexture->desc.cube ? CUBE_FACES : 1) && mip < rhiTexture->mipLevels, __func__, "the layer or mip is past the texture's."))
+        const auto *rhiTexture = lookup(impl->textures, texture, __func__);
+        if (!rhiTexture || !checkArgument(mip < rhiTexture->mipLevels, __func__, "the mip is past the texture's."))
+            return false;
+        return copyTexture(commandBuffer, texture, layer, mip, std::max(1u, rhiTexture->desc.width >> mip), std::max(1u, rhiTexture->desc.height >> mip), buffer, 0, __func__);
+    }
+
+    bool RenderContext::copyTextureToBuffer(const CommandBufferHandle &commandBuffer, const TextureHandle &texture, uint32_t width, uint32_t height, const BufferHandle &buffer, uint64_t bufferOffset)
+    {
+        return copyTexture(commandBuffer, texture, 0, 0, width, height, buffer, bufferOffset, __func__);
+    }
+
+    bool RenderContext::copyTexture(const CommandBufferHandle &commandBuffer, const TextureHandle &texture, uint32_t layer, uint32_t mip, uint32_t width, uint32_t height, const BufferHandle &buffer,
+                                    uint64_t bufferOffset, const char *caller)
+    {
+        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, caller);
+        auto *rhiTexture = lookup(impl->textures, texture, caller);
+        auto *rhiBuffer = lookup(impl->buffers, buffer, caller);
+        if (!rhiCommandBuffer || !rhiTexture || !rhiBuffer || !checkArgument(!impl->insidePass, caller, "copies must be recorded outside a render pass.") ||
+            !checkArgument(rhiTexture->desc.readable, caller, "the texture is not readable (TextureDesc::readable, RenderTargetDesc::readable).") ||
+            !checkArgument(rhiTexture->desc.samples == 1, caller, "a multisampled texture can't be copied; copy its resolve.") ||
+            !checkArgument(layer < (rhiTexture->desc.cube ? CUBE_FACES : 1) && mip < rhiTexture->mipLevels, caller, "the layer or mip is past the texture's.") ||
+            !checkArgument(width > 0 && height > 0 && width <= std::max(1u, rhiTexture->desc.width >> mip) && height <= std::max(1u, rhiTexture->desc.height >> mip), caller,
+                           "the copied texels are past the texture's size."))
             return false;
         const TextureUsage state = rhiTexture->state;
-        if (!checkArgument(state != TextureUsage::UNKNOWN && state != TextureUsage::PRESENT_SRC, __func__, "the texture holds nothing to copy yet."))
+        if (!checkArgument(state != TextureUsage::UNKNOWN && state != TextureUsage::PRESENT_SRC, caller, "the texture holds nothing to copy yet."))
             return false;
         // A depth/stencil texture gives only its depth, 4 bytes a texel.
         const TextureDesc &desc = rhiTexture->desc;
-        const uint32_t width = std::max(1u, desc.width >> mip);
-        const uint32_t height = std::max(1u, desc.height >> mip);
         const bool depthStencil = desc.format == Format::D32_SFLOAT_S8_UINT || desc.format == Format::D24_UNORM_S8_UINT;
         const uint64_t bytes = depthStencil ? uint64_t{4} * width * height : rhi::getTextureLevelSize(desc.format, width, height);
-        if (!checkArgument(bytes > 0 && rhiBuffer->desc.size >= bytes, __func__, "the buffer is smaller than the copy."))
+        if (!checkArgument(bytes > 0 && rhiBuffer->desc.size >= bufferOffset + bytes, caller, "the buffer is smaller than the copy."))
             return false;
-        rhiCommandBuffer->copyFromTexture(rhiTexture, state, layer, mip, rhiBuffer, 0);
+        rhiCommandBuffer->copyFromTexture(rhiTexture, state, layer, mip, rhiBuffer, bufferOffset, width, height);
         return true;
     }
 

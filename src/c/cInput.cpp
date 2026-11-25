@@ -410,4 +410,15 @@ try
     return c::toC(getInputArea(*state, rect != nullptr ? c::toCpp(*rect) : ViewRect{}));
 }
 RASM_C_CATCH({})
+
+rasm_bool RASM_CALL rasm_get_view_pixel(rasm_renderer *renderer, rasm_window window, const rasm_view_rect *rect, float x, float y, uint32_t *pixel_x, uint32_t *pixel_y)
+try
+{
+    Renderer *r = c::getRenderer(renderer, __func__);
+    const Window *state = nullptr;
+    if (r == nullptr || !c::checkPointer(pixel_x, __func__, "pixel_x") || !c::checkPointer(pixel_y, __func__, "pixel_y") || !getWindowOf(*r, window, state, __func__))
+        return RASM_FALSE;
+    return getViewPixel(*state, rect != nullptr ? c::toCpp(*rect) : ViewRect{}, x, y, *pixel_x, *pixel_y) ? RASM_TRUE : RASM_FALSE;
+}
+RASM_C_CATCH(RASM_FALSE)
 // NOLINTEND(readability-identifier-naming)

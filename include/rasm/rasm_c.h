@@ -24,7 +24,7 @@
 
 // NOLINTBEGIN(readability-identifier-naming): C names, snake_case with the rasm_ prefix, as C APIs and their bindings expect
 #define RASM_C_API_VERSION_MAJOR    1
-#define RASM_C_API_VERSION_MINOR    6
+#define RASM_C_API_VERSION_MINOR    7
 #define RASM_C_API_VERSION          (((uint32_t)RASM_C_API_VERSION_MAJOR << 16) | (uint32_t)RASM_C_API_VERSION_MINOR)
 
 #if defined(_WIN32)
@@ -133,6 +133,7 @@ enum
     RASM_FORMAT_R16_UNORM           = 26,       /* 1.4: a terrain tile's heights */
     RASM_FORMAT_R32_SFLOAT          = 27,       /* 1.4: a terrain tile's heights */
     RASM_FORMAT_R8_UNORM            = 28,       /* 1.6: a font's distance atlas */
+    RASM_FORMAT_R32G32B32A32_UINT   = 29,       /* 1.7: the pick pass's ids and positions */
 };
 
 typedef uint32_t                    rasm_anti_aliasing;
@@ -1010,6 +1011,55 @@ typedef struct rasm_label_desc
     uint32_t                        feature_id;
 } rasm_label_desc;
 
+/* 1.7: picking (rasm/picking.h). A pick asks a view what is under a rect of its pixels; its answer is ready a couple of
+ * frames later. */
+typedef struct rasm_pick            { uint64_t id; } rasm_pick;
+
+#define RASM_MAX_PICK_SIZE          256         /* 1.7: pixels on each side of a pick's rect */
+
+enum
+{
+    RASM_PICK_SKIP_MESHES           = 1u << 0,  /* 1.7: opaque and cut-out meshes, not terrain */
+    RASM_PICK_SKIP_BLEND            = 1u << 1,  /* see-through meshes, not vector features */
+    RASM_PICK_SKIP_TERRAIN          = 1u << 2,
+    RASM_PICK_SKIP_VECTORS          = 1u << 3,  /* lines, polygons and points */
+    RASM_PICK_SKIP_LABELS           = 1u << 4,
+    RASM_PICK_SKIP_OVERLAYS         = 1u << 5,  /* overlay features, labels too */
+    RASM_PICK_SKIP_ALL              = (1u << 6) - 1,
+};
+
+enum
+{
+    RASM_PICK_HIT_FEATURE           = 1u << 0,  /* 1.7: a vector feature (a label too): feature is its id */
+    RASM_PICK_HIT_LABEL             = 1u << 1,
+    RASM_PICK_HIT_OVERLAY           = 1u << 2,
+    RASM_PICK_HIT_TERRAIN           = 1u << 3,
+    RASM_PICK_HIT_BACK_FACE         = 1u << 4,  /* the back of a double-sided surface; the normal faces the camera */
+};
+
+typedef struct rasm_pick_desc
+{
+    uint32_t                        size;
+    rasm_view_pixels                rect;                                      /* the view's pixels from its top-left corner; 1 x 1 at 0, 0 by default */
+    float                           min_alpha;                                 /* a see-through surface is picked where its alpha is at least this; 0.5 by default */
+    uint32_t                        skip;                                      /* RASM_PICK_SKIP_* */
+} rasm_pick_desc;
+
+typedef struct rasm_pick_hit
+{
+    uint32_t                        size;
+    rasm_entity                     entity;                                    /* the entity the frame drew, which may be destroyed since */
+    uint32_t                        sub_mesh;
+    uint32_t                        feature;                                   /* a vector feature's id (RASM_PICK_HIT_FEATURE), else 0 */
+    uint32_t                        flags;                                     /* RASM_PICK_HIT_* */
+    uint32_t                        pixels;                                    /* of the rect that show it */
+    uint32_t                        x;                                         /* its pixel nearest the rect's centre */
+    uint32_t                        y;
+    rasm_dvec3                      position;                                  /* world space, at that pixel's centre */
+    rasm_vec3                       normal;                                    /* world space */
+    double                          distance;                                  /* from the camera */
+} rasm_pick_hit;
+
 typedef void (RASM_CALL* rasm_log_callback)(void* user_data, rasm_log_level level, const char* message);
 
 /* The library */
@@ -1263,6 +1313,22 @@ RASM_C_API void             RASM_CALL rasm_font_atlas_destroy(rasm_font_atlas* a
 RASM_C_API rasm_font        RASM_CALL rasm_create_font(rasm_renderer* renderer, const rasm_font_atlas* atlas);
 RASM_C_API rasm_result      RASM_CALL rasm_destroy_font(rasm_renderer* renderer, rasm_font font);
 RASM_C_API rasm_result      RASM_CALL rasm_vector_add_labels(rasm_vector_geometry* geometry, rasm_dvec3 origin, const rasm_font_atlas* atlas, const rasm_label_desc* labels, uint32_t label_count, const rasm_vector_placement* placement);
+
+/* Added in 1.7: picking. rasm_pick_view asks a view of rasm_render_views (rasm_pick_target: a scene view of the
+ * application's own graph) what is under desc->rect of its pixels, as that frame drew it: the pixels' centres, no TAA
+ * jitter, one sample per pixel. The next frame's end draws it, and rasm_is_pick_ready says when its answer is in,
+ * without waiting. rasm_take_pick writes up to capacity hits, nearest the rect's centre first, into an array whose
+ * elements have the size of the first (set hits[0].size, or rasm_pick_hit_init each); hit_count gets how many there
+ * are. A hit names the entity the frame drew, which may be destroyed since: rasm_is_entity_alive tells.
+ * rasm_get_view_pixel turns a point of a window (a mouse position) into a pixel of the window view at rect. */
+RASM_C_API rasm_result      RASM_CALL rasm_pick_desc_init(rasm_pick_desc* desc, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_pick_hit_init(rasm_pick_hit* hit, uint32_t size);
+RASM_C_API rasm_pick        RASM_CALL rasm_pick_view(rasm_renderer* renderer, const rasm_view* view, const rasm_pick_desc* desc);
+RASM_C_API rasm_pick        RASM_CALL rasm_pick_target(rasm_renderer* renderer, rasm_scene scene, rasm_camera camera, rasm_render_target target, const rasm_pick_desc* desc);
+RASM_C_API rasm_bool        RASM_CALL rasm_is_pick_ready(rasm_renderer* renderer, rasm_pick pick);
+RASM_C_API rasm_result      RASM_CALL rasm_take_pick(rasm_renderer* renderer, rasm_pick pick, rasm_pick_hit* hits, uint32_t capacity, uint32_t* hit_count);
+RASM_C_API rasm_bool        RASM_CALL rasm_is_entity_alive(rasm_renderer* renderer, rasm_entity entity);
+RASM_C_API rasm_bool        RASM_CALL rasm_get_view_pixel(rasm_renderer* renderer, rasm_window window, const rasm_view_rect* rect, float x, float y, uint32_t* pixel_x, uint32_t* pixel_y);
 
 #ifdef __cplusplus
 }

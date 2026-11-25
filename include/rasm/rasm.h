@@ -16,6 +16,7 @@
 #include "rasm/material.h"
 #include "rasm/mesh.h"
 #include "rasm/animation.h"
+#include "rasm/picking.h"
 #include "rasm/readback.h"
 #include "rasm/renderSpace.h"
 #include "rasm/terrain.h"

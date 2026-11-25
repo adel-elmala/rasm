@@ -56,6 +56,8 @@ struct VectorVertex
     float   fade;           // coverage of a feature thinner than a pixel
     float   dash;           // a line's distance along it, in the unit of the dashes; 0 for the other kinds
     float   kind;           // VECTOR_KIND_*
+    float3  depthPoint;     // render space: the world point whose depth it takes, without the bias (picking's position)
+    float3  up;             // the ground's up, in render space
 };
 
 static const float  VECTOR_PI           = 3.14159265358979;
@@ -196,6 +198,8 @@ VectorVertex getVectorVertex(SceneData *scene, VectorData style, float4x4 world,
     output.fade             = 1.0;
     output.dash             = 0.0;
     output.kind             = float(kind);
+    output.depthPoint       = anchor;
+    output.up               = up;
     // The world point whose depth the vertex takes: the anchor, the vertex itself, or the ground under it.
     float3 depthPoint       = anchor;
     if (kind == VECTOR_KIND_GLYPH)
@@ -274,6 +278,7 @@ VectorVertex getVectorVertex(SceneData *scene, VectorData style, float4x4 world,
             output.clipPosition.xy += pixels / (float2(scene->viewportWidth, scene->viewportHeight) * 0.5) * getSafeW(scene, output.clipPosition.w);
         }
     }
+    output.depthPoint = depthPoint;
     // Reversed-Z: a larger depth is nearer. An overlay is at the near plane, so it passes every test. A tested feature
     // takes the depth of its depth point moved toward the camera by VECTOR_DEPTH_BIAS of its distance, which holds for
     // any projection: perspective, orthographic, a finite far plane.
