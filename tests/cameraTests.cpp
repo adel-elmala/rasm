@@ -601,3 +601,13 @@ TEST_CASE("an arcball drag past the edge of its sphere goes on turning the same 
     }
     CHECK(last > 0.0f);
 }
+
+TEST_CASE("an arcball drag far past the view's edge turns as much as one at the edge")
+{
+    rasm::CameraRig edge = orbitRig(rasm::CameraController::OrbitStyle::ARCBALL);
+    rasm::CameraRig far = orbitRig(rasm::CameraController::OrbitStyle::ARCBALL);
+    const glm::quat start = edge.transform.rotation;
+    rasm::updateCameraRig(edge, rasm::CameraInput{.mouseStart = glm::vec2(1.0f, 0.0f), .mouseEnd = glm::vec2(1.1f, 0.0f)});
+    rasm::updateCameraRig(far, rasm::CameraInput{.mouseStart = glm::vec2(10.0f, 0.0f), .mouseEnd = glm::vec2(10.1f, 0.0f)});
+    CHECK(getAngle(start, far.transform.rotation) == doctest::Approx(getAngle(start, edge.transform.rotation)).epsilon(1e-3));
+}

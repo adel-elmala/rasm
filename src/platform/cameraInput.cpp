@@ -67,7 +67,9 @@ namespace rasm
                     state.dragActive = false;
                 break;
             }
-            if (state.dragActive || capture.mouse || !isInArea(event.x, event.y, area))
+            // A drag released since the last frame keeps its motion until takeCameraInput gives it: a press before that
+            // starts nothing.
+            if (state.dragActive || state.drag != CameraDrag::NONE || capture.mouse || !isInArea(event.x, event.y, area))
                 break;
             state.drag = getDrag(state.buttons, event);
             if (state.drag == CameraDrag::NONE)

@@ -103,7 +103,8 @@ rasm_result RASM_CALL rasm_set_mouse_grab(rasm_renderer *renderer, rasm_window w
 try
 {
     Renderer *r = c::getRenderer(renderer, __func__);
-    if (r == nullptr)
+    const Window *state = nullptr;
+    if (r == nullptr || !getWindowOf(*r, window, state, __func__))
         return RASM_ERROR_INVALID_ARGUMENT;
     const c::CallErrors errors;
     r->setMouseGrab(on != 0, c::toCpp(window));

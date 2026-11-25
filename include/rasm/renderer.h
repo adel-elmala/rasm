@@ -447,6 +447,7 @@ namespace rasm
         std::vector<InputEvent>                                     pendingInputEvents                      = {}; // added since the last pollEvents; keeps its capacity
         CameraInput                                                 cameraInput                             = {}; // the main window's, from the last pollEvents
         bool                                                        inputPolled                             = false; // pollEvents ran since the last beginFrame
+        bool                                                        engineMouseGrab                         = false; // beginFrame grabbed the mouse for the engine's camera drag
         DescriptorSetLayoutHandle                                   bindlessDescriptorSetLayout             = {};
         DescriptorSetHandle                                         bindlessDescriptorSet                   = {};
         MaterialHandle                                              defaultMaterial                         = {}; // used for invalid material handles

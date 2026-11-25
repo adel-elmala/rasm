@@ -713,10 +713,16 @@ namespace rasm
         pollEvents();
         inputPolled = false;
         // An invalid handle is a frame with no camera to move; a dead one is an error.
-        if (camera.isValid() && (!isLive(camera) || registry.cameras[camera.index].rig.controller.type != CameraController::Type::NONE))
-        {
+        const bool controlled = camera.isValid() && (!isLive(camera) || registry.cameras[camera.index].rig.controller.type != CameraController::Type::NONE);
+        if (controlled)
             updateCamera(camera, cameraInput);
-            setMouseGrab(inputState->camera.dragActive);
+        // The engine's camera input grabs the mouse while it drags, and lets go of only the grab it took itself, so an
+        // application's own grab is left alone, and a camera that stops being moved still gets the pointer back.
+        const bool grab = controlled && inputState->camera.dragActive;
+        if (grab != engineMouseGrab)
+        {
+            setMouseGrab(grab);
+            engineMouseGrab = grab;
         }
         // The attached loader finishes what is ready, within its budget, before anything binds the bindless set or the
         // geometry pool.

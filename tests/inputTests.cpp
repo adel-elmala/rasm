@@ -106,11 +106,13 @@ TEST_CASE("the button map decides which drag a button starts, and only its relea
     CHECK(isNear(input.panEnd, glm::vec2(0.4f, 0.0f)));
     rasm::addCameraInputEvent(state, press(rasm::MouseButton::RIGHT, 520.0f, 300.0f, false), window, {});
     CHECK(!state.dragActive);
+    rasm::takeCameraInput(state, {}, 0.016f);
 
     // Shift + left pans; with every button mapped to ORBIT, the right button orbits as before pans existed.
     rasm::addCameraInputEvent(state, press(rasm::MouseButton::LEFT, 400.0f, 300.0f, true, rasm::KEY_MOD_SHIFT), window, {});
     CHECK(state.drag == rasm::CameraDrag::PAN);
     rasm::addCameraInputEvent(state, press(rasm::MouseButton::LEFT, 400.0f, 300.0f, false), window, {});
+    rasm::takeCameraInput(state, {}, 0.016f);
     state.buttons = {.right = rasm::CameraDrag::ORBIT, .middle = rasm::CameraDrag::ORBIT, .back = rasm::CameraDrag::ORBIT, .forward = rasm::CameraDrag::ORBIT, .shiftLeft = rasm::CameraDrag::ORBIT};
     rasm::addCameraInputEvent(state, press(rasm::MouseButton::RIGHT, 400.0f, 300.0f, true), window, {});
     rasm::addCameraInputEvent(state, move(400.0f, 240.0f), window, {});
@@ -118,6 +120,7 @@ TEST_CASE("the button map decides which drag a button starts, and only its relea
     CHECK(isNear(input.mouseEnd, glm::vec2(0.0f, 0.2f)));
     CHECK(isNear(input.panStart, input.panEnd));
     rasm::addCameraInputEvent(state, press(rasm::MouseButton::RIGHT, 400.0f, 240.0f, false), window, {});
+    rasm::takeCameraInput(state, {}, 0.016f);
 
     // A button mapped to NONE starts nothing.
     state.buttons.middle = rasm::CameraDrag::NONE;
@@ -137,6 +140,15 @@ TEST_CASE("a drag follows the motion: past the area's edge, and during a grab wh
         const rasm::CameraInput input = rasm::takeCameraInput(state, {}, 0.016f);
         CHECK(isNear(input.mouseEnd - input.mouseStart, glm::vec2(0.15f, 0.0f)));
     }
+    // A drag released within a frame keeps its motion until it is taken, even when another button goes down.
+    CameraInputState quick;
+    rasm::addCameraInputEvent(quick, button(200.0f, 300.0f, true), left, {});
+    rasm::addCameraInputEvent(quick, move(260.0f, 300.0f), left, {});
+    rasm::addCameraInputEvent(quick, button(260.0f, 300.0f, false), left, {});
+    rasm::addCameraInputEvent(quick, press(rasm::MouseButton::RIGHT, 260.0f, 300.0f, true), left, {});
+    const rasm::CameraInput released = rasm::takeCameraInput(quick, {}, 0.016f);
+    CHECK(isNear(released.mouseEnd - released.mouseStart, glm::vec2(0.3f, 0.0f)));
+
     // A grab: x and y stay, dx and dy carry the motion.
     InputEvent grabbed = move(350.0f, 300.0f);
     grabbed.dx = 40.0f;

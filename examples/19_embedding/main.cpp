@@ -213,7 +213,12 @@ namespace
             {
                 // SDL numbers left, middle, right; RASM left, right, middle.
                 const rasm::MouseButton buttons[] = {rasm::MouseButton::LEFT, rasm::MouseButton::MIDDLE, rasm::MouseButton::RIGHT, rasm::MouseButton::BACK, rasm::MouseButton::FORWARD};
-                renderer.addInputEvent({.type = rasm::InputEventType::MOUSE_BUTTON, .down = event.button.down, .button = buttons[event.button.button - 1], .x = event.button.x, .y = event.button.y});
+                renderer.addInputEvent({.type = rasm::InputEventType::MOUSE_BUTTON,
+                                        .down = event.button.down,
+                                        .modifiers = toModifiers(SDL_GetModState()),
+                                        .button = buttons[event.button.button - 1],
+                                        .x = event.button.x,
+                                        .y = event.button.y});
                 SDL_CaptureMouse(event.button.down || SDL_GetMouseState(nullptr, nullptr) != 0);
             }
             break;
@@ -368,10 +373,10 @@ namespace
             static float grabX = 0.0f;
             static float grabY = 0.0f;
             if (cameraInput.dragActive)
-                SDL_GetMouseState(&grabX, &grabY);
+                SDL_GetGlobalMouseState(&grabX, &grabY);
             SDL_SetWindowRelativeMouseMode(grabWindow, cameraInput.dragActive);
-            if (!cameraInput.dragActive)
-                SDL_WarpMouseInWindow(grabWindow, grabX, grabY);
+            if (!cameraInput.dragActive && (SDL_GetWindowFlags(grabWindow) & SDL_WINDOW_INPUT_FOCUS) != 0)
+                SDL_WarpMouseGlobal(grabX, grabY);
         }
     }
 

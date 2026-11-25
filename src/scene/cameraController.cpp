@@ -149,8 +149,12 @@ namespace rasm
 
             if (orbit && trackBall.style == CameraController::OrbitStyle::ARCBALL)
             {
-                const glm::vec3 p0 = projectOnTrackBall(input.mouseStart);
-                const glm::vec3 p1 = projectOnTrackBall(input.mouseEnd);
+                // A drag that went on past the view's edge (a grab adds motion without end) turns as it would at the
+                // edge: the step moves back until it starts at most one unit from the center.
+                const float startLength = glm::length(input.mouseStart);
+                const glm::vec2 shift = startLength > 1.0f ? input.mouseStart * (1.0f - 1.0f / startLength) : glm::vec2(0.0f);
+                const glm::vec3 p0 = projectOnTrackBall(input.mouseStart - shift);
+                const glm::vec3 p1 = projectOnTrackBall(input.mouseEnd - shift);
 
                 // The points are in camera space, so the axis is a camera-local axis.
                 glm::vec3 axis = glm::cross(p0, p1);

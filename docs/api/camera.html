@@ -724,7 +724,7 @@ input.buttons.left = rasm::CameraDrag::PAN; // a CAD convention for a flat view<
 <div class="api" id="addCameraInputEvent">
   <pre class="sig">void addCameraInputEvent(CameraInputState&amp; state, const InputEvent&amp; event, const InputArea&amp; area, const UiInputCapture&amp; capture);</pre>
   <div class="body">
-    <p>Applies one event. A press in the area starts the drag <code>state.buttons</code> maps its button to, which goes on outside the area until that button's release. The wheel counts while the pointer is in the area, or before any event told where it is. A lost <code>FOCUS</code> lets go of every key and ends the drag.</p>
+    <p>Applies one event. A press in the area starts the drag <code>state.buttons</code> maps its button to, which goes on outside the area until that button's release; a drag released since the last <code>takeCameraInput</code> keeps its motion for it, and a press before then starts nothing. A move adds its <code>dx</code>, <code>dy</code> to the drag (or its change of position, without them). The wheel counts while the pointer is in the area, or before any event told where it is. A lost <code>FOCUS</code> lets go of every key and ends the drag.</p>
     <dl>
       <dt>capture</dt><dd>What the UI took (<code>getUiInputCapture</code>): a press or the wheel over a UI window does not reach the camera. Pass <code>{}</code> without a UI.</dd>
     </dl>

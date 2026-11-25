@@ -375,6 +375,7 @@ namespace rasm
                         events.push_back({.type = InputEventType::MOUSE_BUTTON,
                                           .window = target->handle,
                                           .down = event.button.down,
+                                          .modifiers = toModifiers(SDL_GetModState()),
                                           .button = button,
                                           .x = event.button.x,
                                           .y = event.button.y});
@@ -497,10 +498,11 @@ namespace rasm
                 if (sdlWindow == nullptr || SDL_GetWindowRelativeMouseMode(sdlWindow) == on)
                     return;
                 if (on)
-                    SDL_GetMouseState(&grabX, &grabY);
+                    SDL_GetGlobalMouseState(&grabX, &grabY);
                 SDL_SetWindowRelativeMouseMode(sdlWindow, on);
-                if (!on)
-                    SDL_WarpMouseInWindow(sdlWindow, grabX, grabY);
+                // Not after the user switched to another window (the drag ended with the focus): the pointer is theirs.
+                if (!on && (SDL_GetWindowFlags(sdlWindow) & SDL_WINDOW_INPUT_FOCUS) != 0)
+                    SDL_WarpMouseGlobal(grabX, grabY);
             }
 
         private:
@@ -546,7 +548,7 @@ namespace rasm
             SDL_Cursor *cursors[SDL_CURSOR_COUNT] = {};
             char *clipboard = nullptr;
             uint32_t openWindows = 0;
-            float grabX = 0.0f; // where the pointer was when the grab began
+            float grabX = 0.0f; // where the pointer was on the screen when the grab began
             float grabY = 0.0f;
         };
     }
