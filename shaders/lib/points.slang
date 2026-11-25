@@ -22,6 +22,13 @@ static const uint   POINT_CHUNK_SCALARS     = 1 << 1;
 static const uint   POINT_CHUNK_HEADER_UNITS = 6;
 static const uint   POINT_INDICES           = 3;        // a triangle a point
 static const float  POINT_STEP_SCALE        = 1.0 / 65535.0;
+// The compute rasterizer (passes/pointRaster.slang). Must match rasm::gfx::POINT_* in uberMaterialTypes.h.
+static const float  POINT_RASTER_MAX_SIZE   = 2.0;      // a chunk whose points are this many pixels across or less goes to it
+static const float  POINT_RASTER_MIN_DENSITY = 0.125;   // and that draws this many points per pixel of its rect on screen
+static const uint   POINT_BATCH_POINTS      = 1024;     // a group of the raster dispatch
+static const uint   POINT_RASTER_MAX_ROWS   = 1 << 16;  // a pixel's word keeps the instance row in 16 bits
+static const uint   POINT_CLEAR_GROUP_SIZE  = 256;
+static const uint   POINT_MAX_CLEAR_GROUPS  = 65535;
 
 // rasm::gfx::PointChunkHeader, read as words: boxMin 0, pointCount 12, boxStep 16, flags 28, scalarMin 32, scalarStep 36,
 // colorOffset 40 (bytes), which uberMaterialTypes.h asserts.
@@ -52,6 +59,61 @@ PointChunk loadPointChunk(SceneData *scene, uint base)
     chunk.scalarStep    = asfloat(u4.y);
     chunk.colorOffset   = scene->pointsPtr[base + 5].x;
     return chunk;
+}
+
+// A point's diameter in pixels at clip w: its size in pixels, or in metres through a pixel's size in the world at its
+// depth; at least a pixel, so it neither vanishes nor flickers. The triangle and the compute path both size it here.
+float getPointDiameter(SceneData *scene, PointData style, float w)
+{
+    float pixelWorld    = 2.0 * max(abs(w), 1e-6) / (abs(scene->projection[1][1]) * float(scene->viewportHeight));
+    bool metres         = (style.flags & POINT_METRES) != 0;
+    return max(metres ? style.size / pixelWorld : style.size, 1.0);
+}
+
+// Where the point's scalar falls in the colormap, 0 to 1. POINT_NO_COLORMAP when it takes none (POINT_SCALAR off, a
+// chunk without scalars, no colormap), POINT_OUT_OF_RANGE when its scalar is outside the range without POINT_CLAMP: it
+// draws nothing. The shaders sample the colormap themselves, from their own bindless array.
+static const float  POINT_NO_COLORMAP       = -1.0;
+static const float  POINT_OUT_OF_RANGE      = -2.0;
+
+float getPointColormapPosition(PointData style, PointChunk chunk, uint scalarStep)
+{
+    if ((style.flags & POINT_SCALAR) == 0 || (chunk.flags & POINT_CHUNK_SCALARS) == 0 || style.colormap == INVALID_TEXTURE_INDEX)
+        return POINT_NO_COLORMAP;
+    float value     = chunk.scalarMin + float(scalarStep) * chunk.scalarStep;
+    if ((style.flags & POINT_LOG) != 0)
+        value       = value > 0.0 ? log(value) : -1e30;
+    float span      = style.rangeMax - style.rangeMin;
+    float t         = span != 0.0 ? (value - style.rangeMin) / span : 0.0;
+    if ((style.flags & POINT_CLAMP) == 0 && !(t >= 0.0 && t <= 1.0))
+        return POINT_OUT_OF_RANGE;
+    return saturate(t);
+}
+
+// The colormap texel of position t (getPointColormapPosition): its 256 entries' centres.
+float2 getColormapCoordinate(float t)
+{
+    return float2((t * 255.0 + 0.5) / 256.0, 0.5);
+}
+
+// The point's color before its colormap: PointData::color, times the point's own color when it has one and is not
+// colored by its scalar.
+float4 getPointBaseColor(SceneData *scene, PointData style, PointChunk chunk, uint base, uint point)
+{
+    if ((style.flags & POINT_SCALAR) != 0 || (chunk.flags & POINT_CHUNK_COLORS) == 0)
+        return style.color;
+    uint2 pair      = scene->pointsPtr[base + chunk.colorOffset / 2 + point / 2];
+    uint packed     = (point & 1) != 0 ? pair.y : pair.x;
+    float4 decoded  = float4(packed & 0xFF, (packed >> 8) & 0xFF, (packed >> 16) & 0xFF, packed >> 24) / 255.0;
+    // Points are opaque: the colors' alpha is not read, so colors packed without one (0) still draw.
+    return style.color * float4(decodeSrgb(decoded.r), decodeSrgb(decoded.g), decodeSrgb(decoded.b), 1.0);
+}
+
+// Whether the point can draw, without its colormap: the compute path drops one that cannot, so the point behind it
+// shows, as by triangles. A colormap's own clear entries are dropped by the resolve instead.
+bool isPointShown(PointData style, PointChunk chunk, uint scalarStep)
+{
+    return style.color.a > 0.0 && getPointColormapPosition(style, chunk, scalarStep) != POINT_OUT_OF_RANGE;
 }
 
 // How far a point's triangle reaches past the chunk's sphere: half its size and a pixel, in this view's pixels at the
@@ -90,5 +152,72 @@ uint selectPointCount(SceneData *scene, PointData style, uint total, float3 cent
     float area          = (style.flags & (POINT_ROUND | POINT_SPHERE)) != 0 ? 0.785398 * size * size : size * size;
     float wanted        = ceil(style.density * diameter * diameter / area);
     return uint(clamp(wanted, 1.0, float(total)));
+}
+
+// The split between the two paths, per chunk. The compute path costs a little per point and, once any chunk takes it,
+// a clear and a resolve per pixel of the rect its chunks cover; the triangles cost about ten times more per point and
+// nothing per pixel. So a chunk takes it when its points are POINT_RASTER_MAX_SIZE pixels or less (squares on both
+// paths: a round one under 3 pixels is drawn square), measured at its sphere's point nearest the camera in this view's
+// own projection (not the LOD camera's, which a frozen view keeps), and when it draws at least
+// POINT_RASTER_MIN_DENSITY points per pixel of its rect on screen. A chunk the camera is inside of, or one partly behind
+// it, goes to the triangles. rect is the pixels its points can reach: its box's corners on screen, and a point's
+// reach past them.
+bool isRasterChunk(SceneData *scene, PointData style, float3 center, float radius, uint count, out uint4 rect)
+{
+    rect                = uint4(0);
+    float4x4 viewProjection = mul(scene->projection, scene->view);
+    float w             = mul(viewProjection, float4(center, 1.0)).w;
+    if (scene->projection[3][3] == 0.0)
+        w              -= radius;
+    if (w <= 0.0 || getPointDiameter(scene, style, w) > POINT_RASTER_MAX_SIZE)
+        return false;
+    float2 size         = float2(scene->viewportWidth, scene->viewportHeight);
+    float2 low          = size;
+    float2 high         = float2(0.0);
+    for (uint corner = 0; corner < 8; ++corner)
+    {
+        float3 offset   = float3((corner & 1) != 0 ? radius : -radius, (corner & 2) != 0 ? radius : -radius, (corner & 4) != 0 ? radius : -radius);
+        float4 clip     = mul(viewProjection, float4(center + offset, 1.0));
+        if (clip.w <= 0.0)
+            return false;
+        float2 pixel    = float2(clip.x / clip.w * 0.5 + 0.5, 0.5 - clip.y / clip.w * 0.5) * size;
+        low             = min(low, pixel);
+        high            = max(high, pixel);
+    }
+    low                 = clamp(floor(low) - POINT_RASTER_MAX_SIZE, 0.0, size - 1.0);
+    high                = clamp(ceil(high) + POINT_RASTER_MAX_SIZE, 0.0, size - 1.0);
+    rect                = uint4(uint2(low), uint2(high));
+    float2 extent       = high - low + 1.0;
+    return float(count) >= POINT_RASTER_MIN_DENSITY * extent.x * extent.y;
+}
+
+// Adds a chunk's first count points to the view's batches, POINT_BATCH_POINTS a batch, and grows the rect that the
+// clear and the resolve cover by the chunk's (an empty rect, its min past its max, runs neither). A chunk that does
+// not fit the buffer's batches takes back what it added and goes to the triangles: while a failed add is not taken
+// back yet, every later add sees the count past the capacity and fails too, so the batches below the final count are
+// all written.
+bool appendPointBatches(SceneData *scene, uint row, uint count, uint4 rect)
+{
+    PointRasterHeader *header = scene->pointRasterPtr;
+    uint batches        = (count + POINT_BATCH_POINTS - 1) / POINT_BATCH_POINTS;
+    uint first          = 0;
+    InterlockedAdd(header->rasterGroups, batches, first);
+    if (first + batches > scene->pointBatchCapacity)
+    {
+        InterlockedAdd(header->rasterGroups, 0u - batches);
+        return false;
+    }
+    for (uint b = 0; b < batches; ++b)
+    {
+        uint start      = b * POINT_BATCH_POINTS;
+        scene->pointBatchesPtr[first + b] = uint2(row, start | min(POINT_BATCH_POINTS, count - start) << 16);
+    }
+    InterlockedMin(header->rectMinX, rect.x);
+    InterlockedMin(header->rectMinY, rect.y);
+    InterlockedMax(header->rectMaxX, rect.z);
+    InterlockedMax(header->rectMaxY, rect.w);
+    uint pixels         = scene->viewportWidth * scene->viewportHeight;
+    header->clearGroups = min((pixels + POINT_CLEAR_GROUP_SIZE - 1) / POINT_CLEAR_GROUP_SIZE, POINT_MAX_CLEAR_GROUPS);
+    return true;
 }
 // clang-format on

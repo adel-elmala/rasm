@@ -107,6 +107,8 @@ int main(void)
     rasm_mesh_build_destroy(build);
     if (rasm_create_colormap_preset(NULL, RASM_COLORMAP_VIRIDIS).id != 0 || (RASM_PICK_SKIP_ALL & RASM_PICK_SKIP_POINTS) == 0)
         return 20;
+    if (rasm_set_compute_points(NULL, RASM_FALSE) != RASM_ERROR_INVALID_ARGUMENT || rasm_get_compute_points(NULL) != RASM_FALSE)
+        return 21;
     printf("rasm_c.h %u.%u compiles as C (__STDC_VERSION__ %ld) and links rasm_c_renderer.\n", RASM_C_API_VERSION_MAJOR, RASM_C_API_VERSION_MINOR, (long)__STDC_VERSION__);
     return 0;
 }

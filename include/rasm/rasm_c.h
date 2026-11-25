@@ -24,7 +24,7 @@
 
 // NOLINTBEGIN(readability-identifier-naming): C names, snake_case with the rasm_ prefix, as C APIs and their bindings expect
 #define RASM_C_API_VERSION_MAJOR    1
-#define RASM_C_API_VERSION_MINOR    10
+#define RASM_C_API_VERSION_MINOR    11
 #define RASM_C_API_VERSION          (((uint32_t)RASM_C_API_VERSION_MAJOR << 16) | (uint32_t)RASM_C_API_VERSION_MINOR)
 
 #if defined(_WIN32)
@@ -316,6 +316,7 @@ typedef struct rasm_renderer_config
     rasm_anti_aliasing              anti_aliasing;
     uint32_t                        max_bindless_textures;                     /* 1.3: sampled textures at once, 16384 by default, lowered to the device's limit */
     uint32_t                        geometry_pool_points;                      /* 1.10: point cloud chunks, 8 B units: a point takes 1 (1.5 with colors) */
+    rasm_bool                       compute_points;                            /* 1.11: points of 2 pixels or less by the compute rasterizer, where the GPU has 64-bit buffer atomics (RASM_TRUE by default) */
 } rasm_renderer_config;
 
 typedef struct rasm_asset_loader_config
@@ -1483,6 +1484,12 @@ RASM_C_API rasm_texture     RASM_CALL rasm_create_colormap(rasm_renderer* render
 RASM_C_API rasm_texture     RASM_CALL rasm_create_colormap_preset(rasm_renderer* renderer, rasm_colormap_preset preset);
 RASM_C_API rasm_result      RASM_CALL rasm_point_cloud_chunk_desc_init(rasm_point_cloud_chunk_desc* desc, uint32_t size);
 RASM_C_API rasm_result      RASM_CALL rasm_build_point_cloud_chunk(const rasm_point_cloud_chunk_desc* desc, rasm_mesh_build** build);
+
+/* Added in 1.11: small points by compute. With it on (the default, rasm_renderer_config's compute_points), a chunk whose
+ * points are 2 pixels across or less is written by a compute pass with 64-bit atomics instead of drawn by triangles, where
+ * the GPU has them; the two take the same pixels. Off: every point by triangles. */
+RASM_C_API rasm_result      RASM_CALL rasm_set_compute_points(rasm_renderer* renderer, rasm_bool on);
+RASM_C_API rasm_bool        RASM_CALL rasm_get_compute_points(rasm_renderer* renderer);
 
 #ifdef __cplusplus
 }

@@ -614,7 +614,25 @@ namespace rasm
                                      {"labelFadesPtr", offsetof(gfx::SceneData, labelFadesPtr)},
                                      {"labelFadeStep", offsetof(gfx::SceneData, labelFadeStep)},
                                      {"labelSlotCount", offsetof(gfx::SceneData, labelSlotCount)},
-                                     {"pointsPtr", offsetof(gfx::SceneData, pointsPtr)}});
+                                     {"pointsPtr", offsetof(gfx::SceneData, pointsPtr)},
+                                     {"pointRasterPtr", offsetof(gfx::SceneData, pointRasterPtr)},
+                                     {"pointBatchesPtr", offsetof(gfx::SceneData, pointBatchesPtr)},
+                                     {"pointPixelsPtr", offsetof(gfx::SceneData, pointPixelsPtr)},
+                                     {"pointBatchCapacity", offsetof(gfx::SceneData, pointBatchCapacity)},
+                                     {"pointRasterPadding", offsetof(gfx::SceneData, pointRasterPadding)}});
+
+            valid &= validateStruct(fieldStruct(layouts, scene, "pointRasterPtr"), "PointRasterHeader", sizeof(gfx::PointRasterHeader),
+                                    {{"rasterGroups", offsetof(gfx::PointRasterHeader, rasterGroups)},
+                                     {"rasterY", offsetof(gfx::PointRasterHeader, rasterY)},
+                                     {"rasterZ", offsetof(gfx::PointRasterHeader, rasterZ)},
+                                     {"clearGroups", offsetof(gfx::PointRasterHeader, clearGroups)},
+                                     {"clearY", offsetof(gfx::PointRasterHeader, clearY)},
+                                     {"clearZ", offsetof(gfx::PointRasterHeader, clearZ)},
+                                     {"rectMinX", offsetof(gfx::PointRasterHeader, rectMinX)},
+                                     {"rectMinY", offsetof(gfx::PointRasterHeader, rectMinY)},
+                                     {"rectMaxX", offsetof(gfx::PointRasterHeader, rectMaxX)},
+                                     {"rectMaxY", offsetof(gfx::PointRasterHeader, rectMaxY)},
+                                     {"padding", offsetof(gfx::PointRasterHeader, padding)}});
 
             valid &= validateStruct(fieldStruct(layouts, scene, "meshletsPtr"), "GeometryMeshlet", sizeof(gfx::GeometryMeshlet),
                                     {{"center", offsetof(gfx::GeometryMeshlet, center)},

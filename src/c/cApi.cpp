@@ -651,6 +651,7 @@ namespace rasm::c
             .bloom = config.bloom != 0,
             .ui = config.ui != 0,
             .antiAliasing = static_cast<AntiAliasing>(config.anti_aliasing),
+            .computePoints = config.compute_points != 0,
         };
     }
 
@@ -700,6 +701,7 @@ namespace rasm::c
             .anti_aliasing = asNumber(config.antiAliasing),
             .max_bindless_textures = config.maxBindlessTextures,
             .geometry_pool_points = config.geometryPoolPoints,
+            .compute_points = config.computePoints ? RASM_TRUE : RASM_FALSE,
         };
     }
 

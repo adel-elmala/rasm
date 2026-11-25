@@ -18,7 +18,8 @@
 // Point cloud: a synthetic LiDAR scan of hills, buildings and trees, 6 000 km from the world's origin, colored by height
 // through a colormap. The scan is cut into square tiles of 32 m, each a chunk of up to 64 K points (buildPointCloudChunk,
 // on worker threads) and an entity placed in doubles. The left view is perspective with TAA, the right one an
-// orthographic top view with 4x MSAA. Far chunks draw only the first points of their order (LOD by prefix).
+// orthographic top view with 4x MSAA. Far chunks draw only the first points of their order (LOD by prefix). Points of
+// 2 pixels or less are written by a compute pass with 64-bit atomics where the GPU has them, the others by triangles.
 // - Drag to orbit (left view) or pan (right view), wheel to zoom.
 // A headless run (or --check) orbits the left view and picks the point under the right view's centre, which must be
 // the point of the scan the shader drew there. A failed check exits with 1.
@@ -31,6 +32,7 @@
 //   --swap-aa      the left view with 4x MSAA, the right one with TAA
 //   --still        no scripted orbit
 //   --zoom         a scripted slow zoom: in on the left view, out on the right one (the chunks' LOD changes)
+//   --triangles    every point by triangles (Renderer::setComputePoints off)
 //   --bench        the GPU time per pass (exampleBench.h), at 1920 x 1080
 
 namespace
@@ -74,6 +76,7 @@ namespace
         bool swapAa = false;
         bool still = false;
         bool zoom = false;
+        bool triangles = false;
     };
 
     struct TilePoints
@@ -266,6 +269,7 @@ namespace
             options.swapAa = options.swapAa || std::strcmp(argv[i], "--swap-aa") == 0;
             options.still = options.still || std::strcmp(argv[i], "--still") == 0;
             options.zoom = options.zoom || std::strcmp(argv[i], "--zoom") == 0;
+            options.triangles = options.triangles || std::strcmp(argv[i], "--triangles") == 0;
         }
         return options;
     }
@@ -313,6 +317,7 @@ int main(int argc, char **argv)
         .shaderDir = RASM_EXAMPLE_SHADER_DIR};
     // A chunk takes its header and a unit of 8 B a point, half a unit more with colors.
     config.geometryPoolPoints = static_cast<uint32_t>(tileCount * (8 + tilePoints + (options.rgb ? tilePoints / 2 + 1 : 0)));
+    config.computePoints = !options.triangles;
     applyExampleArgs(args, config);
     ExampleBench bench{.on = hasBenchFlag(argc, argv)};
     if (bench.on)
@@ -370,7 +375,8 @@ int main(int argc, char **argv)
     }
     builds.clear();
     const double side = tilesPerSide * TILE_SIZE;
-    std::printf("point cloud: %u chunks of %u points (%.1f M), %.0f m across, %u B a point\n", tileCount, tilePoints, tileCount * static_cast<double>(tilePoints) / 1e6, side, options.rgb ? 12u : 8u);
+    std::printf("point cloud: %u chunks of %u points (%.1f M), %.0f m across, %u B a point, small points by %s\n", tileCount, tilePoints, tileCount * static_cast<double>(tilePoints) / 1e6, side,
+                options.rgb ? 12u : 8u, engine.getComputePoints() && engine.getRenderContext().hasBufferInt64Atomics() ? "compute" : "triangles");
 
     const float aspect = 0.5f * static_cast<float>(config.windowWidth) / static_cast<float>(config.windowHeight);
     const glm::dvec3 center = origin + glm::dvec3(0.5 * side, 0.0, 0.5 * side);

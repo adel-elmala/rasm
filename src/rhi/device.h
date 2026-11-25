@@ -272,6 +272,7 @@ namespace rasm::rhi
         virtual bool                    hasAsyncCompute() const = 0;
         virtual bool                    hasTransferQueue() const = 0;
         virtual bool                    hasMeshShaders() const = 0;
+        virtual bool                    hasBufferInt64Atomics() const = 0;
         // Timestamps on the queue count like the graphics queue's: same valid bits and period.
         virtual bool                    hasTimestamps(QueueType queueType) const = 0;
         virtual bool                    fillBuffer(Buffer* buffer, const void* data, size_t size, size_t offset) = 0;

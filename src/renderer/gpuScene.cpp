@@ -125,22 +125,6 @@ namespace rasm
             return static_cast<uint64_t>(capacity) * (2 * sizeof(uint32_t) + sizeof(gfx::DrawInfo));
         }
 
-        // The pipelines that match the view's target: its sample count picks the set.
-        // A target with a MOTION_FORMAT second color (one sample) draws motion too, so its pipelines have two colors.
-        ShadedPipelines &getShadedPipelines(GpuScene &gpuScene, RenderContext &ctx, const SceneView &view)
-        {
-            const RenderTarget &target = ctx.getRenderTarget(view.renderTarget);
-            if (target.colorCount == 2)
-                return gpuScene.shaded[MOTION_VARIANT];
-            return gpuScene.shaded[std::min(static_cast<uint32_t>(std::countr_zero(target.samples)), SAMPLE_VARIANTS - 1)];
-        }
-
-        // The define that makes a shaded pipeline write motion too, for a target with a MOTION_FORMAT second color.
-        const char *getMotionDefine(RenderContext &ctx, const SceneView &view)
-        {
-            return ctx.getRenderTarget(view.renderTarget).colorCount == 2 ? "#define RASM_MOTION_VECTORS 1\n" : "";
-        }
-
         const DebugPipelines &getDebugPipelines(const ShadedPipelines &shaded, DebugView debugView)
         {
             return debugView == DebugView::OVERDRAW ? shaded.overdraw : shaded.debug;
@@ -432,6 +416,22 @@ namespace rasm
     static_assert(2 * (static_cast<uint32_t>(CullMode::BACK) + 1) + 2 == gfx::MAX_DRAW_RUNS, "a draw list has a run per cull mode for OPAQUE and MASK, a point run and a BLEND run");
     static_assert(static_cast<uint32_t>(gfx::TextureTransformSlot::EMISSIVE) + 1 == gfx::TEXTURE_TRANSFORMS, "every texture transform slot has a row");
     static_assert(static_cast<uint32_t>(BlendSortStep::WRITE) + 1 == BLEND_SORT_STEPS, "every sort step has a pipeline");
+
+    // The pipelines that match the view's target: its sample count picks the set.
+    // A target with a MOTION_FORMAT second color (one sample) draws motion too, so its pipelines have two colors.
+    ShadedPipelines &getShadedPipelines(GpuScene &gpuScene, RenderContext &ctx, const SceneView &view)
+    {
+        const RenderTarget &target = ctx.getRenderTarget(view.renderTarget);
+        if (target.colorCount == 2)
+            return gpuScene.shaded[MOTION_VARIANT];
+        return gpuScene.shaded[std::min(static_cast<uint32_t>(std::countr_zero(target.samples)), SAMPLE_VARIANTS - 1)];
+    }
+
+    // The define that makes a shaded pipeline write motion too, for a target with a MOTION_FORMAT second color.
+    const char *getMotionDefine(RenderContext &ctx, const SceneView &view)
+    {
+        return ctx.getRenderTarget(view.renderTarget).colorCount == 2 ? "#define RASM_MOTION_VECTORS 1\n" : "";
+    }
 
     uint64_t getSceneDataAddress(RenderContext &ctx, const GpuScene &gpuScene, uint32_t frame, uint32_t view)
     {
@@ -1197,6 +1197,8 @@ namespace rasm
             builder.write(sceneView.visibleDraws);
             if (!sceneView.depthOnly)
                 builder.write(sceneView.sortBuffers);
+            if (sceneView.pointRaster[0].isValid())
+                builder.write(sceneView.pointRaster);
         };
         // A shaded view's draws also read where the frame before drew a skinned vertex, for motion.
         auto drawScenePass = [&sceneView, &clusters, &animation, renderTarget, face, sampled, sampledCount](PassBuilder &builder)
@@ -1208,6 +1210,8 @@ namespace rasm
             if (!sceneView.depthOnly)
                 builder.readPrevious(animation.skinnedVertices);
             builder.read(sceneView.visibleDraws);
+            if (sceneView.pointRaster[0].isValid())
+                builder.read(sceneView.pointRaster);
             if (clusters.buffers[0].isValid())
                 builder.read(clusters.buffers);
             for (uint32_t s = 0; !sceneView.depthOnly && s < sceneView.shadowCount; ++s)
@@ -1256,7 +1260,10 @@ namespace rasm
             {
                 drawSceneView(view, CULL_EARLY);
                 if (!gpuScene->views[view].late)
+                {
+                    drawPointResolve(view);
                     drawSky(view);
+                }
             });
         // See-through draws go over everything the draw passes and the sky left, so a shaded view ends with them. The
         // pass is there even while the scene has no blend run, since the graph is fixed and the scene is not. The
@@ -1341,6 +1348,7 @@ namespace rasm
                 if (!gpuScene->views[view].late)
                     return;
                 drawSceneView(view, CULL_LATE);
+                drawPointResolve(view);
                 drawSky(view);
             });
         addTransparentPass();
@@ -1409,6 +1417,21 @@ namespace rasm
                     destroyViewBuffer(ctx, view.labelProbes[j]);
                 }
                 return UINT32_MAX;
+            }
+        }
+        // A shaded view's small points go to the compute path where the GPU has 64-bit buffer atomics: its buffer
+        // starts as the header alone and grows once the view has a point run (preparePointRaster). Without it, or
+        // without the atomics, every point is drawn by triangles.
+        for (uint32_t i = 0; !depthOnly && ctx.hasBufferInt64Atomics() && i < MAX_FRAMES_IN_FLIGHT; ++i)
+        {
+            view.pointRaster[i] = ctx.createBuffer({.name = "Point Raster Buffer", .usage = BufferUsage::INDIRECT, .size = sizeof(gfx::PointRasterHeader)});
+            view.pointRasterBytes[i] = sizeof(gfx::PointRasterHeader);
+            if (!view.pointRaster[i].isValid())
+            {
+                spdlog::error("Failed to create the point raster buffers of a scene view; its points are drawn by triangles.");
+                for (uint32_t j = 0; j < MAX_FRAMES_IN_FLIGHT; ++j)
+                    destroyViewBuffer(ctx, view.pointRaster[j]);
+                break;
             }
         }
         if (!depthOnly)
@@ -1487,6 +1510,7 @@ namespace rasm
             destroyViewBuffer(ctx, view.sortBuffers[i]);
             destroyViewBuffer(ctx, view.labelBuffers[i]);
             destroyViewBuffer(ctx, view.labelProbes[i]);
+            destroyViewBuffer(ctx, view.pointRaster[i]);
         }
         destroyViewBuffer(ctx, view.labelFades);
         destroyViewBuffer(ctx, view.visibility);
@@ -1517,6 +1541,7 @@ namespace rasm
         view.debugView = DebugView::NONE;
         view.meshletRuns = 0;
         view.meshShaders = false;
+        view.rasterPoints = false;
 
         const auto &drawList = gpuScene->drawLists[view.scene.index];
         const auto frame = static_cast<uint32_t>(frameCount);
@@ -2031,6 +2056,7 @@ namespace rasm
         }
         if (!view.depthOnly && !drawList.labelEntities.empty())
             placeViewLabels(viewIndex, cameraProjection, worldCameraView, width, height, sceneData);
+        preparePointRaster(viewIndex, sceneData);
         ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), viewIndex * sizeof(gfx::SceneData));
         view.sceneData = sceneData;
         view.projection = cameraProjection;
@@ -2189,6 +2215,8 @@ namespace rasm
 
         const auto commandBuffer = frameResources[frameCount].commandBuffer;
         const gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, static_cast<uint32_t>(frameCount), viewIndex), .argument = phase};
+        if (phase == CULL_EARLY)
+            recordPointReset(viewIndex);
         ctx.bindPipeline(commandBuffer, gpuScene->cullCountPipeline);
         ctx.pushConstants(commandBuffer, gpuScene->cullCountPipeline, &pushConstants, sizeof(pushConstants), 0);
         ctx.dispatch(commandBuffer, view.groupCount);
@@ -2198,6 +2226,9 @@ namespace rasm
         ctx.dispatch(commandBuffer, view.groupCount);
         if (view.meshletRuns != 0 && !view.meshShaders)
             recordMeshletCulling(viewIndex, phase);
+        // The view's last cull wrote every batch of the frame: the points that take the compute path are written now.
+        if (phase == CULL_LATE || !view.late)
+            recordPointRaster(viewIndex);
 
         // The phase that keeps the blend run's draws: the late one, or the only one in a frame without a Hi-Z.
         if (view.sortBlend && (phase == CULL_LATE || view.hizLevelCount == 0))

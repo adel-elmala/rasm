@@ -43,6 +43,7 @@ static const uint   CULL_MESHLETS       = 1u << 15;     // in chunks, not as a w
 static const uint   CULL_WHOLE          = 1u << 14;     // over the run's budget: one CHUNK_WHOLE chunk (writeMain)
 static const uint   CULL_DRAWN_EARLY    = 1u << 13;     // late phase: the early one drew the whole draw
 static const uint   CULL_EARLY_MESHLETS = 1u << 12;     // late phase: the early one drew its meshlets that passed their last test
+static const uint   CULL_RASTER         = 1u << 11;     // a point cloud chunk sent to the compute path (lib/points.slang): no slot
 // A LOD with fewer meshlets is drawn whole: the draw's own test already culled it, and its few meshlets would cost
 // more to test than they save (measured in 05_city and 18_meshlets, RTX 3060).
 static const uint   MESHLET_MIN_DRAW    = 8;
@@ -159,9 +160,15 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
             PointData style = (scene->materialsPtr + scene->instancesPtr[draw.firstInstance].materialIndex)->points;
             uint count      = selectPointCount(scene, style, total, sphere.center, sphere.radius);
             counted         = earlyFlags == 0;
-            visible         = counted;
+            // Small points go to the compute path, the others to the run's triangles. The chunk takes no slot, and the
+            // late phase sees it drawn.
+            uint4 rect      = uint4(0);
+            bool raster     = counted && scene->pointRasterPtr != nullptr && draw.firstInstance < POINT_RASTER_MAX_ROWS &&
+                              isRasterChunk(scene, style, sphere.center, sphere.radius, count, rect) && appendPointBatches(scene, draw.firstInstance, count, rect);
+            visible         = counted && !raster;
+            packed          = raster ? CULL_RASTER : CULLED;
             lod             = count - 1;
-            triangles       = visible ? count : 0;
+            triangles       = counted ? count : 0;
             lod0Triangles   = counted ? total : 0;
             lodTriangles    = triangles;
         }
@@ -343,7 +350,7 @@ void writeMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
                 InterlockedAdd(scene->cullStatsPtr[STATS_MESHLETS_WHOLE], 1);
         }
     }
-    else if (packed != CULLED)
+    else if (packed != CULLED && packed != CULL_RASTER)
     {
         uint slot       = packed & ((1u << CULL_LOD_SHIFT) - 1);
         DrawInfo visibleDraw = group.run == scene->pointRun ? getPointDraw(draw, lod + 1) : getLodDraw(getDrawGeometry(scene, draw), draw, lod);

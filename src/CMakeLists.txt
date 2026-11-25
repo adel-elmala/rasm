@@ -87,6 +87,7 @@ target_sources(rasm_renderer PRIVATE
     "renderer/localShadows.cpp"
     "renderer/msaaResolve.cpp"
     "renderer/picking.cpp"
+    "renderer/pointRaster.cpp"
     "renderer/readback.cpp"
     "renderer/shadowCascades.cpp"
     "renderer/statsOverlay.cpp"
