@@ -1967,6 +1967,9 @@ namespace rasm
             const Mesh &mesh = registry.meshes[entityRef.mesh.index];
             const Material &material = getMaterial(entityRef.material);
             const VectorMaterial &style = material.vector;
+            // Labels that draw nothing (no VECTOR material, no live font) take no room.
+            if (material.type != MaterialType::VECTOR || !isLive(style.font))
+                continue;
             const glm::dmat4 model = entityRef.transform.toMatrix();
             for (uint32_t l = 0; l < state.labelCount && l < mesh.labels.size(); ++l)
             {
@@ -1979,9 +1982,11 @@ namespace rasm
                     const glm::dvec2 ndc = glm::dvec2(clip) / clip.w;
                     // The text's size in pixels: the style's, or its metres at the anchor's depth.
                     const double pixelWorld = pixelScale * (perspective ? clip.w : 1.0);
-                    const double textPixels = style.widthUnit == VectorUnit::METRES ? style.width / pixelWorld : style.width;
+                    const bool metres = style.widthUnit == VectorUnit::METRES;
+                    const double textPixels = metres ? style.width / pixelWorld : style.width;
+                    const double haloPixels = metres ? style.outlineWidth / pixelWorld : style.outlineWidth;
                     const auto center = glm::vec2((ndc.x * 0.5 + 0.5) * width, (0.5 - ndc.y * 0.5) * height);
-                    const auto halfSize = glm::vec2(glm::dvec2(label.halfSize) * textPixels) + glm::vec2(style.outlineWidth);
+                    const auto halfSize = glm::vec2(glm::dvec2(label.halfSize) * textPixels + haloPixels);
                     const auto boxCenter = center + glm::vec2(label.center.x, -label.center.y) * static_cast<float>(textPixels);
                     candidate.low = boxCenter - halfSize;
                     candidate.high = boxCenter + halfSize;

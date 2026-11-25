@@ -15,6 +15,10 @@ namespace rasm
 {
     namespace
     {
+        // The largest em and atlas side buildFontAtlas makes: 4096 is a 2D image size every device supports.
+        constexpr float MAX_FONT_EM_SIZE = 256.0f;
+        constexpr uint32_t MAX_FONT_ATLAS_SIZE = 4096;
+
         // One glyph's distance field before packing.
         struct GlyphImage
         {
@@ -29,7 +33,8 @@ namespace rasm
 
     namespace
     {
-        // A row of glyphs after another, each row as tall as its tallest glyph, in an atlas of the given width.
+        // A row of glyphs after another, each row as tall as its tallest glyph, in an atlas of the given width: its height,
+        // a power of two, or 0 when a glyph is wider than the atlas.
         uint32_t packRows(std::vector<GlyphImage> &images, uint32_t width)
         {
             std::vector<GlyphImage *> byHeight;
@@ -43,6 +48,8 @@ namespace rasm
             int rowHeight = 0;
             for (GlyphImage *image : byHeight)
             {
+                if (image->width > static_cast<int>(width))
+                    return 0;
                 if (x + image->width > static_cast<int>(width))
                 {
                     x = 0;
@@ -71,9 +78,9 @@ namespace rasm
             spdlog::error("buildFontAtlas: the data is not a TrueType or OpenType font.");
             return false;
         }
-        if (!(options.emSize >= 8.0f) || !(options.distanceRange >= 1.0f))
+        if (!(options.emSize >= 8.0f && options.emSize <= MAX_FONT_EM_SIZE) || !(options.distanceRange >= 1.0f && options.distanceRange <= options.emSize))
         {
-            spdlog::error("buildFontAtlas: emSize {} must be 8 or more and distanceRange {} 1 or more.", options.emSize, options.distanceRange);
+            spdlog::error("buildFontAtlas: emSize {} must be 8 to {} and distanceRange {} 1 to emSize.", options.emSize, MAX_FONT_EM_SIZE, options.distanceRange);
             return false;
         }
         const float scale = stbtt_ScaleForMappingEmToPixels(&info, options.emSize);
@@ -141,8 +148,19 @@ namespace rasm
             return false;
         }
 
+        // The narrowest atlas, from 512 texels, whose height stays within MAX_FONT_ATLAS_SIZE.
         atlas.width = options.emSize > 64.0f ? 1024 : 512;
         atlas.height = packRows(images, atlas.width);
+        while ((atlas.height == 0 || atlas.height > MAX_FONT_ATLAS_SIZE) && atlas.width < MAX_FONT_ATLAS_SIZE)
+        {
+            atlas.width *= 2;
+            atlas.height = packRows(images, atlas.width);
+        }
+        if (atlas.height == 0 || atlas.height > MAX_FONT_ATLAS_SIZE)
+        {
+            spdlog::error("buildFontAtlas: {} glyphs at {} texels per em do not fit an atlas of {} x {}.", images.size(), options.emSize, MAX_FONT_ATLAS_SIZE, MAX_FONT_ATLAS_SIZE);
+            return false;
+        }
         atlas.pixels.assign(static_cast<size_t>(atlas.width) * atlas.height, 0);
         for (GlyphImage &image : images)
         {
@@ -154,7 +172,8 @@ namespace rasm
                                              static_cast<float>(image.y + image.height) / static_cast<float>(atlas.height));
             atlas.glyphs.push_back(image.metrics);
         }
-        // Kerning between every pair the atlas holds (the font's kern table or GPOS pairs).
+        // Kerning between every pair the atlas holds (the font's kern table or GPOS pairs): a lookup per pair, so a set of
+        // thousands of codepoints takes seconds here.
         for (size_t a = 0; a < images.size(); ++a)
         {
             for (size_t b = 0; b < images.size(); ++b)

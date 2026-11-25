@@ -7,9 +7,11 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -218,4 +220,33 @@ TEST_CASE("buildFontAtlas: refuses what is no font and bad options")
     REQUIRE(!file.empty());
     CHECK_FALSE(rasm::buildFontAtlas(file.data(), file.size(), {.emSize = 4.0f}, atlas));
     CHECK_FALSE(rasm::buildFontAtlas(file.data(), file.size(), {.distanceRange = 0.0f}, atlas));
+}
+
+TEST_CASE("addVectorLabels: control characters are not drawn, and a priority that is not finite sorts last")
+{
+    const rasm::FontAtlas font = makeFont();
+    rasm::VectorGeometry geometry;
+    const rasm::LabelDesc labels[1] = {{.text = "A\r\tB", .priority = std::numeric_limits<float>::quiet_NaN(), .offset = glm::vec2(std::numeric_limits<float>::infinity(), 0.0f)}};
+    rasm::addVectorLabels(geometry, glm::dvec3(0.0), font, labels, 1);
+    REQUIRE(geometry.labels.size() == 1);
+    // A and B, kerned, with nothing between them: no fallback glyph for the carriage return and the tab.
+    CHECK(glyphQuads(geometry) == 2 * 2);
+    CHECK(geometry.labels[0].halfSize.x == doctest::Approx(0.45f));
+    CHECK(std::isfinite(geometry.labels[0].priority));
+    CHECK(geometry.labels[0].priority < -1e30f);
+    CHECK(geometry.labels[0].center.x == doctest::Approx(0.0f));
+}
+
+TEST_CASE("buildFontAtlas: refuses an atlas past 4096 texels and options out of range")
+{
+    const std::vector<uint8_t> file = readFontFile();
+    REQUIRE(!file.empty());
+    rasm::FontAtlas atlas;
+    CHECK_FALSE(rasm::buildFontAtlas(file.data(), file.size(), {.distanceRange = 2000.0f}, atlas));
+    CHECK_FALSE(rasm::buildFontAtlas(file.data(), file.size(), {.emSize = 300.0f}, atlas));
+    // Large glyphs grow the atlas's width instead of overflowing it.
+    REQUIRE(rasm::buildFontAtlas(file.data(), file.size(), {.emSize = 256.0f, .distanceRange = 32.0f}, atlas));
+    CHECK(atlas.width <= 4096);
+    CHECK(atlas.height <= 4096);
+    CHECK(atlas.pixels.size() == static_cast<size_t>(atlas.width) * atlas.height);
 }

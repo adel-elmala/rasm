@@ -7,6 +7,7 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace rasm
@@ -362,6 +363,12 @@ namespace rasm
             pushVertex(geometry, origin, point, getGroundAxis(point.up), glm::dvec2(0.0), glm::vec2(0.0f), Kind::FILL, Metric::FILL, featureId);
         }
 
+        // C0 and C1 control characters other than the line feed (a carriage return, a tab) are not drawn.
+        bool isControl(uint32_t codepoint)
+        {
+            return codepoint < 0x20 || (codepoint >= 0x7F && codepoint < 0xA0);
+        }
+
         // A label's glyph quads, laid out line by line from its first baseline and moved by shift (ems). halo: the halo's
         // quads (uv[2].y = 1), which the label draws first, so no glyph's halo covers a neighbour's fill.
         void pushLabelGlyphs(VectorGeometry &geometry, const glm::dvec3 &origin, const GroundPoint &anchor, const FontAtlas &font, const std::vector<uint32_t> &codepoints,
@@ -379,7 +386,7 @@ namespace rasm
                     previous = 0;
                     continue;
                 }
-                const GlyphMetrics *glyph = findGlyph(font, codepoint);
+                const GlyphMetrics *glyph = isControl(codepoint) ? nullptr : findGlyph(font, codepoint);
                 if (glyph == nullptr)
                     continue;
                 pen.x += previous != 0 ? getKerning(font, previous, glyph->codepoint) : 0.0f;
@@ -529,7 +536,7 @@ namespace rasm
                     previous = 0;
                     continue;
                 }
-                const GlyphMetrics *glyph = findGlyph(font, codepoint);
+                const GlyphMetrics *glyph = isControl(codepoint) ? nullptr : findGlyph(font, codepoint);
                 if (glyph == nullptr)
                     continue;
                 lineWidths.back() += (previous != 0 ? getKerning(font, previous, glyph->codepoint) : 0.0f) + glyph->advance;
@@ -548,11 +555,14 @@ namespace rasm
                 shift.x += 0.5f * width + GAP;
             else if (label.anchor == LabelAnchor::RIGHT)
                 shift.x -= 0.5f * width + GAP;
-            shift += label.offset;
+            // A priority or offset that is not finite (bad data) would break placement's sort: such a label sorts last.
+            if (std::isfinite(label.offset.x) && std::isfinite(label.offset.y))
+                shift += label.offset;
+            const float priority = std::isfinite(label.priority) ? label.priority : -std::numeric_limits<float>::max();
 
             const GroundPoint anchor = isDraped(placement) ? liftOnGrid(placement, toGrid(placement, label.position)) : GroundPoint{.position = label.position, .up = up};
             const auto labelIndex = static_cast<uint32_t>(geometry.labels.size());
-            geometry.labels.push_back({.anchor = glm::vec3(anchor.position - origin), .center = boxCenter + shift, .halfSize = 0.5f * glm::vec2(width, height), .priority = label.priority, .featureId = label.featureId});
+            geometry.labels.push_back({.anchor = glm::vec3(anchor.position - origin), .center = boxCenter + shift, .halfSize = 0.5f * glm::vec2(width, height), .priority = priority, .featureId = label.featureId});
 
             pushLabelGlyphs(geometry, origin, anchor, font, codepoints, lineWidths, shift, labelIndex, label.featureId, true);
             pushLabelGlyphs(geometry, origin, anchor, font, codepoints, lineWidths, shift, labelIndex, label.featureId, false);

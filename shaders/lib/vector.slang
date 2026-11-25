@@ -177,7 +177,8 @@ float4 getGroundPoint(SceneData *scene, float4x4 viewProjection, float3 anchor, 
     return float4(anchor + axisX * a + axisZ * b, 1.0);
 }
 
-// firstLabel: the instance's first label slot (InstanceData::meshletVisibility of a mesh with labels), -1 for none.
+// firstLabel: the instance's first label slot (InstanceData::meshletVisibility of a mesh with labels), -1 when its
+// entity found no slots.
 VectorVertex getVectorVertex(SceneData *scene, VectorData style, float4x4 world, VertexFull vert, int firstLabel)
 {
     float4x4 viewProjection = mul(scene->projection, scene->view);
@@ -200,9 +201,9 @@ VectorVertex getVectorVertex(SceneData *scene, VectorData style, float4x4 world,
     if (kind == VECTOR_KIND_GLYPH)
     {
         // A glyph of a label: its corner in ems times the text's size, across the screen's axes, and its label's alpha
-        // from this view's placement (0: placed nowhere, the quad collapses). metric is 1 on the halo's quads, which
-        // collapse without a halo; dash carries the halo in pixels.
-        float alpha         = 1.0;
+        // from this view's placement (0: placed nowhere, the quad collapses; an entity that found no label slots shows
+        // none). metric is 1 on the halo's quads, which collapse without a halo; dash carries the halo in pixels.
+        float alpha         = firstLabel >= 0 ? 1.0 : 0.0;
         if (scene->labelsPtr != nullptr && firstLabel >= 0)
             alpha           = scene->labelsPtr[uint(firstLabel) + asuint(vert.tangent.x)];
         float pixelWorld    = getPixelWorld(scene, output.clipPosition.w);
@@ -348,7 +349,7 @@ float4 shadeGlyph(Sampler2D atlas, VectorData style, float4 vertexColor, float2 
     float2 unitRange    = style.distanceRange / float2(width, height);
     float screenRange   = max(0.5 * dot(unitRange, 1.0 / max(fwidth(uv), float2(1e-8))), 1.0);
     float distance      = (value - 0.5) * screenRange;
-    float reach         = haloPass ? clamp(halo, 0.0, 0.5 * screenRange - 1.0) : 0.0;
+    float reach         = haloPass ? clamp(halo, 0.0, max(0.5 * screenRange - 1.0, 0.0)) : 0.0;
     float4 color        = haloPass ? style.outlineColor : style.color * vertexColor;
     color.a            *= saturate(distance + reach + 0.5) * fade;
     return color;

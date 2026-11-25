@@ -552,7 +552,7 @@ namespace rasm
             HandlePool               lightHandles;                                          // RendererConfig::maxLights + 1, set by the constructor
             HandlePool               sceneHandles           = HandlePool(MAX_SCENES);
             HandlePool               environmentHandles;
-            HandlePool               fontHandles            = HandlePool(MAX_FONTS);
+            HandlePool               fontHandles            = HandlePool(MAX_FONTS + 1);
             HandlePool               readbackHandles;
             std::vector<Entity>      entities;
             std::vector<Material>    materials;
