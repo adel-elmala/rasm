@@ -242,7 +242,7 @@
 <table>
   <tr><th>Case</th><th>Who gets it</th></tr>
   <tr><td>A press over a UI window</td><td>The UI, until the release, even when the pointer leaves the window (a slider drag).</td></tr>
-  <tr><td>A press outside every UI window</td><td>The camera starts a drag and keeps it until the release, even over a UI window.</td></tr>
+  <tr><td>A press outside every UI window</td><td>The camera starts the drag its button map gives the button (an orbit or a pan) and keeps it until that button's release, even over a UI window.</td></tr>
   <tr><td>The wheel over a UI window</td><td>The UI scrolls; the camera does not zoom.</td></tr>
   <tr><td>A text field has the focus</td><td>Keys type into it. Shortcuts like F1 or Escape wait until it lets go.</td></tr>
   <tr><td>The window loses the focus</td><td>Nobody: the window will never see the release of a held key or button, so every key counts as up and a drag ends.</td></tr>
@@ -331,7 +331,7 @@
   <tr><td>Dear ImGui's input</td><td><code>processUiEvent</code>, <code>updateUiPlatform</code>, <code>setUiScale</code> in <code>src/platform/uiPlatform.cpp</code>; called from <code>src/renderer/ui.cpp</code></td></tr>
   <tr><td>The surface</td><td><code>createVulkanSurface</code> in <code>src/rhi/vulkan/vulkanSurface.cpp</code>, called by <code>VulkanDevice::initialize</code></td></tr>
   <tr><td>Example</td><td><code>examples/19_embedding/main.cpp</code>: two SDL3 windows of the application's own (the second through <code>addWindow</code>) and a camera it drives, with <code>--headless</code> and <code>--no-window</code>; <code>examples/20_views/main.cpp</code>: a second window the SDL platform opens</td></tr>
-  <tr><td>Tests</td><td><code>tests/inputTests.cpp</code>: NDC, areas, drags across frames, the wheel, the UI's capture, keys by position, focus loss, the F keys, <code>pollEvents</code> once per frame</td></tr>
+  <tr><td>Tests</td><td><code>tests/inputTests.cpp</code>: NDC, areas, drags across frames, the button map, the wheel, the UI's capture, keys by position, focus loss, the F keys, <code>pollEvents</code> once per frame</td></tr>
 </table>
 </div>
 
