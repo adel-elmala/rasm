@@ -38,7 +38,69 @@ struct VSOutput
     nointerpolation uint lod;           // the LOD the draw draws, for DEBUG_VIEW_LODS
     nointerpolation uint meshlet;       // the draw's key, for DEBUG_VIEW_MESHLETS
 #endif
+#if defined(RASM_PICK)
+    nointerpolation uint pickRow;       // the instance row
+    nointerpolation uint pickFeature;   // a vector feature's id
+    nointerpolation uint pickFlags;     // PICK_HIT_*
+#endif
 };
+
+#if defined(RASM_PICK)
+// What a pick looks through and what a hit is: rasm/picking.h's PICK_SKIP_* and PICK_HIT_*.
+static const uint   PICK_SKIP_MESHES    = 1 << 0;
+static const uint   PICK_SKIP_BLEND     = 1 << 1;
+static const uint   PICK_SKIP_TERRAIN   = 1 << 2;
+static const uint   PICK_SKIP_VECTORS   = 1 << 3;
+static const uint   PICK_SKIP_LABELS    = 1 << 4;
+static const uint   PICK_SKIP_OVERLAYS  = 1 << 5;
+static const uint   PICK_HIT_FEATURE    = 1 << 0;
+static const uint   PICK_HIT_LABEL      = 1 << 1;
+static const uint   PICK_HIT_OVERLAY    = 1 << 2;
+static const uint   PICK_HIT_TERRAIN    = 1 << 3;
+static const uint   PICK_HIT_BACK_FACE  = 1 << 4;
+
+// A pick's draws carry its PICK_SKIP_* mask in the low byte of the push constant's argument, and its minAlpha in 1/255
+// steps above it (picking.cpp).
+uint getPickSkip()
+{
+    return pc.argument & 0xFF;
+}
+
+float getPickMinAlpha()
+{
+    return float((pc.argument >> 8) & 0xFF) / 255.0;
+}
+
+// Whether a pick leaves out what the vertex belongs to: then its triangle collapses and draws nothing.
+bool isPickSkipped(uint flags, bool vector)
+{
+    uint skip = getPickSkip();
+    if (vector)
+    {
+        if ((flags & PICK_HIT_OVERLAY) != 0 && (skip & PICK_SKIP_OVERLAYS) != 0)
+            return true;
+        return (skip & ((flags & PICK_HIT_LABEL) != 0 ? PICK_SKIP_LABELS : PICK_SKIP_VECTORS)) != 0;
+    }
+    if ((flags & PICK_HIT_TERRAIN) != 0)
+        return (skip & PICK_SKIP_TERRAIN) != 0;
+#if defined(RASM_ALPHA_BLEND)
+    return (skip & PICK_SKIP_BLEND) != 0;
+#else
+    return (skip & PICK_SKIP_MESHES) != 0;
+#endif
+}
+
+// A unit vector in 32 bits: octahedral, 16 bits per axis (picking.cpp's unpackPickNormal).
+uint packPickNormal(float3 n)
+{
+    n /= max(abs(n.x) + abs(n.y) + abs(n.z), 1e-20);
+    float2 e = n.xy;
+    if (n.z < 0.0)
+        e = (1.0 - abs(n.yx)) * float2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+    uint2 q = uint2(round(saturate(e * 0.5 + 0.5) * 65535.0));
+    return q.x | (q.y << 16);
+}
+#endif
 
 [[vk::binding(0, 0)]]
 Sampler2D gTextures[];
@@ -50,7 +112,7 @@ SamplerCube gCubeTextures[];
 
 // One vertex of a draw, for vertMain and meshMain alike: vertexID is the sub-mesh's own (the raw index-buffer value),
 // lod and meshletKey only feed the debug views.
-VSOutput getVertexOutput(InstanceData *instance, int vertexOffset, uint vertexID, uint lod, uint meshletKey)
+VSOutput getVertexOutput(InstanceData *instance, uint row, int vertexOffset, uint vertexID, uint lod, uint meshletKey)
 {
     float4x4 modelMat       = getWorldMatrix(pc.scene, instance);
     float4x4 viewMat        = pc.scene->view;
@@ -90,6 +152,17 @@ VSOutput getVertexOutput(InstanceData *instance, int vertexOffset, uint vertexID
         output.lod                  = lod;
         output.meshlet              = meshletKey;
 #endif
+#if defined(RASM_PICK)
+        // The feature's own point under the pixel, not its biased or overlay depth, and the ground's up.
+        output.worldPosition        = feature.depthPoint;
+        output.worldNormal          = feature.up;
+        output.pickRow              = row;
+        output.pickFeature          = asuint(vert.tangent.w);
+        output.pickFlags            = PICK_HIT_FEATURE | (uint(feature.kind + 0.5) == VECTOR_KIND_GLYPH ? PICK_HIT_LABEL : 0) |
+                                      ((model->vector.flags & VECTOR_OVERLAY) != 0 ? PICK_HIT_OVERLAY : 0);
+        if (isPickSkipped(output.pickFlags, true))
+            output.clipPosition     = float4(0.0, 0.0, -1.0, 1.0);
+#endif
         return output;
     }
     output.clipPosition         = mul(projectionMat, mul(viewMat, mul(modelMat, float4(vert.pos, 1.0))));
@@ -119,6 +192,13 @@ VSOutput getVertexOutput(InstanceData *instance, int vertexOffset, uint vertexID
     output.lod                  = lod;
     output.meshlet              = meshletKey;
 #endif
+#if defined(RASM_PICK)
+    output.pickRow              = row;
+    output.pickFeature          = 0;
+    output.pickFlags            = model->materialId == MaterialId.TERRAIN ? PICK_HIT_TERRAIN : 0;
+    if (isPickSkipped(output.pickFlags, false))
+        output.clipPosition     = float4(0.0, 0.0, -1.0, 1.0);
+#endif
     return output;
 }
 
@@ -136,7 +216,7 @@ VSOutput vertMain(VSInput input)
     lod                     = getDrawLod(pc.scene, instance, draw->firstIndex);
     meshletKey              = getMeshletKey(draw->firstIndex, draw->firstInstance);
 #endif
-    return getVertexOutput(instance, draw->vertexOffset, input.vertexID, lod, meshletKey);
+    return getVertexOutput(instance, draw->firstInstance, draw->vertexOffset, input.vertexID, lod, meshletKey);
 }
 
 // A visible meshlet (lib/meshletTask.slang): its vertices through getVertexOutput, as vertMain's, and its triangles.
@@ -155,7 +235,7 @@ void meshMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID, in 
     meshletKey          = getMeshletKey(meshlet.firstIndex, meshlet.draw.firstInstance);
 #endif
     if (threadId.x < meshlet.vertexCount)
-        vertices[threadId.x] = getVertexOutput(meshlet.instance, meshlet.draw.vertexOffset, getMeshletVertex(pc.scene, meshlet, threadId.x), lod, meshletKey);
+        vertices[threadId.x] = getVertexOutput(meshlet.instance, meshlet.draw.firstInstance, meshlet.draw.vertexOffset, getMeshletVertex(pc.scene, meshlet, threadId.x), lod, meshletKey);
     for (uint t = threadId.x; t < meshlet.triangleCount; t += MESHLET_CHUNK_SIZE)
         triangles[t] = getMeshletTriangle(pc.scene, meshlet, t);
 }
@@ -337,5 +417,65 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     return TO_OUTPUT(toTarget(shadePBR(gTextures, gCubeTextures, info), coverage));
 #endif
 }
+
+#if defined(RASM_PICK)
+// The pick pass's two targets (picking.cpp): the instance row + 1 (0: nothing drawn), the feature id, PICK_HIT_* and
+// the material row (which nothing reads yet), then the render-space position's bits and the normal.
+struct PickOutput
+{
+    uint4 id       : SV_TARGET0;
+    uint4 position : SV_TARGET1;
+};
+
+// What the pixel shows, for Renderer::pick: compiled per alpha mode like fragMain. MASK cuts where the image cuts; a
+// see-through surface (BLEND, every vector feature) is picked where its alpha, as drawn, is at least the pick's minAlpha.
+[shader("fragment")]
+PickOutput pickMain(VSOutput input, bool isFrontFace : SV_IsFrontFace)
+{
+    MaterialData *model = pc.scene->materialsPtr + input.materialIndex;
+    bool feature        = (input.pickFlags & PICK_HIT_FEATURE) != 0;
+    bool backFace       = !feature && isBackFace(input.handedness, isFrontFace);
+#if defined(RASM_ALPHA_MASK)
+    if (getBaseAlpha(gTextures, model, input.uv0, input.uv1, input.uv2, input.color.a) < model->alphaCutoff)
+        discard;
+#endif
+#if defined(RASM_ALPHA_BLEND)
+    if ((model->flags & MATERIAL_DOUBLE_SIDED) == 0 && backFace)
+        discard;
+    float alpha = 1.0;
+    if (model->materialId == MaterialId.VECTOR)
+    {
+        VectorData style = model->vector;
+        uint kind = uint(input.worldTangent.y + 0.5);
+        if (kind == VECTOR_KIND_GLYPH)
+        {
+            alpha = shadeGlyph(gTextures[style.font], style, input.color, input.uv1, input.worldTangent.x, input.uv2.y, input.uv2.x > 0.5).a;
+        }
+        else
+        {
+            float4 color = shadeVector(style, input.color, input.uv0, input.uv2.x, input.uv2.y, input.worldTangent.x, kind);
+            uint icon = model->material.metallicRoughness.baseColorTextureIndex;
+            if (kind == VECTOR_KIND_POINT && (style.flags & VECTOR_ICON) != 0 && icon != INVALID_TEXTURE_INDEX)
+                color *= sampleMaterial(gTextures[icon], input.uv1);
+            alpha = color.a;
+        }
+    }
+    else
+    {
+        alpha = getBaseAlpha(gTextures, model, input.uv0, input.uv1, input.uv2, input.color.a);
+    }
+    if (alpha < getPickMinAlpha())
+        discard;
+#endif
+    float3 normal = input.worldNormal;
+    normal = dot(normal, normal) > 1e-12 ? normalize(normal) : float3(0.0, 1.0, 0.0);
+    if (backFace)
+        normal = -normal;
+    PickOutput output;
+    output.id       = uint4(input.pickRow + 1, input.pickFeature, input.pickFlags | (backFace ? PICK_HIT_BACK_FACE : 0), input.materialIndex);
+    output.position = uint4(asuint(input.worldPosition), packPickNormal(normal));
+    return output;
+}
+#endif
 
 // clang-format on

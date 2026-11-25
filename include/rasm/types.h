@@ -104,7 +104,8 @@ namespace rasm
         R16G16_SFLOAT,
         R16_UNORM,              // one channel: a terrain tile's heights (rasm/terrain.h)
         R32_SFLOAT,
-        R8_UNORM,               // one byte: a font's distance atlas (rasm/text.h); the last value: VulkanDevice::FORMAT_COUNT
+        R8_UNORM,               // one byte: a font's distance atlas (rasm/text.h)
+        R32G32B32A32_UINT,      // four words: the pick pass's ids and positions (rasm/picking.h); the last value: VulkanDevice::FORMAT_COUNT
     };
 
     // The scene passes' HDR color, and a scene target's optional second color: each pixel's motion since the last frame,

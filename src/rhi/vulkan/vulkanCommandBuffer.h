@@ -41,7 +41,7 @@ namespace rasm::rhi
         void                        copyBuffers(Buffer* src, const BufferCopy* copies, uint32_t copyCount) override;
         void                        copyToTextures(Buffer* src, const TextureCopy* copies, uint32_t copyCount) override;
         void                        acquireTextures(Texture* const* textures, uint32_t count) override;
-        void                        copyFromTexture(Texture* src, TextureUsage state, uint32_t layer, uint32_t mip, Buffer* dst, uint64_t dstOffset) override;
+        void                        copyFromTexture(Texture* src, TextureUsage state, uint32_t layer, uint32_t mip, Buffer* dst, uint64_t dstOffset, uint32_t width, uint32_t height) override;
         void                        writeTimestamp(QueryPool* queryPool, uint32_t index) override;
         VkCommandBuffer             getVkCommandBuffer() const;
 

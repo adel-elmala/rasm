@@ -118,6 +118,8 @@ namespace rasm
         bool                                transitionImageLayout(const CommandBufferHandle& commandBuffer, TextureHandle texture, TextureUsage newUsage, bool discard = false);
         // Copies one layer and mip of a readable texture into the start of buffer, rows tightly packed, for readBuffer after the fence.
         bool                                copyTextureToBuffer(const CommandBufferHandle& commandBuffer, const TextureHandle& texture, uint32_t layer, uint32_t mip, const BufferHandle& buffer);
+        // Only the width x height texels from the corner (0, 0) of mip 0 and layer 0, rows packed, at bufferOffset.
+        bool                                copyTextureToBuffer(const CommandBufferHandle& commandBuffer, const TextureHandle& texture, uint32_t width, uint32_t height, const BufferHandle& buffer, uint64_t bufferOffset);
         bool                                fillBuffer(const BufferHandle& buffer, const void* data, size_t size, size_t offset = 0);
         bool                                readBuffer(const BufferHandle& buffer, void* data, size_t size, size_t offset = 0);
         void                                resetQueries(const QueryPoolHandle& pool);
@@ -191,6 +193,7 @@ namespace rasm
         bool                                createAttachments(RenderTarget& renderTarget, const RenderTargetDesc& desc, rhi::Heap* const* heaps, const uint64_t* offsets);
         void                                destroyAttachments(RenderTarget& renderTarget);
         bool                                placeGroup(uint32_t group);
+        bool                                copyTexture(const CommandBufferHandle& commandBuffer, const TextureHandle& texture, uint32_t layer, uint32_t mip, uint32_t width, uint32_t height, const BufferHandle& buffer, uint64_t bufferOffset, const char* caller);
 
         std::unique_ptr<Impl>   impl;
     };

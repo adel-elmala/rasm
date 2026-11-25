@@ -21,7 +21,8 @@
  * Three views draw each frame: a top-down map into a view texture (a render target), which a board in the scene shows;
  * the main camera into the window; and the map again into a corner of the window. The main camera has a trackball
  * controller, which a script drives with synthetic mouse events (rasm_add_input_event), the way an application with its
- * own event loop feeds RASM; with --fixed-step, which fixes the easing's time step, frame N is the same on every run. At the end it prints the frame and pool stats.
+ * own event loop feeds RASM; with --fixed-step, which fixes the easing's time step, frame N is the same on every run. At frame 20 it picks the main view's centre (1.7) and prints what is there, a
+ * couple of frames later; a headless run whose pick hit nothing exits with 1. At the end it prints the frame and pool stats.
  *
  * Flags, as the C++ examples take them: --headless, --frames N (60), --out <file.png> (frame.png), --fixed-step,
  * --wait-for-loads, --no-cache, --transfer-queue on|off. A headless run copies frame N back into a rasm_image, writes
@@ -343,6 +344,8 @@ int main(int argc, char **argv)
     rasm_frame_stats frameStats;
     rasm_pool_stats poolStats;
     rasm_readback readback = {0};
+    rasm_pick pick = {0};
+    int picked = 1;
     rasm_image *image;
     int written = 0;
     unsigned frame;
@@ -515,10 +518,36 @@ int main(int argc, char **argv)
     frameStats.size = sizeof(frameStats);
     rasm_get_frame_stats(renderer, &frameStats);
 
-    /* 6. The frame loop. Headless, frame N's copy is asked for before it starts and taken once it is drawn. */
+    /* 6. The frame loop. Headless, frame N's copy is asked for before it starts and taken once it is drawn. At frame 20
+     * it picks a 5 x 5 rect at the main view's centre (1.7), and prints what it hit a couple of frames later. */
     image = rasm_image_create();
     for (frame = 1; rasm_running(renderer); ++frame)
     {
+        if (frame == 20)
+        {
+            rasm_pick_desc pickDesc;
+            rasm_window_info window;
+            window.size = sizeof(window);
+            rasm_get_window(renderer, (rasm_window){0}, &window);
+            rasm_pick_desc_init(&pickDesc, sizeof(pickDesc));
+            pickDesc.rect.x = window.pixel_width / 2 - 2;
+            pickDesc.rect.y = window.pixel_height / 2 - 2;
+            pickDesc.rect.width = 5;
+            pickDesc.rect.height = 5;
+            pick = rasm_pick_view(renderer, &views[1], &pickDesc);
+        }
+        if (pick.id != 0 && rasm_is_pick_ready(renderer, pick))
+        {
+            rasm_pick_hit hit;
+            uint32_t hitCount = 0;
+            rasm_pick_hit_init(&hit, sizeof(hit));
+            if (rasm_take_pick(renderer, pick, &hit, 1, &hitCount) == RASM_OK && hitCount > 0 && rasm_is_entity_alive(renderer, hit.entity))
+                printf("Picked entity %llu, sub-mesh %u, at (%.3f, %.3f, %.3f), %.2f m away; %u things under the rect.\n", (unsigned long long)hit.entity.id, hit.sub_mesh, hit.position.x,
+                       hit.position.y, hit.position.z, hit.distance, hitCount);
+            else
+                picked = 0;
+            pick.id = 0;
+        }
         sendScriptedOrbit(renderer, frame, args.frames);
         /* The cut: the quarters while the root's error on screen is large, else the root. */
         rasm_tile_streamer_set_views(tiles, views, 3);
@@ -558,6 +587,11 @@ int main(int argc, char **argv)
     if (args.headless && !written)
     {
         fprintf(stderr, "error: frame %u was not written to %s: %s\n", args.frames, args.out, rasm_get_last_error());
+        return 1;
+    }
+    if (args.headless && !picked)
+    {
+        fprintf(stderr, "error: the pick at the view's centre hit nothing: %s\n", rasm_get_last_error());
         return 1;
     }
     return 0;

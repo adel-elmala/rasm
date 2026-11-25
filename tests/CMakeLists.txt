@@ -29,6 +29,7 @@ add_executable(rasm_tests
             "meshTests.cpp"
             "morphTargetsTests.cpp"
             "pathTests.cpp"
+            "pickingTests.cpp"
             "rangeAllocatorTests.cpp"
             "readbackTests.cpp"
             "releaseQueueTests.cpp"

@@ -62,6 +62,24 @@ namespace
         glm::vec3 color = glm::vec3(1.0f);
     };
 
+    // A pick check of a picking test: a point of the content (moved with it), and what a pick at the pixel it projects to
+    // must answer. A plane through the point gives the exact position (where the pixel's ray meets it), else the hit
+    // must be within some pixels of the point.
+    struct PickProbe
+    {
+        const char *name = "";
+        glm::dvec3 point = glm::dvec3(0.0);
+        rasm::EntityHandle entity;
+        uint32_t feature = 0;
+        uint32_t flags = 0;                 // PICK_HIT_* the hit has
+        glm::dvec3 plane = glm::dvec3(0.0); // the plane's normal; zero: no plane
+        double pixels = 3.0;
+        double metres = 0.0; // added to the tolerance without a plane
+        uint32_t skip = 0;
+        float minAlpha = 0.5f;
+        uint32_t size = 1; // above 1: a size x size rect, which must hold such a hit anywhere
+    };
+
     // What a test's scene holds besides its entities: the lights that cast shadows, and where the camera looks from.
     struct Content
     {
@@ -88,6 +106,7 @@ namespace
         std::shared_ptr<rasm::TileStreamer> tiles;
         std::vector<TileBox> tileBoxes;
         std::vector<rasm::TileHandle> cut;
+        std::vector<PickProbe> probes;
     };
 
     // What every scene may use, loaded once.
@@ -117,6 +136,7 @@ namespace
         bool views = false;           // drawn by Engine::render with the content's views instead of a graph
         bool secondWindow = false;    // a views test that reads the content's second window instead of the main one
         const char *sameAs = nullptr; // compare with this test's image of the same run instead of a golden
+        bool picks = false;           // also checks the content's pick probes, and picks under the centre in the steady frames
     };
 
     struct Comparison
@@ -714,6 +734,86 @@ namespace
         return assets.cube.isValid() && font.isValid() && addSunsetLight(engine, assets, content, 0.8f, glm::vec3(0.4f, -0.8f, -0.3f), 2.5f);
     }
 
+    // What the picking tests pick: a ground and a box (planes, so the positions are exact), a terrain tile, CesiumMan
+    // (skinned, posed on the GPU), a line, a label, a see-through polygon and an overlay line over the box.
+    bool buildPicking(rasm::Engine &engine, const Assets &assets, Content &content)
+    {
+        addGround(engine, assets, content, 8.0f, glm::vec3(0.75f, 0.74f, 0.7f));
+        const rasm::EntityHandle ground = content.entities.back();
+        addTerrainTile(engine, content, 2.0, -4.0, 4.0, 16, glm::vec3(0.55f, 0.75f, 0.45f));
+        const rasm::EntityHandle terrain = content.entities.back();
+        const rasm::EntityHandle box = addEntity(engine, content, "box", assets.cube, createColorMaterial(engine, glm::vec3(0.5f, 0.5f, 0.55f), 0.6f),
+                                                 rasm::Transform{glm::vec3(1.2f, 0.35f, 0.9f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(0.7f)});
+        const rasm::MeshHandle manMesh = engine.loadGLTF("models/gltf/CesiumMan/CesiumMan.glb");
+        rasm::FontAtlas atlas;
+        if (!manMesh.isValid() || !engine.loadFont("fonts/Roboto-Medium.ttf", atlas))
+            return false;
+        const rasm::EntityHandle man = addModel(engine, content, "CesiumMan", manMesh, makeTransform(glm::vec3(-2.6f, 0.0f, 1.0f), 1.0f, 0.4f));
+        engine.playAnimation(man, rasm::AnimationPlay{.clip = 0});
+
+        const glm::dvec3 origin(0.0);
+        const uint32_t two = 2;
+        const uint32_t lineId = 11;
+        rasm::VectorGeometry line;
+        const glm::dvec3 linePoints[2] = {{-3.0, 0.0, -1.0}, {-0.5, 0.0, -1.0}};
+        rasm::addVectorLines(line, origin, linePoints, &two, 1, {}, {}, &lineId);
+        addVectorEntity(engine, content, std::move(line), createVectorMaterial(engine, {.color = glm::vec4(0.1f, 0.3f, 0.8f, 1.0f), .width = 8.0f}));
+        const rasm::EntityHandle lineEntity = content.entities.back();
+
+        const rasm::FontHandle font = engine.createFont(atlas);
+        rasm::VectorGeometry text;
+        const rasm::LabelDesc label = {.position = {-1.5, 0.0, 0.6}, .text = "PICK", .priority = 1.0f, .featureId = 21};
+        rasm::addVectorLabels(text, origin, atlas, &label, 1);
+        addVectorEntity(engine, content, std::move(text),
+                        createVectorMaterial(engine, {.color = glm::vec4(0.12f, 0.1f, 0.08f, 1.0f), .width = 22.0f, .outlineColor = glm::vec4(1.0f), .outlineWidth = 3.0f, .drawOrder = 40, .font = font}));
+        const rasm::EntityHandle labelEntity = content.entities.back();
+
+        // A small square drawn over the big one by its draw order, though it comes first in the draw list.
+        const uint32_t four = 4;
+        const uint32_t oneRing = 1;
+        rasm::VectorGeometry small;
+        const glm::dvec3 smallSquare[4] = {{-3.6, 0.0, -2.9}, {-3.2, 0.0, -2.9}, {-3.2, 0.0, -2.6}, {-3.6, 0.0, -2.6}};
+        const uint32_t smallId = 43;
+        rasm::addVectorPolygons(small, origin, smallSquare, &four, &oneRing, 1, {}, &smallId);
+        addVectorEntity(engine, content, std::move(small), createVectorMaterial(engine, {.color = glm::vec4(0.2f, 0.6f, 0.2f, 0.9f), .drawOrder = 10}));
+        const rasm::EntityHandle smallEntity = content.entities.back();
+
+        rasm::VectorGeometry polygon;
+        const glm::dvec3 square[4] = {{-3.8, 0.0, -3.0}, {-2.2, 0.0, -3.0}, {-2.2, 0.0, -1.8}, {-3.8, 0.0, -1.8}};
+        const uint32_t polygonId = 41;
+        rasm::addVectorPolygons(polygon, origin, square, &four, &oneRing, 1, {}, &polygonId);
+        addVectorEntity(engine, content, std::move(polygon), createVectorMaterial(engine, {.color = glm::vec4(0.9f, 0.4f, 0.1f, 0.4f), .drawOrder = -5}));
+        const rasm::EntityHandle polygonEntity = content.entities.back();
+
+        rasm::VectorGeometry over;
+        const glm::dvec3 overPoints[2] = {{0.4, 0.0, 0.9}, {2.0, 0.0, 0.9}};
+        const uint32_t overId = 31;
+        rasm::addVectorLines(over, origin, overPoints, &two, 1, {}, {}, &overId);
+        addVectorEntity(engine, content, std::move(over), createVectorMaterial(engine, {.color = glm::vec4(0.7f, 0.1f, 0.8f, 1.0f), .width = 6.0f, .drawOrder = 20, .depth = rasm::VectorDepth::OVERLAY}));
+        const rasm::EntityHandle overlay = content.entities.back();
+
+        const glm::dvec3 up(0.0, 1.0, 0.0);
+        const uint32_t onlyBox = rasm::PICK_SKIP_OVERLAYS;
+        content.probes = {
+            {.name = "ground", .point = {-0.5, 0.0, -2.5}, .entity = ground, .plane = up},
+            {.name = "box top", .point = {1.3, 0.7, 0.8}, .entity = box, .plane = up},
+            {.name = "box front", .point = {1.1, 0.4, 1.25}, .entity = box, .plane = {0.0, 0.0, 1.0}},
+            {.name = "terrain", .point = {3.5, 1.6 * std::sin(0.45 * 3.5) * std::cos(0.35 * -2.0) + 0.5 * std::sin(1.3 * 3.5 + 0.9 * -2.0), -2.0}, .entity = terrain, .flags = rasm::PICK_HIT_TERRAIN, .metres = 0.02},
+            {.name = "skinned", .point = {-2.6, 0.9, 1.0}, .entity = man, .pixels = 30.0},
+            {.name = "line", .point = {-1.5, 0.0, -1.0}, .entity = lineEntity, .feature = 11, .flags = rasm::PICK_HIT_FEATURE, .pixels = 8.0},
+            {.name = "label", .point = {-1.5, 0.0, 0.6}, .entity = labelEntity, .feature = 21, .flags = rasm::PICK_HIT_LABEL, .pixels = 30.0, .size = 9},
+            {.name = "overlay", .point = {1.2, 0.0, 0.9}, .entity = overlay, .feature = 31, .flags = rasm::PICK_HIT_OVERLAY, .pixels = 6.0},
+            {.name = "under overlay", .point = {1.2, 0.0, 0.9}, .entity = box, .pixels = 60.0, .skip = onlyBox},
+            {.name = "polygon at 0.3", .point = {-3.0, 0.0, -2.4}, .entity = polygonEntity, .feature = 41, .flags = rasm::PICK_HIT_FEATURE, .minAlpha = 0.3f},
+            {.name = "polygon at 0.5", .point = {-3.0, 0.0, -2.4}, .entity = ground, .plane = up},
+            {.name = "order on top", .point = {-3.4, 0.0, -2.75}, .entity = smallEntity, .feature = 43, .flags = rasm::PICK_HIT_FEATURE, .minAlpha = 0.3f},
+        };
+        content.eye = glm::vec3(0.0f, 4.0f, 5.5f);
+        content.center = glm::vec3(0.0f, 0.0f, -0.6f);
+        content.fovY = 50.0f;
+        return assets.cube.isValid() && font.isValid() && addSunsetLight(engine, assets, content, 0.8f, glm::vec3(0.4f, -0.8f, -0.3f), 2.5f);
+    }
+
     // The tile_streaming test's frame: the streamer's update, and the tiles it hands out get their boxes at once.
     void updateTiles(rasm::Engine &engine, const Assets &assets, const Content &content, rasm::CameraHandle camera)
     {
@@ -763,6 +863,10 @@ namespace
         {.name = "labels",        .build = buildLabels},
         {.name = "labels_msaa4",  .build = buildLabels,        .samples = 4},
         {.name = "labels_taa",    .build = buildLabels,        .taa = true, .frames = 16},
+        // Picks of the scene as drawn: with MSAA and TAA the answer is the pixel's centre without jitter, the same.
+        {.name = "picking",       .build = buildPicking,       .time = 0.5, .picks = true},
+        {.name = "picking_msaa4", .build = buildPicking,       .samples = 4, .time = 0.5, .picks = true},
+        {.name = "picking_taa",   .build = buildPicking,       .taa = true, .frames = 16, .time = 0.5, .picks = true},
         // The same images drawn by meshlets: the same triangles, so the same pixels. The mesh_ tests take the mesh shaders
         // where the device has them (lavapipe and the desktop GPUs do), else vertex pulling. lavapipe's mesh shaders round a
         // few positions differently from its vertex shaders: up to 3 levels on 0.2% of the pixels after TAA, and a few edge
@@ -782,6 +886,7 @@ namespace
         {.name = "far_taa",       .build = buildHelmet,        .taa = true, .frames = 16, .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "taa"},
         {.name = "far_terrain",   .build = buildTerrain,       .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "terrain"},
         {.name = "far_labels",    .build = buildLabels,        .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "labels"},
+        {.name = "far_picking",   .build = buildPicking,       .time = 0.5, .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "picking", .picks = true},
     };
     // clang-format on
 
@@ -895,9 +1000,9 @@ namespace
     }
 
     // Shadow passes, the scene passes, MSAA resolve or TAA, bloom, tone map: the graph an application would build.
-    bool buildGraph(rasm::Engine &engine, const ImageTest &test, const Content &content, rasm::CameraHandle camera, rasm::RenderGraph &graph)
+    bool buildGraph(rasm::Engine &engine, const ImageTest &test, const Content &content, rasm::CameraHandle camera, rasm::RenderGraph &graph, rasm::RenderTargetHandle &sceneTarget)
     {
-        const rasm::RenderTargetHandle sceneTarget = graph.createRenderTarget({
+        sceneTarget = graph.createRenderTarget({
             .name = "scene_hdr",
             .swapchainScale = 1.0f,
             .colorFormats = {rasm::SCENE_COLOR_FORMAT, test.taa ? rasm::MOTION_FORMAT : rasm::Format::UNKNOWN},
@@ -926,8 +1031,73 @@ namespace
         return (!test.bloom || bloom.isValid()) && engine.addToneMapPass(graph, resolved, camera, bloom);
     }
 
+    // The pixel a world point projects to in the test's frame, which the scene target fills.
+    bool projectToPixel(rasm::Engine &engine, rasm::CameraHandle camera, const glm::dvec3 &world, uint32_t &x, uint32_t &y, glm::dmat4 &viewProjection)
+    {
+        viewProjection = glm::dmat4(engine.getProjectionMatrix(camera, static_cast<float>(WIDTH) / static_cast<float>(HEIGHT))) * engine.getViewMatrix(camera);
+        const glm::dvec4 clip = viewProjection * glm::dvec4(world, 1.0);
+        const double px = (clip.x / clip.w * 0.5 + 0.5) * WIDTH;
+        const double py = (0.5 - clip.y / clip.w * 0.5) * HEIGHT;
+        if (clip.w <= 0.0 || px < 0.0 || py < 0.0 || px >= WIDTH || py >= HEIGHT)
+            return false;
+        x = static_cast<uint32_t>(px);
+        y = static_cast<uint32_t>(py);
+        return true;
+    }
+
+    // Whether a probe's answer is right; prints a line when it is not.
+    bool checkProbe(rasm::Engine &engine, const Content &content, rasm::CameraHandle camera, const ImageTest &test, const PickProbe &probe, const rasm::PickHit *hits, uint32_t count)
+    {
+        constexpr uint32_t CAPACITY = 64;
+        const rasm::PickHit *hit = nullptr;
+        for (uint32_t i = 0; i < std::min(count, CAPACITY) && hit == nullptr; ++i)
+        {
+            const bool same = hits[i].entity == probe.entity && (probe.feature == 0 || hits[i].feature == probe.feature) && (hits[i].flags & probe.flags) == probe.flags;
+            if (same || probe.size == 1)
+                hit = &hits[i];
+        }
+        const glm::dvec3 point = content.origin + probe.point;
+        uint32_t x = 0;
+        uint32_t y = 0;
+        glm::dmat4 viewProjection(1.0);
+        projectToPixel(engine, camera, point, x, y, viewProjection);
+        if (hit == nullptr || hit->entity != probe.entity || (probe.feature != 0 && hit->feature != probe.feature) || (hit->flags & probe.flags) != probe.flags)
+        {
+            std::printf("  %s: pick %s: %s\n", test.name, probe.name, hit == nullptr ? "no hit" : "the wrong hit");
+            return false;
+        }
+        double error = 0.0;
+        double tolerance = 0.0;
+        if (probe.plane != glm::dvec3(0.0))
+        {
+            // Where the ray through the hit pixel's centre meets the plane.
+            const glm::dmat4 inverse = glm::inverse(viewProjection);
+            const glm::dvec2 ndc((hit->x + 0.5) / WIDTH * 2.0 - 1.0, 1.0 - (hit->y + 0.5) / HEIGHT * 2.0);
+            const glm::dvec4 a = inverse * glm::dvec4(ndc, 1.0, 1.0);
+            const glm::dvec4 b = inverse * glm::dvec4(ndc, 0.5, 1.0);
+            const glm::dvec3 from = glm::dvec3(a) / a.w;
+            const glm::dvec3 direction = glm::dvec3(b) / b.w - from;
+            const glm::dvec3 expected = from + glm::dot(point - from, probe.plane) / glm::dot(direction, probe.plane) * direction;
+            error = glm::length(hit->position - expected);
+            tolerance = 1e-4 * glm::length(expected - engine.getCameraTransform(camera).position) + 1e-5;
+        }
+        else
+        {
+            const double distance = glm::length(point - engine.getCameraTransform(camera).position);
+            const double pixel = 2.0 * distance * std::tan(glm::radians(static_cast<double>(content.fovY)) * 0.5) / HEIGHT;
+            error = glm::length(hit->position - point);
+            tolerance = probe.pixels * pixel + probe.metres;
+        }
+        if (error > tolerance)
+        {
+            std::printf("  %s: pick %s: off by %.6f m, more than %.6f\n", test.name, probe.name, error, tolerance);
+            return false;
+        }
+        return true;
+    }
+
     bool renderTest(rasm::Engine &engine, const Assets &assets, rasm::CameraHandle camera, const ImageTest &test, std::vector<BuiltContent> &built, rasm::ReadbackImage &image,
-                    AllocationCount &steady)
+                    AllocationCount &steady, uint32_t &pickFailures)
     {
         const Content *content = getContent(engine, assets, camera, test, built);
         if (!content)
@@ -950,17 +1120,29 @@ namespace
             {.scene = content->scene, .camera = content->security, .output = {.window = content->window}},
         };
         rasm::RenderGraph graph = engine.createRenderGraph();
+        rasm::RenderTargetHandle sceneTarget;
+        // A picking test picks a 5 x 5 rect under the centre every frame, so the steady frames count its allocations too.
+        rasm::PickHandle hover;
         auto frame = [&]()
         {
             engine.setAnimationTime(test.time);
             if (content->tiles)
                 updateTiles(engine, assets, *content, camera);
+            if (test.picks && hover.isValid() && engine.isPickReady(hover))
+            {
+                rasm::PickHit hits[4];
+                uint32_t count = 0;
+                engine.takePick(hover, hits, 4, count);
+                hover = {};
+            }
+            if (test.picks && !hover.isValid())
+                hover = engine.pick(content->scene, camera, sceneTarget, {.rect = {.x = WIDTH / 2 - 2, .y = HEIGHT / 2 - 2, .width = 5, .height = 5}});
             if (test.views)
                 engine.render(views, 5);
             else
                 graph.execute(camera);
         };
-        if (!test.views && !buildGraph(engine, test, *content, camera, graph))
+        if (!test.views && !buildGraph(engine, test, *content, camera, graph, sceneTarget))
         {
             engine.setDebugView(rasm::DebugView::NONE);
             engine.setMeshletPath(rasm::MeshletPath::OFF);
@@ -975,6 +1157,32 @@ namespace
         for (uint32_t extra = 0; extra < 8 && copy.isValid() && !engine.isReadbackReady(copy); ++extra)
             frame();
         const bool taken = copy.isValid() && engine.takeReadback(copy, image);
+        // Each probe's pick at the pixel its point projects to, all in one frame, read when the GPU is done with it.
+        pickFailures = 0;
+        if (test.picks && taken)
+        {
+            std::vector<rasm::PickHandle> picks;
+            for (const PickProbe &probe : content->probes)
+            {
+                uint32_t x = 0;
+                uint32_t y = 0;
+                glm::dmat4 viewProjection(1.0);
+                if (!projectToPixel(engine, camera, content->origin + probe.point, x, y, viewProjection))
+                    std::printf("  %s: pick %s: its point is outside the frame\n", test.name, probe.name);
+                const uint32_t half = probe.size / 2;
+                picks.push_back(engine.pick(content->scene, camera, sceneTarget,
+                                            {.rect = {.x = x - std::min(x, half), .y = y - std::min(y, half), .width = probe.size, .height = probe.size}, .minAlpha = probe.minAlpha, .skip = probe.skip}));
+            }
+            for (uint32_t extra = 0; extra < 8; ++extra)
+                frame();
+            for (size_t i = 0; i < picks.size(); ++i)
+            {
+                rasm::PickHit hits[64];
+                uint32_t count = 0;
+                const bool ok = engine.takePick(picks[i], hits, 64, count) && checkProbe(engine, *content, camera, test, content->probes[i], hits, count);
+                pickFailures += ok ? 0 : 1;
+            }
+        }
         // A steady frame makes no heap allocation on the main thread.
         for (uint32_t i = 0; taken && i < SETTLE_FRAMES + STEADY_FRAMES; ++i)
         {
@@ -1013,13 +1221,17 @@ namespace
         const auto start = std::chrono::steady_clock::now();
         rasm::ReadbackImage actual;
         AllocationCount steady;
-        const bool renderedOk = renderTest(engine, assets, camera, test, built, actual, steady);
+        uint32_t pickFailures = 0;
+        const bool renderedOk = renderTest(engine, assets, camera, test, built, actual, steady, pickFailures);
         const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
         if (!renderedOk)
         {
             std::printf("%-14s %-6s %10s %8s %8.1f  (it did not render)\n", test.name, "FAIL", "-", "-", seconds);
             return false;
         }
+        // A test whose pick checks failed fails (each printed its line), but its image is still written or compared.
+        if (pickFailures > 0)
+            std::printf("%-14s %-6s %10s %8s %8.1f  (%u pick checks failed)\n", test.name, "FAIL", "-", "-", seconds, pickFailures);
         // A test whose steady frames allocate fails, but its image is still written or compared.
         const bool allocated = steady.count > 0;
         if (allocated)
@@ -1033,18 +1245,19 @@ namespace
             const bool written = rasm::writePng(joinPath(options.goldenDir, std::string(test.name) + ".png"), actual);
             std::printf("%-14s %-6s %10s %8s %8.1f\n", test.name, written ? "update" : "FAIL", "-", "-", seconds);
             rendered.push_back({test.name, std::move(actual)});
-            return written && !allocated;
+            return written && !allocated && pickFailures == 0;
         }
 
         // A test that compares with another test's image of this run renders that one first when it was not selected.
         rasm::ReadbackImage expected;
+        uint32_t ignoredPicks = 0;
         if (test.sameAs)
         {
             auto found = std::find_if(rendered.begin(), rendered.end(), [&](const Rendered &r)
                                       { return r.name == test.sameAs; });
             if (found != rendered.end())
                 expected = found->image;
-            else if (AllocationCount ignored; renderTest(engine, assets, camera, *findTest(test.sameAs), built, expected, ignored))
+            else if (AllocationCount ignored; renderTest(engine, assets, camera, *findTest(test.sameAs), built, expected, ignored, ignoredPicks))
                 rendered.push_back({test.sameAs, expected});
         }
         else
@@ -1076,7 +1289,7 @@ namespace
         if (!pass)
             writeFailure(options, test, actual, &expected, comparison.sizeMatches ? &diff : nullptr);
         rendered.push_back({test.name, std::move(actual)});
-        return pass && !allocated;
+        return pass && !allocated && pickFailures == 0;
     }
 
     // One engine for every test, so the pipelines are compiled once, from source: no disk caches, so every run takes the

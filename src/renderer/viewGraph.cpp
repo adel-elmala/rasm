@@ -257,6 +257,16 @@ namespace rasm
                                     { return state.used && state.scene == scene && state.camera == camera && state.sceneTarget == renderTarget; });
     }
 
+    RenderTargetHandle ViewGraph::getSceneTarget(const View &view) const
+    {
+        for (const ViewState &state : states)
+        {
+            if (built && state.used && state.scene == view.scene && state.camera == view.camera && state.output == view.output.target && isSameWindow(state.window, view.output.window))
+                return state.sceneTarget;
+        }
+        return {};
+    }
+
     // The next render builds a new graph from its list.
     void ViewGraph::release(SceneHandle scene, CameraHandle camera)
     {

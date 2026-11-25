@@ -27,6 +27,21 @@ namespace rasm
         return {.x = x0, .y = y0, .width = x1 - x0, .height = y1 - y0};
     }
 
+    bool getViewPixel(const Window &window, const ViewRect &rect, float x, float y, uint32_t &pixelX, uint32_t &pixelY)
+    {
+        if (window.width == 0 || window.height == 0 || !std::isfinite(x) || !std::isfinite(y))
+            return false;
+        const ViewPixels view = getViewPixels(rect, window.pixelWidth, window.pixelHeight);
+        // Points to the window's pixels: they differ on a HiDPI display.
+        const double px = static_cast<double>(x) * window.pixelWidth / window.width;
+        const double py = static_cast<double>(y) * window.pixelHeight / window.height;
+        if (px < view.x || py < view.y || px >= static_cast<double>(view.x) + view.width || py >= static_cast<double>(view.y) + view.height)
+            return false;
+        pixelX = static_cast<uint32_t>(px) - view.x;
+        pixelY = static_cast<uint32_t>(py) - view.y;
+        return true;
+    }
+
     InputArea getInputArea(const Window &window, const ViewRect &rect)
     {
         const float width = static_cast<float>(window.width);

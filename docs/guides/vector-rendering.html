@@ -397,7 +397,7 @@ const rasm::EntityHandle entity = engine.createEntity("layer", mesh, roads, rasm
     <li><code>src/scene/vector.cpp</code> and <code>shaders/lib/vector.slang</code> agree on the vertex: the kinds, the metrics, the across direction <code>cross(along, up)</code>.</li>
     <li>No offset reaches past <code>MAX_VECTOR_MITER</code> half widths: culling's pad counts on it.</li>
     <li>Vector meshes have no LODs and no meshlets (<code>buildVectorMesh</code>).</li>
-    <li>Every pass that draws a <code>VECTOR</code> material spreads its vertices; a new one (an ID pass for picking) too. The feature id's bits are in <code>tangent.w</code>: copy them, never compute with them.</li>
+    <li>Every pass that draws a <code>VECTOR</code> material spreads its vertices, the pick pass too (<a href="picking.html">Picking</a>): it compiles <code>vertMain</code> with <code>RASM_PICK</code> and writes the feature id. The feature id's bits are in <code>tangent.w</code>: copy them, never compute with them.</li>
     <li>A vertex behind the camera takes the sizes of one at the near plane (<code>getSafeW</code>): a line that crosses the near plane keeps a bounded width.</li>
   </ul>
 </div>

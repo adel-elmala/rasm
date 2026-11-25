@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Picking · RASM</title>
+<meta name="description" content="GPU picking: what is under a pixel, from an ID buffer drawn only for the pixels asked for, read back without a stall, with the world position exact in a large world, and how RASM does it.">
+<meta name="rasm-sources" content="include/rasm/picking.h src/renderer/picking.h src/renderer/picking.cpp shaders/passes/rasm.slang shaders/lib/vector.slang src/renderer/gpuScene.cpp src/renderer/viewGraph.cpp src/renderer/view.cpp src/c/cPicking.cpp examples/26_picking/main.cpp tests/pickingTests.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/picking.js"></script>
+</head>
+<body data-root="../" data-page="guides/picking.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Culling and the frame</p>
+<h1>Picking</h1>
+<p class="lead">Picking answers "what is under this pixel?": the object, the part of it, and the point in the world. An editor selects with it, a game aims with it, a map app asks which road the mouse is on. This page explains how to get the answer from the GPU: draw object ids into a small image, only for the pixels you ask about, and read it back without a stall. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>An <b>ID buffer</b> is an image whose pixels hold numbers, not colors: which object drew the pixel, and where it hit it.</li>
+    <li>Draw it with the <b>same vertex code</b> as the image, so it sees exactly what the user sees: animated, deformed, spread on screen.</li>
+    <li>Draw it only for the <b>rect you ask about</b>: a narrow frustum through those pixels culls almost everything, and a shifted viewport puts the view's pixels in a tiny target.</li>
+    <li>Read it back <b>a few frames later</b>, when the GPU is done. Never wait for it in the frame that asked.</li>
+    <li>Write the hit point <b>relative to the camera</b> in floats, and add the camera's position in doubles on the CPU: exact in a planet-sized world.</li>
+    <li>A rect gives many pixels: <b>group</b> them by object, nearest the rect's centre first.</li>
+  </ul>
+</div>
+
+<h2 id="why"><span class="n">1</span>Two ways to ask</h2>
+
+<p>There are two classic answers. One asks the CPU's copy of the scene, the other asks the GPU's picture of it.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="A ray from the camera tested against the CPU's triangles. The skinned arm and the terrain the GPU lifted are not where the CPU thinks: the ray misses the arm the user sees.">
+      <circle cx="22" cy="70" r="6" class="solid"/>
+      <line x1="22" y1="70" x2="300" y2="58" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <rect x="150" y="76" width="44" height="40" class="ghost"/>
+      <text x="172" y="132" class="mid small t-faint">the rest pose</text>
+      <polygon points="150,40 194,52 194,72 150,60" class="solid"/>
+      <text x="144" y="46" class="end small">what is drawn</text>
+      <path d="M210,118 Q250,96 300,110" class="surface"/>
+      <text x="316" y="20" class="end small t-bad">the CPU tests the rest pose:</text>
+      <text x="316" y="34" class="end small t-bad">the ray misses</text>
+    </svg>
+    <h4>Ray cast on the CPU</h4>
+    <p>Needs the triangles on the CPU, and a copy of every rule that moves them: skinning, morphs, terrain heights, lines spread to a width in pixels. Any difference picks the wrong thing.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="The GPU draws an id per pixel with the same vertex code as the image. The pixel under the cursor holds the id of the arm the user sees.">
+      <path d="M20,20H300M20,40H300M20,60H300M20,80H300M20,100H300M20,120H300M20,20V120M60,20V120M100,20V120M140,20V120M180,20V120M220,20V120M260,20V120M300,20V120" class="grid"/>
+      <rect x="140" y="40" width="40" height="40" class="gpu"/><text x="160" y="64" class="mid mono">7</text>
+      <rect x="180" y="40" width="40" height="20" class="gpu"/><text x="200" y="55" class="mid mono small">7</text>
+      <rect x="60" y="80" width="80" height="40" class="mem o-50"/><text x="100" y="104" class="mid mono">3</text>
+      <circle cx="160" cy="60" r="16" class="hot"/>
+      <text x="316" y="134" class="end small t-ok">the pixel says: object 7</text>
+    </svg>
+    <h4>ID buffer on the GPU</h4>
+    <p>Draw the scene again with each object's id as its "color". The pixel holds the answer, and it is what was drawn, whatever the vertex shader did.</p>
+  </div>
+</div>
+
+<p>The ID buffer is the one to use when the GPU moves or builds geometry. The rest of this page is about doing it well.</p>
+
+<h2 id="id-buffer"><span class="n">2</span>The ID buffer</h2>
+
+<p>Each pixel of the ID buffer holds integers, in an integer format (four 32-bit words a pixel): an id of the object that drew it, and a word or two more, such as the part of a mesh or a map feature's own id. 0 means "nothing": the background.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 220" role="img" aria-label="Left: the image the user sees, a house, a tree and a road. Right: the same pixels in the ID buffer, each holding the number of the object that drew it, with 0 for the sky. The depth test keeps the nearest object, so where the tree stands in front of the house the pixels say tree.">
+    <rect x="20" y="20" width="300" height="180" class="zone"/>
+    <polygon points="70,150 70,90 130,60 190,90 190,150" class="solid"/>
+    <circle cx="200" cy="100" r="34" class="ok"/>
+    <rect x="196" y="130" width="8" height="30" class="solid"/>
+    <path d="M20,180 Q170,150 320,176" class="surface"/>
+    <text x="170" y="214" class="mid small">what the user sees</text>
+    <line x1="334" y1="110" x2="410" y2="110" class="arrow" marker-end="url(#ah)"/>
+    <text x="372" y="100" class="mid small">same draws,</text>
+    <text x="372" y="128" class="mid small">ids out</text>
+    <path d="M430,20H730M430,50H730M430,80H730M430,110H730M430,140H730M430,170H730M430,200H730M430,20V200M480,20V200M530,20V200M580,20V200M630,20V200M680,20V200M730,20V200" class="grid"/>
+    <text x="455" y="40" class="mid mono t-faint">0</text><text x="505" y="40" class="mid mono t-faint">0</text><text x="555" y="40" class="mid mono t-faint">0</text><text x="605" y="40" class="mid mono t-faint">0</text><text x="655" y="40" class="mid mono t-faint">0</text><text x="705" y="40" class="mid mono t-faint">0</text>
+    <text x="455" y="70" class="mid mono t-faint">0</text><text x="505" y="70" class="mid mono t-cpu">1</text><text x="555" y="70" class="mid mono t-cpu">1</text><text x="605" y="70" class="mid mono t-ok">2</text><text x="655" y="70" class="mid mono t-faint">0</text><text x="705" y="70" class="mid mono t-faint">0</text>
+    <text x="455" y="100" class="mid mono t-cpu">1</text><text x="505" y="100" class="mid mono t-cpu">1</text><text x="555" y="100" class="mid mono t-ok">2</text><text x="605" y="100" class="mid mono t-ok">2</text><text x="655" y="100" class="mid mono t-ok">2</text><text x="705" y="100" class="mid mono t-faint">0</text>
+    <text x="455" y="130" class="mid mono t-cpu">1</text><text x="505" y="130" class="mid mono t-cpu">1</text><text x="555" y="130" class="mid mono t-ok">2</text><text x="605" y="130" class="mid mono t-ok">2</text><text x="655" y="130" class="mid mono t-faint">0</text><text x="705" y="130" class="mid mono t-faint">0</text>
+    <text x="455" y="160" class="mid mono t-cpu">1</text><text x="505" y="160" class="mid mono t-cpu">1</text><text x="555" y="160" class="mid mono t-cpu">1</text><text x="605" y="160" class="mid mono">2</text><text x="655" y="160" class="mid mono t-faint">0</text><text x="705" y="160" class="mid mono t-faint">0</text>
+    <text x="455" y="190" class="mid mono t-mem">3</text><text x="505" y="190" class="mid mono t-mem">3</text><text x="555" y="190" class="mid mono t-mem">3</text><text x="605" y="190" class="mid mono t-mem">3</text><text x="655" y="190" class="mid mono t-mem">3</text><text x="705" y="190" class="mid mono t-mem">3</text>
+    <text x="580" y="214" class="mid small">the ID buffer: 1 house, 2 tree, 3 road, 0 sky</text>
+  </svg>
+  <figcaption>The depth test works as in the image: the nearest surface writes the pixel. So the answer is what the user sees, even where objects cross.</figcaption>
+</figure>
+
+<p>The same draw can also write <b>where</b> it hit the surface: the point, and the surface's normal. That turns "which object" into "which object, and where on it", for placing things, measuring and snapping.</p>
+
+<h2 id="small"><span class="n">3</span>Draw only the pixels you ask about</h2>
+
+<p>An ID buffer of the whole screen costs a whole extra frame of drawing, and most of it is never read. The question is about one pixel, or a small rect around the mouse. Two tricks make the work follow the rect:</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Seen from above: the view's wide frustum, and inside it the narrow frustum through a rect of 3 pixels. Only the one object the narrow frustum touches is drawn.">
+      <polygon points="20,65 230,10 230,120" class="zone"/>
+      <polygon points="20,65 230,52 230,78" class="gpu o-50"/>
+      <circle cx="20" cy="65" r="5" class="solid"/>
+      <circle cx="150" cy="62" r="10" class="gpu"/>
+      <circle cx="120" cy="30" r="9" class="ghost"/>
+      <circle cx="190" cy="100" r="11" class="ghost"/>
+      <circle cx="90" cy="88" r="8" class="ghost"/>
+    </svg>
+    <h4>A narrow frustum</h4>
+    <p>Cull with the frustum through the rect, not the view's. Its four side planes come from the rect's edges. In a big scene it keeps a handful of objects.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The view's full image drawn as a large grid, offset so that the rect's pixels fall on a tiny target of 3 by 2 pixels at its corner. Everything else lands outside the target and is clipped.">
+      <rect x="10" y="10" width="200" height="110" class="ghost"/>
+      <text x="110" y="110" class="mid small t-faint">the view (W × H)</text>
+      <rect x="120" y="50" width="45" height="30" class="mem"/>
+      <path d="M135,50V80M150,50V80M120,65H165" class="grid"/>
+      <text x="142" y="96" class="mid small">the target</text>
+      <circle cx="10" cy="10" r="4" class="hot"/>
+      <text x="18" y="26" class="small">the viewport starts at (−x, −y)</text>
+    </svg>
+    <h4>A shifted viewport</h4>
+    <p>Keep the view's whole viewport, W × H, but start it at (−x, −y). The rect's pixels land on a target the size of the rect, and the rasterizer clips the rest.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two pixel grids, the view's and the target's, with the same sample point at the centre of each pixel. The shift is a whole number of pixels, so every sample is where the view's was.">
+      <path d="M20,20H110M20,50H110M20,80H110M20,110H110M20,20V110M50,20V110M80,20V110M110,20V110" class="grid"/>
+      <circle cx="35" cy="35" r="3" class="hot"/><circle cx="65" cy="35" r="3" class="hot"/><circle cx="95" cy="35" r="3" class="hot"/>
+      <circle cx="35" cy="65" r="3" class="hot"/><circle cx="65" cy="65" r="3" class="hot"/><circle cx="95" cy="65" r="3" class="hot"/>
+      <path d="M140,50H220M140,80H220M140,50V80M180,50V80M220,50V80" class="grid"/>
+      <circle cx="160" cy="65" r="3" class="hot"/><circle cx="200" cy="65" r="3" class="hot"/>
+      <text x="180" y="100" class="mid small">same samples</text>
+    </svg>
+    <h4>The same pixels</h4>
+    <p>The projection, the viewport size and every pixel-size rule stay the view's, so lines keep their width in pixels and LODs stay the same. The samples fall exactly where the view's did.</p>
+  </div>
+</div>
+
+<p>The narrow frustum is the view's projection with a stretch in front of it. The rect covers x<sub>0</sub>…x<sub>1</sub> and y<sub>0</sub>…y<sub>1</sub> of normalized device coordinates; the stretch maps that range to −1…1, and the usual plane extraction (the rows of the matrix) gives the rect's planes:</p>
+
+<div class="formula">
+  <p class="eq">x′ = s<sub>x</sub>·x + t<sub>x</sub>·w</p>
+  <p class="eq">s<sub>x</sub> = 2 / (x<sub>1</sub> − x<sub>0</sub>)</p>
+  <p class="eq">t<sub>x</sub> = −(x<sub>1</sub> + x<sub>0</sub>) / (x<sub>1</sub> − x<sub>0</sub>)</p>
+  <p class="eq">planes: rows of S · P · V</p>
+  <dl>
+    <dt>x, w</dt><dd>a point's clip coordinates; NDC x = x / w</dd>
+    <dt>x<sub>0</sub>, x<sub>1</sub></dt><dd>the rect's edges in NDC: 2 · pixel / width − 1 (and 1 − 2 · pixel / height for y, rows down from the top)</dd>
+    <dt>S, P, V</dt><dd>the stretch (the same for y), the projection, the view; the planes x′ ≥ −w, x′ ≤ w and the same for y bound the rect, and near and far stay the view's</dd>
+  </dl>
+</div>
+
+<figure class="lab" data-lab="pick-frustum" data-title="Cut the frustum to the rect">
+  <figcaption>Move the rect along the row of pixels and change its width. Watch how few objects the narrow frustum keeps, and which one the centre pixel's ray meets first.</figcaption>
+</figure>
+
+<h2 id="pixel"><span class="n">4</span>What one pixel holds</h2>
+
+<p>Two integer texels per pixel, 32 bytes, are enough for a rich answer. The second texel keeps a float's bits as an integer, so no value is changed on the way.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 170" role="img" aria-label="Two texels of four 32-bit words each. The first: the object's row plus one (0 means nothing), a feature id, flags, and one spare word. The second: the hit point's x, y and z relative to the camera as float bits, and the normal packed in 32 bits.">
+    <text x="20" y="36" class="small">texel 1</text>
+    <rect x="80" y="18" width="160" height="30" class="cpu"/><text x="160" y="38" class="mid small">object + 1 (0: none)</text>
+    <rect x="240" y="18" width="160" height="30" class="cpu"/><text x="320" y="38" class="mid small">feature id</text>
+    <rect x="400" y="18" width="160" height="30" class="cpu"/><text x="480" y="38" class="mid small">flags (kind, back face)</text>
+    <rect x="560" y="18" width="160" height="30" class="box"/><text x="640" y="38" class="mid small">spare</text>
+    <text x="20" y="96" class="small">texel 2</text>
+    <rect x="80" y="78" width="160" height="30" class="mem"/><text x="160" y="98" class="mid small">x − camera (float)</text>
+    <rect x="240" y="78" width="160" height="30" class="mem"/><text x="320" y="98" class="mid small">y − camera (float)</text>
+    <rect x="400" y="78" width="160" height="30" class="mem"/><text x="480" y="98" class="mid small">z − camera (float)</text>
+    <rect x="560" y="78" width="160" height="30" class="gpu"/><text x="640" y="98" class="mid small">normal: 2 × 16 bits</text>
+    <path d="M80,124V132H720V124" class="arrow"/>
+    <text x="400" y="152" class="mid small">32 bytes a pixel: a 256 × 256 rect is 2 MiB, nothing next to a frame</text>
+  </svg>
+  <figcaption>Integer formats are never blended or converted, so the bits that go in come out. A float target could change a value that is really a bit pattern; an integer one cannot.</figcaption>
+</figure>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A camera far from the world's origin. The hit point is written relative to the camera, a short vector, and the camera's position is kept in doubles on the CPU.">
+      <circle cx="20" cy="110" r="4" class="ghost"/><text x="30" y="114" class="small t-faint">world origin, 6 000 km away</text>
+      <circle cx="120" cy="50" r="6" class="solid"/>
+      <circle cx="200" cy="80" r="5" class="hot"/>
+      <line x1="120" y1="50" x2="196" y2="78" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="150" y="40" class="small">a float: short</text>
+    </svg>
+    <h4>Relative to the camera</h4>
+    <p>A float keeps 24 bits: 0.5 m at 6 000 km, 0.06 mm at 1 km. Written relative to the camera and added to its position in doubles, the point is exact anywhere.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A unit sphere folded onto an octahedron and then flat onto a square: two 16-bit numbers hold any direction.">
+      <polygon points="120,15 200,65 120,115 40,65" class="zone"/>
+      <circle cx="120" cy="65" r="40" class="ghost"/>
+      <line x1="120" y1="65" x2="150" y2="40" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    </svg>
+    <h4>Octahedral normal</h4>
+    <p>Fold the unit sphere onto an octahedron, then flat: two 16-bit numbers, a precision of about 0.005°.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An id that is reused: object 5 is destroyed and a new object gets its slot. The pick names the old object with its old generation, which is now dead.">
+      <rect x="20" y="30" width="80" height="34" class="cpu"/><text x="60" y="52" class="mid small">5, gen 1</text>
+      <rect x="140" y="30" width="80" height="34" class="cpu"/><text x="180" y="52" class="mid small">5, gen 2</text>
+      <line x1="100" y1="47" x2="138" y2="47" class="arrow" marker-end="url(#ah)"/>
+      <text x="120" y="88" class="mid small">a pick of the old frame</text>
+      <text x="120" y="104" class="mid small t-ok">names gen 1: dead</text>
+    </svg>
+    <h4>Ids that outlive the frame</h4>
+    <p>The answer comes frames later. Name the object with a handle that has a generation, so an object destroyed since reads as dead, never as its successor.</p>
+  </div>
+</div>
+
+<h2 id="when"><span class="n">5</span>When the answer comes</h2>
+
+<p>The GPU runs a frame or two behind the CPU (<a href="frames-in-flight.html">frames in flight</a>). The pick is drawn at the end of the next frame, copied to memory the CPU can read, and read when that frame's fence has passed. Waiting at once would stall the CPU until the GPU catches up.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 150" role="img" aria-label="A timeline. In frame F the application asks. At the end of frame F the pick's cull, draws and copy are recorded. The GPU runs frame F while the CPU builds F plus 1. Once frame F's fence has passed, at the latest at the start of frame F plus 2, the CPU reads the copy and the answer is ready.">
+    <text x="10" y="44" class="small t-cpu">CPU</text>
+    <rect x="60" y="26" width="200" height="30" rx="4" class="cpu"/><text x="160" y="46" class="mid small">frame F: ask, record the pick</text>
+    <rect x="266" y="26" width="200" height="30" rx="4" class="cpu"/><text x="366" y="46" class="mid small">frame F + 1</text>
+    <rect x="472" y="26" width="200" height="30" rx="4" class="cpu"/><text x="572" y="46" class="mid small">F + 2: read, answer</text>
+    <text x="10" y="104" class="small t-gpu">GPU</text>
+    <rect x="266" y="86" width="200" height="30" rx="4" class="gpu"/><text x="366" y="106" class="mid small">runs frame F + the pick</text>
+    <line x1="466" y1="101" x2="500" y2="62" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="570" y="106" class="mid small">fence F passed</text>
+    <text x="380" y="140" class="mid small">no wait: the CPU never stops for the GPU</text>
+  </svg>
+  <figcaption>Hover asks every frame and shows the newest answer that is in: it lags the mouse by two frames, which the eye does not notice.</figcaption>
+</figure>
+
+<div class="callout warn">
+  <strong>Read before the memory is used again</strong>
+  <p>The copy lives in the frame slot's memory, and so does anything the ids refer to (a table of objects per slot). Read the answer, and turn ids into handles, before that slot records its next frame. After that, the bytes are another frame's.</p>
+</div>
+
+<h2 id="kinds"><span class="n">6</span>See-through, cut-out, MSAA and TAA</h2>
+
+<p>The ID draw follows the image's rules where they make sense, and picks a rule of its own where a pixel has no single answer.</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A leaf texture with holes: the pick sees the leaf only where the image does.">
+      <path d="M30,100 Q120,10 210,100 Q120,70 30,100" class="ok"/>
+      <circle cx="100" cy="72" r="8" class="paper"/><circle cx="140" cy="70" r="7" class="paper"/>
+    </svg>
+    <h4>Cut-outs</h4>
+    <p>Discard below the cutoff, as the image does: a click through a hole in a leaf hits what is behind it.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A glass pane in front of a box. With a threshold under the glass's alpha the pick hits the glass; above it, it hits the box.">
+      <rect x="130" y="40" width="70" height="60" class="solid"/>
+      <rect x="60" y="20" width="60" height="96" class="gpu o-25"/>
+      <line x1="20" y1="66" x2="128" y2="66" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="90" y="128" class="mid small">alpha 0.3</text>
+    </svg>
+    <h4>See-through</h4>
+    <p>No blending in an id. A see-through surface is picked where its alpha reaches a threshold: an editor sets it low to select glass, a game high to aim through it. Drawn in the image's blend order without writing depth, the one shown on top writes last.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="One pixel with four MSAA samples on an edge, and the single pick sample at its centre.">
+      <rect x="60" y="15" width="100" height="100" class="box"/>
+      <polygon points="60,115 160,15 160,115" class="mem o-50"/>
+      <circle cx="85" cy="40" r="4" class="ghost"/><circle cx="135" cy="35" r="4" class="ghost"/><circle cx="80" cy="95" r="4" class="ghost"/><circle cx="135" cy="90" r="4" class="ghost"/>
+      <circle cx="110" cy="65" r="6" class="hot"/>
+    </svg>
+    <h4>MSAA and TAA</h4>
+    <p>One sample per pixel, at its centre, with no jitter. An edge pixel of the image blends two surfaces; the pick names the one at the centre, the same every frame.</p>
+  </div>
+</div>
+
+<p>Kinds the user wants to look through, such as labels over a map or every object but the ground, are best left out in the vertex stage: their triangles collapse and draw nothing, at no cost.</p>
+
+<h2 id="rect"><span class="n">7</span>A rect: many pixels, one list</h2>
+
+<p>A pick of a rect, say 7 × 7 pixels around the mouse to catch a thin line, gives up to 49 answers. Group the pixels by what they show, and order the groups by the pixel nearest the rect's centre, then by distance from the camera.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 190" role="img" aria-label="A 7 by 7 rect over a thin road crossing a field. The pixels group into the road, 9 pixels, its nearest pixel one away from the centre, and the field, 40 pixels, under the centre itself. Sorted by the distance of the nearest pixel, the field comes first; a hover that wants the road picks with a rule of its own, or skips the ground.">
+    <path d="M40,20H250M40,50H250M40,80H250M40,110H250M40,140H250M40,170H250M40,20V170M70,20V170M100,20V170M130,20V170M160,20V170M190,20V170M220,20V170M250,20V170" class="grid"/>
+    <rect x="40" y="20" width="210" height="150" class="ok o-25"/>
+    <polygon points="40,140 250,50 250,80 40,170" class="mem o-75"/>
+    <circle cx="145" cy="95" r="6" class="hot"/>
+    <text x="145" y="186" class="mid small">the rect and its centre</text>
+    <line x1="270" y1="95" x2="330" y2="95" class="arrow" marker-end="url(#ah)"/>
+    <text x="300" y="86" class="mid small">group</text>
+    <rect x="340" y="40" width="390" height="40" rx="6" class="ok o-50"/><text x="356" y="65" class="small">1. the field: 40 pixels, nearest at the centre (0 px)</text>
+    <rect x="340" y="100" width="390" height="40" rx="6" class="mem"/><text x="356" y="125" class="small">2. the road: 9 pixels, nearest 1 px from the centre</text>
+    <text x="535" y="166" class="mid small">each group keeps its nearest pixel's point and normal</text>
+  </svg>
+  <figcaption>Hover takes the first group; a box selection takes all of them. The pixel count says how much of the rect each one covers.</figcaption>
+</figure>
+
+<h2 id="pitfalls"><span class="n">8</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>The pick names the wrong object at an edge</dt><dd>The image was jittered (TAA) or multisampled, and the ID draw was not. Pick at the pixel's centre without jitter, and accept that an edge pixel belongs to one surface.</dd></div>
+  <div><dt>Thin lines are hard to hit</dt><dd>A one-pixel line is missed by a one-pixel pick most of the time. Pick a small rect (5 × 5, 7 × 7) and take the nearest group of the kind you want.</dd></div>
+  <div><dt>The position jumps in steps far from the origin</dt><dd>The point was written in world coordinates as floats. Write it relative to the camera and add the camera's position in doubles.</dd></div>
+  <div><dt>The frame stalls when the user clicks</dt><dd>The answer was read in the frame that asked, so the CPU waited for the GPU. Read it two frames later, when it is ready.</dd></div>
+  <div><dt>A deleted object comes back from a click</dt><dd>The id was a bare slot, reused by a new object. Keep a generation with it, and map it with the table the frame drew with.</dd></div>
+  <div><dt>The pick costs a frame</dt><dd>The ID buffer covered the whole screen, or drew every visible object. Cull with the rect's frustum and draw into a rect-sized target.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
+
+<p><code>Renderer::pick</code> takes a view of <code>Renderer::render(views, count)</code>, or a scene, camera and render target of the application's own graph, and a <code>PickDesc</code>: the rect in the view's pixels (<code>ViewPixels</code>, at most <code>MAX_PICK_SIZE</code> on each side), <code>minAlpha</code> and the <code>skip</code> mask. It returns a <code>PickHandle</code>. The next <code>endFrame</code> records it, <code>isPickReady</code> says when the answer is in, and <code>takePick</code> fills an array of <code>PickHit</code>s. Nothing runs while nobody picks: no pass, no barrier, no memory.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="RASM's pick in endFrame, after the frame's passes. For each pick: the view's SceneData from this frame is copied with the projection without jitter, the rect's frustum planes and the pick's own culling buffer; countMain and writeMain cull the view's draw list into it; the pick pipelines draw those draws into the pick's column of the slot's two R32G32B32A32_UINT targets, with the viewport shifted by the rect. Then one copy of the targets' used corner into a host-readable buffer. Two frames later readPicks groups the pixels and maps each instance row to its entity with the slot's InstanceOwners.">
+    <rect x="20" y="20" width="160" height="56" rx="6" class="cpu"/><text x="100" y="42" class="mid mono small">pick(view, desc)</text><text x="100" y="60" class="mid small">a request, any time</text>
+    <line x1="180" y1="48" x2="214" y2="48" class="arrow" marker-end="url(#ah)"/>
+    <rect x="216" y="20" width="170" height="56" rx="6" class="cpu"/><text x="301" y="42" class="mid small">SceneData of the view,</text><text x="301" y="60" class="mid small">rect planes, no jitter</text>
+    <line x1="386" y1="48" x2="420" y2="48" class="arrow" marker-end="url(#ah)"/>
+    <rect x="420" y="20" width="164" height="56" rx="6" class="gpu"/><text x="502" y="42" class="mid mono small">countMain + writeMain</text><text x="502" y="60" class="mid small">frustum only</text>
+    <line x1="584" y1="48" x2="606" y2="48" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="608" y="20" width="140" height="56" rx="6" class="shader"/><text x="678" y="42" class="mid mono small">vertMain, pickMain</text><text x="678" y="60" class="mid small">per alpha mode</text>
+    <line x1="678" y1="76" x2="678" y2="110" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="430" y="112" width="318" height="70" rx="6" class="mem"/>
+    <text x="589" y="132" class="mid small">the slot's targets: picks side by side</text>
+    <rect x="446" y="142" width="40" height="30" class="gpu o-50"/><rect x="486" y="142" width="96" height="30" class="gpu o-25"/><rect x="582" y="142" width="20" height="30" class="gpu o-50"/>
+    <text x="680" y="162" class="mid small">ids, positions</text>
+    <line x1="430" y1="147" x2="380" y2="147" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="216" y="120" width="160" height="56" rx="6" class="mem"/><text x="296" y="142" class="mid small">copy of the used corner</text><text x="296" y="160" class="mid small">host-readable buffer</text>
+    <line x1="296" y1="176" x2="296" y2="214" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="160" y="216" width="270" height="62" rx="6" class="cpu"/><text x="295" y="238" class="mid mono small">readPicks: fence passed</text><text x="295" y="256" class="mid small">group, row → entity, + origin</text>
+    <line x1="430" y1="247" x2="470" y2="247" class="arrow" marker-end="url(#ah)"/>
+    <rect x="472" y="216" width="160" height="62" rx="6" class="cpu"/><text x="552" y="238" class="mid mono small">takePick</text><text x="552" y="256" class="mid small">PickHit[], no wait</text>
+    <text x="20" y="150" class="small">recorded: endFrame</text><text x="20" y="250" class="small">read: beginFrame</text><text x="20" y="266" class="small">of F + 2</text>
+  </svg>
+  <figcaption>The pick reuses the view's culling shader and vertex code, so its draws are the view's: the same LODs, the same terrain displacement and skinning, the same vector widths and label placement.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>This page</th><th>RASM</th></tr>
+  <tr><td>A narrow frustum</td><td><code>getPickClipMatrix</code> stretches the rect to −1…1; <code>getFrustumPlanes</code> of it times the view's unjittered projection and view gives the planes. The cull is <code>countMain</code> and <code>writeMain</code> of <code>shaders/passes/cull.slang</code> with <code>hizLevelCount</code> 0 and no meshlets: frustum only, the view's LODs and vector padding.</td></tr>
+  <tr><td>A shifted viewport</td><td>The viewport is (column − x, −y, W, H) on the slot's targets, the scissor the pick's column. Up to <code>MAX_FRAME_PICKS</code> picks a frame sit side by side in one row up to <code>MAX_PICK_ROW_WIDTH</code> pixels; the others wait a frame.</td></tr>
+  <tr><td>The same vertex code</td><td><code>shaders/passes/rasm.slang</code> compiled with <code>RASM_PICK</code>: <code>vertMain</code> as the image's, <code>pickMain</code> instead of <code>fragMain</code>, one pipeline per alpha mode, made on the first pick (<code>P31</code>).</td></tr>
+  <tr><td>Two integer texels</td><td><code>R32G32B32A32_UINT</code> ids (instance row + 1, feature id, <code>PICK_HIT_*</code> flags, the material row) and positions (render-space float bits, <code>packPickNormal</code>), with a <code>D32_SFLOAT</code> depth.</td></tr>
+  <tr><td>Relative to the camera</td><td>The view's render space (<a href="large-world-precision.html">Large worlds</a>); <code>toWorldPosition</code> with the view's origin of that frame. A vector feature writes its own point under the pixel without its depth bias, so an overlay or a label gives the ground under it.</td></tr>
+  <tr><td>Ids that outlive the frame</td><td>The GPU writes the instance row. <code>InstanceOwners</code> keeps, per frame slot, which entity's sub-mesh each row holds as that slot's table does; <code>readPicks</code> maps the rows before the slot's next sync, so a destroyed entity's row reused at once still names the old <code>EntityHandle</code>, which <code>Renderer::isAlive</code> then calls dead.</td></tr>
+  <tr><td>See-through and cut-outs</td><td><code>MASK</code> cuts at the material's cutoff; <code>BLEND</code> meshes and every vector feature (lines, points, polygons, labels) are picked where their alpha as drawn reaches <code>PickDesc::minAlpha</code> (0.5 by default, a line's drawn edge; 1/255 steps, rounded down). The blend run is sorted as the view sorts it (draw order, then back to front: <code>recordBlendSort</code> on the pick's SceneData) and drawn last without writing depth, so the feature the view shows on top writes the pixel last. Overlays stay on top, as on screen.</td></tr>
+  <tr><td>Kinds to look through</td><td><code>PICK_SKIP_MESHES</code>, <code>PICK_SKIP_BLEND</code>, <code>PICK_SKIP_TERRAIN</code>, <code>PICK_SKIP_VECTORS</code>, <code>PICK_SKIP_LABELS</code>, <code>PICK_SKIP_OVERLAYS</code>: their triangles collapse in the vertex stage.</td></tr>
+  <tr><td>A rect, grouped</td><td><code>groupPickSamples</code>: a <code>PickHit</code> per (row, feature) with its pixel count and its pixel nearest the centre, then nearest the camera.</td></tr>
+  <tr><td>No allocation, no stall</td><td>Requests, their hit vectors and the scratch keep their capacity, so a hover pick every frame allocates nothing (the image tests count it). <code>takePick</code> waits only when called before the frame is done.</td></tr>
+</table>
+</div>
+
+<div class="stats">
+  <div><b>0 ms</b><span>while nobody picks</span><small>no pass is recorded</small></div>
+  <div><b>0.15 ms</b><span>a 1 × 1 pick in 05_city</span><small>145 000 entities, 1920 × 1080, RTX 3060, Release</small></div>
+  <div><b>0.03 ms</b><span>a 1 × 1 pick in 26_picking</span><small>about 40 draws</small></div>
+</div>
+
+<h3>Code map</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The API</td><td><code>include/rasm/picking.h</code> (<code>PickDesc</code>, <code>PickHit</code>, the flags), <code>Renderer::pick</code>, <code>isPickReady</code>, <code>takePick</code> in <code>include/rasm/renderer.h</code>; <code>getViewPixel</code> in <code>include/rasm/view.h</code></td></tr>
+  <tr><td>Requests, recording, read-out</td><td><code>src/renderer/picking.cpp</code>: <code>queuePick</code>, <code>recordPicks</code> (from <code>endFrame</code>), <code>finishPickSubmit</code>, <code>readPicks</code> (from <code>beginFrame</code> after the fence, and <code>isPickReady</code>)</td></tr>
+  <tr><td>The view's frame data</td><td><code>prepareSceneView</code> keeps <code>SceneView::sceneData</code>, its unjittered projection and its origin; <code>ViewGraph::getSceneTarget</code> finds a view's scene target</td></tr>
+  <tr><td>The shader</td><td><code>pickMain</code>, <code>isPickSkipped</code>, <code>packPickNormal</code> in <code>shaders/passes/rasm.slang</code>; <code>VectorVertex::depthPoint</code> in <code>shaders/lib/vector.slang</code></td></tr>
+  <tr><td>The C API</td><td><code>rasm_pick_view</code>, <code>rasm_pick_target</code>, <code>rasm_is_pick_ready</code>, <code>rasm_take_pick</code> in <code>src/c/cPicking.cpp</code></td></tr>
+  <tr><td>Example</td><td><code>examples/26_picking/main.cpp</code>: hover, click and box picks in two views, and scripted checks far from the origin</td></tr>
+  <tr><td>Tests</td><td><code>tests/pickingTests.cpp</code> (the rect's matrix, the grouping, the normal, the row owners); the image tests <code>picking</code>, <code>picking_msaa4</code>, <code>picking_taa</code>, <code>far_picking</code> pick known points</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Rules to keep</strong>
+  <p>A pick reads only what its frame drew: the view's SceneData of that frame and the slot's tables. Read a slot's picks before that slot records new ones or syncs its instance rows. Keep the pick draw's vertex code the image's: a rule added to <code>vertMain</code> reaches the pick by itself.</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Vulkan specification, "Viewport": the viewport's bounds range, which allows a negative origin.</li>
+  <li>Cigolle et al., "A Survey of Efficient Representations for Independent Unit Vectors" (octahedral normals).</li>
+  <li><a href="frustum-culling.html">Frustum culling</a>, <a href="headless-readback.html">Headless rendering and readback</a>, <a href="large-world-precision.html">Large worlds</a>, <a href="generational-handles.html">Generational handles</a>.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

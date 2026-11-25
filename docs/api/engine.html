@@ -63,6 +63,8 @@
   <tr><td><a href="#TileStreamer"><code>TileStreamer</code></a></td><td>keep a map's or a world's tiles in memory under a byte budget</td><td>this page</td></tr>
   <tr><td><a href="#readFrame"><code>readFrame</code></a> / <a href="#readTexture"><code>readTexture</code></a></td><td>copy the frame or a texture to the CPU (screenshots, thumbnails, tests)</td><td>this page</td></tr>
   <tr><td><a href="#isReadbackReady"><code>isReadbackReady</code></a> / <a href="#takeReadback"><code>takeReadback</code></a></td><td>is the copy done, take its pixels</td><td>this page</td></tr>
+  <tr><td><a href="#pick"><code>pick</code></a> / <a href="#isPickReady"><code>isPickReady</code></a> / <a href="#takePick"><code>takePick</code></a></td><td>what is under a pixel or a rect of a view: entity, feature, world position</td><td>this page</td></tr>
+  <tr><td><a href="#isAlive"><code>isAlive</code></a></td><td>is an entity (a pick's, say) still there</td><td>this page</td></tr>
   <tr><td><a href="#getFrameStats"><code>getFrameStats</code></a></td><td>frame times, draws, memory</td><td>this page</td></tr>
   <tr><td><a href="#beginGpuTimer"><code>beginGpuTimer</code></a> / <a href="#endGpuTimer"><code>endGpuTimer</code></a></td><td>time your own GPU work</td><td>this page</td></tr>
   <tr><td><a href="#queryMemoryStats"><code>queryMemoryStats</code></a></td><td>GPU memory budget and use</td><td>this page</td></tr>
@@ -469,6 +471,13 @@ const rasm::TextureHandle tvPicture = engine.getRenderTargetTexture(tv);</code><
     <p>The pixels <code>rect</code> covers in an image of <code>width</code> × <code>height</code>, as a <code>ViewPixels</code> (<code>x</code>, <code>y</code>, <code>width</code>, <code>height</code>, all <code>uint32_t</code>). Each edge is rounded on its own, so rects that touch share their edge: no gap and no overlap. Edges are kept inside the image, and the result is at least 1 × 1 (0 × 0 for an empty image). The tone map uses it for its viewport and scissor, and <code>render</code> for each view's target size.</p>
     <pre><code>const rasm::ViewPixels pip = rasm::getViewPixels({.x = 0.75f, .y = 0.0f, .width = 0.25f, .height = 0.25f}, 1280, 720);
 // pip is {960, 0, 320, 180}</code></pre>
+  </div>
+</div>
+
+<div class="api" id="getViewPixel">
+  <pre class="sig">bool                    getViewPixel(const Window&amp; window, const ViewRect&amp; rect, float x, float y, uint32_t&amp; pixelX, uint32_t&amp; pixelY);</pre>
+  <div class="body">
+    <p>The pixel of a window view (the view at <code>rect</code> of <code>window</code>) under a point in the window's points, such as the mouse's, counted from the view's top-left corner: what <a href="#pick"><code>pick</code></a> takes. It turns points into pixels with the window's pixel size, so it holds on a HiDPI display. False when the point is outside the view.</p>
   </div>
 </div>
 
@@ -1525,6 +1534,100 @@ const rasm::ReadbackHandle hdr = engine.readTexture(engine.getRenderTargetTextur
     if (engine.takeReadback(shot, image))
         rasm::writePng("frame.png", image);
 }</code></pre>
+  </div>
+</div>
+
+<h3 id="picking">Picking: what is under a pixel</h3>
+
+<p>A pick asks a view what it drew under a rect of its pixels: the entity and its sub-mesh, a vector feature's id, the world position in doubles and the normal. It is drawn at the end of the next frame through the rect's own small frustum, so it costs a cull of the draw list and the few draws that touch the rect, and nothing at all while nobody picks; its answer comes a couple of frames later, like a readback. The idea, step by step: <a href="../guides/picking.html">Picking</a>. <code>examples/26_picking</code> hovers, clicks and box-picks in two views.</p>
+
+<pre><code>// Every frame: the pixel under the mouse, then the newest answer that is in.
+uint32_t x = 0;
+uint32_t y = 0;
+if (rasm::getViewPixel(engine.getMainWindow(), view.output.rect, mouseX, mouseY, x, y))
+    pending = engine.pick(view, {.rect = {.x = x, .y = y, .width = 1, .height = 1}});
+if (pending.isValid() &amp;&amp; engine.isPickReady(pending))
+{
+    rasm::PickHit hit;
+    uint32_t count = 0;
+    if (engine.takePick(pending, &amp;hit, 1, count) &amp;&amp; count &gt; 0)
+        std::printf("entity %llu at %.3f %.3f %.3f\n", static_cast&lt;unsigned long long&gt;(hit.entity.index), hit.position.x, hit.position.y, hit.position.z);
+    pending = {};
+}</code></pre>
+
+<div class="api" id="pick">
+  <pre class="sig">PickHandle pick(const View&amp; view, const PickDesc&amp; desc);
+PickHandle pick(SceneHandle scene, CameraHandle camera, const RenderTargetHandle&amp; renderTarget, const PickDesc&amp; desc);</pre>
+  <div class="body">
+    <p>Asks what <code>view</code>, a view of <a href="#render"><code>render(views, count)</code></a>, drew under <code>desc.rect</code>; the second form asks the scene view of your own graph that <a href="#addScenePasses"><code>addScenePasses</code></a> draws into <code>renderTarget</code>. Call it before or during the frame you want: the next <code>endFrame</code> draws it, as that frame drew the view, at the pixels' centres, without TAA's jitter and with one sample per pixel (MSAA does not change the answer). If the view did not draw in that frame, the pick fails. Returns an invalid handle, with an error, for a rect of 0 or more than <code>MAX_PICK_SIZE</code> (256) pixels on a side, a <code>skip</code> with unknown bits, or a scene or camera that is not alive. Several picks a frame are fine: up to 8 go out in one frame, side by side, and the others in the next.</p>
+  </div>
+</div>
+
+<div class="api" id="PickDesc">
+  <pre class="sig">constexpr uint32_t              MAX_PICK_SIZE           = 256;
+
+constexpr uint32_t              PICK_SKIP_MESHES        = 1u &lt;&lt; 0;  // opaque and cut-out (MASK) meshes, not terrain
+constexpr uint32_t              PICK_SKIP_BLEND         = 1u &lt;&lt; 1;  // see-through (BLEND) meshes, not vector features
+constexpr uint32_t              PICK_SKIP_TERRAIN       = 1u &lt;&lt; 2;
+constexpr uint32_t              PICK_SKIP_VECTORS       = 1u &lt;&lt; 3;  // lines, polygons and points
+constexpr uint32_t              PICK_SKIP_LABELS        = 1u &lt;&lt; 4;
+constexpr uint32_t              PICK_SKIP_OVERLAYS      = 1u &lt;&lt; 5;  // VectorDepth::OVERLAY features, labels too
+constexpr uint32_t              PICK_SKIP_ALL           = (1u &lt;&lt; 6) - 1;
+
+struct PickDesc
+{
+    ViewPixels                  rect            = {.x = 0, .y = 0, .width = 1, .height = 1};
+    float                       minAlpha        = 0.5f;
+    uint32_t                    skip            = 0;        // PICK_SKIP_*
+};</pre>
+  <div class="body">
+    <p><code>rect</code> is in the view's pixels from its top-left corner (a <a href="#getViewPixels"><code>ViewPixels</code></a>; <a href="#getViewPixel"><code>getViewPixel</code></a> turns a mouse position into one); a rect that reaches past the view is cut to it. <code>minAlpha</code>: a see-through surface (a <code>BLEND</code> material, and every vector feature: lines, polygons, points, labels) is picked where its alpha as drawn is at least this, else the pick sees what is behind it. 0.5 puts a line's pick edge on its drawn edge; a polygon filled at alpha 0.4 needs less. Cut-outs (<code>MASK</code>) cut where the image does. <code>skip</code> leaves kinds out, so the pick looks through them: <code>PICK_SKIP_LABELS</code> to select under the names, <code>PICK_SKIP_ALL &amp; ~PICK_SKIP_TERRAIN</code> for "where on the ground".</p>
+  </div>
+</div>
+
+<div class="api" id="PickHit">
+  <pre class="sig">constexpr uint32_t              PICK_HIT_FEATURE        = 1u &lt;&lt; 0;  // a vector feature (a label too): PickHit::feature is its id
+constexpr uint32_t              PICK_HIT_LABEL          = 1u &lt;&lt; 1;
+constexpr uint32_t              PICK_HIT_OVERLAY        = 1u &lt;&lt; 2;
+constexpr uint32_t              PICK_HIT_TERRAIN        = 1u &lt;&lt; 3;
+constexpr uint32_t              PICK_HIT_BACK_FACE      = 1u &lt;&lt; 4;  // the back of a double-sided surface; the normal faces the camera
+
+struct PickHit
+{
+    EntityHandle                entity;
+    uint32_t                    subMesh         = 0;
+    uint32_t                    feature         = 0;
+    uint32_t                    flags           = 0;        // PICK_HIT_*
+    uint32_t                    pixels          = 0;
+    uint32_t                    x               = 0;
+    uint32_t                    y               = 0;
+    glm::dvec3                  position        = glm::dvec3(0.0);
+    glm::vec3                   normal          = glm::vec3(0.0f, 1.0f, 0.0f);
+    double                      distance        = 0.0;
+};</pre>
+  <div class="body">
+    <p>One thing the rect covers: an entity's sub-mesh (a glTF primitive), and for a vector feature the id it was built with (<code>addVectorLines</code>' <code>featureIds</code>, <code>LabelDesc::featureId</code>). <code>pixels</code> is how many of the rect show it; <code>x</code>, <code>y</code> is its pixel nearest the rect's centre, and <code>position</code> (world space, exact far from the origin), <code>normal</code> (the surface's or the terrain's, not a normal map's) and <code>distance</code> (from the camera) are that pixel's. A vector feature gives its own point under the pixel without its depth bias, so an overlay or a label gives the ground under it; a line or point that faces the screen is within about half its width of the ground point. <code>entity</code> is the entity the frame drew: one destroyed since keeps its old handle, which <a href="#isAlive"><code>isAlive</code></a> calls dead.</p>
+  </div>
+</div>
+
+<div class="api" id="isPickReady">
+  <pre class="sig">bool isPickReady(PickHandle pick);</pre>
+  <div class="body">
+    <p>True once <code>takePick</code> would not wait: the GPU has finished the frame that drew the pick, or it failed. Poll it each frame. False for a pick no frame has drawn yet and for an unknown handle.</p>
+  </div>
+</div>
+
+<div class="api" id="takePick">
+  <pre class="sig">bool takePick(PickHandle pick, PickHit* hits, uint32_t capacity, uint32_t&amp; hitCount);</pre>
+  <div class="body">
+    <p>Writes up to <code>capacity</code> hits, nearest the rect's centre first, then nearest the camera; <code>hitCount</code> is how many there are (0: the rect shows only the background). The handle is then used up. <span class="tag main-thread">may block</span> When the GPU has not finished the frame that drew it, it waits for that frame's fence. Returns false when the pick failed (its view did not draw in that frame), or no frame has drawn it yet: then it does not wait, and the pick stays pending. A pick every frame allocates nothing.</p>
+  </div>
+</div>
+
+<div class="api" id="isAlive">
+  <pre class="sig">bool isAlive(EntityHandle entity) const;</pre>
+  <div class="body">
+    <p>False for an entity that was destroyed, or a handle that never named one. A pick's answer comes frames after its frame, so its entity may be gone.</p>
   </div>
 </div>
 

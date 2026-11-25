@@ -11,6 +11,7 @@
 #include "renderer/lightClusters.h"
 #include "renderer/animation.h"
 #include "renderer/localShadows.h"
+#include "renderer/picking.h"
 #include "renderer/renderSpace.h"
 #include "renderer/shadowCascades.h"
 #include "renderer/uberMaterialTypes.h"
@@ -234,25 +235,6 @@ namespace rasm
             return levelCount;
         }
 
-        // The planes of clip space (-w <= x, y <= w and 0 <= z <= w) are sums of rows of projection * view, in world space.
-        // The infinite far plane of reversed-Z comes out as (0, 0, 0, nearZ), which every sphere passes.
-        void getFrustumPlanes(const glm::mat4 &viewProjection, glm::vec4 planes[6])
-        {
-            const glm::mat4 rows = glm::transpose(viewProjection);
-            planes[0] = rows[3] + rows[0];
-            planes[1] = rows[3] - rows[0];
-            planes[2] = rows[3] + rows[1];
-            planes[3] = rows[3] - rows[1];
-            planes[4] = rows[2];
-            planes[5] = rows[3] - rows[2];
-            for (uint32_t i = 0; i < 6; ++i)
-            {
-                const float length = glm::length(glm::vec3(planes[i]));
-                if (length > 0.0f)
-                    planes[i] /= length;
-            }
-        }
-
         // glTF: a transform with a negative determinant mirrors the mesh, so its front faces turn clockwise (D8).
         // det(T * R * S * M) = sx * sy * sz * det(M). The blend run is one run, so that it stays in one sorted order:
         // fragBlend drops the back faces of a single-sided material instead.
@@ -427,6 +409,25 @@ namespace rasm
         return ctx.getBufferDeviceAddress(gpuScene.sceneData[frame]) + view * sizeof(gfx::SceneData);
     }
 
+    // The planes of clip space (-w <= x, y <= w and 0 <= z <= w) are sums of rows of projection * view, in world space.
+    // The infinite far plane of reversed-Z comes out as (0, 0, 0, nearZ), which every sphere passes.
+    void getFrustumPlanes(const glm::mat4 &viewProjection, glm::vec4 planes[6])
+    {
+        const glm::mat4 rows = glm::transpose(viewProjection);
+        planes[0] = rows[3] + rows[0];
+        planes[1] = rows[3] - rows[0];
+        planes[2] = rows[3] + rows[1];
+        planes[3] = rows[3] - rows[1];
+        planes[4] = rows[2];
+        planes[5] = rows[3] - rows[2];
+        for (uint32_t i = 0; i < 6; ++i)
+        {
+            const float length = glm::length(glm::vec3(planes[i]));
+            if (length > 0.0f)
+                planes[i] /= length;
+        }
+    }
+
     bool Renderer::createGpuScene()
     {
         // Material rows are indexed by handle, from 1, so the table has a row for each of maxMaterials materials and row 0.
@@ -454,11 +455,12 @@ namespace rasm
         gpuScene->instanceMeshlets.assign(config.maxInstances, 0);
         gpuScene->instanceMeshletWords.assign(config.maxInstances, -1);
         gpuScene->instanceMeshletWordCounts.assign(config.maxInstances, 0);
+        picks->owners.reset(config.maxInstances);
 
-        // The CPU rewrites each view's SceneData every frame, so it stays host-visible.
+        // The CPU rewrites each view's SceneData every frame, so it stays host-visible. The picks' come after the views'.
         for (auto &buffer : gpuScene->sceneData)
         {
-            buffer = ctx.createBuffer({.name = "Scene Data Buffer", .usage = BufferUsage::STORAGE, .size = MAX_SCENE_VIEWS * sizeof(gfx::SceneData), .hostVisible = true});
+            buffer = ctx.createBuffer({.name = "Scene Data Buffer", .usage = BufferUsage::STORAGE, .size = (MAX_SCENE_VIEWS + MAX_FRAME_PICKS) * sizeof(gfx::SceneData), .hostVisible = true});
             if (!buffer.isValid())
             {
                 spdlog::error("Failed to create the scene data buffer.");
@@ -545,6 +547,7 @@ namespace rasm
                     EntityDrawState &state = gpuScene->entities[entity.index];
                     state.firstInstance = static_cast<uint32_t>(firstRow);
                     state.instanceCount = rowCount;
+                    picks->owners.assign(state.firstInstance, rowCount, entity);
                     state.waitingForTextures = !texturesLoaded(*this, entityRef, mesh);
                     for (uint32_t r = 0; r < rowCount; ++r)
                     {
@@ -633,6 +636,7 @@ namespace rasm
 
         const auto frame = static_cast<uint32_t>(frameCount);
         syncGpuAnimation();
+        picks->owners.sync(frame);
         gpuScene->instances.upload(ctx, frame);
         gpuScene->materials.upload(ctx, frame);
         for (auto &drawList : gpuScene->drawLists)
@@ -1433,6 +1437,8 @@ namespace rasm
 
         const auto &drawList = gpuScene->drawLists[view.scene.index];
         const auto frame = static_cast<uint32_t>(frameCount);
+        // A pick of this frame finds the view drawn; one that is not ready shows nothing.
+        view.preparedSync = gpuScene->syncCount;
         if (drawList.draws.empty() || (drawList.staleSlots & (1u << frame)) != 0)
         {
             // Nothing to draw, but the sky still shows, so a scene whose meshes still load is not left black. The sky
@@ -1914,6 +1920,9 @@ namespace rasm
         if (!view.depthOnly && !drawList.labelEntities.empty())
             placeViewLabels(viewIndex, cameraProjection, worldCameraView, width, height, sceneData);
         ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), viewIndex * sizeof(gfx::SceneData));
+        view.sceneData = sceneData;
+        view.projection = cameraProjection;
+        view.origin = origin;
 
         // cull.slang's groups each lie inside one run.
         if (culled)
@@ -2082,8 +2091,13 @@ namespace rasm
     {
         const SceneView &view = gpuScene->views[viewIndex];
         const auto frame = static_cast<uint32_t>(frameCount);
-        const auto commandBuffer = frameResources[frame].commandBuffer;
-        const uint32_t capacity = getBlendSortCapacity(gpuScene->drawLists[view.scene.index].runs[view.blendRun].count);
+        recordBlendSort(getSceneDataAddress(ctx, *gpuScene, frame, viewIndex), getBlendSortCapacity(gpuScene->drawLists[view.scene.index].runs[view.blendRun].count));
+    }
+
+    // The sort of a SceneData's blend run (a view's, or a pick's: picking.cpp), whose sort buffers hold capacity keys.
+    void Renderer::recordBlendSort(uint64_t sceneDataAddress, uint32_t capacity)
+    {
+        const auto commandBuffer = frameResources[frameCount].commandBuffer;
         BlendSortDispatch dispatches[MAX_BLEND_SORT_DISPATCHES];
         const uint32_t dispatchCount = getBlendSortDispatches(capacity, dispatches, MAX_BLEND_SORT_DISPATCHES);
         // A cut plan would leave the draws half sorted or skip the write; unsorted draws are still valid. Every
@@ -2095,7 +2109,7 @@ namespace rasm
         }
 
         const uint32_t timer = beginGpuTimer(commandBuffer, "Blend Sort");
-        gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, frame, viewIndex)};
+        gfx::PushConstants pushConstants{.scene = sceneDataAddress};
         for (uint32_t i = 0; i < dispatchCount; ++i)
         {
             if (i > 0)

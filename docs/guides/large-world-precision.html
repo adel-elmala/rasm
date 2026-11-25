@@ -229,7 +229,7 @@
   <tr><td>View, frustum planes, LOD plane</td><td>Made from the world-space view in doubles, moved by the origin, then floats. The view matrix becomes a rotation.</td></tr>
   <tr><td>Shadow maps</td><td>The light's matrices in doubles, moved by the origin. A cascade still snaps to the <b>world's</b> texel grid, in doubles: snapped in render space, the grid would move with the camera and the edges would crawl.</td></tr>
   <tr><td>Last frame (motion vectors)</td><td>The camera moved since the last frame, so the last frame's view-projection is kept in world space, in doubles, and moved into this frame's render space. An object's last translation is stored as <i>last − now</i>, a small number.</td></tr>
-  <tr><td>Picking, readbacks</td><td>A render-space position read from the GPU plus the view's origin, in doubles, is the world position.</td></tr>
+  <tr><td>Picking, readbacks</td><td>A render-space position read from the GPU plus the view's origin, in doubles, is the world position: <code>takePick</code> gives it so, to a millimetre 6 000 km from the origin (<a href="picking.html">Picking</a>).</td></tr>
 </table>
 </div>
 

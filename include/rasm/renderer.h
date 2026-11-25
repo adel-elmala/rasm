@@ -13,6 +13,7 @@
 #include "rasm/input.h"
 #include "rasm/light.h"
 #include "rasm/mesh.h"
+#include "rasm/picking.h"
 #include "rasm/readback.h"
 #include "rasm/terrain.h"
 #include "rasm/text.h"
@@ -50,6 +51,8 @@ namespace rasm
     struct Ui;
     struct Inspector;
     struct Readbacks;
+    struct Picks;
+    struct PickRequest;
     struct InspectEntry;
     struct TaaState;
     namespace gfx { struct SceneData; }
@@ -190,6 +193,8 @@ namespace rasm
         PipelineHandle              createComputePipeline(const std::string& name, const std::string& shaderSource, const std::string& entryPoint = "compMain");
         const Material&             getMaterial(const MaterialHandle& handle);
         Transform                   getTransform(EntityHandle entity);
+        // False for an entity that was destroyed (a pick may name one) or never made.
+        bool                        isAlive(EntityHandle entity) const;
         Transform                   getCameraTransform(CameraHandle camera);
         CameraProjection            getCameraProjection(CameraHandle camera);
         CameraController            getCameraController(CameraHandle camera);
@@ -276,6 +281,20 @@ namespace rasm
         // Converts the copy into image and frees it. Blocks until the GPU has finished the frame that copied it when it
         // is not ready yet. Returns false when the copy failed, or no frame has copied it yet (then it stays pending).
         bool                        takeReadback(ReadbackHandle readback, ReadbackImage& image);
+        // What is under desc.rect of a view that render(views, count) draws, as that frame drew it (no TAA jitter, one
+        // sample per pixel, at the pixels' centres). Call it before or during the frame you want: the next endFrame
+        // records it, and its answer is ready a couple of frames later, without waiting. Returns invalid for a rect
+        // bigger than MAX_PICK_SIZE or empty.
+        PickHandle                  pick(const View& view, const PickDesc& desc);
+        // The same for a scene view of the application's own graph (addScenePasses into renderTarget).
+        PickHandle                  pick(SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, const PickDesc& desc);
+        // True once takePick would not wait: the GPU finished the frame that drew it, or it failed.
+        bool                        isPickReady(PickHandle pick);
+        // The hits, nearest the rect's centre first (then nearest the camera), at most capacity of them; hitCount is
+        // how many there are. Blocks until the GPU has finished the frame that drew it when it is not ready yet.
+        // Returns false when it failed (its view did not draw in that frame), or no frame has drawn it yet (then it
+        // stays pending).
+        bool                        takePick(PickHandle pick, PickHit* hits, uint32_t capacity, uint32_t& hitCount);
         bool                        running() const;
         bool                        recreateSwapchain();
         bool                        recreateSwapchain(WindowHandle window);
@@ -434,6 +453,7 @@ namespace rasm
         Inspection                                                  inspection                              = {};
         std::unique_ptr<Inspector>                                  inspector                               = {};
         std::unique_ptr<Readbacks>                                  readbacks                               = {};
+        std::unique_ptr<Picks>                                      picks                                   = {};
 
     private:
         static constexpr Format     DEPTH_FORMAT    = Format::D32_SFLOAT;
@@ -500,6 +520,7 @@ namespace rasm
         bool                        createMeshletPipelines(uint32_t view, bool opaque, bool mask);
         void                        recordHiz(uint32_t view);
         void                        recordBlendSort(uint32_t view);
+        void                        recordBlendSort(uint64_t sceneDataAddress, uint32_t capacity);
         void                        drawSceneView(uint32_t view, uint32_t phase);
         void                        drawTransparent(uint32_t view);
         void                        drawCullingGhosts(uint32_t view);
@@ -522,6 +543,10 @@ namespace rasm
         void                        drawTablesSection();
         void                        recordReadbacks();
         void                        finishReadbackSubmit(bool submitted);
+        PickHandle                  queuePick(const View* view, SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, const PickDesc& desc);
+        void                        recordPicks();
+        void                        finishPickSubmit(bool submitted);
+        void                        readPicks(uint32_t slot);
 
         LoadHooks*                                                              loads               = nullptr;  // the attached AssetLoader's
         std::unordered_set<TextureHandle, HandleHash>                           loadingTextures;    // made by a loader, not filled yet: isLoaded false

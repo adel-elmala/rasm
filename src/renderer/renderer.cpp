@@ -10,6 +10,7 @@
 #include "renderer/gpuScene.h"
 #include "renderer/inspector.h"
 #include "renderer/lightClusters.h"
+#include "renderer/picking.h"
 #include "renderer/readback.h"
 #include "renderer/animation.h"
 #include "renderer/viewGraph.h"
@@ -57,6 +58,7 @@ namespace rasm
     Renderer::Renderer(const RendererConfig &config, std::unique_ptr<Platform> windowPlatform) : config(config), geometryPool(std::make_unique<GeometryPool>()), gpuScene(std::make_unique<GpuScene>()), gpuLights(std::make_unique<GpuLights>()), gpuAnimation(std::make_unique<GpuAnimation>()), environments(std::make_unique<Environments>()), frameStats(std::make_unique<FrameStatsCollector>()), statsOverlay(std::make_unique<StatsOverlay>()), shaderCompiler(std::make_unique<ShaderCompiler>()), platform(std::move(windowPlatform))
     {
         readbacks = std::make_unique<Readbacks>();
+        picks = std::make_unique<Picks>();
         // Room for a burst of events, so a steady frame does not grow the queue (P27).
         inputState = std::make_unique<InputState>();
         inputEvents.reserve(256);
@@ -722,6 +724,8 @@ namespace rasm
         if (readbackComputeWait > 0 && ctx.getFenceValue(frameFence) >= readbackComputeWait)
             readbackComputeWait = 0;
         ctx.collectReleases();
+        // Before this frame's endFrame records new picks into the slot, and before syncGpuScene gives its rows away.
+        readPicks(static_cast<uint32_t>(frameCount));
 
         // After the wait: they read what the slot's last frame measured and rewrite the tables it read.
         updateFrameStats();
@@ -811,6 +815,7 @@ namespace rasm
                     drawStatsOverlay();
             }
             setRenderTarget(renderTarget, face);
+            recordPicks();
             recordReadbacks();
             // An offscreen swapchain image is never presented; the next acquire of it drops what it holds.
             for (uint32_t i = 0; i < MAX_WINDOWS && platform->type() != PlatformType::HEADLESS; ++i)
@@ -834,6 +839,7 @@ namespace rasm
         const bool presenting = submitBatches();
         ctx.tagReleases({.fence = frameFence, .value = frameFenceValue}, {.fence = computeFence, .value = computeFenceValue});
         finishReadbackSubmit(presenting);
+        finishPickSubmit(presenting);
         finishEnvironmentBakes();
         for (uint32_t i = 0; i < MAX_WINDOWS && presenting; ++i)
         {
@@ -1266,6 +1272,11 @@ namespace rasm
     bool Renderer::isLive(const MaterialHandle &material) const
     {
         return registry.materialHandles.isAlive(material.index, material.generation);
+    }
+
+    bool Renderer::isAlive(EntityHandle entity) const
+    {
+        return isLive(entity);
     }
 
     bool Renderer::isLive(const CameraHandle &camera) const

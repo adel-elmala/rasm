@@ -392,6 +392,7 @@
   <tr><td>Copy-source usage only where needed</td><td><code>TextureDesc::readable</code>, <code>RenderTargetDesc::readable</code> (off by default). A window's swapchain images get it when the surface's <code>supportedUsageFlags</code> has <code>TRANSFER_SRC</code>; else <code>readFrame</code> returns invalid.</td></tr>
   <tr><td>Barrier, copy, barrier</td><td><code>rhi::CommandBuffer::copyFromTexture</code>: the image goes to the copy layout and back to its tracked state, then a copy → host barrier. Rows are tightly packed.</td></tr>
   <tr><td>Wait on the frame's fence, later</td><td>Each readback keeps the frame fence value of the frame that copied it. <code>isReadbackReady</code> compares it with the fence; <code>takeReadback</code> waits only when called too early.</td></tr>
+  <tr><td>Read back only what you need</td><td>A pick copies only the rect it drew, through the same frame fence: <code>isPickReady</code>, <code>takePick</code> (<a href="picking.html">Picking</a>).</td></tr>
   <tr><td>A temporary target needs memory of its own</td><td>A graph makes a readable target outside the shared transient memory, as it does a history target.</td></tr>
   <tr><td>Convert on the CPU</td><td><code>convertReadback</code>, when the image is taken: <code>ReadbackFormat::RGBA8_SRGB</code> or <code>RGBA32_FLOAT</code>.</td></tr>
   <tr><td>Wait for all loads</td><td><code>Renderer::waitForLoads</code>; the examples call it with <code>--wait-for-loads</code> (<code>C16</code>), which <code>verify-change</code> passes.</td></tr>

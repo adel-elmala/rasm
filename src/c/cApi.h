@@ -89,6 +89,7 @@ namespace rasm::c
     inline RenderTargetHandle toCpp(rasm_render_target h)   { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
     inline TileHandle       toCpp(rasm_tile h)              { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
     inline FontHandle       toCpp(rasm_font h)              { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
+    inline PickHandle       toCpp(rasm_pick h)              { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
 
     inline rasm_scene       toC(SceneHandle h)              { return {packHandle(h.index, h.generation)}; }
     inline rasm_entity      toC(EntityHandle h)             { return {packHandle(h.index, h.generation)}; }
@@ -103,6 +104,7 @@ namespace rasm::c
     inline rasm_render_target toC(RenderTargetHandle h)     { return {packHandle(h.index, h.generation)}; }
     inline rasm_tile        toC(TileHandle h)               { return {packHandle(h.index, h.generation)}; }
     inline rasm_font        toC(FontHandle h)               { return {packHandle(h.index, h.generation)}; }
+    inline rasm_pick        toC(PickHandle h)               { return {packHandle(h.index, h.generation)}; }
 
     inline glm::vec2        toCpp(const rasm_vec2& v)       { return {v.x, v.y}; }
     inline glm::vec3        toCpp(const rasm_vec3& v)       { return {v.x, v.y, v.z}; }
@@ -218,6 +220,9 @@ namespace rasm::c
     // The structs of version 1.6.
     constexpr size_t        FONT_LOAD_OPTIONS_SIZE_1_6      = offsetof(rasm_font_load_options, codepoint_count) + sizeof(uint32_t);
     constexpr size_t        LABEL_DESC_SIZE_1_6             = offsetof(rasm_label_desc, feature_id) + sizeof(uint32_t);
+    // The structs of version 1.7.
+    constexpr size_t        PICK_DESC_SIZE_1_7              = offsetof(rasm_pick_desc, skip) + sizeof(uint32_t);
+    constexpr size_t        PICK_HIT_SIZE_1_7               = offsetof(rasm_pick_hit, distance) + sizeof(double);
 
 }
 
