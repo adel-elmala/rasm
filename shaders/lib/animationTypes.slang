@@ -19,9 +19,10 @@ static const uint   NO_WEIGHT_OVERRIDE          = 0x7FC00000;
 // matrices are its entity's, and its vertices and bounds are posed.
 struct InstanceTransform
 {
-    float4x4            worldMatrix;
+    float4              world[3];           // the rows of the affine world matrix; w: the translation's high part
+    float3              translationLow;     // the translation is w + translationLow
     float3x3            normalMatrix;
-    float4              previousWorld[3];   // the rows of the affine world matrix the frame before drew
+    float4              previousWorld[3];   // the rows the frame before drew; w: its translation minus this one
     float3              boundsCenter;       // a skinned sub-mesh's sphere around its posed vertices, object space
     float               boundsRadius;       // < 0: the geometry's bounds
     int32_t             skinnedVertex;      // its first vertex in SceneData::skinnedVertsPtr, -1: the geometry pool's
@@ -92,7 +93,9 @@ struct AnimationMeshData
 // A row of the animated entity table, written by the CPU when an entity plays, stops or moves.
 struct AnimatedEntity
 {
-    float4x4            entityMatrix;
+    float4              entity[3];          // the rows of the entity's matrix; w: the translation's high part
+    float3              translationLow;
+    uint32_t            rowPadding;
     AnimationMeshData*  mesh;
     float               phase;              // the clip's time at the clock's base
     float               speed;
@@ -131,6 +134,7 @@ struct AnimationFrame
 struct AnimatePushConstants
 {
     AnimationFrame*     frame;
-    uint32_t            padding[2];
+    uint32_t            zero;               // 0, which the shader compiler cannot know (renderSpace.slang)
+    uint32_t            padding;
 };
 // clang-format on

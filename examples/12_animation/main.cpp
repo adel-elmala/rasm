@@ -156,7 +156,7 @@ int main(int argc, char **argv)
     const glm::vec3 orbitCenter(0.0f, 1.5f, -1.0f);
     engine.setCameraController(camera, rasm::CameraController{
                                            .type = rasm::CameraController::Type::TRACK_BALL,
-                                           .trackBall = {.radius = glm::length(orbitCenter - engine.getCameraTransform(camera).position), .center = orbitCenter, .orbitSensitivity = 1.0f},
+                                           .trackBall = {.radius = glm::length(orbitCenter - glm::vec3(engine.getCameraTransform(camera).position)), .center = orbitCenter, .orbitSensitivity = 1.0f},
                                            .easingSpeed = 6.0f});
     engine.addCameraToScene(scene, camera);
 

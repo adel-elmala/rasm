@@ -116,7 +116,7 @@ namespace rasm
             .rig = createCameraRig(CameraController{.type = CameraController::Type::TRACK_BALL,
                                                     .trackBall = {
                                                         .radius = radius,
-                                                        .center = transform.position + forward * radius,
+                                                        .center = transform.position + glm::dvec3(forward * radius),
                                                         .orbitSensitivity = 1.0f,
                                                     }},
                                    transform),
@@ -311,12 +311,12 @@ namespace rasm
         return toProjectionMatrix(projection);
     }
 
-    glm::mat4 Renderer::getViewMatrix(CameraHandle camera)
+    glm::dmat4 Renderer::getViewMatrix(CameraHandle camera)
     {
         if (!isLive(camera))
         {
             spdlog::error("Invalid camera handle.");
-            return glm::mat4(1.0f);
+            return glm::dmat4(1.0);
         }
 
         const auto &transform = registry.cameras[camera.index].rig.transform;
@@ -324,10 +324,9 @@ namespace rasm
         // Compute the view matrix from the camera's world transform.
         // The view matrix is the inverse of the camera's world transform.
         // world-to-view = inverse(world-to-camera) = inverse( T * R ) = inverse(R) * inverse(T)
-        auto view = glm::mat4_cast(glm::conjugate(transform.rotation)) *
-                    glm::translate(glm::mat4(1.0f), -transform.position);
-
-        return view;
+        // In doubles: far from the origin the translation needs them. The views draw with it moved into their render
+        // space (toRenderMatrix), where it is the rotation alone.
+        return glm::dmat4(glm::mat4_cast(glm::conjugate(transform.rotation))) * glm::translate(glm::dmat4(1.0), -transform.position);
     }
 
     void Renderer::updateCamera(CameraHandle camera, const CameraInput &input)

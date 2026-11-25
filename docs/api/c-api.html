@@ -308,6 +308,7 @@ rasm_result      rasm_get_transform(rasm_renderer* renderer, rasm_entity entity,
 rasm_result      rasm_update_transform(rasm_renderer* renderer, rasm_entity entity, const rasm_transform* transform);</pre>
   <div class="body">
     <p>See <a href="scene.html#createEntity">scene.html</a>. A NULL <code>transform</code> is the identity: position 0, rotation <code>{0, 0, 0, 1}</code> (x, y, z, w), scale 1. A 0 material draws with the mesh's own glTF materials, or the default one.</p>
+    <p><code>rasm_transform</code>'s position is three floats, while the engine keeps doubles (<a href="../guides/large-world-precision.html">large worlds</a>): a position set from C has float precision, and <code>rasm_get_transform</code> rounds a double position to floats, so writing it back moves an entity that the C++ API placed far from the origin. The same holds for a light's <code>position</code> and the trackball's <code>track_ball_center</code>.</p>
   </div>
 </div>
 

@@ -329,7 +329,7 @@ namespace
     // trackball always looks at its center, so a rig that does not would jump on its first frame.
     rasm::CameraRig orbitFrom(const rasm::CameraController &orbit, const rasm::Transform &pose)
     {
-        const glm::vec3 offset = pose.position - orbit.trackBall.center;
+        const glm::vec3 offset = glm::vec3(pose.position - orbit.trackBall.center);
         const float distance = glm::length(offset);
         if (distance < 1e-3f)
             return rasm::createCameraRig(orbit, pose);

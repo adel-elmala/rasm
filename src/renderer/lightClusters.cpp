@@ -2,6 +2,7 @@
 #include "rasm/renderer.h"
 #include "core/utils.h"
 #include "platform/paths.h"
+#include "renderer/renderSpace.h"
 #include "renderer/uberMaterialTypes.h"
 
 #include "spdlog/spdlog.h"
@@ -111,12 +112,14 @@ namespace rasm
         if (light.index >= gpuLights->lights.capacity())
             return;
         const Light &lightRef = registry.lights[light.index];
-        gfx::Light row{.position = lightRef.position,
+        const SplitPosition position = splitPosition(lightRef.position);
+        gfx::Light row{.position = position.high,
                        .intensity = lightRef.intensity,
                        .color = lightRef.color,
                        .range = lightRef.range,
                        .direction = lightRef.direction,
-                       .type = static_cast<gfx::LightType>(lightRef.type)};
+                       .type = static_cast<gfx::LightType>(lightRef.type),
+                       .positionLow = position.low};
         setSpotCone(lightRef, row);
         gpuLights->lights.setRow(static_cast<uint32_t>(light.index), &row);
     }

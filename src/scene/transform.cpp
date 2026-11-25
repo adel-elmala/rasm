@@ -16,9 +16,9 @@ namespace rasm
     }
 
     // Scale, then rotate, then translate.
-    glm::mat4 Transform::toMatrix() const
+    glm::dmat4 Transform::toMatrix() const
     {
-        return glm::translate(glm::mat4(1.0f), position) * glm::mat4_cast(rotation) * glm::scale(glm::mat4(1.0f), scale);
+        return glm::translate(glm::dmat4(1.0), position) * glm::dmat4(glm::mat4_cast(rotation)) * glm::scale(glm::dmat4(1.0), glm::dvec3(scale));
     }
 
 }

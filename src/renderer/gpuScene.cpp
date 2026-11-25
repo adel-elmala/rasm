@@ -11,6 +11,7 @@
 #include "renderer/lightClusters.h"
 #include "renderer/animation.h"
 #include "renderer/localShadows.h"
+#include "renderer/renderSpace.h"
 #include "renderer/shadowCascades.h"
 #include "renderer/uberMaterialTypes.h"
 
@@ -98,13 +99,21 @@ namespace rasm
             return path;
         }
 
-        // An orthographic view's direction, or a perspective one's position: what the meshlet cone test looks from.
+        // An orthographic view's direction, or a perspective one's position: what the meshlet cone test looks from. In
+        // render space a perspective camera is at the origin.
         glm::vec4 getCullViewPoint(const glm::mat4 &projection, const glm::mat4 &view)
         {
             const glm::mat4 world = glm::inverse(view);
             if (projection[3][3] == 1.0f)
                 return glm::vec4(-glm::normalize(glm::vec3(world[2])), 0.0f);
             return glm::vec4(glm::vec3(world[3]), 1.0f);
+        }
+
+        void writeRenderOrigin(gfx::SceneData &sceneData, const glm::dvec3 &origin)
+        {
+            const SplitPosition split = splitPosition(origin);
+            sceneData.originHigh = split.high;
+            sceneData.originLow = split.low;
         }
 
         // The blend sort's keys (a uint2 each), then the draws it copies aside (shaders/passes/sort.slang).
@@ -137,11 +146,12 @@ namespace rasm
         // A shaded view's motion and jitter. The previous view-projection is the frame before's without jitter (this
         // one's on the view's first frame, so it has no motion). A view of a TAA pass (addTaaPass) moves its projection
         // by a sub-pixel offset each frame, the same as a translation of clip space by jitter (NDC) times w, so it
-        // works for any projection; the motion and the sky take it out again.
-        void writeViewMotion(SceneView &view, gfx::SceneData &sceneData, uint32_t width, uint32_t height)
+        // works for any projection; the motion and the sky take it out again. The view keeps the frame before's in world
+        // space, in doubles, so that it can move it into this frame's render space: the origin moves with the camera.
+        void writeViewMotion(SceneView &view, gfx::SceneData &sceneData, const glm::dmat4 &worldView, const glm::dvec3 &origin, uint32_t width, uint32_t height)
         {
-            const glm::mat4 viewProjection = sceneData.projection * sceneData.view;
-            sceneData.previousViewProjection = view.hasPrevious ? view.previousViewProjection : viewProjection;
+            const glm::dmat4 viewProjection = glm::dmat4(sceneData.projection) * worldView;
+            sceneData.previousViewProjection = toRenderMatrix(view.hasPrevious ? view.previousViewProjection : viewProjection, origin);
             view.previousViewProjection = viewProjection;
             view.hasPrevious = true;
             if (!view.jitter)
@@ -180,7 +190,7 @@ namespace rasm
         // fitted to the camera's view, and also give their splits; a spot light's map follows its cone; a point
         // light's cube has one projection for its faces, and the view of face. False, and no shadow, when the camera's near
         // plane has moved to a directional shadow's distance or beyond since addShadowPasses.
-        bool getShadowMaps(const Light &light, const Camera &camera, const glm::mat4 &projection, const glm::mat4 &view, const SceneShadow &shadow, uint32_t mapSize, uint32_t face, ShadowCascade *maps, float *splits)
+        bool getShadowMaps(const Light &light, const Camera &camera, const glm::mat4 &projection, const glm::dmat4 &view, const SceneShadow &shadow, uint32_t mapSize, uint32_t face, ShadowCascade *maps, float *splits)
         {
             if (light.type == LightType::SPOT)
             {
@@ -196,7 +206,7 @@ namespace rasm
             if (!(shadow.distance > nearZ))
                 return false;
             getShadowSplits(nearZ, shadow.distance, shadow.splitLambda, shadow.mapCount, splits);
-            const glm::mat4 world = glm::inverse(view);
+            const glm::dmat4 world = glm::inverse(view);
             for (uint32_t i = 0; i < shadow.mapCount; ++i)
                 maps[i] = fitShadowCascade(projection, world, light.direction, i == 0 ? nearZ : splits[i - 1], splits[i], mapSize, shadow.distance);
             return true;
@@ -445,7 +455,7 @@ namespace rasm
                 writeInstanceRows(entity, false);
         }
         for (EntityHandle entity : gpuScene->movedEntities)
-            gpuScene->entities[entity.index].syncedMatrix = registry.entities[entity.index].transform.toMatrix();
+            gpuScene->entities[entity.index].syncedTransform = registry.entities[entity.index].transform;
         // A swap, not a move: both lists keep their capacity, so a frame that moves entities allocates nothing.
         std::swap(gpuScene->settlingEntities, gpuScene->movedEntities);
         gpuScene->movedEntities.clear();
@@ -513,7 +523,7 @@ namespace rasm
                         gpuScene->instanceMeshletWords[firstRow + r] = bits ? static_cast<int32_t>(firstWord) : -1;
                         gpuScene->instanceMeshletWordCounts[firstRow + r] = bits ? words : 0;
                     }
-                    state.syncedMatrix = entityRef.transform.toMatrix();
+                    state.syncedTransform = entityRef.transform;
                     writeInstanceRows(entity, false);
                     startPendingAnimation(entity);
                     poseAtRest(entity, gpuScene->syncCount);
@@ -578,7 +588,7 @@ namespace rasm
         gpuScene->entitiesWaitingForMesh.push_back(entity);
     }
 
-    // A row's previousWorld is the matrix the frame before drew: the entity's matrix at the last sync (syncedMatrix).
+    // A row's previousWorld is the matrix the frame before drew: the entity's matrix at the last sync (syncedTransform).
     // A write that moves the entity (moved) puts it on movedEntities, so the next sync makes the new matrix the synced
     // one, and the sync after writes the rows again with previousWorld = world, so a stopped entity has no motion.
     void Renderer::writeInstanceRows(EntityHandle entity, bool moved)
@@ -596,20 +606,21 @@ namespace rasm
 
         const Entity &entityRef = registry.entities[entity.index];
         const Mesh &mesh = registry.meshes[entityRef.mesh.index];
-        const glm::mat4 entityMatrix = entityRef.transform.toMatrix();
+        // In doubles up to the row, which keeps the translation as a high and a low float (writeWorldRows).
+        const glm::dmat4 entityMatrix = entityRef.transform.toMatrix();
+        const glm::dmat4 syncedMatrix = state.syncedTransform.toMatrix();
 
         for (uint32_t i = 0; i < state.instanceCount; ++i)
         {
             const SubMesh &subMesh = mesh.subMeshes[i];
-            const glm::mat4 model = entityMatrix * subMesh.transform;
-            const glm::mat4 previous = glm::transpose(state.syncedMatrix * subMesh.transform);
-            const gfx::InstanceData row{.worldMatrix = model,
-                                        .normalMatrix = glm::transpose(glm::inverse(glm::mat3(model))),
-                                        .geometryIndex = subMesh.geometry.geometryIndex,
-                                        .materialIndex = static_cast<uint32_t>(getSubMeshMaterial(*this, entityRef, subMesh).handle.index),
-                                        .previousWorld = {previous[0], previous[1], previous[2]},
-                                        .animationRow = getAnimationRow(entity, i),
-                                        .meshletVisibility = gpuScene->instanceMeshletWords[state.firstInstance + i]};
+            const glm::dmat4 model = entityMatrix * glm::dmat4(subMesh.transform);
+            gfx::InstanceData row{.normalMatrix = glm::transpose(glm::inverse(glm::mat3(glm::dmat3(model)))),
+                                  .geometryIndex = subMesh.geometry.geometryIndex,
+                                  .materialIndex = static_cast<uint32_t>(getSubMeshMaterial(*this, entityRef, subMesh).handle.index),
+                                  .animationRow = getAnimationRow(entity, i),
+                                  .meshletVisibility = gpuScene->instanceMeshletWords[state.firstInstance + i]};
+            writeWorldRows(model, row.world, row.translationLow);
+            writePreviousRows(syncedMatrix * glm::dmat4(subMesh.transform), model, row.previousWorld);
             gpuScene->instances.setRow(state.firstInstance + i, &row);
         }
 
@@ -1353,11 +1364,13 @@ namespace rasm
             if (view.depthOnly)
                 return;
             const auto &target = ctx.getRenderTarget(view.renderTarget);
+            const glm::dvec3 origin = registry.cameras[view.camera.index].rig.transform.position;
+            const glm::dmat4 worldView = getViewMatrix(view.camera);
             gfx::SceneData sceneData{};
             sceneData.projection = getProjectionMatrix(view.camera, static_cast<float>(target.width) / static_cast<float>(target.height));
-            sceneData.view = getViewMatrix(view.camera);
-            sceneData.cameraWorldPosition = registry.cameras[view.camera.index].rig.transform.position;
-            writeViewMotion(view, sceneData, target.width, target.height);
+            sceneData.view = toRenderMatrix(worldView, origin);
+            writeRenderOrigin(sceneData, origin);
+            writeViewMotion(view, sceneData, worldView, origin, target.width, target.height);
             view.sky = writeSceneEnvironment(*environments, registry.scenes[view.scene.index].environment, sceneData) &&
                        ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), viewIndex * sizeof(gfx::SceneData));
             return;
@@ -1656,8 +1669,12 @@ namespace rasm
             frozenReader = reader.frozen && cullingFrozen ? &reader : nullptr;
             break;
         }
+        // Every view of a camera draws in that camera's render space: the world moved so that the camera is at the
+        // origin. The view matrices are made in world space, in doubles, and moved into it (toRenderMatrix).
         const glm::mat4 cameraProjection = getProjectionMatrix(view.camera, static_cast<float>(cameraWidth) / static_cast<float>(cameraHeight));
-        const glm::mat4 cameraView = getViewMatrix(view.camera);
+        const glm::dmat4 worldCameraView = getViewMatrix(view.camera);
+        const glm::dvec3 origin = cameraRef.rig.transform.position;
+        const glm::mat4 cameraView = toRenderMatrix(worldCameraView, origin);
 
         // Each shadow's maps, while its light is in the scene. A light that is not casts no shadow, and its maps draw
         // nothing.
@@ -1669,7 +1686,7 @@ namespace rasm
         {
             const SceneShadow &shadow = view.shadows[s];
             const bool inScene = isLive(shadow.light) && shadow.light.index < lightScenes.size() && (lightScenes[shadow.light.index] & (1u << view.scene.index)) != 0;
-            shadowLit[s] = inScene && getShadowMaps(registry.lights[shadow.light.index], cameraRef, cameraProjection, cameraView, shadow, ctx.getRenderTarget(shadow.maps[0]).width, view.face, shadowMaps[s], splits[s]);
+            shadowLit[s] = inScene && getShadowMaps(registry.lights[shadow.light.index], cameraRef, cameraProjection, worldCameraView, shadow, ctx.getRenderTarget(shadow.maps[0]).width, view.face, shadowMaps[s], splits[s]);
         }
         if (shadowView && !shadowLit[0])
             return;
@@ -1682,14 +1699,14 @@ namespace rasm
             if (view.shadows[0].maps[i] != view.renderTarget)
                 continue;
             sceneData.projection = shadowMaps[0][i].projection;
-            sceneData.view = shadowMaps[0][i].view;
+            sceneData.view = toRenderMatrix(shadowMaps[0][i].view, origin);
         }
         view.mirrored = glm::determinant(glm::mat3(sceneData.view)) < 0.0f;
+        writeRenderOrigin(sceneData, origin);
         if (!view.depthOnly)
-            writeViewMotion(view, sceneData, width, height);
+            writeViewMotion(view, sceneData, worldCameraView, origin, width, height);
         getFrustumPlanes(sceneData.projection * sceneData.view, sceneData.frustumPlanes);
         sceneData.cullViewPoint = getCullViewPoint(sceneData.projection, sceneData.view);
-        sceneData.cameraWorldPosition = cameraRef.rig.transform.position;
         sceneData.nearZ = getNearZ(cameraRef);
         sceneData.vertsPtr = ctx.getBufferDeviceAddress(geometryPool->vertexBuffer());
         sceneData.drawInfoPtr = ctx.getBufferDeviceAddress(culled ? view.visibleDraws[frame] : drawList.buffers[frame]);
@@ -1773,7 +1790,7 @@ namespace rasm
             for (uint32_t i = 0; i < shadow.mapCount; ++i)
             {
                 gfx::ShadowMap &map = sceneData.shadowMaps[mapCount++];
-                map.matrix = cube ? shadowMaps[s][i].projection : shadowMaps[s][i].projection * shadowMaps[s][i].view;
+                map.matrix = cube ? shadowMaps[s][i].projection : toRenderMatrix(glm::dmat4(shadowMaps[s][i].projection) * shadowMaps[s][i].view, origin);
                 map.texture = getBindlessTextureIndex(ctx.getRenderTarget(shadow.maps[i]).attachments[frame].depth);
                 map.split = splits[s][i];
             }
@@ -1790,26 +1807,31 @@ namespace rasm
             const glm::mat4 lodViewProjection = cameraProjection * cameraView;
             sceneData.lodDepthPlane = glm::vec4(lodViewProjection[0][3], lodViewProjection[1][3], lodViewProjection[2][3], lodViewProjection[3][3]);
         }
+        // The frozen values stay in the render space of the frame that froze them, and move into this frame's.
         if (frozen && !view.frozen)
         {
             std::copy(sceneData.frustumPlanes, sceneData.frustumPlanes + 6, view.frozenPlanes);
+            view.frozenOrigin = origin;
             view.frozenLodPixelsPerUnit = sceneData.lodPixelsPerUnit;
             view.frozenLodDepthPlane = sceneData.lodDepthPlane;
-            view.frozenViewProjection = cameraProjection * cameraView;
+            view.frozenViewProjection = glm::dmat4(cameraProjection) * worldCameraView;
             view.frozenViewPoint = sceneData.cullViewPoint;
         }
         view.frozen = frozen;
         if (frozen)
         {
-            std::copy(view.frozenPlanes, view.frozenPlanes + 6, sceneData.frustumPlanes);
+            for (uint32_t i = 0; i < 6; ++i)
+                sceneData.frustumPlanes[i] = moveRenderPlane(view.frozenPlanes[i], view.frozenOrigin, origin);
             sceneData.cullViewPoint = view.frozenViewPoint;
+            if (view.frozenViewPoint.w != 0.0f)
+                sceneData.cullViewPoint = glm::vec4(toRenderPosition(toWorldPosition(glm::vec3(view.frozenViewPoint), view.frozenOrigin), origin), 1.0f);
             sceneData.lodPixelsPerUnit = view.frozenLodPixelsPerUnit;
-            sceneData.lodDepthPlane = view.frozenLodDepthPlane;
+            sceneData.lodDepthPlane = moveRenderPlane(view.frozenLodDepthPlane, view.frozenOrigin, origin);
         }
         if (frozenReader != nullptr)
         {
             sceneData.lodPixelsPerUnit = frozenReader->frozenLodPixelsPerUnit;
-            sceneData.lodDepthPlane = frozenReader->frozenLodDepthPlane;
+            sceneData.lodDepthPlane = moveRenderPlane(frozenReader->frozenLodDepthPlane, frozenReader->frozenOrigin, origin);
         }
         sceneData.debugView = static_cast<uint32_t>(view.debugView);
         ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), viewIndex * sizeof(gfx::SceneData));

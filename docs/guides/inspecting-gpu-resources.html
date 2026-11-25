@@ -288,19 +288,21 @@
 <p>A GPU table is an array of structs that shaders read through a pointer. To show a row, the tool needs each field's name, type and offset. Writing them down by hand makes a third copy of the struct, next to the C++ one and the shader one, and it goes wrong the day a field moves. The shader compiler already knows the layout: its <b>reflection</b> lists every field with its offset in the layout the shaders really read.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 210" role="img" aria-label="A row of 164 bytes. Reflection gives the fields: worldMatrix at 0, 64 bytes, a float4x4; normalMatrix at 64, 36 bytes; geometryIndex at 100; materialIndex at 104; previousWorld at 108, 48 bytes; animationRow at 156; meshletVisibility at 160. The tool reads each field's bytes from the CPU copy of the row and prints them by type.">
-    <text x="10" y="22" class="title">one row, 164 bytes, as reflection lays it out</text>
-    <rect x="10" y="40" width="256" height="40" class="mem"/><text x="138" y="64" class="mid small mono">worldMatrix · 0</text>
-    <rect x="266" y="40" width="144" height="40" class="mem o-75"/><text x="338" y="64" class="mid small mono">normalMatrix · 64</text>
-    <rect x="410" y="40" width="16" height="40" class="shader"/>
-    <rect x="426" y="40" width="16" height="40" class="shader o-75"/>
-    <rect x="442" y="40" width="192" height="40" class="mem"/><text x="538" y="64" class="mid small mono">previousWorld · 108</text>
-    <rect x="634" y="40" width="16" height="40" class="shader"/>
-    <rect x="650" y="40" width="16" height="40" class="shader o-75"/>
-    <path d="M418,84 V110 H300" class="arrow" marker-end="url(#ah)"/><text x="294" y="114" class="end small mono">geometryIndex · 100</text>
-    <path d="M434,84 V132 H300" class="arrow" marker-end="url(#ah)"/><text x="294" y="136" class="end small mono">materialIndex · 104</text>
-    <path d="M642,84 V120 H670" class="arrow" marker-end="url(#ah)"/><text x="674" y="124" class="small mono">animationRow · 156</text>
-    <path d="M658,84 V150 H560" class="arrow" marker-end="url(#ah)"/><text x="556" y="154" class="end small mono">meshletVisibility · 160</text>
+  <svg viewBox="0 0 760 210" role="img" aria-label="A row of 160 bytes. Reflection gives the fields: world at 0, three float4 rows, 48 bytes; translationLow at 48, 12 bytes; normalMatrix at 60, 36 bytes; geometryIndex at 96; materialIndex at 100; previousWorld at 104, 48 bytes; animationRow at 152; meshletVisibility at 156. The tool reads each field's bytes from the CPU copy of the row and prints them by type.">
+    <text x="10" y="22" class="title">one row, 160 bytes, as reflection lays it out</text>
+    <rect x="10" y="40" width="192" height="40" class="mem"/><text x="106" y="64" class="mid small mono">world · 0</text>
+    <rect x="202" y="40" width="48" height="40" class="mem o-50"/><text x="226" y="64" class="mid small mono">48</text>
+    <rect x="250" y="40" width="144" height="40" class="mem o-75"/><text x="322" y="64" class="mid small mono">normalMatrix · 60</text>
+    <rect x="394" y="40" width="16" height="40" class="shader"/>
+    <rect x="410" y="40" width="16" height="40" class="shader o-75"/>
+    <rect x="426" y="40" width="192" height="40" class="mem"/><text x="522" y="64" class="mid small mono">previousWorld · 104</text>
+    <rect x="618" y="40" width="16" height="40" class="shader"/>
+    <rect x="634" y="40" width="16" height="40" class="shader o-75"/>
+    <path d="M226,84 V96 H200" class="arrow" marker-end="url(#ah)"/><text x="194" y="100" class="end small mono">translationLow · 48</text>
+    <path d="M402,84 V118 H300" class="arrow" marker-end="url(#ah)"/><text x="294" y="122" class="end small mono">geometryIndex · 96</text>
+    <path d="M418,84 V140 H300" class="arrow" marker-end="url(#ah)"/><text x="294" y="144" class="end small mono">materialIndex · 100</text>
+    <path d="M626,84 V120 H670" class="arrow" marker-end="url(#ah)"/><text x="674" y="124" class="small mono">animationRow · 152</text>
+    <path d="M642,84 V150 H560" class="arrow" marker-end="url(#ah)"/><text x="556" y="154" class="end small mono">meshletVisibility · 156</text>
     <text x="10" y="172" class="small">name, type and offset: from the shader compiler, for the struct the shaders read</text>
     <text x="10" y="192" class="small">the bytes: from the CPU's copy of the table, the same bytes the upload sends</text>
   </svg>

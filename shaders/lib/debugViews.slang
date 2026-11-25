@@ -113,7 +113,7 @@ float4 getDebugColor(Sampler2D gTextures[], SceneData *scene, MaterialData *mode
     float3 n = getDebugNormal(gTextures, model, position, normal, tangent, uv0, uv1, uv2, backFace);
     if (view == DEBUG_VIEW_NORMALS)
         return float4(n * 0.5 + 0.5, 1.0);
-    float shade = 0.35 + 0.65 * saturate(dot(n, normalize(scene->cameraWorldPosition - position)));
+    float shade = 0.35 + 0.65 * saturate(dot(n, normalize(-position)));
     float3 color = view == DEBUG_VIEW_LODS ? DEBUG_LOD_COLORS[min(lod, MAX_MESH_LODS - 1)] : ((pc.argument & 1) == DEBUG_LATE_PASS ? DEBUG_LATE_COLOR : DEBUG_EARLY_COLOR);
     if (view == DEBUG_VIEW_MESHLETS)
         color = getMeshletColor(meshlet);

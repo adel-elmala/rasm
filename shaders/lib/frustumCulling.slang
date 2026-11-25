@@ -10,10 +10,10 @@ struct Sphere
     float           scale;          // the world matrix's largest stretch, bounded from above
 };
 
-// An object-space sphere of the instance in world space. The radius grows by the matrix's largest stretch: the square
-// root of the largest eigenvalue of transpose(M) * M, whose entries are the dot products of M's columns. Its largest
-// row sum of absolute values bounds that eigenvalue (Gershgorin), exactly when the columns are orthogonal, and never
-// too small when a non-uniform scale is followed by a rotation.
+// An object-space sphere of the instance in render space (core.slang). The radius grows by the matrix's largest
+// stretch: the square root of the largest eigenvalue of transpose(M) * M, whose entries are the dot products of M's
+// columns. Its largest row sum of absolute values bounds that eigenvalue (Gershgorin), exactly when the columns are
+// orthogonal, and never too small when a non-uniform scale is followed by a rotation.
 Sphere getInstanceSphere(SceneData *scene, InstanceData *instance, float3 center, float radius)
 {
     float4x4 world          = getWorldMatrix(scene, instance);
@@ -33,7 +33,7 @@ Sphere getInstanceSphere(SceneData *scene, InstanceData *instance, float3 center
     return sphere;
 }
 
-// The draw's bounding sphere in world space: its geometry's, or a skinned sub-mesh's around its posed vertices, which
+// The draw's bounding sphere in render space: its geometry's, or a skinned sub-mesh's around its posed vertices, which
 // the Animate pass writes each frame.
 Sphere getWorldSphere(SceneData *scene, DrawInfo draw)
 {

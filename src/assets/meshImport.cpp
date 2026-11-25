@@ -106,7 +106,7 @@ namespace rasm
             // 1. If the node has a direct 4x4 matrix defined
             if (node.matrix.size() == 16)
             {
-                return glm::make_mat4(node.matrix.data());
+                return glm::mat4(glm::make_mat4(node.matrix.data())); // a node is placed in its mesh: floats hold it
             }
 
             // 2. Otherwise, construct it from Translation, Rotation, and Scale (TRS)

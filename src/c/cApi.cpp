@@ -480,14 +480,14 @@ namespace rasm::c
 
     Transform toCpp(const rasm_transform &transform)
     {
-        return {.position = toCpp(transform.position),
+        return {.position = glm::dvec3(toCpp(transform.position)),
                 .rotation = glm::quat(transform.rotation.w, transform.rotation.x, transform.rotation.y, transform.rotation.z),
                 .scale = toCpp(transform.scale)};
     }
 
     rasm_transform toC(const Transform &transform)
     {
-        return {.position = toC(transform.position),
+        return {.position = toC(glm::vec3(transform.position)),
                 .rotation = {transform.rotation.x, transform.rotation.y, transform.rotation.z, transform.rotation.w},
                 .scale = toC(transform.scale)};
     }
@@ -641,7 +641,7 @@ namespace rasm::c
                 .intensity = light.intensity,
                 .range = light.range,
                 .color = toCpp(light.color),
-                .position = toCpp(light.position),
+                .position = glm::dvec3(toCpp(light.position)),
                 .direction = toCpp(light.direction),
                 .innerConeAngle = light.inner_cone_angle,
                 .outerConeAngle = light.outer_cone_angle};
@@ -654,7 +654,7 @@ namespace rasm::c
                 .intensity = light.intensity,
                 .range = light.range,
                 .color = toC(light.color),
-                .position = toC(light.position),
+                .position = toC(glm::vec3(light.position)),
                 .direction = toC(light.direction),
                 .inner_cone_angle = light.innerConeAngle,
                 .outer_cone_angle = light.outerConeAngle};
@@ -789,7 +789,7 @@ namespace rasm::c
     {
         CameraController result = {.type = static_cast<CameraController::Type>(controller.type), .easingSpeed = controller.easing_speed};
         if (result.type == CameraController::Type::TRACK_BALL)
-            result.trackBall = {.radius = controller.track_ball_radius, .center = toCpp(controller.track_ball_center), .orbitSensitivity = controller.track_ball_orbit_sensitivity};
+            result.trackBall = {.radius = controller.track_ball_radius, .center = glm::dvec3(toCpp(controller.track_ball_center)), .orbitSensitivity = controller.track_ball_orbit_sensitivity};
         else if (result.type == CameraController::Type::FREE_FLY)
             result.freeFly = {.yaw = controller.free_fly_yaw, .pitch = controller.free_fly_pitch, .speed = controller.free_fly_speed, .lookSensitivity = controller.free_fly_look_sensitivity};
         return result;
@@ -818,7 +818,7 @@ namespace rasm::c
         if (controller.type == CameraController::Type::TRACK_BALL)
         {
             result.track_ball_radius = controller.trackBall.radius;
-            result.track_ball_center = toC(controller.trackBall.center);
+            result.track_ball_center = toC(glm::vec3(controller.trackBall.center));
             result.track_ball_orbit_sensitivity = controller.trackBall.orbitSensitivity;
         }
         else if (controller.type == CameraController::Type::FREE_FLY)

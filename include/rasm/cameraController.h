@@ -28,7 +28,7 @@ namespace rasm
         struct TrackBall
         {
             float       radius;            // target orbit radius, wheel zoom eases toward it
-            glm::vec3   center;
+            glm::dvec3  center;            // world space, in doubles
             float       orbitSensitivity; // multiplier for drag rotation
         };
 

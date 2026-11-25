@@ -2,6 +2,7 @@
 #pragma once
 
 #include "animationTypes.slang"
+#include "renderSpace.slang"
 
 // Constants
 static const uint   INVALID_TEXTURE_INDEX = 0xFFFFFFFF;
@@ -58,6 +59,7 @@ struct Light
     LightType   type;
     float       spotScale;      // the cone's falloff: saturate(dot(direction, -l) * spotScale + spotOffset)
     float       spotOffset;
+    float3      positionLow;    // position is the high part; getLight gives the light with its position in render space
 };
 
 // Must match rasm::gfx::ShadowedLight: a light of the view that has a shadow, and its maps.
@@ -71,7 +73,7 @@ struct ShadowedLight
 // Must match rasm::gfx::ShadowMap.
 struct ShadowMap
 {
-    float4x4    matrix;         // world to clip: a cascade's or a spot's projection * view; a point light's face projection
+    float4x4    matrix;         // render space to clip: a cascade's or a spot's projection * view; a point light's face projection
     uint32_t    texture;        // bindless index of the depth; a point light's is a cube (gCubeTextures)
     float       split;          // a cascade's: the view depth where it ends
 };
@@ -137,11 +139,12 @@ struct MaterialData
 
 struct InstanceData
 {
-    float4x4        worldMatrix;
+    float4          world[3];           // the rows of the affine world matrix; w: the translation's high part
+    float3          translationLow;     // the translation is w + translationLow; getWorldMatrix gives it in render space
     float3x3        normalMatrix;
     uint32_t        geometryIndex;
     uint32_t        materialIndex;
-    float4          previousWorld[3];   // the rows of the affine world matrix the frame before drew, for motion
+    float4          previousWorld[3];   // the rows the frame before drew, for motion; w: its translation minus this one
     int32_t         animationRow;       // its InstanceTransform in SceneData::animatedTransformsPtr, -1: the matrices above
     int32_t         meshletVisibility;  // its first word in each view's meshlet visibility bits, -1: none
 };
@@ -150,7 +153,7 @@ struct SceneData
 {
     float4x4            projection;
     float4x4            view;
-    float3              cameraWorldPosition;
+    float3              originHigh;         // the view's origin, its camera: render space = world - origin (toRenderSpace)
     uint32_t            shadowedLightCount; // shadowedLights in use
     VertexFull*         vertsPtr;
     DrawInfo*           drawInfoPtr;
@@ -170,7 +173,7 @@ struct SceneData
     Light*              lightsPtr;          // the light table
     uint32_t*           sceneLightsPtr;     // the scene's light rows: globalLightCount global lights, then the local ones
     uint32_t*           clustersPtr;        // the view's light clusters (lightClusters.slang); null: every pixel shades every local light
-    float4              frustumPlanes[6];   // world space, inside where dot(xyz, p) + w >= 0
+    float4              frustumPlanes[6];   // render space, inside where dot(xyz, p) + w >= 0
     uint32_t            drawCount;
     uint32_t            runCount;
     uint32_t            runFirst[MAX_DRAW_RUNS];
@@ -221,6 +224,8 @@ struct SceneData
     uint32_t            coneRuns;               // a bit per run culled by face, where the cone test holds
     uint32_t            padding;
     uint32_t*           meshletDataPtr;         // the meshlets' vertices and triangles, for the mesh shaders; null without them
+    float3              originLow;              // the origin is originHigh + originLow
+    uint32_t            zero;                   // 0, which the shader compiler cannot know (renderSpace.slang)
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.
@@ -322,12 +327,42 @@ float decodeSrgb(float encoded)
     return encoded <= 0.04045 ? encoded / 12.92 : pow((encoded + 0.055) / 1.055, 2.4);
 }
 
-// An animated instance's matrices come from the Animate pass, every other one's from its instance row.
+// A world position stored as a high and a low float, in the view's render space: the world moved so that the camera
+// is at the origin (renderSpace.slang).
+float3 toRenderSpace(SceneData *scene, float3 high, float3 low)
+{
+    return subtractSplit(high, low, scene->originHigh, scene->originLow, scene->zero);
+}
+
+// A light row with its position in render space.
+Light getLight(SceneData *scene, uint row)
+{
+    Light light     = scene->lightsPtr[row];
+    light.position  = toRenderSpace(scene, light.position, light.positionLow);
+    return light;
+}
+
+float3 getRowTranslation(float4 rows[3])
+{
+    return float3(rows[0].w, rows[1].w, rows[2].w);
+}
+
+float4x4 getRenderMatrix(SceneData *scene, float4 rows[3], float3 translationLow)
+{
+    float3 t = toRenderSpace(scene, getRowTranslation(rows), translationLow);
+    return float4x4(float4(rows[0].xyz, t.x), float4(rows[1].xyz, t.y), float4(rows[2].xyz, t.z), float4(0.0, 0.0, 0.0, 1.0));
+}
+
+// An animated instance's matrices come from the Animate pass, every other one's from its instance row. The world
+// matrix is in render space.
 float4x4 getWorldMatrix(SceneData *scene, InstanceData *instance)
 {
     if (instance->animationRow >= 0)
-        return scene->animatedTransformsPtr[instance->animationRow].worldMatrix;
-    return instance->worldMatrix;
+    {
+        InstanceTransform *transform = scene->animatedTransformsPtr + instance->animationRow;
+        return getRenderMatrix(scene, transform->world, transform->translationLow);
+    }
+    return getRenderMatrix(scene, instance->world, instance->translationLow);
 }
 
 float3x3 getNormalMatrix(SceneData *scene, InstanceData *instance)
@@ -337,15 +372,16 @@ float3x3 getNormalMatrix(SceneData *scene, InstanceData *instance)
     return instance->normalMatrix;
 }
 
-// Where the frame before drew an object-space position.
-float3 getPreviousWorldPosition(SceneData *scene, InstanceData *instance, float4 position)
+// Where the frame before drew an object-space position, in this frame's render space: the rows' w is the translation
+// the frame before drew minus this frame's, small, so it adds to this frame's translation without losing precision.
+float3 getPreviousWorldPosition(SceneData *scene, InstanceData *instance, float3 position)
 {
+    float4x4 world      = getWorldMatrix(scene, instance);
+    float4 rows[3]      = instance->previousWorld;
     if (instance->animationRow >= 0)
-    {
-        InstanceTransform *transform = scene->animatedTransformsPtr + instance->animationRow;
-        return float3(dot(transform->previousWorld[0], position), dot(transform->previousWorld[1], position), dot(transform->previousWorld[2], position));
-    }
-    return float3(dot(instance->previousWorld[0], position), dot(instance->previousWorld[1], position), dot(instance->previousWorld[2], position));
+        rows = scene->animatedTransformsPtr[instance->animationRow].previousWorld;
+    float3 linear       = float3(dot(rows[0].xyz, position), dot(rows[1].xyz, position), dot(rows[2].xyz, position));
+    return linear + float3(world[0].w, world[1].w, world[2].w) + getRowTranslation(rows);
 }
 
 // The instance's first vertex in this slot's skinned vertices, or -1 when its vertices are the geometry pool's.

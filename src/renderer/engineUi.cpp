@@ -260,13 +260,14 @@ namespace rasm
             if (view.graphs == 0 || view.depthOnly || !view.frozen || view.camera != camera)
                 continue;
             const RenderTarget &target = ctx.getRenderTarget(view.renderTarget);
-            const glm::mat4 live = getProjectionMatrix(view.camera, static_cast<float>(target.width) / static_cast<float>(target.height)) * getViewMatrix(view.camera);
-            const glm::mat4 toWorld = glm::inverse(view.frozenViewProjection);
+            // In doubles, in world space: far from the origin the corners need them.
+            const glm::dmat4 live = glm::dmat4(getProjectionMatrix(view.camera, static_cast<float>(target.width) / static_cast<float>(target.height))) * getViewMatrix(view.camera);
+            const glm::dmat4 toWorld = glm::inverse(view.frozenViewProjection);
             glm::vec4 corners[8];
             for (uint32_t i = 0; i < 8; ++i)
             {
-                const glm::vec4 world = toWorld * glm::vec4((i & 1) != 0 ? 1.0f : -1.0f, (i & 2) != 0 ? 1.0f : -1.0f, i < 4 ? 1.0f : FROZEN_FAR_DEPTH, 1.0f);
-                corners[i] = live * glm::vec4(glm::vec3(world) / world.w, 1.0f);
+                const glm::dvec4 world = toWorld * glm::dvec4((i & 1) != 0 ? 1.0 : -1.0, (i & 2) != 0 ? 1.0 : -1.0, i < 4 ? 1.0 : static_cast<double>(FROZEN_FAR_DEPTH), 1.0);
+                corners[i] = glm::vec4(live * glm::dvec4(glm::dvec3(world) / world.w, 1.0));
             }
             const uint32_t edges[12][2] = {{0, 1}, {1, 3}, {3, 2}, {2, 0}, {4, 5}, {5, 7}, {7, 6}, {6, 4}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
             for (const auto &edge : edges)

@@ -8,9 +8,9 @@
 namespace rasm
 {
 
-    glm::mat4                   getSpotShadowView(const glm::vec3& position, const glm::vec3& direction);
+    glm::dmat4                  getSpotShadowView(const glm::dvec3& position, const glm::vec3& direction);
     glm::mat4                   getSpotShadowProjection(float outerConeAngle, float distance);
-    glm::mat4                   getCubeFaceView(const glm::vec3& position, uint32_t face);
+    glm::dmat4                  getCubeFaceView(const glm::dvec3& position, uint32_t face);
     glm::mat4                   getCubeFaceProjection(float distance);
 
 }

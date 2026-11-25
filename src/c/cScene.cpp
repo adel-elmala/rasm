@@ -545,7 +545,7 @@ try
     if (r == nullptr || !c::checkHandle(camera.id, __func__, "camera") || !c::checkPointer(matrix, __func__, "matrix"))
         return RASM_ERROR_INVALID_ARGUMENT;
     const c::CallErrors errors;
-    *matrix = c::toC(r->getViewMatrix(c::toCpp(camera)));
+    *matrix = c::toC(glm::mat4(r->getViewMatrix(c::toCpp(camera))));
     return errors.result();
 }
 RASM_C_CATCH_RESULT

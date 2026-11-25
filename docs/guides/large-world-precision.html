@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Large Worlds · RASM</title>
+<meta name="description" content="Why 32-bit floats jitter far from the origin, and how double positions on the CPU, camera-relative rendering and a high/low split of each position keep a planet-sized world as sharp as one near the origin. Then how RASM does it.">
+<meta name="rasm-sources" content="include/rasm/transform.h include/rasm/light.h include/rasm/cameraController.h include/rasm/renderSpace.h src/renderer/renderSpace.h src/renderer/renderSpace.cpp shaders/lib/renderSpace.slang shaders/lib/core.slang shaders/passes/animate.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/shadowCascades.cpp src/renderer/localShadows.cpp src/renderer/lightClusters.cpp src/renderer/animation.cpp src/renderer/uberMaterialTypes.h src/scene/camera.cpp src/CMakeLists.txt examples/23_large_world/main.cpp tests/renderSpaceTests.cpp tests/image/imageTests.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/large-world-precision.js"></script>
+</head>
+<body data-root="../" data-page="guides/large-world-precision.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>Large worlds: float precision and camera-relative rendering</h1>
+<p class="lead">A map of the Earth puts its objects millions of metres from the origin. A 32-bit float cannot hold such a number to the centimetre, so the picture shakes and breaks apart as the camera moves. This page shows where the precision goes, and the three tools that bring it back: <b>double positions</b> on the CPU, <b>camera-relative rendering</b>, and a <b>high/low split</b> that lets the GPU subtract the camera without losing anything. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>A float has 24 bits of precision. Its <b>step</b> (the gap to the next float) grows with the number: 0.5 m at the Earth's radius.</li>
+    <li>The vertex shader computes <i>object − camera</i>. Both are big, the result is small: the big numbers' rounding errors are all that is left (<b>cancellation</b>).</li>
+    <li>Keep positions in <b>doubles</b> on the CPU (a step of 1 nanometre on the Earth), and draw in <b>render space</b>: the world moved so that the camera is at the origin.</li>
+    <li>Moving every object every frame costs CPU time. Instead, store each position as two floats, <b>high + low</b>, and let the GPU subtract the camera's high and low parts separately.</li>
+    <li>The compiler must not regroup those sums. Make each step opaque to it.</li>
+    <li>Reversed-Z with a float depth buffer already keeps depth precise at any distance from the camera; the origin does not matter to it.</li>
+  </ul>
+</div>
+
+<h2 id="steps"><span class="n">1</span>Floats have steps</h2>
+
+<p>A float stores a number as 24 bits of digits and a power of two. So between two powers of two there are always 2<sup>23</sup> floats, evenly spaced. The farther from 0, the wider the gap.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="Three number lines. Near 1 metre the floats are 0.12 micrometres apart. Near 100 kilometres they are 7.8 millimetres apart. Near 6378 kilometres, the Earth's radius, they are half a metre apart: a point at 6 378 137.37 m snaps to 6 378 137.5.">
+    <text x="20" y="40" class="title">near 1 m</text>
+    <line x1="170" y1="40" x2="740" y2="40" class="surface"/>
+    <path d="M170,32V48M175,32V48M180,32V48M185,32V48M190,32V48M195,32V48M200,32V48M205,32V48M210,32V48M215,32V48M220,32V48M225,32V48M230,32V48M235,32V48M240,32V48M245,32V48M250,32V48M255,32V48M260,32V48M265,32V48M270,32V48M275,32V48M280,32V48M285,32V48M290,32V48M295,32V48M300,32V48" class="grid"/>
+    <text x="320" y="66" class="small">step 0.000 000 12 m: too small to see</text>
+    <text x="20" y="110" class="title">near 100 km</text>
+    <line x1="170" y1="110" x2="740" y2="110" class="surface"/>
+    <path d="M170,102V118M230,102V118M290,102V118M350,102V118M410,102V118M470,102V118M530,102V118M590,102V118M650,102V118M710,102V118" class="grid"/>
+    <text x="230" y="138" class="mid small">100 000.0000</text><text x="290" y="138" class="mid small">+7.8 mm</text>
+    <text x="20" y="180" class="title">near 6378 km</text>
+    <line x1="170" y1="180" x2="740" y2="180" class="surface"/>
+    <path d="M250,170V190M490,170V190M730,170V190" class="grid"/>
+    <text x="250" y="208" class="mid small">6 378 137.0</text><text x="490" y="208" class="mid small">6 378 137.5</text><text x="730" y="208" class="end small">6 378 138.0</text>
+    <circle cx="428" cy="180" r="6" class="hot"/>
+    <text x="428" y="164" class="mid small t-hot">6 378 137.37</text>
+    <path d="M434,176 C455,166 470,166 484,176" class="arrow hot" marker-end="url(#ah-hot)"/>
+  </svg>
+  <figcaption>The same 24 bits at three distances from the origin. On the Earth's surface, in Earth-centred coordinates, a float can only say "here or half a metre away".</figcaption>
+</figure>
+
+<div class="stats">
+  <div><b>0.12 µm</b><span>float step at 1 m</span><small>2<sup>0 − 23</sup></small></div>
+  <div><b>7.8 mm</b><span>at 100 km</span><small>2<sup>16 − 23</sup></small></div>
+  <div><b>0.5 m</b><span>at 6378 km, the Earth's radius</span><small>2<sup>22 − 23</sup></small></div>
+  <div><b>0.93 nm</b><span>a double's step at 6378 km</span><small>2<sup>22 − 52</sup></small></div>
+</div>
+
+<h2 id="cancellation"><span class="n">2</span>Big minus big: why it shakes</h2>
+
+<p>The GPU never needs the big numbers. It needs where a vertex is <b>seen from the camera</b>: object minus camera, a few metres. But if both are floats first, each is already rounded, and the subtraction keeps only the difference of the two roundings.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 150" role="img" aria-label="The camera at 6 378 135.12 rounds to 6 378 135.0 and the vertex at 6 378 137.37 rounds to 6 378 137.5. Their difference is 2.5 instead of 2.25: a quarter of a metre off.">
+      <text x="10" y="24" class="small">camera 6 378 135.12 → <tspan class="t-bad">135.0</tspan></text>
+      <text x="10" y="48" class="small">vertex 6 378 137.37 → <tspan class="t-bad">137.5</tspan></text>
+      <line x1="10" y1="62" x2="310" y2="62" class="grid"/>
+      <text x="10" y="84" class="small">vertex − camera = <tspan class="t-bad">2.5</tspan> (true: 2.25)</text>
+      <text x="10" y="112" class="small">as the camera moves, the result jumps</text>
+      <text x="10" y="130" class="small">in steps of 0.5 m: the scene shakes</text>
+    </svg>
+    <h4>Round first, subtract later</h4>
+    <p>Floats on the GPU, world positions: the error is half a step of the big number.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 150" role="img" aria-label="In doubles, 6 378 137.37 minus 6 378 135.12 is 2.25, and that small number becomes a float with no visible error.">
+      <text x="10" y="24" class="small">camera 6 378 135.12 (double)</text>
+      <text x="10" y="48" class="small">vertex 6 378 137.37 (double)</text>
+      <line x1="10" y1="62" x2="310" y2="62" class="grid"/>
+      <text x="10" y="84" class="small">vertex − camera = <tspan class="t-ok">2.25</tspan>, then a float</text>
+      <text x="10" y="112" class="small">a float near 2.25 has a step of</text>
+      <text x="10" y="130" class="small">0.24 µm: nothing to see</text>
+    </svg>
+    <h4>Subtract first, round later</h4>
+    <p>The small result is what becomes a float, so its error is tiny.</p>
+  </div>
+</div>
+
+<p>This is <b>cancellation</b>: subtracting two close numbers cancels their leading digits, and the error that was small next to the big numbers becomes big next to the result. It is why a scene far from the origin shakes, and also why lighting can break into blocks: every value computed from a world position carries the same error.</p>
+
+<h2 id="render-space"><span class="n">3</span>Render space: the camera at the origin</h2>
+
+<p>So subtract the camera first, in doubles, on the CPU. The GPU then works in <b>render space</b>: the world moved so that the camera sits at the origin. Near the camera, where precision matters, every number is small.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="Left: world space, with the origin at the centre of the Earth, far away, and the camera and a house 6378 kilometres from it. Right: render space, the same camera at the origin and the house 12 metres in front of it. The view matrix in render space only turns; it has no translation.">
+    <text x="180" y="22" class="mid title">world space (doubles)</text>
+    <circle cx="60" cy="190" r="6" class="solid"/><text x="72" y="208" class="small">origin: the Earth's centre</text>
+    <path d="M60,190 L250,70" class="arrow dashed" marker-end="url(#ah)"/>
+    <text x="110" y="120" class="small halo">6 378 137 m</text>
+    <circle cx="260" cy="64" r="6" class="cpu"/><text x="272" y="60" class="small">camera</text>
+    <path d="M300,80 l12,-10 l12,10 v14 h-24 z" class="solid"/><text x="300" y="110" class="small">house</text>
+    <line x1="380" y1="20" x2="380" y2="215" class="grid"/>
+    <text x="570" y="22" class="mid title">render space (floats)</text>
+    <path d="M430,150H720M560,40V210" class="grid"/>
+    <circle cx="560" cy="150" r="7" class="cpu"/><text x="572" y="170" class="small">camera at (0, 0, 0)</text>
+    <path d="M640,104 l14,-12 l14,12 v18 h-28 z" class="solid"/><text x="630" y="140" class="small">house at (12, 4, −8)</text>
+    <path d="M565,146 L635,112" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="440" y="200" class="small">render = world − camera, in doubles, then floats</text>
+  </svg>
+  <figcaption>The view matrix of render space has no translation: the camera is already at the origin, so the matrix only turns the world. Lights, frustum planes and shadow matrices are all made in the same space.</figcaption>
+</figure>
+
+<p>The catch is cost. When the camera moves, every object's render-space position changes. Rewriting every object's GPU row every frame makes the CPU's work grow with the scene: 100 000 rows of 160 B, twice for two frames in flight, is 32 MB of uploads per frame.</p>
+
+<div class="vgrid">
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Every row of a big table is marked as rewritten, every frame the camera moves.">
+      <rect x="40" y="16" width="160" height="14" class="mem"/><rect x="40" y="34" width="160" height="14" class="mem"/><rect x="40" y="52" width="160" height="14" class="mem"/><rect x="40" y="70" width="160" height="14" class="mem"/><rect x="40" y="88" width="160" height="14" class="mem"/>
+      <path d="M205,16V102" class="arrow hot thick"/>
+      <text x="120" y="122" class="mid small">all rows, every frame</text>
+    </svg>
+    <h4>Rewrite every row</h4>
+    <p>Exact, but the CPU cost grows with the entity count.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A grid of cells. The camera wanders inside one cell; when it leaves, all rows are rewritten at once.">
+      <path d="M40,20V110M100,20V110M160,20V110M220,20V110M40,20H220M40,65H220M40,110H220" class="grid"/>
+      <circle cx="90" cy="50" r="5" class="cpu"/><path d="M90,50 L130,52" class="arrow cpu dashed" marker-end="url(#ah-cpu)"/>
+      <text x="130" y="124" class="mid small">rebase when the camera leaves its cell</text>
+    </svg>
+    <h4>Floating origin</h4>
+    <p>Move the origin only now and then. Cheaper, but each move rewrites everything at once, and the error grows with the cell's size.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Rows stay as they are. Only one small block, the camera's origin, changes per frame.">
+      <rect x="30" y="16" width="130" height="14" class="mem"/><rect x="30" y="34" width="130" height="14" class="mem"/><rect x="30" y="52" width="130" height="14" class="mem"/><rect x="30" y="70" width="130" height="14" class="mem"/><rect x="30" y="88" width="130" height="14" class="mem"/>
+      <rect x="175" y="45" width="50" height="24" rx="4" class="cpu"/><text x="200" y="61" class="mid small">origin</text>
+      <text x="120" y="122" class="mid small">one origin per view per frame</text>
+    </svg>
+    <h4>High/low rows</h4>
+    <p>Rows keep the absolute position in two floats; the GPU subtracts the camera (next section). Nothing per entity.</p>
+  </div>
+</div>
+
+<h2 id="split"><span class="n">4</span>The high/low split</h2>
+
+<p>A double has about 53 bits of digits, a float 24. Two floats hold about 48 of them: the <b>high</b> part is the double rounded to a float, the <b>low</b> part is what rounding left over, also as a float.</p>
+
+<div class="formula">
+  <p class="eq">high = float(d)</p>
+  <p class="eq">low = float(d − high)</p>
+  <p class="eq">render = (high − cameraHigh) + (low − cameraLow)</p>
+  <dl>
+    <dt>high</dt><dd>The nearest float: 6 378 137.5 for 6 378 137.37.</dd>
+    <dt>low</dt><dd>The rest, small: −0.13, as precise as any float near 0.1.</dd>
+    <dt>render</dt><dd>The high parts of two nearby points are equal or a few steps apart, so their difference is exact. The low parts add what is left.</dd>
+  </dl>
+</div>
+
+<p>The CPU splits each position once, when it changes, and stores both halves in the object's row. Each frame it splits only the camera. The GPU does the four subtractions and one addition per vertex: a few instructions, and nothing to upload when the camera moves.</p>
+
+<figure class="lab" data-lab="float-split" data-title="Move a house far from the origin">
+  <figcaption>Drag the distance from 1 m to 10 million km. The red outline is the house with plain floats (world positions, rounded, then minus the camera); the green one uses the high/low split. Watch the red one break apart near the Earth's radius.</figcaption>
+</figure>
+
+<p>The split is not endless: its error is about 2<sup>−48</sup> of the distance from the origin. On the Earth that is 0.02 µm. At 10<sup>10</sup> m, 70 times the distance from the Earth to the Sun, points near the camera still land within 0.03 mm; at 10<sup>12</sup> m it reaches millimetres, and a world that big needs an origin per region.</p>
+
+<h2 id="order"><span class="n">5</span>Keep the order of the sums</h2>
+
+<p>The formula only works if it runs exactly as written. A compiler that sees <code class="lang-text">(high − cameraHigh) + (low − cameraLow) − pixel</code> may regroup it, for example as <code class="lang-text">(high − pixel) − cameraHigh + …</code>. Then a big number meets a small one first and the low parts are lost again.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="A light's pool on the ground drawn as nested squares of half a metre: the pixel position was added to the high part before the camera was subtracted.">
+      <rect x="10" y="10" width="300" height="120" class="paper"/>
+      <rect x="90" y="30" width="140" height="80" class="light o-25"/><rect x="115" y="45" width="90" height="50" class="light o-50"/><rect x="140" y="58" width="40" height="24" class="light o-75"/>
+      <path d="M10,30H310M10,50H310M10,70H310M10,90H310M10,110H310M50,10V130M90,10V130M130,10V130M170,10V130M210,10V130M250,10V130" class="grid"/>
+    </svg>
+    <h4>Regrouped</h4>
+    <p>The shading position snaps to 0.5 m blocks: a lamp's pool of light becomes squares.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="The same pool of light, a smooth round falloff.">
+      <rect x="10" y="10" width="300" height="120" class="paper"/>
+      <ellipse cx="160" cy="70" rx="80" ry="45" class="light o-25"/><ellipse cx="160" cy="70" rx="52" ry="30" class="light o-50"/><ellipse cx="160" cy="70" rx="24" ry="14" class="light o-75"/>
+    </svg>
+    <h4>In order</h4>
+    <p>Each difference is computed on its own, then added.</p>
+  </div>
+</div>
+
+<div class="callout warn">
+  <strong>Make each step opaque</strong>
+  <p>SPIR-V's <code class="lang-text">NoContraction</code> decoration (HLSL and GLSL <code class="lang-text">precise</code>) is meant to forbid regrouping, but a shader compiler may drop it and a driver may ignore it. What every compiler respects is a value it cannot know: an OR of each step's bits with a 0 that is read from memory. The compiler cannot prove it is 0, so it cannot regroup through it. It costs one integer OR per component.</p>
+</div>
+
+<h2 id="everything"><span class="n">6</span>Everything in one space</h2>
+
+<p>Every position the GPU compares with another must be in the same render space. Directions (a sun, the sky, a normal) do not change when the origin moves; positions do.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Data</th><th>How it reaches render space</th></tr>
+  <tr><td>Objects</td><td>High/low rows, minus the view's origin on the GPU.</td></tr>
+  <tr><td>Lights with a position</td><td>The same: high/low in the light's row.</td></tr>
+  <tr><td>View, frustum planes, LOD plane</td><td>Made from the world-space view in doubles, moved by the origin, then floats. The view matrix becomes a rotation.</td></tr>
+  <tr><td>Shadow maps</td><td>The light's matrices in doubles, moved by the origin. A cascade still snaps to the <b>world's</b> texel grid, in doubles: snapped in render space, the grid would move with the camera and the edges would crawl.</td></tr>
+  <tr><td>Last frame (motion vectors)</td><td>The camera moved since the last frame, so the last frame's view-projection is kept in world space, in doubles, and moved into this frame's render space. An object's last translation is stored as <i>last − now</i>, a small number.</td></tr>
+  <tr><td>Picking, readbacks</td><td>A render-space position read from the GPU plus the view's origin, in doubles, is the world position.</td></tr>
+</table>
+</div>
+
+<h2 id="depth"><span class="n">7</span>Depth far from the camera</h2>
+
+<p>Depth is a separate question. The depth buffer stores the distance <b>from the camera</b>, so the world's origin does not matter to it. What matters is how far the camera can see. With <a href="projection-depth.html">reversed-Z</a>, a 32-bit float depth and an infinite far plane, depth = near / distance, and the float keeps the same relative precision at every distance:</p>
+
+<div class="stats">
+  <div><b>0.12 mm</b><span>depth step at 1 km</span><small>distance × 2<sup>−23</sup></small></div>
+  <div><b>12 cm</b><span>at 1000 km</span><small>a mountain range from orbit</small></div>
+  <div><b>4.3 m</b><span>at 36 000 km</span><small>the Earth from a geostationary orbit</small></div>
+  <div><b>any</b><span>near plane</span><small>near only scales the depth; it does not cost precision</small></div>
+</div>
+
+<p>Without reversed-Z, a standard 0-to-1 depth puts almost all its precision near the near plane, and far surfaces z-fight. With it, a camera in orbit and a camera on the street both need no extra trick: no logarithmic depth, no second depth range.</p>
+
+<h2 id="pitfalls"><span class="n">8</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>Far from the origin, vertices shake as the camera moves</dt><dd>Positions reach the GPU as world-space floats, or the view matrix has the camera's translation. Draw in render space.</dd></div>
+  <div><dt>Geometry is right, but lighting falls in blocks</dt><dd>One shader path still subtracts big numbers, or the compiler regrouped the split sum. Check every position the shading uses, and keep the sums in order.</dd></div>
+  <div><dt>Shadow edges crawl while the camera moves</dt><dd>The cascade snaps to texels in render space. Snap in world space, in doubles.</dd></div>
+  <div><dt>Moving objects smear with TAA far away only</dt><dd>The last frame's matrix was stored in render space and not moved to the new origin, or the last translation was stored as an absolute float.</dd></div>
+  <div><dt>A double silently becomes a float</dt><dd>Math libraries convert between precisions without a word. Make such conversions explicit, so each one is a decision.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
+
+<p>Positions are doubles in the public API: <code>Transform::position</code>, <code>Light::position</code> and <code>CameraController::TrackBall::center</code> are <code>glm::dvec3</code>, and <code>Transform::toMatrix</code> and <code>Renderer::getViewMatrix</code> return a <code>glm::dmat4</code>. Each view draws in the render space of its camera: its origin is the camera's position.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="On the CPU, an entity's double transform goes through writeWorldRows into its instance row as three rows whose w holds the high part of the translation, plus translationLow. Only when the entity moves. Each frame, prepareSceneView splits the camera's position into SceneData's originHigh and originLow, and moves the view into render space with toRenderMatrix. On the GPU, getWorldMatrix calls toRenderSpace, which subtracts the origin part by part with subtractSplit.">
+    <text x="20" y="22" class="title t-cpu">CPU</text>
+    <rect x="20" y="36" width="190" height="56" rx="6" class="cpu"/><text x="115" y="58" class="mid title">Transform</text><text x="115" y="78" class="mid small mono">dvec3 position</text>
+    <path d="M210,64 H270" class="arrow cpu" marker-end="url(#ah-cpu)"/><text x="240" y="54" class="mid small">on change</text>
+    <rect x="275" y="36" width="210" height="56" rx="6" class="mem"/><text x="380" y="58" class="mid title">instance row (160 B)</text><text x="380" y="78" class="mid small mono">world[3].w + translationLow</text>
+    <rect x="20" y="126" width="190" height="56" rx="6" class="cpu"/><text x="115" y="148" class="mid title">camera</text><text x="115" y="168" class="mid small mono">dvec3 position</text>
+    <path d="M210,154 H270" class="arrow cpu" marker-end="url(#ah-cpu)"/><text x="240" y="144" class="mid small">each frame</text>
+    <rect x="275" y="126" width="210" height="56" rx="6" class="mem"/><text x="380" y="148" class="mid title">SceneData of the view</text><text x="380" y="168" class="mid small mono">originHigh, originLow, view</text>
+    <line x1="510" y1="20" x2="510" y2="250" class="grid"/>
+    <text x="530" y="22" class="title t-gpu">GPU, every vertex, light, sphere</text>
+    <rect x="530" y="70" width="210" height="96" rx="6" class="shader"/>
+    <text x="635" y="94" class="mid title">toRenderSpace</text>
+    <text x="635" y="116" class="mid small mono">(high − originHigh)</text>
+    <text x="635" y="134" class="mid small mono">+ (low − originLow)</text>
+    <text x="635" y="154" class="mid small">each step kept in order</text>
+    <path d="M485,64 C510,64 510,96 528,96" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <path d="M485,154 C510,154 510,140 528,140" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="20" y="220" class="small">Lights: Light::position the same way, in the light table (positionLow).</text>
+    <text x="20" y="240" class="small">Animated rows: the Animate pass adds the node's offset to the low part.</text>
+    <text x="530" y="200" class="small">then the shaders work as before:</text>
+    <text x="530" y="218" class="small">culling, Hi-Z, LODs, clusters,</text>
+    <text x="530" y="236" class="small">shadows, motion, the sky</text>
+  </svg>
+  <figcaption>Moving the camera writes one origin per view and no instance row. Moving an entity writes its rows, as before.</figcaption>
+</figure>
+
+<h3>Where RASM follows the page, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>CPU positions</td><td>doubles</td><td><code>glm::dvec3</code> positions; rotation and scale stay floats. Mesh vertices and glTF node transforms are floats, in their mesh's space.</td></tr>
+  <tr><td>Render space</td><td>the camera at the origin</td><td>Each scene view uses its camera's position, also its shadow maps' views (they belong to the camera of <code>addShadowPasses</code>). <code>toRenderMatrix</code> moves a world-space matrix there in doubles.</td></tr>
+  <tr><td>Rows</td><td>high/low</td><td><code>InstanceData</code>: three rows, w = the high part, and <code>translationLow</code> (160 B). <code>InstanceTransform</code> and <code>AnimatedEntity</code> the same. <code>gfx::Light</code> adds <code>positionLow</code> (68 B).</td></tr>
+  <tr><td>Keeping the order</td><td>opaque steps</td><td><code>subtractSplit</code> in <code>shaders/lib/renderSpace.slang</code> ORs each step with <code>SceneData::zero</code> (<code>AnimatePushConstants::zero</code> in the Animate pass). Slang drops <code>precise</code>, and the NVIDIA driver regroups across <code class="lang-text">NoContraction</code>, which makes lighting fall in 0.5 m blocks.</td></tr>
+  <tr><td>Motion</td><td>last frame in world space</td><td><code>SceneView::previousViewProjection</code> is a world-space <code>glm::dmat4</code>; <code>previousWorld</code> rows hold last − now in w.</td></tr>
+  <tr><td>Shadows</td><td>world texel grid</td><td><code>fitShadowCascade</code> snaps in doubles; <code>getSpotShadowView</code> and <code>getCubeFaceView</code> return world-space <code>glm::dmat4</code>s.</td></tr>
+  <tr><td>Frozen culling</td><td>—</td><td>The frozen planes and LOD plane stay in the render space of the frame that froze them and are moved to each new origin (<code>moveRenderPlane</code>).</td></tr>
+  <tr><td>Silent conversions</td><td>explicit</td><td>RASM's own targets build with <code>GLM_FORCE_EXPLICIT_CTOR</code>: a <code>dvec3</code> or <code>dmat4</code> becomes a float type only through a written cast.</td></tr>
+  <tr><td>World positions back</td><td>origin + render position</td><td><code>toWorldPosition</code> and <code>toRenderPosition</code> (<code>rasm/renderSpace.h</code>); a view's origin is its camera's <code>getCameraTransform(camera).position</code> in the frame it drew.</td></tr>
+</table>
+</div>
+
+<div class="stats">
+  <div><b>62.8%</b><span>pixels off, before</span><small>far vs near, more than 8 levels, frame 120 of <code>--compare</code></small></div>
+  <div><b>0.04%</b><span>pixels off, after</span><small>shadow-edge pixels only; 0 with the culling debug view</small></div>
+  <div><b>0</b><span>rows written per camera move</span><small><code>syncGpuScene</code> 0.3 µs per frame with 12 000 entities</small></div>
+  <div><b>1.34 ms</b><span>frame, before and after</span><small>12 000 pillars, flying camera, RTX 3060, Release</small></div>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The split, the rows, render-space matrices and planes</td><td><code>splitPosition</code>, <code>writeWorldRows</code>, <code>writePreviousRows</code>, <code>toRenderMatrix</code>, <code>moveRenderPlane</code> in <code>src/renderer/renderSpace.cpp</code>; tested by <code>tests/renderSpaceTests.cpp</code> (also where the split stops being exact)</td></tr>
+  <tr><td>The GPU side</td><td><code>subtractSplit</code> in <code>shaders/lib/renderSpace.slang</code>; <code>toRenderSpace</code>, <code>getLight</code>, <code>getWorldMatrix</code>, <code>getPreviousWorldPosition</code> in <code>shaders/lib/core.slang</code>; the animated rows in <code>shaders/passes/animate.slang</code></td></tr>
+  <tr><td>The rows</td><td><code>Renderer::writeInstanceRows</code> (<code>src/renderer/gpuScene.cpp</code>), <code>Renderer::writeLightRow</code> (<code>lightClusters.cpp</code>), <code>writeAnimationRow</code> (<code>animation.cpp</code>)</td></tr>
+  <tr><td>Each view's origin and matrices</td><td><code>Renderer::prepareSceneView</code>, <code>writeViewMotion</code>, <code>getShadowMaps</code> in <code>gpuScene.cpp</code></td></tr>
+  <tr><td>The demo and the proof</td><td><code>examples/23_large_world</code> (<code>--compare</code>, <code>--origin</code>); image tests <code>far_shadows</code>, <code>far_skinning</code>, <code>far_taa</code> compare against the same scenes at the origin</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>No shader reads a world position: every position goes through <code>toRenderSpace</code> (rows through <code>getWorldMatrix</code>, lights through <code>getLight</code>).</li>
+    <li>A view, shadow or light matrix is made in world space in doubles and moved with <code>toRenderMatrix</code>, never built from float world positions.</li>
+    <li>A new GPU struct with a position stores it high/low, and its shader subtracts with <code>subtractSplit</code>.</li>
+    <li>Data kept across frames (motion, frozen culling) is kept in world space or with its origin, because the origin moves with the camera.</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <strong>Not done yet</strong>
+  <p>The C API (<code>rasm_c.h</code> 1.1) still takes float positions. The environment turns only around +Y, so a globe's local "up" tilts the sky, and the free-fly controller turns around +Y (<code>D42</code>). glTF node translations are floats.</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Patrick Cozzi and Kevin Ring, <i>3D Engine Design for Virtual Globes</i> (2011): chapter 5, Vertex Transform Precision.</li>
+  <li>David Goldberg, <i>What Every Computer Scientist Should Know About Floating-Point Arithmetic</i>, ACM Computing Surveys (1991).</li>
+  <li>Emil Persson, <i>Creating Vast Game Worlds</i>, SIGGRAPH 2012 course (Just Cause 2).</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

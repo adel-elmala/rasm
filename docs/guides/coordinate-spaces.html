@@ -978,23 +978,23 @@ pixels:  x_p = vx + (x_n + 1) / 2 · width
   <div><dt>The model is mirrored, or inside out</dt><dd>Data from a tool with the other handedness, converted with a rotation only.</dd></div>
   <div><dt>A matrix "does nothing" or does something strange</dt><dd>Row-major data read as column-major: the matrix is transposed.</dd></div>
   <div><dt>Lighting looks wrong on scaled objects</dt><dd>Normals transformed with the model matrix. They need the inverse transpose (<a href="normal-mapping.html">Normal mapping</a>).</dd></div>
-  <div><dt>Far from the origin, vertices jitter</dt><dd>A 32-bit float has only 24 bits of precision: at 100 km, steps are about 8 mm. Large worlds render relative to the camera.</dd></div>
+  <div><dt>Far from the origin, vertices jitter</dt><dd>A 32-bit float has only 24 bits of precision: at 100 km, steps are about 8 mm. Large worlds render relative to the camera (<a href="large-world-precision.html">Large worlds</a>).</dd></div>
   <div><dt>The camera spins wildly at the top or bottom</dt><dd>lookAt with forward parallel to up, or Euler angles at gimbal lock. Clamp the pitch (<a href="camera-controllers.html">Camera controllers</a>).</dd></div>
 </dl>
 
 <h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
 
-<p>RASM uses the glTF convention: a right-handed, Y-up world, and a camera that looks down its local −Z. Transforms are a position, a quaternion and a scale. Clip space is Y-up on every backend; the Vulkan backend flips Y with a negative viewport height (fix A).</p>
+<p>RASM uses the glTF convention: a right-handed, Y-up world, and a camera that looks down its local −Z. Transforms are a position in doubles, a quaternion and a scale. Clip space is Y-up on every backend; the Vulkan backend flips Y with a negative viewport height (fix A). The GPU never sees world space: each view draws in its camera's <b>render space</b>, the world moved so that the camera is at the origin (<a href="large-world-precision.html">Large worlds</a>).</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 300" role="img" aria-label="On the CPU, Transform toMatrix times the sub-mesh transform becomes the instance row's worldMatrix. getViewMatrix and getProjectionMatrix fill SceneData. On the GPU, vertMain multiplies projection, view and worldMatrix with the vertex position. The Vulkan setViewport passes a negative height so that the Y-up clip space lands upright in the framebuffer.">
+  <svg viewBox="0 0 760 300" role="img" aria-label="On the CPU, Transform toMatrix times the sub-mesh transform, in doubles, becomes the instance row's world rows, with the translation split in a high and a low float. getViewMatrix, moved into render space, and getProjectionMatrix fill SceneData with the camera's origin. On the GPU, vertMain subtracts the origin from the row's translation and multiplies projection, view and world with the vertex position. The Vulkan setViewport passes a negative height so that the Y-up clip space lands upright in the framebuffer.">
     <text x="20" y="24" class="title t-cpu">CPU</text>
     <rect x="20" y="36" width="220" height="56" rx="6" class="cpu"/>
     <text x="130" y="60" class="mid mono">Transform::toMatrix</text>
-    <text x="130" y="78" class="mid small">entity T · R · S, × sub-mesh matrix</text>
+    <text x="130" y="78" class="mid small">entity T · R · S × sub-mesh, doubles</text>
     <rect x="20" y="104" width="220" height="56" rx="6" class="cpu"/>
     <text x="130" y="128" class="mid mono">getViewMatrix</text>
-    <text x="130" y="146" class="mid small">conjugate(rotation) · T(−position)</text>
+    <text x="130" y="146" class="mid small">moved to render space: R only</text>
     <rect x="20" y="172" width="220" height="56" rx="6" class="cpu"/>
     <text x="130" y="196" class="mid mono">getProjectionMatrix</text>
     <text x="130" y="214" class="mid small">fitted to the target's aspect</text>
@@ -1004,17 +1004,17 @@ pixels:  x_p = vx + (x_n + 1) / 2 · width
     <line x1="240" y1="200" x2="288" y2="168" class="arrow mem" marker-end="url(#ah-mem)"/>
     <rect x="290" y="36" width="200" height="56" rx="6" class="mem"/>
     <text x="390" y="60" class="mid">Instance row</text>
-    <text x="390" y="78" class="mid mono small">worldMatrix</text>
+    <text x="390" y="78" class="mid mono small">world[3] + translationLow</text>
     <rect x="290" y="128" width="200" height="56" rx="6" class="mem"/>
     <text x="390" y="152" class="mid">SceneData</text>
-    <text x="390" y="170" class="mid mono small">view · projection</text>
+    <text x="390" y="170" class="mid mono small">view · projection · origin</text>
 
     <line x1="490" y1="64"  x2="538" y2="96"  class="arrow" marker-end="url(#ah)"/>
     <line x1="490" y1="156" x2="538" y2="124" class="arrow" marker-end="url(#ah)"/>
     <text x="645" y="24" class="mid title t-gpu">GPU</text>
     <rect x="540" y="80" width="210" height="56" rx="28" class="shader"/>
     <text x="645" y="104" class="mid mono">vertMain</text>
-    <text x="645" y="122" class="mid small">projection · view · world · pos</text>
+    <text x="645" y="122" class="mid small">P · V · (world − origin) · pos</text>
     <line x1="645" y1="136" x2="645" y2="174" class="arrow gpu" marker-end="url(#ah-gpu)"/>
     <rect x="540" y="176" width="210" height="56" rx="6" class="gpu"/>
     <text x="645" y="200" class="mid">Viewport, height &lt; 0</text>
@@ -1033,9 +1033,9 @@ pixels:  x_p = vx + (x_n + 1) / 2 · width
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Handedness, up axis</td><td>a choice; glTF is right-handed, Y-up</td><td>Right-handed, Y-up, like glTF. Imported glTF and OBJ data is used as it is, with no mirroring (<code>D8</code>).</td></tr>
   <tr><td>Camera direction</td><td>looks down −Z</td><td>The same. Free-fly and trackball code use <code class="lang-text">rotation * (0, 0, -1)</code> as forward.</td></tr>
-  <tr><td>Model matrix</td><td><var>T</var> · <var>R</var> · <var>S</var>, column vectors</td><td><code>Transform::toMatrix</code> builds exactly <var>T</var> · <var>R</var> · <var>S</var> with glm (column vectors, column-major). The instance's world matrix is that times <code>SubMesh</code>'s <code>transform</code>.</td></tr>
+  <tr><td>Model matrix</td><td><var>T</var> · <var>R</var> · <var>S</var>, column vectors</td><td><code>Transform::toMatrix</code> builds exactly <var>T</var> · <var>R</var> · <var>S</var> with glm (column vectors, column-major), in doubles. The instance's world matrix is that times <code>SubMesh</code>'s <code>transform</code>; its row keeps the translation as a high and a low float.</td></tr>
   <tr><td>Rotation</td><td>a unit quaternion</td><td><code>Transform</code> holds a <code>glm::quat</code>, identity by default (<code>B22</code>). <code>Transform::rotate</code> multiplies the new turn on the left, so it turns around a world axis.</td></tr>
-  <tr><td>View matrix</td><td><var>R</var><sup>T</sup> · <var>T</var>(−<var>eye</var>), or lookAt</td><td><code>getViewMatrix</code>: <code class="lang-text">mat4_cast(conjugate(rotation)) * translate(-position)</code>. No general inverse, and no lookAt: the controllers produce the rotation directly. The camera's scale is not used.</td></tr>
+  <tr><td>View matrix</td><td><var>R</var><sup>T</sup> · <var>T</var>(−<var>eye</var>), or lookAt</td><td><code>getViewMatrix</code>: <code class="lang-text">mat4_cast(conjugate(rotation)) * translate(-position)</code>, a <code>glm::dmat4</code>. No general inverse, and no lookAt: the controllers produce the rotation directly. The camera's scale is not used. The views draw with it moved into render space (<code>toRenderMatrix</code>), where it is the rotation alone.</td></tr>
   <tr><td>Y flip for Vulkan</td><td>fix A, B or a final flip</td><td>Fix A, inside <code>VulkanCommandBuffer::setViewport</code>: <code class="lang-text">y = y + height</code>, <code class="lang-text">height = -height</code>. Callers pass a normal top-left rectangle.</td></tr>
   <tr><td>Hand-written clip positions</td><td>must follow the clip convention</td><td>Clip space is Y-up, so <code>statsOverlay.slang</code> maps pixel rows with <code class="lang-text">1.0 - pixel.y / screen.y * 2.0</code>, and occlusion culling maps NDC back to rows with <code class="lang-text">0.5 - y * 0.5</code>.</td></tr>
   <tr><td>Mouse</td><td>flip <var>y</var></td><td><code>toInputNdc</code> in <code>cameraInput.cpp</code> flips it, so mouse motion is Y-up too (<a href="camera-controllers.html#in-rasm">Camera controllers</a>).</td></tr>
@@ -1069,10 +1069,6 @@ pixels:  x_p = vx + (x_n + 1) / 2 · width
   </ul>
 </div>
 
-<div class="callout">
-  <strong>Not done yet</strong>
-  <p>All positions are 32-bit floats in world space. Large worlds need double precision on the CPU and camera-relative rendering (development plan, phase 5, map engines).</p>
-</div>
 
 <h3>Further reading</h3>
 <ul>

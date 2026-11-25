@@ -85,7 +85,7 @@
     <text x="292" y="214" class="mono">materialIndex = 2</text>
     <text x="292" y="229" class="mono small">previousWorld, animationRow</text>
     <rect x="280" y="242" width="220" height="24" rx="4" class="mem"/><text x="292" y="258" class="mono">row 4</text>
-    <text x="280" y="284" class="small">InstanceData, 164 B</text>
+    <text x="280" y="284" class="small">InstanceData, 160 B</text>
 
     <text x="550" y="22" class="title">Geometry table</text>
     <text x="550" y="38" class="small">one copy, in the geometry pool</text>
@@ -182,7 +182,7 @@
   <tr><th>Table</th><th>Buffers</th><th>Rows</th><th>Written by</th></tr>
   <tr><td>Geometry<br><code>GeometryData</code>, 200 B</td><td>one, in the geometry pool (<code>tableBuffer</code>)</td><td><code>geometryPoolSubMeshes</code> (2<sup>14</sup>)</td><td><code>upload</code> of the geometry pool, once per sub-mesh, with one <code>GeometryLod</code> per LOD. No frame has read a new row yet, so one copy is enough.</td></tr>
   <tr><td>Material<br><code>MaterialData</code>, 220 B</td><td><code>GpuTable</code>, one per frame slot</td><td><code>EngineConfig::maxMaterials</code> + 1 rows; row = material handle index, reused at once by the next material</td><td><code>writeMaterialRow</code></td></tr>
-  <tr><td>Instance<br><code>InstanceData</code>, 164 B</td><td><code>GpuTable</code>, one per frame slot</td><td><code>maxInstances</code> (2<sup>16</sup>), bump-allocated</td><td><code>writeInstanceRows</code>. <code>animationRow</code> names the row's <code>InstanceTransform</code> while a clip moves its sub-mesh, −1 otherwise.</td></tr>
+  <tr><td>Instance<br><code>InstanceData</code>, 160 B</td><td><code>GpuTable</code>, one per frame slot</td><td><code>maxInstances</code> (2<sup>16</sup>), bump-allocated</td><td><code>writeInstanceRows</code>. <code>animationRow</code> names the row's <code>InstanceTransform</code> while a clip moves its sub-mesh, −1 otherwise.</td></tr>
   <tr><td>Animated entities<br><code>AnimatedEntity</code>, 120 B</td><td><code>GpuTable</code>, one per frame slot</td><td><code>maxAnimatedEntities</code> (2<sup>14</sup>), a row from an entity's first play, or from its instance rows for a skinned or morphed mesh</td><td><code>writeAnimationRow</code>, on play, stop or move (<a href="keyframe-animation.html#in-rasm">keyframe animation</a>)</td></tr>
   <tr><td>Morph weight overrides<br><code>float</code>, 4 B</td><td><code>GpuTable</code>, one per frame slot</td><td><code>maxMorphWeights</code> (2<sup>16</sup>), a range per posed entity of a morphed mesh</td><td><code>writeMorphWeightRows</code>, on <code>setMorphWeights</code> and <code>clearMorphWeights</code>; a quiet NaN where the clip's weight counts (<a href="morph-targets.html#in-rasm">morph targets</a>)</td></tr>
   <tr><td>Morph weights<br><code>float</code>, 4 B</td><td>one per frame slot</td><td><code>maxMorphWeights</code> (2<sup>16</sup>), the same ranges</td><td>the GPU: the <code>Animate</code> pass writes each weight, which the <code>Skin</code> pass reads</td></tr>

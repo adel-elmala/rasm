@@ -26,7 +26,7 @@ namespace rasm
         glm::uvec2              size                    = glm::uvec2(0);
         uint32_t                version                 = 0;    // the history's RenderTarget::version: a resize or a new swapchain makes new, unwritten textures
         uint32_t                historyResets           = 0;
-        glm::vec3               position                = glm::vec3(0.0f);
+        glm::dvec3              position                = glm::dvec3(0.0);
         glm::quat               rotation                = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
         bool                    valid                   = false;
     };
@@ -38,7 +38,7 @@ namespace rasm
     // Whether the camera moved too far since the last frame for its history to help: a turn above TAA_JUMP_ANGLE, or
     // a move above jumpDistance (TAA_JUMP_NEAR_PLANES near planes for a perspective camera, half the view's width
     // for an orthographic one).
-    bool                        isCameraJump(const glm::vec3& previousPosition, const glm::quat& previousRotation,
-                                             const glm::vec3& position, const glm::quat& rotation, float jumpDistance);
+    bool                        isCameraJump(const glm::dvec3& previousPosition, const glm::quat& previousRotation,
+                                             const glm::dvec3& position, const glm::quat& rotation, float jumpDistance);
 }
 // clang-format on

@@ -103,7 +103,7 @@ namespace rasm
         SceneHandle                 createScene();
         EntityHandle                createEntity(const std::string& name, MeshHandle mesh = MeshHandle{}, MaterialHandle material = MaterialHandle{}, Transform transform = Transform{});
         CameraHandle                createCamera(CameraProjection projection, Transform transform);
-        LightHandle                 createLight(LightType type, glm::vec3 color = glm::vec3(1.0f), glm::vec3 position = glm::vec3(1.0f), glm::vec3 direction = glm::vec3(0.0f, -1.0f, 0.0f), float intensity = 1.0f, float range = 10.0f, float innerConeAngle = 0.0f, float outerConeAngle = SPOT_OUTER_CONE_ANGLE);
+        LightHandle                 createLight(LightType type, glm::vec3 color = glm::vec3(1.0f), glm::dvec3 position = glm::dvec3(1.0), glm::vec3 direction = glm::vec3(0.0f, -1.0f, 0.0f), float intensity = 1.0f, float range = 10.0f, float innerConeAngle = 0.0f, float outerConeAngle = SPOT_OUTER_CONE_ANGLE);
         Light                       getLight(LightHandle light) const;
         void                        updateLight(LightHandle light, const Light& values);
         void                        addEntityToScene(SceneHandle scene, EntityHandle entity);
@@ -178,7 +178,7 @@ namespace rasm
         glm::mat4                   getProjectionMatrix(CameraHandle camera);
         // The camera's projection fitted to another aspect ratio. The camera itself does not change.
         glm::mat4                   getProjectionMatrix(CameraHandle camera, float aspect);
-        glm::mat4                   getViewMatrix(CameraHandle camera);
+        glm::dmat4                  getViewMatrix(CameraHandle camera);
         void                        updateCameraAspectRatio(float aspect);
         void                        updateCamera(CameraHandle camera, const CameraInput& input);
         void                        updateTransform(EntityHandle entity, Transform transform);

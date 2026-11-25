@@ -75,7 +75,7 @@ void lightsMain(uint3 threadId : SV_GroupThreadID)
             uint row        = scene->sceneLightsPtr[scene->globalLightCount + i];
             if (isShadowedLight(scene, row))
                 continue;
-            float4 bounds   = getLightSphere(scene->lightsPtr[row]);
+            float4 bounds   = getLightSphere(getLight(scene, row));
             Sphere sphere   = { bounds.xyz, bounds.w, 1.0 };
             if (!isInFrustum(scene, sphere))
                 continue;

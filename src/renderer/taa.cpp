@@ -60,11 +60,11 @@ namespace rasm
         return glm::vec2(getHalton(index, 2), getHalton(index, 3)) - glm::vec2(0.5f);
     }
 
-    bool isCameraJump(const glm::vec3 &previousPosition, const glm::quat &previousRotation, const glm::vec3 &position, const glm::quat &rotation, float jumpDistance)
+    bool isCameraJump(const glm::dvec3 &previousPosition, const glm::quat &previousRotation, const glm::dvec3 &position, const glm::quat &rotation, float jumpDistance)
     {
         const float cosHalfAngle = std::min(std::abs(glm::dot(previousRotation, rotation)), 1.0f);
         const float angle = 2.0f * std::acos(cosHalfAngle);
-        return angle > TAA_JUMP_ANGLE || glm::length(position - previousPosition) > jumpDistance;
+        return angle > TAA_JUMP_ANGLE || glm::length(position - previousPosition) > static_cast<double>(jumpDistance);
     }
 
     // The history target's desc for a source: the source's size, one SCENE_COLOR_FORMAT storage color with history.

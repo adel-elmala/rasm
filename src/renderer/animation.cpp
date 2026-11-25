@@ -6,6 +6,7 @@
 #include "renderer/animationTime.h"
 #include "renderer/geometryPool.h"
 #include "renderer/gpuScene.h"
+#include "renderer/renderSpace.h"
 #include "renderer/uberMaterialTypes.h"
 
 #include "spdlog/spdlog.h"
@@ -890,20 +891,21 @@ namespace rasm
             clip = static_cast<int32_t>(state.play.clip == ALL_ANIMATION_CLIPS ? clips.size() : state.play.clip);
         else if (state.rest)
             clip = static_cast<int32_t>(clips.size() + 1);
-        const gfx::AnimatedEntity row{.entityMatrix = entityRef.transform.toMatrix(),
-                                      .mesh = animation.meshes[entityRef.mesh.index].address,
-                                      .phase = getAnimationPhase(state.play, duration, animation.base),
-                                      .speed = state.play.speed,
-                                      .duration = duration,
-                                      .clip = clip,
-                                      .loop = state.play.loop ? 1u : 0u,
-                                      .firstTransform = state.firstTransform,
-                                      .firstNode = state.firstNode,
-                                      .resetSync = state.resetSync,
-                                      .firstJoint = state.firstJoint,
-                                      .firstSkinnedVertex = state.firstSkinnedVertex,
-                                      .firstWeight = state.firstWeight,
-                                      .padding = 0};
+        gfx::AnimatedEntity row{.rowPadding = 0,
+                                .mesh = animation.meshes[entityRef.mesh.index].address,
+                                .phase = getAnimationPhase(state.play, duration, animation.base),
+                                .speed = state.play.speed,
+                                .duration = duration,
+                                .clip = clip,
+                                .loop = state.play.loop ? 1u : 0u,
+                                .firstTransform = state.firstTransform,
+                                .firstNode = state.firstNode,
+                                .resetSync = state.resetSync,
+                                .firstJoint = state.firstJoint,
+                                .firstSkinnedVertex = state.firstSkinnedVertex,
+                                .firstWeight = state.firstWeight,
+                                .padding = 0};
+        writeWorldRows(entityRef.transform.toMatrix(), row.entity, row.translationLow);
         gpuAnimation->entities.setRow(state.row, &row);
     }
 
@@ -997,7 +999,7 @@ namespace rasm
         animation.recordedSync = gpuScene->syncCount;
 
         const auto commandBuffer = frameResources[frame].commandBuffer;
-        const gfx::AnimatePushConstants pushConstants{.frame = ctx.getBufferDeviceAddress(animation.frames[frame]), .padding = {0, 0}};
+        const gfx::AnimatePushConstants pushConstants{.frame = ctx.getBufferDeviceAddress(animation.frames[frame]), .zero = 0, .padding = 0};
         ctx.bindPipeline(commandBuffer, animation.pipeline);
         ctx.pushConstants(commandBuffer, animation.pipeline, &pushConstants, sizeof(pushConstants), 0);
         ctx.dispatch(commandBuffer, animation.entityRows);
@@ -1013,7 +1015,7 @@ namespace rasm
             return;
         const auto frame = static_cast<uint32_t>(frameCount);
         const auto commandBuffer = frameResources[frame].commandBuffer;
-        const gfx::AnimatePushConstants pushConstants{.frame = ctx.getBufferDeviceAddress(animation.frames[frame]), .padding = {0, 0}};
+        const gfx::AnimatePushConstants pushConstants{.frame = ctx.getBufferDeviceAddress(animation.frames[frame]), .zero = 0, .padding = 0};
         ctx.bindPipeline(commandBuffer, animation.skinPipeline);
         ctx.pushConstants(commandBuffer, animation.skinPipeline, &pushConstants, sizeof(pushConstants), 0);
         ctx.dispatch(commandBuffer, animation.entityRows, (animation.maxSkinnedVertices + SKIN_GROUP_SIZE - 1) / SKIN_GROUP_SIZE);

@@ -39,6 +39,7 @@ namespace
     // After the frame is read: frames that let the readback settle, then frames that must not allocate (P27).
     constexpr uint32_t SETTLE_FRAMES = 2;
     constexpr uint32_t STEADY_FRAMES = 4;
+    constexpr glm::dvec3 FAR_ORIGIN(4197000.0, 168000.0, 4786000.0);
 
     struct Options
     {
@@ -68,6 +69,10 @@ namespace
         rasm::CameraHandle security;
         rasm::RenderTargetHandle viewTexture;
         rasm::WindowHandle window; // a second, offscreen window, which the security camera's view also draws
+        // What moveContent moves: the entities and lights that addEntity, addModel, addGround and addLight made.
+        std::vector<rasm::EntityHandle> entities;
+        std::vector<rasm::LightHandle> lights;
+        glm::dvec3 origin = glm::dvec3(0.0); // where the content's origin is in the world
     };
 
     // What every scene may use, loaded once.
@@ -88,8 +93,9 @@ namespace
         bool taa = false;
         bool bloom = false;
         rasm::DebugView view = rasm::DebugView::NONE;
-        uint32_t frames = 4; // rendered before the frame that is read
-        double time = 0.0;   // the animation clock of every frame, in seconds
+        uint32_t frames = 4;                 // rendered before the frame that is read
+        double time = 0.0;                   // the animation clock of every frame, in seconds
+        glm::dvec3 origin = glm::dvec3(0.0); // the scene, its lights and the camera moved here by a translation
         rasm::MeshletPath meshlets = rasm::MeshletPath::OFF;
         uint32_t threshold = 3;       // a channel differs when it is off by more than this (0-255)
         double fraction = 0.001;      // the test fails when more of the pixels than this differ
@@ -108,6 +114,7 @@ namespace
     struct BuiltContent
     {
         BuildContent build = nullptr;
+        glm::dvec3 origin = glm::dvec3(0.0);
         Content content;
         bool ok = false;
     };
@@ -159,26 +166,56 @@ namespace
         return material;
     }
 
+    rasm::EntityHandle addEntity(rasm::Engine &engine, Content &content, const char *name, rasm::MeshHandle mesh, rasm::MaterialHandle material, const rasm::Transform &transform)
+    {
+        const rasm::EntityHandle entity = engine.createEntity(name, mesh, material, transform);
+        engine.addEntityToScene(content.scene, entity);
+        content.entities.push_back(entity);
+        return entity;
+    }
+
+    rasm::LightHandle addLight(rasm::Engine &engine, Content &content, rasm::LightHandle light)
+    {
+        engine.addLightToScene(content.scene, light);
+        content.lights.push_back(light);
+        return light;
+    }
+
     void addGround(rasm::Engine &engine, const Assets &assets, Content &content, float halfSize, const glm::vec3 &color)
     {
-        const rasm::EntityHandle ground = engine.createEntity("ground", assets.cube, createColorMaterial(engine, color, 0.85f),
-                                                              rasm::Transform{glm::vec3(0.0f, -0.05f, 0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(2.0f * halfSize, 0.1f, 2.0f * halfSize)});
-        engine.addEntityToScene(content.scene, ground);
+        addEntity(engine, content, "ground", assets.cube, createColorMaterial(engine, color, 0.85f),
+                  rasm::Transform{glm::vec3(0.0f, -0.05f, 0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(2.0f * halfSize, 0.1f, 2.0f * halfSize)});
     }
 
     rasm::EntityHandle addModel(rasm::Engine &engine, Content &content, const char *name, rasm::MeshHandle mesh, const rasm::Transform &transform)
     {
-        const rasm::EntityHandle entity = engine.createEntity(name, mesh, {}, transform);
-        engine.addEntityToScene(content.scene, entity);
-        return entity;
+        return addEntity(engine, content, name, mesh, {}, transform);
+    }
+
+    // The content moved by a translation, far from the world's origin. Each view draws in its camera's render space, so
+    // it looks the same as at the origin.
+    void moveContent(rasm::Engine &engine, Content &content, const glm::dvec3 &origin)
+    {
+        content.origin = origin;
+        for (rasm::EntityHandle entity : content.entities)
+        {
+            rasm::Transform transform = engine.getTransform(entity);
+            transform.position += origin;
+            engine.updateTransform(entity, transform);
+        }
+        for (rasm::LightHandle light : content.lights)
+        {
+            rasm::Light values = engine.getLight(light);
+            values.position += origin;
+            engine.updateLight(light, values);
+        }
     }
 
     // The venice sunset photo around the scene, and a sun higher than its own, so the shadows are short enough to see.
     bool addSunsetLight(rasm::Engine &engine, const Assets &assets, Content &content, float intensity, const glm::vec3 &sunDirection, float sunIntensity)
     {
         engine.setSceneEnvironment(content.scene, rasm::SceneEnvironment{.environment = assets.sunset, .intensity = intensity, .rotation = ENVIRONMENT_ROTATION});
-        content.sun = engine.createLight(rasm::LightType::DIRECTIONAL, glm::vec3(1.0f, 0.85f, 0.7f), glm::vec3(0.0f), glm::normalize(sunDirection), sunIntensity, 0.0f);
-        engine.addLightToScene(content.scene, content.sun);
+        content.sun = addLight(engine, content, engine.createLight(rasm::LightType::DIRECTIONAL, glm::vec3(1.0f, 0.85f, 0.7f), glm::vec3(0.0f), glm::normalize(sunDirection), sunIntensity, 0.0f));
         return content.sun.isValid();
     }
 
@@ -313,17 +350,17 @@ namespace
         for (int i = 0; i < 4; ++i)
         {
             const float angle = glm::radians(45.0f + 90.0f * static_cast<float>(i));
-            engine.addEntityToScene(content.scene, engine.createEntity("pillar", cube, stone, rasm::Transform{glm::vec3(2.0f * std::cos(angle), 1.0f, 2.0f * std::sin(angle)), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(0.4f, 2.0f, 0.4f)}));
+            addEntity(engine, content, "pillar", cube, stone, rasm::Transform{glm::vec3(2.0f * std::cos(angle), 1.0f, 2.0f * std::sin(angle)), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(0.4f, 2.0f, 0.4f)});
         }
-        engine.addEntityToScene(content.scene, engine.createEntity("box", cube, stone, makeTransform(glm::vec3(-4.0f, 0.5f, 1.0f), 1.0f, 0.4f)));
-        engine.addEntityToScene(content.scene, engine.createEntity("box", cube, stone, makeTransform(glm::vec3(4.2f, 0.6f, -0.5f), 1.2f, -0.3f)));
+        addEntity(engine, content, "box", cube, stone, makeTransform(glm::vec3(-4.0f, 0.5f, 1.0f), 1.0f, 0.4f));
+        addEntity(engine, content, "box", cube, stone, makeTransform(glm::vec3(4.2f, 0.6f, -0.5f), 1.2f, -0.3f));
         const glm::vec3 lampPosition(-5.0f, 6.0f, 4.0f);
         content.local[0] = engine.createLight(rasm::LightType::SPOT, glm::vec3(1.0f, 0.95f, 0.8f), lampPosition, glm::normalize(glm::vec3(-1.0f, 0.0f, 0.0f) - lampPosition), 80.0f, 30.0f,
                                               glm::radians(16.0f), glm::radians(26.0f));
         content.local[1] = engine.createLight(rasm::LightType::POINT, glm::vec3(1.0f, 0.6f, 0.3f), glm::vec3(0.0f, 1.2f, 0.0f), glm::vec3(0.0f), 40.0f, 10.0f);
         content.localCount = 2;
-        engine.addLightToScene(content.scene, content.local[0]);
-        engine.addLightToScene(content.scene, content.local[1]);
+        addLight(engine, content, content.local[0]);
+        addLight(engine, content, content.local[1]);
         content.eye = glm::vec3(1.5f, 5.5f, 9.0f);
         content.center = glm::vec3(0.0f, 0.5f, 0.0f);
         content.fovY = 50.0f;
@@ -435,6 +472,12 @@ namespace
         {.name = "mesh_msaa4",    .build = buildSponza,        .samples = 4, .meshlets = rasm::MeshletPath::MESH_SHADERS, .threshold = 3, .fraction = 0.0001, .sameAs = "sponza_msaa4"},
         {.name = "mesh_taa",      .build = buildHelmet,        .taa = true, .frames = 16, .meshlets = rasm::MeshletPath::MESH_SHADERS, .threshold = 3, .fraction = 0.0001, .sameAs = "taa"},
         {.name = "mesh_normals",  .build = buildHelmet,        .view = rasm::DebugView::NORMALS, .meshlets = rasm::MeshletPath::MESH_SHADERS, .threshold = 3, .fraction = 0.0001, .sameAs = "debug_normals"},
+        // The same scenes moved 6370 km from the world's origin (Earth-centred coordinates of Paris): each view draws in
+        // its camera's render space, so they look the same. Only the shadow maps' texel grids, which stay the world's,
+        // move by part of a texel, so a few shadow edge pixels differ.
+        {.name = "far_shadows",   .build = buildLocalShadows,  .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "local_shadows"},
+        {.name = "far_skinning",  .build = buildSkinning,      .time = 1.25, .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "skinning"},
+        {.name = "far_taa",       .build = buildHelmet,        .taa = true, .frames = 16, .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "taa"},
     };
     // clang-format on
 
@@ -532,15 +575,17 @@ namespace
         return result;
     }
 
-    const Content *getContent(rasm::Engine &engine, const Assets &assets, rasm::CameraHandle camera, BuildContent build, std::vector<BuiltContent> &built)
+    const Content *getContent(rasm::Engine &engine, const Assets &assets, rasm::CameraHandle camera, const ImageTest &test, std::vector<BuiltContent> &built)
     {
         for (const BuiltContent &entry : built)
-            if (entry.build == build)
+            if (entry.build == test.build && entry.origin == test.origin)
                 return entry.ok ? &entry.content : nullptr;
-        BuiltContent entry{.build = build};
+        BuiltContent entry{.build = test.build, .origin = test.origin};
         entry.content.scene = engine.createScene();
         engine.addCameraToScene(entry.content.scene, camera);
-        entry.ok = entry.content.scene.isValid() && build(engine, assets, entry.content);
+        entry.ok = entry.content.scene.isValid() && test.build(engine, assets, entry.content);
+        if (entry.ok && test.origin != glm::dvec3(0.0))
+            moveContent(engine, entry.content, test.origin);
         built.push_back(entry);
         return entry.ok ? &built.back().content : nullptr;
     }
@@ -580,12 +625,12 @@ namespace
     bool renderTest(rasm::Engine &engine, const Assets &assets, rasm::CameraHandle camera, const ImageTest &test, std::vector<BuiltContent> &built, rasm::ReadbackImage &image,
                     AllocationCount &steady)
     {
-        const Content *content = getContent(engine, assets, camera, test.build, built);
+        const Content *content = getContent(engine, assets, camera, test, built);
         if (!content)
             return false;
         engine.setCameraProjection(camera, rasm::CameraProjection{.type = rasm::CameraProjection::Type::PERSPECTIVE,
                                                                   .perspective{.fovY = content->fovY, .aspect = static_cast<float>(WIDTH) / static_cast<float>(HEIGHT), .nearZ = 0.1f}});
-        engine.setCameraTransform(camera, rasm::Transform{content->eye, glm::quatLookAt(glm::normalize(content->center - content->eye), glm::vec3(0.0f, 1.0f, 0.0f)), glm::vec3(1.0f)});
+        engine.setCameraTransform(camera, rasm::Transform{content->origin + glm::dvec3(content->eye), glm::quatLookAt(glm::normalize(content->center - content->eye), glm::vec3(0.0f, 1.0f, 0.0f)), glm::vec3(1.0f)});
         engine.setCameraBloomStrength(camera, test.bloom ? 0.15f : 0.0f);
         engine.resetCameraHistory(camera);
         engine.setDebugView(test.view);

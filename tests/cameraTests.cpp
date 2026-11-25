@@ -58,11 +58,26 @@ TEST_CASE("the view matrix moves the camera to the origin")
     transform.rotate(glm::vec3(0.0f, 1.0f, 0.0f), 0.7f);
     auto camera = engine.createCamera(perspective(), transform);
 
-    glm::mat4 view = engine.getViewMatrix(camera);
+    glm::dmat4 view = engine.getViewMatrix(camera);
 
-    CHECK(isNear(glm::vec3(view * glm::vec4(transform.position, 1.0f)), glm::vec3(0.0f)));
-    CHECK(isNear(glm::vec3(view * glm::vec4(transform.position + transform.rotation * glm::vec3(0.0f, 0.0f, -1.0f), 1.0f)),
+    CHECK(isNear(glm::vec3(view * glm::dvec4(transform.position, 1.0)), glm::vec3(0.0f)));
+    CHECK(isNear(glm::vec3(view * glm::dvec4(transform.position + glm::dvec3(transform.rotation * glm::vec3(0.0f, 0.0f, -1.0f)), 1.0)),
                  glm::vec3(0.0f, 0.0f, -1.0f)));
+}
+
+// In doubles: 6400 km from the origin a float view matrix would be off by up to half a metre.
+TEST_CASE("the view matrix is exact far from the origin")
+{
+    rasm::Engine engine(headlessConfig());
+    rasm::Transform transform;
+    transform.position = glm::dvec3(4197000.25, 168000.5, 4786000.75);
+    transform.rotate(glm::vec3(0.0f, 1.0f, 0.0f), 0.7f);
+    auto camera = engine.createCamera(perspective(), transform);
+
+    const glm::dmat4 view = engine.getViewMatrix(camera);
+    const glm::dvec3 ahead = transform.position + glm::dvec3(transform.rotation * glm::vec3(0.0f, 0.0f, -0.001f));
+    CHECK(glm::length(glm::dvec3(view * glm::dvec4(transform.position, 1.0))) < 1e-6);
+    CHECK(glm::length(glm::dvec3(view * glm::dvec4(ahead, 1.0)) - glm::dvec3(0.0, 0.0, -0.001)) < 1e-6);
 }
 
 TEST_CASE("perspective projection maps depth to reversed [1, 0]")
@@ -229,7 +244,7 @@ TEST_CASE("a trackball drag keeps the camera on the orbit sphere")
 
     auto result = engine.getCameraTransform(camera);
     CHECK_FALSE(isNear(result.position, transform.position));
-    CHECK(glm::length(result.position - center) == doctest::Approx(4.0f));
+    CHECK(glm::length(result.position - glm::dvec3(center)) == doctest::Approx(4.0));
 }
 
 TEST_CASE("free-fly movement is scaled by speed and frame time")
@@ -374,6 +389,26 @@ TEST_CASE("an invalid camera handle is rejected")
 {
     rasm::Engine engine(headlessConfig());
 
-    CHECK(engine.getViewMatrix(rasm::CameraHandle{}) == glm::mat4(1.0f));
+    CHECK(engine.getViewMatrix(rasm::CameraHandle{}) == glm::dmat4(1.0));
     CHECK(engine.getProjectionMatrix(rasm::CameraHandle{}) == glm::mat4(1.0f));
+}
+
+// After a drag stops, the eased pose reaches the target and stays there bit for bit, near the origin and far from it,
+// though a trackball's positions carry the float rounding of its radius (B24).
+TEST_CASE("a trackball at rest settles exactly, also far from the origin")
+{
+    for (const glm::dvec3 center : {glm::dvec3(0.0), glm::dvec3(4197000.0, 168000.0, 4786000.0)})
+    {
+        rasm::CameraController controller{.type = rasm::CameraController::Type::TRACK_BALL,
+                                          .trackBall = {.radius = 15.0f, .center = center, .orbitSensitivity = 1.0f}};
+        rasm::CameraRig rig = rasm::createCameraRig(controller, rasm::Transform{center + glm::dvec3(0.0, 0.0, 15.0)});
+        rasm::updateCameraRig(rig, rasm::CameraInput{.mouseStart = glm::vec2(0.0f), .mouseEnd = glm::vec2(0.3f, 0.2f), .deltaTime = 1.0f / 60.0f});
+        for (int frame = 0; frame < 600; ++frame)
+            rasm::updateCameraRig(rig, rasm::CameraInput{.deltaTime = 1.0f / 60.0f});
+        const rasm::Transform settled = rig.transform;
+        rasm::updateCameraRig(rig, rasm::CameraInput{.deltaTime = 1.0f / 60.0f});
+        CHECK(rig.transform.position == settled.position);
+        CHECK(rig.transform.position == rig.targetTransform.position);
+        CHECK(rig.transform.rotation == rig.targetTransform.rotation);
+    }
 }

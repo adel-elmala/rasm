@@ -1,6 +1,8 @@
 #include "rasm/cameraController.h"
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace rasm
 {
@@ -71,7 +73,7 @@ namespace rasm
 
             if (glm::dot(move, move) > 1e-6f)
             {
-                transform.position += glm::normalize(move) * freeFly.speed * input.deltaTime;
+                transform.position += glm::dvec3(glm::normalize(move) * freeFly.speed * input.deltaTime);
             }
         }
 
@@ -111,7 +113,7 @@ namespace rasm
                 trackBall.radius = glm::max(radius, 0.0f);
             }
 
-            transform.position = trackBall.center + trackBall.radius * (transform.rotation * glm::vec3(0.0f, 0.0f, 1.0f));
+            transform.position = trackBall.center + glm::dvec3(trackBall.radius * (transform.rotation * glm::vec3(0.0f, 0.0f, 1.0f)));
         }
 
         void ease(CameraRig &rig, float deltaTime)
@@ -122,7 +124,12 @@ namespace rasm
             // Easing between (nearly) equal values still rounds by an amount that depends on deltaTime, so a
             // camera at rest would move by float noise every frame. Close enough, it snaps to the target (B24).
             const glm::quat remaining = glm::conjugate(current.rotation) * target.rotation;
-            const bool settled = glm::length(target.position - current.position) <= 1e-6f * glm::max(1.0f, glm::length(target.position)) &&
+            // A trackball's positions are its center plus a float offset of its radius, which rounds by about radius x 1e-7,
+            // so its tolerance grows with the radius. The position itself is a double, so the tolerance does not grow with
+            // the distance from the origin, past the double's own rounding.
+            const double reach = rig.controller.type == CameraController::Type::TRACK_BALL ? std::max(1.0, static_cast<double>(rig.controller.trackBall.radius)) : 1.0;
+            const double tolerance = 1e-6 * reach + 4.0 * std::numeric_limits<double>::epsilon() * glm::length(target.position);
+            const bool settled = glm::length(target.position - current.position) <= tolerance &&
                                  glm::length(glm::vec3(remaining.x, remaining.y, remaining.z)) <= 1e-6f &&
                                  glm::length(target.scale - current.scale) <= 1e-6f;
             if (easingSpeed <= 0.0f || deltaTime <= 0.0f || settled)
@@ -142,13 +149,13 @@ namespace rasm
                 // Linearly interpolating the position would cut across the arc and
                 // make the camera drift closer to the orbit center.
                 const auto &trackBall = rig.controller.trackBall;
-                const float currentRadius = glm::length(current.position - trackBall.center);
+                const auto currentRadius = static_cast<float>(glm::length(current.position - trackBall.center));
                 const float radius = glm::mix(currentRadius, trackBall.radius, t);
-                current.position = trackBall.center + radius * (current.rotation * glm::vec3(0.0f, 0.0f, 1.0f));
+                current.position = trackBall.center + glm::dvec3(radius * (current.rotation * glm::vec3(0.0f, 0.0f, 1.0f)));
             }
             else
             {
-                current.position = glm::mix(current.position, target.position, t);
+                current.position = glm::mix(current.position, target.position, static_cast<double>(t));
             }
         }
     }

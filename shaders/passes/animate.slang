@@ -1,5 +1,6 @@
 // clang-format off
 #include "animationTypes.slang"
+#include "renderSpace.slang"
 
 // The Animate pass: one group per row of the animated entity table. It samples the entity's clip at the frame's time
 // into each node's local matrix and each morph weight, walks up the parents to each node's world matrix, writes each
@@ -292,8 +293,10 @@ void animateMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
 
         // A skinned sub-mesh ignores its node (glTF): its joints place its vertices, and the entity places them all. A
         // morphed one that is not skinned follows its node, with the vertices the Skin pass morphs.
+        // The entity's translation stays split in a high and a low part: the node's offset, turned and scaled by the
+        // entity, is small and goes to the low part. Every view subtracts its own origin from them (toRenderSpace).
         InstanceTransform transform;
-        float4x4 world = entity.entityMatrix;
+        float4x4 world = float4x4(float4(entity.entity[0].xyz, 0.0), float4(entity.entity[1].xyz, 0.0), float4(entity.entity[2].xyz, 0.0), float4(0.0, 0.0, 0.0, 1.0));
         transform.boundsCenter = float3(0.0);
         transform.boundsRadius = -1.0;
         transform.skinnedVertex = -1;
@@ -302,7 +305,7 @@ void animateMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
         if (subMesh.jointCount == 0)
         {
             float3x4 node = loadRows(worlds + subMesh.node * 3);
-            world = mul(entity.entityMatrix, float4x4(node[0], node[1], node[2], float4(0.0, 0.0, 0.0, 1.0)));
+            world = mul(world, float4x4(node[0], node[1], node[2], float4(0.0, 0.0, 0.0, 1.0)));
             if (subMesh.vertexCount > 0)
             {
                 GeometryData base = frame->geometry[subMesh.geometryIndex];
@@ -321,12 +324,16 @@ void animateMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
             transform.skinnedVertex = int(entity.firstSkinnedVertex + subMesh.firstSkinnedVertex);
             transform.skinnedMotion = reset ? 0 : 1;
         }
-        transform.worldMatrix = world;
+        for (uint i = 0; i < 3; ++i)
+            transform.world[i] = float4(world[i].xyz, entity.entity[i].w);
+        transform.translationLow = entity.translationLow + float3(world[0].w, world[1].w, world[2].w);
         transform.normalMatrix = getNormalMatrix((float3x3)world);
-        float4x4 previous = reset ? world : frame->previousTransforms[row].worldMatrix;
-        transform.previousWorld[0] = previous[0];
-        transform.previousWorld[1] = previous[1];
-        transform.previousWorld[2] = previous[2];
+        // The frame before's rows, with its translation minus this one's (renderSpace.slang).
+        InstanceTransform previous = reset ? transform : frame->previousTransforms[row];
+        float3 moved = subtractSplit(float3(previous.world[0].w, previous.world[1].w, previous.world[2].w), previous.translationLow,
+                                     float3(transform.world[0].w, transform.world[1].w, transform.world[2].w), transform.translationLow, pc.zero);
+        for (uint i = 0; i < 3; ++i)
+            transform.previousWorld[i] = float4(previous.world[i].xyz, moved[i]);
         frame->transforms[row] = transform;
     }
 }

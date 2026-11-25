@@ -71,6 +71,7 @@ target_sources(rasm_renderer PRIVATE
     "renderer/gpuTable.cpp"
     "renderer/renderGraph.cpp"
     "renderer/renderer.cpp"
+    "renderer/renderSpace.cpp"
     "renderer/shaderCache.cpp"
     "renderer/shaderCompiler.cpp"
     "renderer/localShadows.cpp"
@@ -164,7 +165,7 @@ target_compile_definitions(rasm_renderer PRIVATE VK_NO_PROTOTYPES VOLK_NO_DEVICE
 # stb_image, stb_image_write and stb_image_resize2, rasm tinygltf, which calls stb_image), spdlog, Tracy, the flags.
 foreach (rasm_target rasm_renderer rasm)
     target_link_libraries(${rasm_target} PRIVATE Tracy::TracyClient spdlog::spdlog)
-    target_compile_definitions(${rasm_target} PRIVATE STBI_WINDOWS_UTF8)
+    target_compile_definitions(${rasm_target} PRIVATE STBI_WINDOWS_UTF8 GLM_FORCE_EXPLICIT_CTOR)
     target_include_directories(${rasm_target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     # SYSTEM, like the imported targets' directories, so RASM_WARNINGS does not report warnings inside these headers.
     target_include_directories(${rasm_target} SYSTEM PRIVATE ${Stb_INCLUDE_DIR} ${TINYGLTF_INCLUDE_DIRS})
@@ -203,7 +204,7 @@ if (RASM_C_API)
     set_target_properties(rasm_c PROPERTIES EXPORT_NAME c)
 
     foreach (rasm_target rasm_c_objects rasm_c_renderer rasm_c)
-        target_compile_definitions(${rasm_target} PRIVATE RASM_C_BUILD)
+        target_compile_definitions(${rasm_target} PRIVATE RASM_C_BUILD GLM_FORCE_EXPLICIT_CTOR)
         target_include_directories(${rasm_target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
         set_target_properties(${rasm_target} PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON POSITION_INDEPENDENT_CODE ON)
     endforeach()

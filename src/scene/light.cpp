@@ -18,7 +18,7 @@ namespace rasm
         }
     }
 
-    LightHandle Renderer::createLight(LightType type, glm::vec3 color, glm::vec3 position, glm::vec3 direction, float intensity, float range, float innerConeAngle, float outerConeAngle)
+    LightHandle Renderer::createLight(LightType type, glm::vec3 color, glm::dvec3 position, glm::vec3 direction, float intensity, float range, float innerConeAngle, float outerConeAngle)
     {
         if (!isValidSpotCone(type, innerConeAngle, outerConeAngle))
             return {};
