@@ -16,6 +16,9 @@ static const uint   POINT_SPHERE            = 1 << 2;
 static const uint   POINT_SCALAR            = 1 << 3;
 static const uint   POINT_LOG               = 1 << 4;
 static const uint   POINT_CLAMP             = 1 << 5;
+static const uint   POINT_ADAPTIVE          = 1 << 6;
+static const uint   POINT_MAX_SIZE_SHIFT    = 16;       // flags' high 16 bits: an adaptive point's largest diameter, in 1/16 pixels
+static const float  POINT_ADAPTIVE_COVER    = 4.0;      // times an adaptive point's chunk covers its ground (getPointDiameter)
 // PointChunkHeader::flags, and the header's size. Must match rasm::gfx::POINT_CHUNK_*.
 static const uint   POINT_CHUNK_COLORS      = 1 << 0;
 static const uint   POINT_CHUNK_SCALARS     = 1 << 1;
@@ -32,7 +35,7 @@ static const uint   POINT_BATCH_THINNED     = 1u << 31; // a batch's second word
 static const uint   POINT_MAX_CLEAR_GROUPS  = 65535;
 
 // rasm::gfx::PointChunkHeader, read as words: boxMin 0, pointCount 12, boxStep 16, flags 28, scalarMin 32, scalarStep 36,
-// colorOffset 40 (bytes), which uberMaterialTypes.h asserts.
+// colorOffset 40, spacing 44 (bytes), which uberMaterialTypes.h asserts.
 struct PointChunk
 {
     float3          boxMin;
@@ -42,6 +45,7 @@ struct PointChunk
     float           scalarMin;
     float           scalarStep;
     uint            colorOffset;        // in words from the header
+    float           spacing;            // between neighbouring points, in its entity's units; 0: unknown
 };
 
 PointChunk loadPointChunk(SceneData *scene, uint base)
@@ -59,16 +63,67 @@ PointChunk loadPointChunk(SceneData *scene, uint base)
     chunk.scalarMin     = asfloat(u4.x);
     chunk.scalarStep    = asfloat(u4.y);
     chunk.colorOffset   = scene->pointsPtr[base + 5].x;
+    chunk.spacing       = asfloat(scene->pointsPtr[base + 5].y);
     return chunk;
 }
 
+float getPointMaxSize(PointData style)
+{
+    return float(style.flags >> POINT_MAX_SIZE_SHIFT) / 16.0;
+}
+
+float loadPointSpacing(SceneData *scene, uint base)
+{
+    return asfloat(scene->pointsPtr[base + 5].y);
+}
+
+// A chunk's spacing is in its entity's units: in the world it is that times the entity's scale (its matrix's first
+// column), which getPointDiameter's pixel size is in.
+float getWorldSpacing(float spacing, float4x4 world)
+{
+    return spacing * length(mul(world, float4(1.0, 0.0, 0.0, 0.0)).xyz);
+}
+
+// A chunk's LOD (rasm::PointChunkLod, Renderer::setPointChunkLod), in its instance's meshletVisibility word: -1 when it
+// was never set (all its points, no finer chunk), else bits 24 to 30 the share of its points drawn (of 127) and bits 3o
+// to 3o + 2 the drawn share (of 7) of the finer chunk in octant o of its entity's space, o = (x >= 0) | (y >= 0) << 1 |
+// (z >= 0) << 2. Must match encodePointChunkLod in src/scene/entity.cpp.
+float getPointDrawnShare(int lod)
+{
+    return lod < 0 ? 1.0 : float((uint(lod) >> 24) & 0x7F) / 127.0;
+}
+
+float getPointFinerShare(int lod, float3 local)
+{
+    if (lod < 0)
+        return 0.0;
+    uint octant     = (local.x >= 0.0 ? 1u : 0u) | (local.y >= 0.0 ? 2u : 0u) | (local.z >= 0.0 ? 4u : 0u);
+    return float((uint(lod) >> (3 * octant)) & 7u) / 7.0;
+}
+
 // A point's diameter in pixels at clip w: its size in pixels, or in metres through a pixel's size in the world at its
-// depth; at least a pixel, so it neither vanishes nor flickers. The triangle and the compute path both size it here.
-float getPointDiameter(SceneData *scene, PointData style, float w)
+// depth; at least a pixel, so it neither vanishes nor flickers. POINT_ADAPTIVE grows it, up to maxSize, once the chunk's
+// points no longer cover its ground density times at that size (the rule the prefix LOD keeps, selectPointCount): from
+// where its spacing on screen times sqrt(density / area) passes the size (area 1 for a square, pi / 4 for a round
+// point), and sqrt(POINT_ADAPTIVE_COVER / density) times faster than that, so near the camera it covers the ground about
+// 4 times. A random sample, whose points fall where they will, leaves under 1% of its ground open at 4 (e^-4.6), and 5
+// to 10% at 2. Points that already cover do not grow, so the far ones keep their size and the compute path. finer, the
+// drawn share of a finer chunk over the point (getPointFinerShare), takes it back to the size: as that chunk fades in,
+// its points cover its share and these the square of what is left of their growth, which together never cover less.
+// The triangle and the compute path both size a point here, and the cull pass a chunk, with finer 0 (its largest).
+float getPointDiameter(SceneData *scene, PointData style, float spacing, float finer, float w)
 {
     float pixelWorld    = 2.0 * max(abs(w), 1e-6) / (abs(scene->projection[1][1]) * float(scene->viewportHeight));
     bool metres         = (style.flags & POINT_METRES) != 0;
-    return max(metres ? style.size / pixelWorld : style.size, 1.0);
+    float size          = max(metres ? style.size / pixelWorld : style.size, 1.0);
+    if ((style.flags & POINT_ADAPTIVE) == 0 || !(spacing > 0.0))
+        return size;
+    float area          = (style.flags & (POINT_ROUND | POINT_SPHERE)) != 0 ? 0.785398 : 1.0;
+    float density       = max(style.density, 1.0);
+    float covering      = spacing / pixelWorld * sqrt(density / area);
+    float faster        = sqrt(max(POINT_ADAPTIVE_COVER / density, 1.0));
+    float grown         = clamp(size + faster * max(covering - size, 0.0), size, max(getPointMaxSize(style), size));
+    return lerp(grown, size, saturate(finer));
 }
 
 // Where the point's scalar falls in the colormap, 0 to 1. POINT_NO_COLORMAP when it takes none (POINT_SCALAR off, a
@@ -118,15 +173,26 @@ float getPointPadding(SceneData *scene, PointData style, float3 center, float ra
     float depth         = orthographic ? 1.0 : max(dot(scene->lodDepthPlane, float4(center, 1.0)) + radius, 0.0);
     float pixelWorld    = depth / max(scene->lodPixelsPerUnit, 1e-6);
     bool metres         = (style.flags & POINT_METRES) != 0;
-    return (metres ? 0.5 * style.size : 0.0) + ((metres ? 0.0 : 0.5 * style.size) + 1.0) * pixelWorld;
+    float pixels        = metres ? 0.0 : 0.5 * style.size;
+    // An adaptive point reaches up to maxSize pixels.
+    if ((style.flags & POINT_ADAPTIVE) != 0)
+        pixels          = max(pixels, 0.5 * getPointMaxSize(style));
+    return (metres ? 0.5 * style.size : 0.0) + (pixels + 1.0) * pixelWorld;
 }
 
 // LOD by prefix: the first points of the chunk's order are an even sample of it, so the chunk draws only as many as
 // cover its square on screen about density times: density * diameter^2 / area, area the point's square, or pi / 4 of
 // it for a round point. This is the one place that decides what a chunk draws. Measured at the sphere's point nearest
 // the camera, as selectLod does, so a camera inside the sphere draws them all; a size in metres cancels the distance. A
-// forced LOD k (F2) draws total >> k; lodErrorPixels 0 or density 0 draws all.
-uint selectPointCount(SceneData *scene, PointData style, uint total, float3 center, float radius)
+// forced LOD k (F2) draws total >> k; lodErrorPixels 0 or density 0 draws all. Then drawn, the chunk's drawn share
+// (getPointDrawnShare), keeps that share of them, 0 none, so a chunk fades in and out by its prefix.
+uint selectPointCount(SceneData *scene, PointData style, uint total, float drawn, float3 center, float radius)
+{
+    uint count          = selectPointPrefix(scene, style, total, center, radius);
+    return drawn >= 1.0 ? count : uint(float(count) * max(drawn, 0.0) + 0.5);
+}
+
+uint selectPointPrefix(SceneData *scene, PointData style, uint total, float3 center, float radius)
 {
     if (scene->forcedLod >= 0)
         return max(total >> min(uint(scene->forcedLod), 16u), 1u);
@@ -156,14 +222,14 @@ uint selectPointCount(SceneData *scene, PointData style, uint total, float3 cent
 // POINT_RASTER_MIN_DENSITY points per pixel of its rect on screen. A chunk the camera is inside of, or one partly behind
 // it, goes to the triangles. rect is the pixels its points can reach: its box's corners on screen, and a point's
 // reach past them.
-bool isRasterChunk(SceneData *scene, PointData style, float3 center, float radius, uint count, out uint4 rect)
+bool isRasterChunk(SceneData *scene, PointData style, float spacing, float3 center, float radius, uint count, out uint4 rect)
 {
     rect                = uint4(0);
     float4x4 viewProjection = mul(scene->projection, scene->view);
     float w             = mul(viewProjection, float4(center, 1.0)).w;
     if (scene->projection[3][3] == 0.0)
         w              -= radius;
-    if (w <= 0.0 || getPointDiameter(scene, style, w) > POINT_RASTER_MAX_SIZE)
+    if (w <= 0.0 || getPointDiameter(scene, style, spacing, 0.0, w) > POINT_RASTER_MAX_SIZE)
         return false;
     float2 size         = float2(scene->viewportWidth, scene->viewportHeight);
     float2 low          = size;

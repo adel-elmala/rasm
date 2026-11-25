@@ -103,7 +103,8 @@ namespace rasm
             return contents[index];
         }
 
-        // Bytes: the textures' allocations and the meshes' share of the geometry pools. Rows: of each fixed pool.
+        // Bytes: the textures' allocations and the meshes' share of the geometry pools, the point pool's included. Rows: of
+        // each fixed pool. A point chunk's Mesh::pointOrder (2 B a point) is in CPU memory, not counted.
         TileCost measure(const TileContentLists &content) const
         {
             TileCost cost;
@@ -121,7 +122,10 @@ namespace rasm
                 for (const SubMesh &subMesh : mesh.subMeshes)
                 {
                     const MeshGeometry &geometry = subMesh.geometry;
-                    const uint64_t indices = static_cast<uint64_t>(geometry.indexCount) + geometry.lodIndexCount;
+                    // A point chunk's indices are the range every chunk shares; its points are its own.
+                    const uint64_t indices = geometry.pointCount > 0 ? 0 : static_cast<uint64_t>(geometry.indexCount) + geometry.lodIndexCount;
+                    unit(cost, TileUnit::BYTES) += static_cast<uint64_t>(geometry.pointUnits) * 2 * sizeof(uint32_t);
+                    unit(cost, TileUnit::POINTS) += geometry.pointUnits;
                     unit(cost, TileUnit::BYTES) += geometry.vertexCount * sizeof(Vertex) + geometry.colorCount * sizeof(uint32_t) + geometry.skinCount * sizeof(SkinVertex) +
                                                    geometry.morphCount * sizeof(MorphDelta) + indices * sizeof(uint32_t) + geometry.meshletCount * sizeof(gfx::GeometryMeshlet) +
                                                    geometry.meshletDataCount * sizeof(uint32_t);
@@ -324,10 +328,11 @@ namespace rasm
                                                      rendererConfig.geometryPoolMeshlets,
                                                      rendererConfig.maxInstances,
                                                      rendererConfig.maxMaterials,
-                                                     renderer.ctx.getBindlessTextureCapacity()};
+                                                     renderer.ctx.getBindlessTextureCapacity(),
+                                                     rendererConfig.geometryPoolPoints};
             // Slots a destroyed texture frees wait for the GPU, so they are not free yet.
             const uint64_t slotsTaken = capacities[static_cast<uint32_t>(TileUnit::TEXTURES)] - std::min<uint64_t>(capacities[static_cast<uint32_t>(TileUnit::TEXTURES)], renderer.ctx.getFreeBindlessTextureSlots());
-            const uint64_t inUse[TILE_UNITS] = {0, pools.vertices, pools.indices, pools.subMeshes, pools.meshlets, pools.instances, pools.materials, slotsTaken};
+            const uint64_t inUse[TILE_UNITS] = {0, pools.vertices, pools.indices, pools.subMeshes, pools.meshlets, pools.instances, pools.materials, slotsTaken, pools.points};
             // What the tiles' content holds now, not their reservations, which are not in the pools yet.
             const TileCost &real = residency.getReal();
             TileCost limits;

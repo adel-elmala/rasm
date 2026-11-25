@@ -4,8 +4,26 @@
 
 #include "spdlog/spdlog.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace rasm
 {
+    namespace
+    {
+        // As getPointDrawnShare and getPointFinerShare (shaders/lib/points.slang) read it: the drawn share in 7 bits at
+        // 24, each octant's finer share in 3 bits at 3 * octant.
+        int32_t encodePointChunkLod(const PointChunkLod &lod)
+        {
+            const auto steps = [](float share, float scale)
+            { return static_cast<uint32_t>(std::lround(std::clamp(std::isfinite(share) ? share : 0.0f, 0.0f, 1.0f) * scale)); };
+            uint32_t word = steps(lod.drawn, 127.0f) << 24;
+            for (uint32_t octant = 0; octant < 8; ++octant)
+                word |= steps(lod.finer[octant], 7.0f) << (3 * octant);
+            return static_cast<int32_t>(word);
+        }
+    }
+
     EntityHandle Renderer::createEntity(const std::string &name, MeshHandle mesh, MaterialHandle material, Transform transform)
     {
         if (mesh.isValid() && !isLive(mesh))
@@ -61,6 +79,21 @@ namespace rasm
 
         registry.entities[entity.index].transform = transform;
         writeInstanceRows(entity);
+    }
+
+    void Renderer::setPointChunkLod(EntityHandle entity, const PointChunkLod &lod)
+    {
+        if (!isLive(entity))
+        {
+            spdlog::error("setPointChunkLod: invalid or destroyed entity handle.");
+            return;
+        }
+        const int32_t word = encodePointChunkLod(lod);
+        EntityDrawState &state = gpuScene->entities[entity.index];
+        if (state.pointLod == word)
+            return;
+        state.pointLod = word;
+        writeInstanceRows(entity, false);
     }
 
     // Its rows and animation ranges are free for another entity at once (releaseEntityRows), and the draw lists of its

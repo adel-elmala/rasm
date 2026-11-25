@@ -43,6 +43,11 @@ namespace rasm
         return loader.loadFont(path, atlas, options);
     }
 
+    bool Engine::loadPointCloud(const std::string &path, PointCloudData &cloud, const PointCloudLoadOptions &options)
+    {
+        return loader.loadPointCloud(path, cloud, options);
+    }
+
     EnvironmentHandle Engine::loadEnvironment(const std::string &path)
     {
         return loader.loadEnvironment(path);

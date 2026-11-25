@@ -22,6 +22,7 @@ namespace rasm
         TextureHandle               loadTexture(const std::string& path, Format format = Format::R8G8B8A8_SRGB);
         EnvironmentHandle           loadEnvironment(const std::string& path);
         bool                        loadFont(const std::string& path, FontAtlas& atlas, const FontLoadOptions& options = {});
+        bool                        loadPointCloud(const std::string& path, PointCloudData& cloud, const PointCloudLoadOptions& options = {});
         std::string                 resolveAssetPath(const std::string& path) const;
         // The config with the paths resolved and the values the frame changes (F1's showStats, F2's forcedLod).
         EngineConfig                getConfig() const;

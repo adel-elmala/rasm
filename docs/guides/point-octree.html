@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Streaming Point Clouds · RASM</title>
+<meta name="description" content="A point cloud larger than GPU memory, streamed as an octree of samples: each node a sample of its cube and its children the detail it lacks, a cut by the spacing on screen, nodes that fade in and out, points that grow where the sample is sparse, and LAS and LAZ files. Then how RASM does it.">
+<meta name="rasm-sources" content="include/rasm/pointCloudOctree.h include/rasm/pointCloud.h include/rasm/assetLoader.h include/rasm/material.h include/rasm/renderer.h src/scene/pointCloudOctree.cpp src/scene/pointCloud.cpp src/scene/pointCloudInternal.h src/scene/entity.cpp src/scene/tileStreamer.cpp src/scene/tileResidency.h src/assets/pointCloudLoad.cpp src/renderer/pointRaster.cpp src/renderer/gpuScene.cpp shaders/lib/points.slang shaders/passes/cull.slang shaders/passes/points.slang shaders/passes/pointRaster.slang cmake/Findlaszip.cmake src/c/cPointCloud.cpp src/c/cLoader.cpp tests/pointCloudOctreeTests.cpp tests/pointCloudLoadTests.cpp examples/29_point_streaming/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/point-octree.js"></script>
+</head>
+<body data-root="../" data-page="guides/point-octree.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>Streaming point clouds</h1>
+<p class="lead">A city scanned from the air holds billions of points, far more than a GPU can hold. A view needs only a part of them: every point near the camera, and far away just enough to fill the screen. This page explains the octree of samples that gives each view that part, how its nodes stream in and out of memory without popping, how points grow where the sample is sparse, and the LAS files scans come in. It builds on <a href="point-clouds.html">Point clouds</a> (chunks and splats) and <a href="tile-streaming.html">Tile streaming</a> (the cut and the budget). The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>An <b>octree of samples</b>: the root keeps an even sample of the whole cloud; each child keeps an even sample of what its parent left in its cube. Drawing a node <em>adds</em> detail to its ancestors.</li>
+    <li>A node keeps <b>a point of each cell</b> of a grid over its cube, the one nearest the cell's centre. So its <b>spacing</b> is about the cell's size, and each level is twice as fine.</li>
+    <li>The <b>cut</b>: a node's children are wanted while its spacing on screen passes an error of a pixel or two. Near the camera the cut goes deep, far away the root alone fills the view.</li>
+    <li>The nodes are tiles of a <b>streamer</b> under a byte budget: parents first, the nodes nobody wants dropped first.</li>
+    <li>A node <b>fades in</b> by drawing a growing share of its points, and out before it is dropped, so nothing pops.</li>
+    <li><b>Adaptive points</b> grow where the sample is sparser than their size on screen, so the ground stays closed near the camera, and shrink back where a finer node fills in.</li>
+  </ul>
+</div>
+
+<h2 id="problem"><span class="n">1</span>A cloud bigger than memory</h2>
+
+<p>A point of a scan takes 8 to 12 bytes on the GPU (<a href="point-clouds.html#storage">Storage</a>). A billion points take 10 GB: more than most GPUs have, and the frame could not draw them anyway. The view needs much less. Look at the camera's own picture: a screen of 2 million pixels needs about 2 million points to be closed, wherever they come from.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="A bar for the whole cloud, much longer than the bar of GPU memory, and a short bar for what one view needs: every point near the camera and few far away.">
+    <text x="20" y="40" class="title">The whole cloud</text>
+    <rect x="200" y="24" width="540" height="26" rx="4" class="mem"/>
+    <text x="470" y="41" class="mid small">billions of points: 10 GB and more</text>
+    <text x="20" y="100" class="title">GPU memory</text>
+    <rect x="200" y="84" width="260" height="26" rx="4" class="box"/>
+    <text x="330" y="101" class="mid small">a few GB, shared with everything else</text>
+    <text x="20" y="160" class="title">What a view needs</text>
+    <rect x="200" y="144" width="70" height="26" rx="4" class="gpu"/>
+    <text x="280" y="161" class="small">near the camera every point, far away a sparse sample: the budget</text>
+    <text x="380" y="198" class="mid small t-faint">so the cloud is cut into pieces that load and go as the camera moves</text>
+  </svg>
+  <figcaption>The view's part changes as the camera moves. A structure must give it quickly, and every piece must be small enough to load in a frame or two.</figcaption>
+</figure>
+
+<h2 id="octree"><span class="n">2</span>An octree of samples</h2>
+
+<p>An octree cuts a cube into eight, and each part into eight again. In a point cloud octree (Potree, Schütz et al. 2020) each node keeps <em>some</em> of the points of its cube, not all: an even sample. The root keeps a coarse sample of everything. A child keeps a sample of the points its parent left in its cube. Draw a node and its ancestors, and the points add up to a sample twice as fine as the node's parent alone.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Three levels of a quadtree, the octree in two dimensions. The root draws a few points over the whole square; level 1 adds points in its quarters; level 2 adds more in one quarter's quarters. Together they are fine where level 2 is drawn and coarse elsewhere.">
+    <text x="105" y="22" class="mid title">Level 0: the root</text>
+    <rect x="30" y="34" width="150" height="150" class="paper"/>
+    <circle cx="48" cy="52" r="3" class="mem"/><circle cx="95" cy="60" r="3" class="mem"/><circle cx="150" cy="48" r="3" class="mem"/>
+    <circle cx="60" cy="105" r="3" class="mem"/><circle cx="118" cy="98" r="3" class="mem"/><circle cx="165" cy="110" r="3" class="mem"/>
+    <circle cx="45" cy="160" r="3" class="mem"/><circle cx="100" cy="150" r="3" class="mem"/><circle cx="152" cy="168" r="3" class="mem"/>
+    <text x="105" y="204" class="mid small">a point per big cell</text>
+
+    <text x="300" y="22" class="mid title">Level 1 adds</text>
+    <rect x="225" y="34" width="150" height="150" class="paper"/>
+    <path d="M300,34 V184 M225,109 H375" class="grid"/>
+    <circle cx="245" cy="70" r="2.5" class="gpu"/><circle cx="278" cy="50" r="2.5" class="gpu"/><circle cx="262" cy="92" r="2.5" class="gpu"/>
+    <circle cx="322" cy="62" r="2.5" class="gpu"/><circle cx="355" cy="80" r="2.5" class="gpu"/><circle cx="338" cy="45" r="2.5" class="gpu"/>
+    <circle cx="240" cy="130" r="2.5" class="gpu"/><circle cx="282" cy="170" r="2.5" class="gpu"/><circle cx="268" cy="125" r="2.5" class="gpu"/>
+    <circle cx="320" cy="135" r="2.5" class="gpu"/><circle cx="360" cy="160" r="2.5" class="gpu"/><circle cx="345" cy="125" r="2.5" class="gpu"/>
+    <text x="300" y="204" class="mid small">four children, each a sample of its quarter</text>
+
+    <text x="495" y="22" class="mid title">Level 2 adds, near the camera</text>
+    <rect x="420" y="34" width="150" height="150" class="paper"/>
+    <path d="M495,34 V184 M420,109 H570 M457,109 V184 M420,146 H495" class="grid"/>
+    <circle cx="428" cy="118" r="2" class="cpu"/><circle cx="447" cy="128" r="2" class="cpu"/><circle cx="436" cy="140" r="2" class="cpu"/>
+    <circle cx="466" cy="117" r="2" class="cpu"/><circle cx="484" cy="131" r="2" class="cpu"/><circle cx="475" cy="141" r="2" class="cpu"/>
+    <circle cx="430" cy="155" r="2" class="cpu"/><circle cx="446" cy="170" r="2" class="cpu"/><circle cx="440" cy="179" r="2" class="cpu"/>
+    <circle cx="466" cy="158" r="2" class="cpu"/><circle cx="488" cy="166" r="2" class="cpu"/><circle cx="478" cy="178" r="2" class="cpu"/>
+    <text x="495" y="204" class="mid small">only where the view needs it</text>
+
+    <text x="665" y="22" class="mid title">Drawn together</text>
+    <rect x="610" y="34" width="110" height="150" class="paper"/>
+    <circle cx="625" cy="52" r="2.5" class="mem"/><circle cx="660" cy="60" r="2.5" class="mem"/><circle cx="700" cy="48" r="2.5" class="mem"/>
+    <circle cx="640" cy="70" r="2" class="gpu"/><circle cx="690" cy="80" r="2" class="gpu"/><circle cx="675" cy="98" r="2" class="mem"/>
+    <circle cx="622" cy="118" r="1.6" class="cpu"/><circle cx="634" cy="126" r="1.6" class="cpu"/><circle cx="628" cy="138" r="1.6" class="cpu"/>
+    <circle cx="646" cy="117" r="1.6" class="cpu"/><circle cx="660" cy="131" r="1.6" class="cpu"/><circle cx="650" cy="141" r="1.6" class="cpu"/>
+    <circle cx="624" cy="155" r="1.6" class="cpu"/><circle cx="636" cy="170" r="1.6" class="cpu"/><circle cx="645" cy="160" r="1.6" class="gpu"/>
+    <circle cx="660" cy="158" r="1.6" class="cpu"/><circle cx="700" cy="140" r="2" class="gpu"/><circle cx="705" cy="170" r="2" class="mem"/>
+    <text x="665" y="204" class="mid small">fine near, coarse far</text>
+    <text x="380" y="236" class="mid small t-faint">no point is stored twice: a child holds only what its parent did not keep</text>
+  </svg>
+  <figcaption>The octree in two dimensions, a quadtree. Each level halves the spacing between the points drawn. The children <em>add</em> to their parent: this is additive refinement, against replacement, where a child stands in for its parent (<a href="tile-streaming.html">Tile streaming</a>).</figcaption>
+</figure>
+
+<div class="vgrid">
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A node's cube with a grid; one point kept in each cell that has points, the one nearest the cell's centre.">
+      <rect x="60" y="10" width="110" height="110" class="paper"/>
+      <path d="M87.5,10 V120 M115,10 V120 M142.5,10 V120 M60,37.5 H170 M60,65 H170 M60,92.5 H170" class="grid"/>
+      <circle cx="73" cy="24" r="3.5" class="gpu"/><circle cx="102" cy="23" r="3.5" class="gpu"/><circle cx="128" cy="52" r="3.5" class="gpu"/>
+      <circle cx="74" cy="79" r="3.5" class="gpu"/><circle cx="156" cy="80" r="3.5" class="gpu"/><circle cx="100" cy="106" r="3.5" class="gpu"/>
+      <circle cx="82" cy="30" r="2" class="box o-50"/><circle cx="135" cy="44" r="2" class="box o-50"/><circle cx="66" cy="86" r="2" class="box o-50"/>
+    </svg>
+    <h4>A point a cell</h4>
+    <p>A grid over the node's cube; of each cell's points it keeps the one nearest the centre. The rest go to its children.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A ruler between two neighbouring kept points: the spacing, about one cell.">
+      <rect x="60" y="10" width="110" height="110" class="paper"/>
+      <path d="M87.5,10 V120 M115,10 V120 M142.5,10 V120 M60,37.5 H170 M60,65 H170 M60,92.5 H170" class="grid"/>
+      <circle cx="74" cy="51" r="3.5" class="gpu"/><circle cx="101" cy="51" r="3.5" class="gpu"/>
+      <path d="M74,72 H101" class="arrow hot" marker-start="url(#ah-hot)" marker-end="url(#ah-hot)"/>
+      <text x="88" y="90" class="mid small t-hot">spacing</text>
+    </svg>
+    <h4>Its spacing</h4>
+    <p>The distance between its points is about a cell: its size over the grid's (128 cells a side, say). Each level halves it.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A small node with only a few points left: a leaf that keeps them all.">
+      <rect x="85" y="25" width="70" height="70" class="paper"/>
+      <circle cx="98" cy="40" r="3" class="cpu"/><circle cx="120" cy="52" r="3" class="cpu"/><circle cx="140" cy="38" r="3" class="cpu"/>
+      <circle cx="105" cy="78" r="3" class="cpu"/><circle cx="133" cy="83" r="3" class="cpu"/>
+      <text x="120" y="118" class="mid small">a leaf: few enough points, all of them</text>
+    </svg>
+    <h4>Leaves</h4>
+    <p>A node with few points left (a few thousand) keeps them all and has no children. Its spacing is the data's own.</p>
+  </div>
+</div>
+
+<h2 id="build"><span class="n">3</span>Building it</h2>
+
+<p>The build reads every point once to sort it, then once per level. The trick is the same Morton order the chunks use (<a href="point-clouds.html#prefix">Level of detail by prefix</a>), now of the whole cloud's cube: in that order, the points of any node of the octree, and of any cell of its grid, are one run of the list.</p>
+
+<ol class="flow">
+  <li class="cpu">The cube around all points. Each point's cell at the finest level, 2<sup>21</sup> a side, and its 63-bit Morton code. Sort by it.</li>
+  <li class="cpu">A node is a run of the sorted list. Its grid's cells are runs inside it: a change of the code's next bits starts a new one.</li>
+  <li class="cpu">Of each cell's run keep the point nearest the cell's centre. Move the others to the front, still in order.</li>
+  <li class="cpu">The rest splits into the eight children by the next three bits: eight runs. Build each the same way.</li>
+  <li class="mem">Store each node's points as offsets from its cube's centre, in floats: exact to a tenth of a millimetre near the node, wherever the cloud is.</li>
+</ol>
+
+<p>No point is copied twice and nothing is searched: the cost is the sort, then one pass per level. A grid that would keep too many points (a volume, like a tree's crown, fills far more cells than a surface) is made coarser, so a node never passes its maximum.</p>
+
+<h2 id="cut"><span class="n">4</span>The cut: spacing on screen</h2>
+
+<p>A node's spacing seen from the camera is its error on screen: how far apart its points are, in pixels. A node whose spacing on screen passes the error wants its children. The same rule as for tiles (<a href="tile-streaming.html">Tile streaming</a>), with the spacing as the geometric error:</p>
+
+<div class="formula">
+  <p class="eq">error on screen = spacing × pixels per unit / distance</p>
+  <p class="eq">want the children while error on screen &gt; ε</p>
+  <dl>
+    <dt>spacing</dt><dd>the node's, in world units; a leaf's error is 0: there is nothing finer</dd>
+    <dt>distance</dt><dd>from the camera to the nearest point of the node's bounding sphere (any distance for an orthographic view)</dd>
+    <dt>ε</dt><dd>the error allowed, in pixels: the spacing at which the points drawn just cover the ground</dd>
+  </dl>
+</div>
+
+<figure class="lab" data-lab="octree-cut" data-title="Walk the cut of a quadtree">
+  <figcaption>Drag the eye over the points and toward them: the nodes near it split down to the leaves, the far ones stay coarse. Raise the error: fewer nodes and points for the same picture, coarser far away.</figcaption>
+</figure>
+
+<p>Choose ε so that a node at the edge of the cut is just closed at the points' size: for round points of 2 pixels that must cover the ground twice, ε = 2 × √(π/4 / 2) ≈ 1.25 pixels. A smaller ε draws more points for no visible gain; a larger one shows gaps, unless the points grow (<a href="#adaptive">Adaptive point size</a>).</p>
+
+<h2 id="streaming"><span class="n">5</span>Streaming under a budget</h2>
+
+<p>Each node is a tile of a streamer with additive refinement: drawn with its parents once it is in, its parents drawn while it is on the way. The streamer does the rest as for any tiles: it ranks the wanted nodes by error, loads the largest first, keeps them under the byte budget, and drops the nodes nobody wants, the oldest first.</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A node handed out: its points become a chunk on a worker thread, then a mesh on the renderer.">
+      <rect x="20" y="30" width="60" height="40" rx="4" class="cpu"/><text x="50" y="55" class="mid small">node</text>
+      <rect x="100" y="30" width="60" height="40" rx="4" class="cpu"/><text x="130" y="55" class="mid small">chunk</text>
+      <rect x="180" y="30" width="45" height="40" rx="4" class="gpu"/><text x="202" y="55" class="mid small">GPU</text>
+      <path d="M80,50 H98" class="arrow cpu" marker-end="url(#ah-cpu)"/><path d="M160,50 H178" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <text x="120" y="100" class="mid small">built on a worker, uploaded once</text>
+    </svg>
+    <h4>A node is a chunk</h4>
+    <p>When it is handed out, its points become a chunk (16-bit steps of its box) on a worker thread, and an entity at its cube's centre.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A memory bar under the budget: parents first, then children; unwanted nodes at the end go first.">
+      <rect x="20" y="40" width="200" height="28" rx="4" class="box"/>
+      <rect x="20" y="40" width="50" height="28" rx="4" class="mem"/><rect x="70" y="40" width="80" height="28" class="gpu"/><rect x="150" y="40" width="40" height="28" class="box o-50"/>
+      <path d="M200,32 V76" class="arrow hot"/><text x="200" y="26" class="mid small t-hot">budget</text>
+      <text x="45" y="90" class="mid small">parents</text><text x="110" y="90" class="mid small">wanted</text><text x="172" y="90" class="mid small">unwanted</text>
+    </svg>
+    <h4>Under the budget</h4>
+    <p>Parents load first and stay longest. What does not fit waits, and its parent covers its place.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Memory per point: 8 bytes on the GPU, 12 with colors; the octree's copy on the CPU.">
+      <rect x="30" y="30" width="80" height="30" rx="4" class="gpu"/><text x="70" y="50" class="mid small">8 B / 12 B</text>
+      <rect x="130" y="30" width="80" height="30" rx="4" class="cpu"/><text x="170" y="50" class="mid small">24 B / 28 B</text>
+      <text x="70" y="80" class="mid small">GPU, a node in</text><text x="170" y="80" class="mid small">CPU, the octree</text>
+    </svg>
+    <h4>Where the bytes are</h4>
+    <p>A node in GPU memory takes 8 B a point, 12 with colors. The octree itself stays in CPU memory, all of it.</p>
+  </div>
+</div>
+
+<h2 id="fades"><span class="n">6</span>Fading in and out</h2>
+
+<p>A node that appears at once adds a whole level of points in one frame: the ground gets finer in a block, and the eye sees it. A node that is dropped at once does the reverse. The fix uses the chunks' prefix order (<a href="point-clouds.html#prefix">Level of detail by prefix</a>): any first share of a chunk's points is an even sample, so a node can draw a share that grows from 0 to all of them over a few tenths of a second. Before it is dropped it shrinks back to 0, kept wanted until then.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Points drawn in a node's place over time: a step from the parent's alone to the parent's and the child's in one frame.">
+      <path d="M30,110 H290 M30,110 V20" class="grid"/>
+      <path d="M30,90 H150 V40 H290" class="surface"/>
+      <text x="160" y="130" class="mid small">frames</text>
+      <text x="155" y="32" class="small t-bad">one frame: a pop</text>
+    </svg>
+    <h4>At once</h4>
+    <p>The density doubles in one frame, over the node's whole cube.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Points drawn in the node's place over time: a ramp from the parent's alone to the parent's and the child's over about twenty frames.">
+      <path d="M30,110 H290 M30,110 V20" class="grid"/>
+      <path d="M30,90 H130 L200,40 H290" class="surface"/>
+      <text x="160" y="130" class="mid small">frames</text>
+      <text x="168" y="32" class="small t-ok">a ramp of 0.35 s</text>
+    </svg>
+    <h4>By its prefix</h4>
+    <p>The node draws a share of its points that grows each frame: an even sample, finer each frame.</p>
+  </div>
+</div>
+
+<h2 id="adaptive"><span class="n">7</span>Adaptive point size</h2>
+
+<p>Points of a fixed size close the ground only where the sample is dense enough on screen. Near the camera a leaf's points may be several pixels apart: the data has no finer level, and fixed points leave gaps. An <b>adaptive</b> point grows with its node's spacing on screen, so the points cover the ground there too, and keeps its size far away, where they already cover it.</p>
+
+<div class="vgrid">
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Far away: small points close together cover the ground.">
+      <rect x="40" y="20" width="160" height="90" class="paper"/>
+      <g class="gpu"><circle cx="50" cy="30" r="3"/><circle cx="60" cy="34" r="3"/><circle cx="70" cy="29" r="3"/><circle cx="80" cy="33" r="3"/><circle cx="90" cy="30" r="3"/><circle cx="100" cy="34" r="3"/><circle cx="110" cy="29" r="3"/><circle cx="120" cy="33" r="3"/><circle cx="130" cy="30" r="3"/><circle cx="140" cy="34" r="3"/><circle cx="150" cy="29" r="3"/><circle cx="160" cy="33" r="3"/><circle cx="170" cy="30" r="3"/><circle cx="180" cy="34" r="3"/><circle cx="190" cy="29" r="3"/></g>
+      <text x="120" y="70" class="mid small">far: the sample covers at 2 px</text>
+    </svg>
+    <h4>Far: fixed size</h4>
+    <p>Spacing on screen under a pixel or two: the points keep their size.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Near the camera: the same small points far apart leave the ground open.">
+      <rect x="40" y="20" width="160" height="90" class="paper"/>
+      <g class="gpu"><circle cx="60" cy="40" r="3"/><circle cx="105" cy="35" r="3"/><circle cx="150" cy="44" r="3"/><circle cx="185" cy="36" r="3"/><circle cx="72" cy="85" r="3"/><circle cx="118" cy="78" r="3"/><circle cx="165" cy="90" r="3"/></g>
+      <text x="120" y="66" class="mid small t-bad">gaps</text>
+    </svg>
+    <h4>Near: fixed size</h4>
+    <p>The leaf's points are many pixels apart: the background shows through.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Near the camera: the points grown to the spacing cover the ground.">
+      <rect x="40" y="20" width="160" height="90" class="paper"/>
+      <g class="gpu"><circle cx="60" cy="40" r="24"/><circle cx="105" cy="35" r="24"/><circle cx="150" cy="44" r="24"/><circle cx="185" cy="36" r="18"/><circle cx="72" cy="85" r="24"/><circle cx="118" cy="78" r="24"/><circle cx="165" cy="90" r="22"/></g>
+    </svg>
+    <h4>Near: adaptive</h4>
+    <p>Grown to the spacing on screen, the same points close the ground.</p>
+  </div>
+</div>
+
+<p>How large? Random points leave gaps wider than their mean spacing: points that cover the ground <var>c</var> times on average leave a share <var>e</var><sup>−<var>c</var></sup> of it open, 13 % at 2, under 2 % at 4. So the size starts to grow where the points stop covering the ground <var>density</var> times (the level of detail's own rule, <a href="point-clouds.html#density">How many points a chunk keeps</a>), and grows faster from there, so near the camera they cover it about 4 times:</p>
+
+<div class="formula">
+  <p class="eq">covering = spacing on screen × √(density / a)</p>
+  <p class="eq">grown = size + √(4 / density) × max(covering − size, 0)</p>
+  <p class="eq">diameter = min(grown, largest)</p>
+  <dl>
+    <dt><var>a</var></dt><dd>a point's area over its diameter squared: 1 for a square, π/4 for a disc</dd>
+    <dt>size</dt><dd>the points' own size in pixels; points that already cover the ground keep it</dd>
+    <dt>largest</dt><dd>a clamp in pixels: a sample sparser than that shows its gaps</dd>
+  </dl>
+</div>
+
+<p>The spacing is measured as the cell size at which the points take half as many cells as there are points: a little more than the mean spacing for a random sample (1.2 times), as such a sample has gaps wider than its mean. The lab uses that factor.</p>
+
+<figure class="lab" data-lab="adaptive-size" data-title="Close a sparse ground">
+  <figcaption>Move the spacing on screen up, as the camera comes closer: fixed points open the ground at once; adaptive ones stay closed until they reach their largest size. Slide it down: the adaptive points stop growing, so far chunks keep their size.</figcaption>
+</figure>
+
+<p>One more rule keeps grown points from covering detail. A parent's points grow over the parts of its cube where no finer node is drawn, but where a child is drawn the child's points are finer. So each node tells its points, per octant of its cube, how far the child there has faded in, and a point there shrinks back to the base size by that share. Together the child's points and the parent's shrinking ones never cover less than either alone did.</p>
+
+<h2 id="las"><span class="n">8</span>LAS and LAZ files</h2>
+
+<p>Scans come as LAS files (ASPRS): a header, variable length records, then fixed-size point records. LAZ is the same, the points compressed. A position is three 32-bit integers times the file's scale plus its offset, in doubles: millimetres stay exact even for Earth-centred coordinates of six million metres.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 170" role="img" aria-label="A LAS file: the header (227 bytes, 375 for LAS 1.4) with the scale, offset and point count, then the variable length records (the coordinate system as WKT), then the point records of 20 to 67 bytes each.">
+    <rect x="20" y="30" width="170" height="46" rx="4" class="mem"/><text x="105" y="50" class="mid small title">header</text><text x="105" y="66" class="mid small">227 B (375 B in 1.4)</text>
+    <rect x="190" y="30" width="170" height="46" rx="4" class="cpu"/><text x="275" y="50" class="mid small title">variable length records</text><text x="275" y="66" class="mid small">coordinate system (WKT)</text>
+    <rect x="360" y="30" width="380" height="46" rx="4" class="gpu"/><text x="550" y="50" class="mid small title">point records</text><text x="550" y="66" class="mid small">20 to 67 B each, by the point format</text>
+    <text x="105" y="104" class="mid small">scale, offset, bounds,</text><text x="105" y="120" class="mid small">format, count</text>
+    <text x="550" y="104" class="mid small">x, y, z (int32) × scale + offset</text>
+    <text x="550" y="120" class="mid small">intensity, classification, GPS time, RGB</text>
+    <text x="380" y="156" class="mid small t-faint">LAZ: the same header and records, the points in LASzip's chunks</text>
+  </svg>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Point format</th><th>Bytes</th><th>GPS time</th><th>RGB</th><th>Notes</th></tr>
+  <tr><td>0</td><td>20</td><td>—</td><td>—</td><td>positions, intensity, returns, class</td></tr>
+  <tr><td>1, 2, 3</td><td>28, 26, 34</td><td>1, 3</td><td>2, 3</td><td></td></tr>
+  <tr><td>4, 5</td><td>57, 63</td><td>yes</td><td>5</td><td>with waveform packets</td></tr>
+  <tr><td>6, 7, 8</td><td>30, 36, 38</td><td>yes</td><td>7, 8</td><td>LAS 1.4: a byte of 4-bit return numbers, a full byte for the class; 8 adds near infrared</td></tr>
+  <tr><td>9, 10</td><td>59, 67</td><td>yes</td><td>10</td><td>1.4 with waveform packets</td></tr>
+</table>
+</div>
+
+<p>Colors are 16 bits a channel by the specification, but many files store 8-bit values in them: a reader takes the high byte, or the values as they are when none passes 255. A projected file (UTM and the like) has <var>z</var> up; an Earth-centred one (ECEF) has the Earth's axis as <var>z</var>.</p>
+
+<h2 id="pitfalls"><span class="n">9</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>Points pop in a block as the camera moves</dt><dd>A node shows all its points in one frame. Fade it in by its prefix, and keep it wanted while it fades out.</dd></div>
+  <div><dt>Dark specks on the ground near the camera</dt><dd>Points of a fixed size over a sparse sample. Let them grow with the spacing on screen, or lower the cut's error until finer nodes come in.</dd></div>
+  <div><dt>Big blobs over fine detail</dt><dd>A coarse node's grown points over a place where a finer node is drawn. Shrink a node's points per octant as its child fades in.</dd></div>
+  <div><dt>Huge discs at the edge of the data</dt><dd>A node with a few scattered points measures a large spacing. They are no surface: never let a node's spacing pass its parent's.</dd></div>
+  <div><dt>Everything loads, the budget is always full</dt><dd>An error too small for the data: every node within view wants its leaves. Raise it, or let adaptive points close the gaps.</dd></div>
+  <div><dt>The scene jitters far from the origin</dt><dd>Points kept in floats in world units. Keep them as offsets from their node's centre, and the node in doubles.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
+
+<p>RASM gives the pieces and the application drives them, as for any tiles: <code>AssetLoader::loadPointCloud</code> reads the file, <code>buildPointCloudOctree</code> builds the octree on any thread, each node is a <code>TileStreamer</code> tile with <code>TileRefine::ADD</code>, and the application walks the cut, builds the handed-out nodes' chunks on its threads and sets their fades with <code>Renderer::setPointChunkLod</code>. <code>examples/29_point_streaming</code> does all of it.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="A frame of example 29: the cut walk, the streamer's update, chunks built on worker threads and uploaded, fades set per node; on the GPU the cull keeps the drawn share of each chunk's prefix, and the point shaders grow adaptive points and shrink them per octant.">
+    <text x="20" y="22" class="title t-cpu">The application, each frame (CPU)</text>
+    <rect x="20" y="34" width="150" height="56" rx="6" class="cpu"/><text x="95" y="57" class="mid small title">walk the cut</text><text x="95" y="74" class="mid small">getScreenError &gt; ε</text>
+    <rect x="200" y="34" width="150" height="56" rx="6" class="cpu"/><text x="275" y="57" class="mid small title">TileStreamer::update</text><text x="275" y="74" class="mid small">under the budget</text>
+    <rect x="380" y="34" width="170" height="56" rx="6" class="cpu"/><text x="465" y="57" class="mid small title">workers: chunks</text><text x="465" y="74" class="mid small">getPointCloudNodeChunk</text>
+    <rect x="580" y="34" width="160" height="56" rx="6" class="cpu"/><text x="660" y="57" class="mid small title">fades</text><text x="660" y="74" class="mid small">setPointChunkLod</text>
+    <path d="M170,62 H198" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <path d="M350,62 H378" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <path d="M550,62 H578" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="20" y="120" width="720" height="40" rx="6" class="mem"/>
+    <text x="380" y="139" class="mid small title">instance row: drawn share (7 bits) and each octant's finer share (3 bits) · chunk header: spacing</text>
+    <text x="380" y="153" class="mid small">point pool: 8 B a point (12 with colors), counted in the streamer's budget</text>
+    <path d="M660,90 V118" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <path d="M465,90 V118" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="20" y="190" class="title t-gpu">The GPU</text>
+    <rect x="20" y="202" width="220" height="56" rx="6" class="gpu"/><text x="130" y="225" class="mid small title">cull</text><text x="130" y="242" class="mid small">prefix × drawn share</text>
+    <rect x="270" y="202" width="220" height="56" rx="6" class="shader"/><text x="380" y="225" class="mid small title">getPointDiameter</text><text x="380" y="242" class="mid small">adaptive size, finer share</text>
+    <rect x="520" y="202" width="220" height="56" rx="6" class="gpu"/><text x="630" y="225" class="mid small title">compute or triangles</text><text x="630" y="242" class="mid small">2 px or less: compute</text>
+    <path d="M130,160 V200" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <path d="M240,230 H268" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <path d="M490,230 H518" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="380" y="286" class="mid small t-faint">the cull and both draw paths size a point with the same function, so a chunk switches paths unseen</text>
+  </svg>
+  <figcaption>Example 29's frame. The application owns the tree and the cut; RASM owns the budget, the chunks and how points are sized.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>This page</th><th>RASM</th></tr>
+  <tr><td>A grid over the node's cube</td><td><code>PointCloudOctreeDesc::cells</code>, 128 a side; coarser for a node that would keep more than <code>maxNodePoints</code> (16 384). A node with no more points left is a leaf with all of them (up to <code>MAX_POINT_CHUNK_POINTS</code>).</td></tr>
+  <tr><td>The spacing</td><td>Measured from the node's points: the cell size at which they take half as many cells as there are points (1.2 times a random sample's mean spacing, 1.4 times a grid's step), never more than the parent's (<code>PointCloudNode::spacing</code>). A leaf's <code>geometricError</code> is 0.</td></tr>
+  <tr><td>The cut</td><td>The application's: example 29 wants a node's children while <code>TileStreamer::getScreenError</code> passes 1.25 pixels, and while they fade out.</td></tr>
+  <tr><td>The budget</td><td><code>TileStreamer</code>: a point chunk's bytes are its share of the point pool (<code>RendererConfig::geometryPoolPoints</code>), and the pool's units are a limit of their own. <code>Mesh::pointOrder</code> (2 B a point) is in CPU memory and not counted.</td></tr>
+  <tr><td>Fades</td><td><code>PointChunkLod::drawn</code>, through <code>Renderer::setPointChunkLod</code>: the cull keeps that share of the prefix the level of detail chose (<code>selectPointCount</code>). Example 29 fades over 0.35 s.</td></tr>
+  <tr><td>Adaptive size</td><td><code>PointSizeMode::ADAPTIVE</code> with <code>PointMaterial::maxSize</code>; the chunk's spacing is in its header, times the entity's scale. <code>POINT_ADAPTIVE_COVER</code> (4) is the cover near the camera.</td></tr>
+  <tr><td>Shrink per octant</td><td><code>PointChunkLod::finer</code>, per octant of the entity's space, which is the node's cube around its centre.</td></tr>
+  <tr><td>LAS and LAZ</td><td><code>AssetLoader::loadPointCloud</code>: RASM's own reader for LAS 1.0 to 1.4, formats 0 to 10; LAZ through LASzip (Apache-2.0, vcpkg's <samp>laszip</samp>).</td></tr>
+</table>
+</div>
+
+<p>Measured with example 29 (Release, RTX 3060, a perspective view with TAA and an orthographic one with 4× MSAA): a synthetic scan of 8 M points written as LAS, 1 km across near Paris in ECEF, a flight at 14 m/s and 45 m over the ground.</p>
+
+<div class="stats">
+  <div><b>48 M/s</b><span>points read from LAS</span><small>8 M points in 0.16 s, one thread</small></div>
+  <div><b>6.3 M/s</b><span>points built into the octree</span><small>1739 nodes in 1.27 s, one thread</small></div>
+  <div><b>48 of 92 MiB</b><span>the budget held</span><small>a peak of 48.00 MiB over 1424 frames of flight, 1219 loads, 462 drops</small></div>
+  <div><b>0.11 ms</b><span>cut and streamer update a frame</span><small>760 nodes drawn at most</small></div>
+</div>
+
+<p>At 1920 × 1080 the two views take 5.8 ms of GPU frame with adaptive points, 3.3 ms with fixed ones, which leave the ground open: near the camera grown points pass 2 pixels and leave the compute path for the triangles (<code>P33</code>). Example 29 sets <code>PointMaterial::density</code> to 3, so the top view's random ground leaves 0.06 % of its pixels open instead of 0.2 %, for 0.4 ms. The images show no pop as nodes come and go: the frames where nodes appear or go change no more pixels than the frames where none do.</p>
+
+<h3>Code map</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The octree and its build</td><td><code>include/rasm/pointCloudOctree.h</code>, <code>src/scene/pointCloudOctree.cpp</code></td></tr>
+  <tr><td>Spacing, Morton codes</td><td><code>measurePointSpacing</code>, <code>spreadMortonBits</code> in <code>src/scene/pointCloud.cpp</code> (<code>src/scene/pointCloudInternal.h</code>)</td></tr>
+  <tr><td>Fades and finer shares</td><td><code>Renderer::setPointChunkLod</code> (<code>src/scene/entity.cpp</code>), read by <code>getPointDrawnShare</code> and <code>getPointFinerShare</code> in <code>shaders/lib/points.slang</code></td></tr>
+  <tr><td>Adaptive size</td><td><code>getPointDiameter</code> in <code>shaders/lib/points.slang</code>, used by <code>shaders/passes/points.slang</code>, <code>shaders/passes/pointRaster.slang</code> and the cull (<code>isRasterChunk</code>)</td></tr>
+  <tr><td>The point pool in the budget</td><td><code>TileUnit::POINTS</code> in <code>src/scene/tileResidency.h</code>, <code>src/scene/tileStreamer.cpp</code></td></tr>
+  <tr><td>LAS and LAZ</td><td><code>src/assets/pointCloudLoad.cpp</code>, <code>cmake/Findlaszip.cmake</code></td></tr>
+  <tr><td>The example</td><td><code>examples/29_point_streaming/main.cpp</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule"><strong>Rules to keep</strong> A node's points are offsets from its cube's centre and its entity sits there: the octants of <code>PointChunkLod::finer</code> are that space's. The octree must outlive every chunk built from it. The streamer's budget must stay under <code>RendererConfig::geometryPoolPoints</code>: the pool is fixed. A change to how a point is sized goes through <code>getPointDiameter</code> alone, so the cull, the triangles and the compute path agree.</div>
+
+<p>Further reading: M. Schütz, S. Ohrhallinger, M. Wimmer, <em>Fast Out-of-Core Octree Generation for Massive Point Clouds</em> (2020); ASPRS, <em>LAS Specification 1.4 R15</em> (2019); M. Isenburg, <em>LASzip: lossless compression of LiDAR data</em> (2013).</p>
+
+</main>
+</div>
+</body>
+</html>

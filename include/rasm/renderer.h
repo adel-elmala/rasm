@@ -14,6 +14,7 @@
 #include "rasm/light.h"
 #include "rasm/mesh.h"
 #include "rasm/picking.h"
+#include "rasm/pointCloud.h"
 #include "rasm/readback.h"
 #include "rasm/terrain.h"
 #include "rasm/text.h"
@@ -212,6 +213,7 @@ namespace rasm
         void                        updateCameraAspectRatio(float aspect);
         void                        updateCamera(CameraHandle camera, const CameraInput& input);
         void                        updateTransform(EntityHandle entity, Transform transform);
+        void                        setPointChunkLod(EntityHandle entity, const PointChunkLod& lod);
         void                        setCameraTransform(CameraHandle camera, Transform transform);
         void                        setCameraProjection(CameraHandle camera, CameraProjection projection);
         void                        setCameraController(CameraHandle camera, CameraController controller);

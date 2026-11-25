@@ -1277,7 +1277,8 @@ namespace rasm
                 .meshlets = geometry.meshlets,
                 .instances = gpuScene->instanceRows.used(),
                 .animationPoolBytes = gpuAnimation->poolRanges.used(),
-                .releasesWaiting = ctx.getReleasesWaiting()};
+                .releasesWaiting = ctx.getReleasesWaiting(),
+                .points = geometry.points};
     }
 
     bool Renderer::isLive(const EntityHandle &entity) const

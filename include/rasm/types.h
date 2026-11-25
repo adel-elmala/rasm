@@ -248,7 +248,7 @@ namespace rasm
         uint32_t     geometryPoolPoints      = 1u << 20; // point cloud chunks, 8 B each: a point takes one (1.5 with colors), 8 MiB
         uint32_t     maxInstances            = 1u << 16; // 164 B each, twice (one copy per frame slot)
         uint32_t     maxLights               = 1u << 14; // 56 B each, twice
-        uint32_t     maxMaterials            = 1u << 12; // materials alive at once, 248 B each, twice
+        uint32_t     maxMaterials            = 1u << 12; // materials alive at once, 352 B each, twice
         uint32_t     maxBindlessTextures     = 1u << 14; // sampled textures at once (slots of the bindless set), at most MAX_BINDLESS_TEXTURES and what the device allows
         uint32_t     maxAnimatedEntities     = 1u << 14; // entities that play a clip, 120 B each, twice
         uint32_t     animationPoolBytes      = 16u << 20; // the nodes, key times and values of every loaded animation
@@ -298,7 +298,7 @@ namespace rasm
         uint32_t     geometryPoolPoints      = 1u << 20; // point cloud chunks, 8 B each: a point takes one (1.5 with colors), 8 MiB
         uint32_t     maxInstances            = 1u << 16; // 164 B each, twice (one copy per frame slot)
         uint32_t     maxLights               = 1u << 14; // 56 B each, twice
-        uint32_t     maxMaterials            = 1u << 12; // materials alive at once, 248 B each, twice
+        uint32_t     maxMaterials            = 1u << 12; // materials alive at once, 352 B each, twice
         uint32_t     maxBindlessTextures     = 1u << 14; // sampled textures at once (slots of the bindless set), at most MAX_BINDLESS_TEXTURES and what the device allows
         uint32_t     maxAnimatedEntities     = 1u << 14; // entities that play a clip, 120 B each, twice
         uint32_t     animationPoolBytes      = 16u << 20; // the nodes, key times and values of every loaded animation
@@ -449,6 +449,7 @@ namespace rasm
         uint64_t     instances               = 0;        // instance rows, of maxInstances
         uint64_t     animationPoolBytes      = 0;        // of animationPoolBytes
         uint32_t     releasesWaiting         = 0;        // destroyed objects the GPU may still use
+        uint64_t     points                  = 0;        // 8 B units of geometryPoolPoints
     };
 
     // The load workers now. Decoded bytes are those of the loads that started and are not uploaded yet.

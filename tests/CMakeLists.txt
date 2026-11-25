@@ -48,6 +48,8 @@ add_executable(rasm_tests
             "textTests.cpp"
             "vectorTests.cpp"
             "pointCloudTests.cpp"
+            "pointCloudOctreeTests.cpp"
+            "pointCloudLoadTests.cpp"
             "tileResidencyTests.cpp"
             "transformTests.cpp"
             "uiTests.cpp"
@@ -56,8 +58,10 @@ add_executable(rasm_tests
             "workerPoolTests.cpp"
     )
 
-# The KTX tests encode small Basis images in memory with libktx, so they need no test files.
-target_link_libraries(rasm_tests PRIVATE rasm::rasm doctest::doctest KTX::ktx)
+# The KTX tests encode small Basis images in memory with libktx, and the point cloud load tests write LAZ files with
+# LASzip, so they need no test files.
+find_package(laszip REQUIRED)
+target_link_libraries(rasm_tests PRIVATE rasm::rasm doctest::doctest KTX::ktx laszip::laszip)
 # Private classes such as rhi::UploadManager are tested against a fake rhi::Device.
 target_include_directories(rasm_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_compile_definitions(rasm_tests PRIVATE RASM_TEST_EXECUTABLE_DIR="$<TARGET_FILE_DIR:rasm_tests>"

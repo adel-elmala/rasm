@@ -1,5 +1,6 @@
 #include "rasm/pointCloud.h"
 #include "assets/meshBuild.h"
+#include "scene/pointCloudInternal.h"
 #include "renderer/uberMaterialTypes.h"
 
 #include "spdlog/spdlog.h"
@@ -43,6 +44,80 @@ namespace rasm
                 return 0;
             return static_cast<uint16_t>(std::clamp(std::round((value - first) / step), 0.0f, QUANTIZATION_STEPS));
         }
+    }
+
+    uint64_t spreadMortonBits(uint32_t v)
+    {
+        uint64_t x = v & 0x1FFFFFu;
+        x = (x | x << 32) & 0x1F00000000FFFFull;
+        x = (x | x << 16) & 0x1F0000FF0000FFull;
+        x = (x | x << 8) & 0x100F00F00F00F00Full;
+        x = (x | x << 4) & 0x10C30C30C30C30C3ull;
+        x = (x | x << 2) & 0x1249249249249249ull;
+        return x;
+    }
+
+    uint32_t compactMortonBits(uint64_t x)
+    {
+        x &= 0x1249249249249249ull;
+        x = (x ^ (x >> 2)) & 0x10C30C30C30C30C3ull;
+        x = (x ^ (x >> 4)) & 0x100F00F00F00F00Full;
+        x = (x ^ (x >> 8)) & 0x1F0000FF0000FFull;
+        x = (x ^ (x >> 16)) & 0x1F00000000FFFFull;
+        x = (x ^ (x >> 32)) & 0x1FFFFFull;
+        return static_cast<uint32_t>(x);
+    }
+
+    // The cell size at which the points take half as many cells as there are points: the cells of each octree level of
+    // their cube are counted at once along a Morton order, and the size between the two levels around that count
+    // follows the growth from one to the next (4 for a surface, 8 for a volume). For a random sample of a surface that is
+    // 1.2 times its mean spacing (the square root of its area over its points), for a grid of step h 1.4 h: a little
+    // more than the mean, as a random sample has gaps wider than it.
+    float measurePointSpacing(const glm::vec3 *positions, uint32_t count)
+    {
+        if (positions == nullptr || count < 2)
+            return 0.0f;
+        glm::vec3 low = positions[0];
+        glm::vec3 high = positions[0];
+        for (uint32_t i = 1; i < count; ++i)
+        {
+            low = glm::min(low, positions[i]);
+            high = glm::max(high, positions[i]);
+        }
+        const float extent = std::max(std::max(high.x - low.x, high.y - low.y), high.z - low.z);
+        if (!(extent > 0.0f) || !std::isfinite(extent))
+            return 0.0f;
+        const float scale = static_cast<float>((1u << MORTON_LEVELS) - 1) / extent;
+        std::vector<uint64_t> codes(count);
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            const glm::vec3 cell = glm::clamp((positions[i] - low) * scale, glm::vec3(0.0f), glm::vec3(static_cast<float>((1u << MORTON_LEVELS) - 1)));
+            codes[i] = spreadMortonBits(static_cast<uint32_t>(cell.x)) | spreadMortonBits(static_cast<uint32_t>(cell.y)) << 1 | spreadMortonBits(static_cast<uint32_t>(cell.z)) << 2;
+        }
+        std::sort(codes.begin(), codes.end());
+        // cells[L]: the cells of level L the points take (level L splits the cube into 2^L cells a side).
+        uint64_t cells[MORTON_LEVELS + 1] = {};
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            uint32_t first = 0;
+            if (i > 0)
+            {
+                const uint64_t differ = codes[i] ^ codes[i - 1];
+                first = differ == 0 ? MORTON_LEVELS + 1 : MORTON_LEVELS - static_cast<uint32_t>(std::bit_width(differ) - 1) / 3;
+            }
+            for (uint32_t level = first; level <= MORTON_LEVELS; ++level)
+                ++cells[level];
+        }
+        const double target = 0.5 * static_cast<double>(count);
+        for (uint32_t level = 0; level < MORTON_LEVELS; ++level)
+        {
+            if (static_cast<double>(cells[level + 1]) < target)
+                continue;
+            const double size = static_cast<double>(extent) / static_cast<double>(1u << level);
+            const double growth = std::log2(static_cast<double>(cells[level + 1]) / static_cast<double>(cells[level]));
+            return static_cast<float>(growth > 0.0 ? size * std::pow(static_cast<double>(cells[level]) / target, 1.0 / growth) : size);
+        }
+        return extent / static_cast<float>(1u << MORTON_LEVELS);
     }
 
     // Each prefix of the order is an even sample: the points sorted along a Morton curve, then taken at the bit-reversed
@@ -113,7 +188,8 @@ namespace rasm
                                            .flags = (colors ? gfx::POINT_CHUNK_COLORS : 0u) | (scalars ? gfx::POINT_CHUNK_SCALARS : 0u),
                                            .scalarMin = scalarMin,
                                            .scalarStep = scalarStep,
-                                           .colorOffset = colors ? positionWords : 0u};
+                                           .colorOffset = colors ? positionWords : 0u,
+                                           .spacing = desc.spacing > 0.0f && std::isfinite(desc.spacing) ? desc.spacing : measurePointSpacing(desc.positions, count)};
         std::vector<uint32_t> &data = build.data->raw.points;
         data.assign(words, 0u);
         std::memcpy(data.data(), &header, sizeof(header));

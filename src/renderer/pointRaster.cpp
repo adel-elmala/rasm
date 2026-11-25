@@ -83,7 +83,12 @@ namespace rasm
 
         // Only this slot's last frame used the buffer, and the fence wait covered it.
         const auto &drawList = gpuScene->drawLists[view.scene.index];
-        const uint32_t capacity = getPointBatchCapacity(drawList.runs[sceneData.pointRun].count);
+        // The batches grow to twice what they held: a scene whose chunks come in a few at a time (a TileStreamer) would
+        // otherwise make the buffer, the view's pixels with it, again at each new count, and wait on each allocation.
+        const uint32_t need = getPointBatchCapacity(drawList.runs[sceneData.pointRun].count);
+        uint32_t capacity = view.pointBatchCapacity[frame];
+        if (need > capacity)
+            capacity = std::min(std::max(need, 2 * capacity), gfx::POINT_MAX_BATCHES);
         const PointRasterLayout layout = getPointRasterLayout(capacity, sceneData.viewportWidth, sceneData.viewportHeight);
         if (view.pointRasterBytes[frame] < layout.size)
         {
@@ -94,6 +99,7 @@ namespace rasm
             }
             view.pointRasterBytes[frame] = layout.size;
         }
+        view.pointBatchCapacity[frame] = capacity;
         const uint64_t address = ctx.getBufferDeviceAddress(view.pointRaster[frame]);
         sceneData.pointRasterPtr = address;
         sceneData.pointBatchesPtr = address + layout.batches;

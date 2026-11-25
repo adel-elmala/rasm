@@ -42,6 +42,7 @@ namespace rasm
         uint32_t                        listStamp                                                           = 0;    // the draw list rebuild that last met it, so it is drawn once
         int32_t                         firstLabel                                                          = -1;   // its first label slot (GpuScene::labelSlots), -1 without labels
         uint32_t                        labelCount                                                          = 0;
+        int32_t                         pointLod                                                            = -1;   // a point chunk's PointChunkLod, as points.slang reads it; -1: never set
     };
 
     struct DrawRun
@@ -105,6 +106,7 @@ namespace rasm
         uint32_t                        sortCapacity[MAX_FRAMES_IN_FLIGHT]                                  = {};
         BufferHandle                    pointRaster[MAX_FRAMES_IN_FLIGHT]                                   = {};   // a shaded view's compute path for small points (getPointRasterLayout), grown under the same handle
         uint64_t                        pointRasterBytes[MAX_FRAMES_IN_FLIGHT]                              = {};
+        uint32_t                        pointBatchCapacity[MAX_FRAMES_IN_FLIGHT]                            = {};
         bool                            rasterPoints                                                        = false;    // this frame's culls send small points to the compute path
         uint32_t                        graphs                                                              = 0;    // graphs that hold it; 0 is a free slot
         bool                            ready                                                               = false;

@@ -5,9 +5,12 @@
 #include "rasm/text.h"
 #include "rasm/types.h"
 
+#include "glm/glm.hpp"
+
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace rasm
 {
@@ -21,6 +24,35 @@ namespace rasm
         float                       distanceRange   = 16.0f;            // atlas pixels the stored distance spans (FontAtlas::distanceRange): a halo reaches half of it
         const uint32_t*             codepoints      = nullptr;          // the characters to hold; null: ASCII and Latin-1 (32 to 126, 160 to 255)
         uint32_t                    codepointCount  = 0;
+    };
+
+    enum class PointCloudScalar : uint32_t
+    {
+        NONE,
+        INTENSITY,
+        CLASSIFICATION,
+        ELEVATION,      // its height: z, or y with zUpToYUp
+        GPS_TIME,
+        RETURN_NUMBER,
+    };
+
+    struct PointCloudLoadOptions
+    {
+        PointCloudScalar            scalar          = PointCloudScalar::INTENSITY;
+        bool                        zUpToYUp        = false;            // (x, y, z) to (x, z, -y): a projected file's east, north and up to RASM's east, up and south
+    };
+
+    struct PointCloudData
+    {
+        std::vector<glm::dvec3>     positions;                          // the file's coordinates scaled and offset, as stored: ECEF, or a projection's metres
+        std::vector<uint32_t>       colors;                             // RGBA8 sRGB, alpha 255 (packVertexColor); empty for a point format without color
+        std::vector<float>          scalars;                            // PointCloudLoadOptions::scalar; empty for NONE
+        glm::dvec3                  boundsMin       = glm::dvec3(0.0);
+        glm::dvec3                  boundsMax       = glm::dvec3(0.0);
+        std::string                 coordinateSystem;                   // the OGC WKT of its variable length records, empty without
+        uint32_t                    pointFormat     = 0;                // 0 to 10
+        uint32_t                    versionMinor    = 0;                // LAS 1.x
+        bool                        compressed      = false;            // LAZ
     };
 
     // A TrueType or OpenType font's signed distance field atlas, with stb_truetype: each codepoint's glyph, its metrics
@@ -51,6 +83,7 @@ namespace rasm
         // Reads a font file and builds its atlas (buildFontAtlas), on this thread: upload it with Renderer::createFont,
         // and lay labels out with it (addVectorLabels). False with an error when the file cannot be read or is no font.
         bool                        loadFont(const std::string& path, FontAtlas& atlas, const FontLoadOptions& options = {});
+        bool                        loadPointCloud(const std::string& path, PointCloudData& cloud, const PointCloudLoadOptions& options = {});
         // Blocks until every load is in, its copies included.
         void                        waitForLoads();
         LoadStats                   getLoadStats() const;

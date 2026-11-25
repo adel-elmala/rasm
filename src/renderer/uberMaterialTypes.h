@@ -34,6 +34,8 @@ namespace rasm::gfx
     constexpr uint32_t      POINT_SCALAR                = 1u << 3;  // the scalar through the colormap, else the point's color
     constexpr uint32_t      POINT_LOG                   = 1u << 4;  // rangeMin and rangeMax are logarithms
     constexpr uint32_t      POINT_CLAMP                 = 1u << 5;  // a scalar outside the range takes its end, else it is not drawn
+    constexpr uint32_t      POINT_ADAPTIVE              = 1u << 6;  // the size grows with the chunk's spacing on screen, up to its largest
+    constexpr uint32_t      POINT_MAX_SIZE_SHIFT        = 16;       // flags' high 16 bits: POINT_ADAPTIVE's largest diameter, in 1/16 pixels
 
     // A point cloud chunk in the point pool, in 32-bit words: this header, then two words per point (x | y << 16,
     // z | scalar << 16, each a 16-bit step of the box), then a word per point of RGBA8 colors at colorOffset. The
@@ -236,7 +238,7 @@ namespace rasm::gfx
         float               scalarMin;                              // a scalar is scalarMin + scalarStep * its 16-bit step
         float               scalarStep;
         uint32_t            colorOffset;                            // words from the header to the colors
-        uint32_t            padding;
+        float               spacing;                                // the distance between neighbouring points, in its entity's units
     };
 
     // A view's point raster buffer starts with it: the raster and clear dispatches' group counts, indirect, and the
@@ -280,7 +282,7 @@ namespace rasm::gfx
         uint32_t        materialIndex;
         glm::vec4       previousWorld[3];           // the rows the frame before drew, for motion; w: its translation minus this one
         int32_t         animationRow;               // its InstanceTransform in SceneData::animatedTransformsPtr, -1: the matrices above
-        int32_t         meshletVisibility;          // its first word in each view's meshlet visibility bits, -1: none; a VECTOR mesh with labels (no meshlets): its first label slot
+        int32_t         meshletVisibility;          // its first word in each view's meshlet visibility bits, -1: none; a VECTOR mesh with labels (no meshlets): its first label slot; a point chunk: its PointChunkLod (lib/points.slang)
     };
 
     struct InstanceTransform
@@ -671,6 +673,7 @@ namespace rasm::gfx
     static_assert(offsetof(PointChunkHeader, scalarMin) == 32, "PointChunkHeader must match loadPointChunk");
     static_assert(offsetof(PointChunkHeader, scalarStep) == 36, "PointChunkHeader must match loadPointChunk");
     static_assert(offsetof(PointChunkHeader, colorOffset) == 40, "PointChunkHeader must match loadPointChunk");
+    static_assert(offsetof(PointChunkHeader, spacing) == 44, "PointChunkHeader must match loadPointChunk");
     static_assert(offsetof(MaterialData, points) == 312, "MaterialData must match the shader's scalar layout");
     static_assert(sizeof(MaterialData) == 352, "MaterialData must match the shader's scalar layout");
     static_assert(offsetof(MaterialData, vector) == 248, "MaterialData must match the shader's scalar layout");

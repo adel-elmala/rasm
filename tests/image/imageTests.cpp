@@ -982,6 +982,52 @@ namespace
         return assets.cube.isValid() && viridis.isValid() && addSunsetLight(engine, assets, content, 0.6f, glm::vec3(0.5f, -0.7f, -0.4f), 2.0f);
     }
 
+    // Adaptive points (PointSizeMode::ADAPTIVE): a sparse random sheet near the camera, grown to close, and two finer
+    // sheets over two of its quarters, as an octree's children: the right one drawn whole, so the parent's points over it
+    // keep their size (PointChunkLod::finer 1), the left one half faded in (drawn 0.5, finer 0.5).
+    bool buildPointsAdaptive(rasm::Engine &engine, const Assets &assets, Content &content)
+    {
+        uint64_t state = 7;
+        const auto next = [&state]()
+        {
+            state = state * 6364136223846793005ull + 1442695040888963407ull;
+            return static_cast<float>(state >> 40) / static_cast<float>(1u << 24);
+        };
+        const auto makeSheet = [&next](uint32_t count, float x0, float x1, float z0, float z1, float y)
+        {
+            std::vector<glm::vec3> sheet;
+            for (uint32_t i = 0; i < count; ++i)
+                sheet.emplace_back(x0 + (x1 - x0) * next(), y + 0.02f * next(), z0 + (z1 - z0) * next());
+            return sheet;
+        };
+        const rasm::PointMaterial adaptive{.size = 2.0f, .sizeMode = rasm::PointSizeMode::ADAPTIVE, .maxSize = 40.0f};
+        rasm::PointMaterial parentStyle = adaptive;
+        parentStyle.color = glm::vec4(0.95f, 0.55f, 0.2f, 1.0f);
+        rasm::PointMaterial rightStyle = adaptive;
+        rightStyle.color = glm::vec4(0.25f, 0.5f, 0.95f, 1.0f);
+        rasm::PointMaterial leftStyle = adaptive;
+        leftStyle.color = glm::vec4(0.3f, 0.8f, 0.35f, 1.0f);
+        const std::vector<glm::vec3> parent = makeSheet(3000, -3.0f, 3.0f, -3.0f, 3.0f, 0.01f);
+        const std::vector<glm::vec3> right = makeSheet(6000, 0.0f, 3.0f, 0.0f, 3.0f, 0.03f);
+        const std::vector<glm::vec3> left = makeSheet(6000, -3.0f, 0.0f, 0.0f, 3.0f, 0.03f);
+        const rasm::Transform at{glm::vec3(0.0f, 0.0f, -1.0f)};
+        const rasm::EntityHandle parentEntity = addEntity(engine, content, "parent", engine.createMesh(rasm::buildPointCloudChunk({.positions = parent.data(), .count = 3000})),
+                                                          createPointMaterial(engine, parentStyle), at);
+        addEntity(engine, content, "right", engine.createMesh(rasm::buildPointCloudChunk({.positions = right.data(), .count = 6000})), createPointMaterial(engine, rightStyle), at);
+        const rasm::EntityHandle leftEntity =
+            addEntity(engine, content, "left", engine.createMesh(rasm::buildPointCloudChunk({.positions = left.data(), .count = 6000})), createPointMaterial(engine, leftStyle), at);
+        // Octants of the parent's space: x >= 0 is 1, y >= 0 is 2, z >= 0 is 4; the sheets lie above y = 0.
+        rasm::PointChunkLod parentLod;
+        parentLod.finer[1 | 2 | 4] = 1.0f;
+        parentLod.finer[2 | 4] = 0.5f;
+        engine.setPointChunkLod(parentEntity, parentLod);
+        engine.setPointChunkLod(leftEntity, {.drawn = 0.5f});
+        content.eye = glm::vec3(0.0f, 2.4f, 3.4f);
+        content.center = glm::vec3(0.0f, 0.0f, -1.2f);
+        content.fovY = 60.0f;
+        return addSunsetLight(engine, assets, content, 0.6f, glm::vec3(0.5f, -0.7f, -0.4f), 2.0f);
+    }
+
     bool buildPointsOrtho(rasm::Engine &engine, const Assets &assets, Content &content)
     {
         content.orthoHeight = 6.0f;
@@ -1067,6 +1113,8 @@ namespace
         {.name = "points_msaa4",  .build = buildPoints,        .samples = 4, .picks = true},
         {.name = "points_taa",    .build = buildPoints,        .taa = true, .frames = 16, .picks = true},
         {.name = "points_ortho",  .build = buildPointsOrtho,   .picks = true},
+        // Adaptive points grown to close a sparse sheet, and an octree's parent and children (PointChunkLod).
+        {.name = "points_adaptive", .build = buildPointsAdaptive},
         // The same points by triangles only, as a device without 64-bit atomics draws them: both paths take the same
         // pixels, so the image matches the one the compute path drew. Under MSAA a view without the compute path keeps
         // the points' triangles as they are, which leave out the samples of a pixel's edge past the square's left,

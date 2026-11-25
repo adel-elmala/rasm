@@ -27,6 +27,21 @@ struct rasm_engine
 
 using namespace rasm;
 
+struct rasm_point_cloud
+{
+    PointCloudData data;
+};
+
+namespace
+{
+    static_assert(RASM_POINT_CLOUD_SCALAR_NONE == static_cast<uint32_t>(PointCloudScalar::NONE));
+    static_assert(RASM_POINT_CLOUD_SCALAR_INTENSITY == static_cast<uint32_t>(PointCloudScalar::INTENSITY));
+    static_assert(RASM_POINT_CLOUD_SCALAR_CLASSIFICATION == static_cast<uint32_t>(PointCloudScalar::CLASSIFICATION));
+    static_assert(RASM_POINT_CLOUD_SCALAR_ELEVATION == static_cast<uint32_t>(PointCloudScalar::ELEVATION));
+    static_assert(RASM_POINT_CLOUD_SCALAR_GPS_TIME == static_cast<uint32_t>(PointCloudScalar::GPS_TIME));
+    static_assert(RASM_POINT_CLOUD_SCALAR_RETURN_NUMBER == static_cast<uint32_t>(PointCloudScalar::RETURN_NUMBER));
+}
+
 // NOLINTBEGIN(readability-identifier-naming): the parameters keep their names from rasm_c.h
 
 namespace
@@ -299,4 +314,62 @@ try
     return RASM_OK;
 }
 RASM_C_CATCH_RESULT
+
+rasm_result RASM_CALL rasm_point_cloud_load_options_init(rasm_point_cloud_load_options *options, uint32_t size)
+try
+{
+    const PointCloudLoadOptions cpp;
+    const rasm_point_cloud_load_options defaults = {.size = sizeof(rasm_point_cloud_load_options), .scalar = static_cast<uint32_t>(cpp.scalar), .z_up_to_y_up = cpp.zUpToYUp ? RASM_TRUE : RASM_FALSE};
+    return c::initSized(options, size, c::POINT_CLOUD_LOAD_OPTIONS_SIZE_1_12, &defaults, sizeof(defaults), __func__, "options");
+}
+RASM_C_CATCH_RESULT
+
+rasm_result RASM_CALL rasm_asset_loader_load_point_cloud(rasm_asset_loader *loader, const char *path, const rasm_point_cloud_load_options *options, rasm_point_cloud **cloud)
+try
+{
+    if (!c::checkPointer(cloud, __func__, "cloud"))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    *cloud = nullptr;
+    // NULL options: the defaults.
+    const PointCloudLoadOptions cpp;
+    rasm_point_cloud_load_options values = {.size = sizeof(rasm_point_cloud_load_options), .scalar = static_cast<uint32_t>(cpp.scalar), .z_up_to_y_up = cpp.zUpToYUp ? RASM_TRUE : RASM_FALSE};
+    AssetLoader *l = getLoader(loader, __func__);
+    if (l == nullptr || !checkPath(path, __func__) || (options != nullptr && !c::readSized(options, c::POINT_CLOUD_LOAD_OPTIONS_SIZE_1_12, &values, sizeof(values), __func__, "options")) ||
+        !c::checkEnum(values.scalar, RASM_POINT_CLOUD_SCALAR_RETURN_NUMBER + 1, __func__, "options->scalar"))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    auto made = std::make_unique<rasm_point_cloud>();
+    if (!l->loadPointCloud(path, made->data, {.scalar = static_cast<PointCloudScalar>(values.scalar), .zUpToYUp = values.z_up_to_y_up != 0}))
+        return RASM_ERROR_FAILED;
+    *cloud = made.release();
+    return RASM_OK;
+}
+RASM_C_CATCH_RESULT
+
+rasm_result RASM_CALL rasm_get_point_cloud_info(const rasm_point_cloud *cloud, rasm_point_cloud_info *info)
+try
+{
+    if (!c::checkPointer(cloud, __func__, "cloud"))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    const PointCloudData &data = cloud->data;
+    const rasm_point_cloud_info values = {.size = sizeof(rasm_point_cloud_info),
+                                          .positions = reinterpret_cast<const rasm_dvec3 *>(data.positions.data()),
+                                          .colors = data.colors.empty() ? nullptr : data.colors.data(),
+                                          .scalars = data.scalars.empty() ? nullptr : data.scalars.data(),
+                                          .count = static_cast<uint32_t>(data.positions.size()),
+                                          .bounds_min = c::toC(data.boundsMin),
+                                          .bounds_max = c::toC(data.boundsMax),
+                                          .coordinate_system = data.coordinateSystem.c_str(),
+                                          .point_format = data.pointFormat,
+                                          .version_minor = data.versionMinor,
+                                          .compressed = data.compressed ? RASM_TRUE : RASM_FALSE};
+    return c::writeSized(info, c::POINT_CLOUD_INFO_SIZE_1_12, &values, sizeof(values), __func__, "info") ? RASM_OK : RASM_ERROR_INVALID_ARGUMENT;
+}
+RASM_C_CATCH_RESULT
+
+void RASM_CALL rasm_point_cloud_destroy(rasm_point_cloud *cloud)
+try
+{
+    delete cloud;
+}
+RASM_C_CATCH_VOID
 // NOLINTEND(readability-identifier-naming)

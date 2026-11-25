@@ -469,6 +469,7 @@ namespace rasm
                 .indices = indexRanges.used(),
                 .subMeshes = subMeshRows.used(),
                 .meshlets = meshletRanges.used(),
+                .points = pointRanges.used(),
                 .largestFreeVertices = vertexRanges.largestFree(),
                 .largestFreeIndices = indexRanges.largestFree()};
     }
