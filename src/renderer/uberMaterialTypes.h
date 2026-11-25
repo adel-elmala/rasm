@@ -32,6 +32,7 @@ namespace rasm::gfx
     constexpr uint32_t      VECTOR_GROUND               = 1u << 1;  // spread in the ground's plane, else across the screen
     constexpr uint32_t      VECTOR_OVERLAY              = 1u << 2;  // over everything: no depth test, no occlusion culling
     constexpr uint32_t      VECTOR_ICON                 = 1u << 3;  // points read their icon from the albedo texture
+    constexpr uint32_t      VECTOR_TEXT                 = 1u << 4;  // labels: glyphs from the font's atlas
     // A blended draw's order in the Transparent pass: VECTOR_ORDER_SCENE + VectorData::drawOrder, the scene's see-through
     // draws at VECTOR_ORDER_SCENE. Must match shaders/lib/vector.slang.
     constexpr int32_t       VECTOR_ORDER_SCENE          = 128;
@@ -160,6 +161,8 @@ namespace rasm::gfx
         float               gapLength;
         uint32_t            flags;                                  // VECTOR_*
         int32_t             drawOrder;
+        uint32_t            font;                                   // the font atlas's bindless index, INVALID_TEXTURE_INDEX without a font
+        float               distanceRange;                          // the atlas's (FontAtlas::distanceRange)
     };
 
     struct MaterialData
@@ -183,7 +186,7 @@ namespace rasm::gfx
         uint32_t        materialIndex;
         glm::vec4       previousWorld[3];           // the rows the frame before drew, for motion; w: its translation minus this one
         int32_t         animationRow;               // its InstanceTransform in SceneData::animatedTransformsPtr, -1: the matrices above
-        int32_t         meshletVisibility;          // its first word in each view's meshlet visibility bits, -1: none
+        int32_t         meshletVisibility;          // its first word in each view's meshlet visibility bits, -1: none; a VECTOR mesh with labels (no meshlets): its first label slot
     };
 
     struct InstanceTransform
@@ -430,6 +433,7 @@ namespace rasm::gfx
         glm::vec3        originLow;                 // the origin is originHigh + originLow (splitPosition)
         uint32_t         zero;                      // always 0: the shaders' render-space sums keep their order (renderSpace.slang)
         glm::vec4        environmentOrientation;    // quaternion (x, y, z, w): SceneEnvironment::orientation
+        uint64_t         labelsPtr;                 // a shaded view's label slots' alpha (placeViewLabels); 0: every label shown
     };
 
     struct PushConstants
@@ -550,8 +554,8 @@ namespace rasm::gfx
     static_assert(sizeof(TextureTransform) == 24, "TextureTransform must match the shader's scalar layout");
     static_assert(sizeof(Material) == 84, "Material must match the shader's scalar layout");
     static_assert(sizeof(TerrainData) == 28, "TerrainData must match the shader's scalar layout");
-    static_assert(sizeof(VectorData) == 56, "VectorData must match the shader's scalar layout");
-    static_assert(sizeof(MaterialData) == 304, "MaterialData must match the shader's scalar layout");
+    static_assert(sizeof(VectorData) == 64, "VectorData must match the shader's scalar layout");
+    static_assert(sizeof(MaterialData) == 312, "MaterialData must match the shader's scalar layout");
     static_assert(offsetof(MaterialData, vector) == 248, "MaterialData must match the shader's scalar layout");
     static_assert(offsetof(MaterialData, terrain) == 220, "MaterialData must match the shader's scalar layout");
     static_assert(offsetof(MaterialData, materialId) == 84, "MaterialData must match the shader's scalar layout");
@@ -579,7 +583,8 @@ namespace rasm::gfx
     static_assert(offsetof(GeometryData, lodCount) == 20, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, lods) == 24, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, environmentOrientation) == 2032, "SceneData must match the shader's scalar layout");
-    static_assert(sizeof(SceneData) == 2048, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, labelsPtr) == 2048, "SceneData must match the shader's scalar layout");
+    static_assert(sizeof(SceneData) == 2056, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, meshletDataPtr) == 2008, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, originLow) == 2016, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, previousSkinnedVertsPtr) == 1816, "SceneData must match the shader's scalar layout");

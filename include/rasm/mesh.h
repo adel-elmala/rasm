@@ -75,6 +75,17 @@ namespace rasm
         float               boundsRadius     = 0.0f;
     };
 
+    // A label of a mesh (addVectorLabels): its anchor in the mesh's space, and the box around its text on screen in
+    // ems from the anchor (+y up), which collision places it by.
+    struct MeshLabel
+    {
+        glm::vec3           anchor          = glm::vec3(0.0f);
+        glm::vec2           center          = glm::vec2(0.0f);
+        glm::vec2           halfSize        = glm::vec2(0.0f);
+        float               priority        = 0.0f;
+        uint32_t            featureId       = 0;
+    };
+
     struct SubMesh
     {
         MeshGeometry        geometry;
@@ -91,6 +102,7 @@ namespace rasm
         std::vector<std::string>    morphTargetNames;   // one per weight of an entity (setMorphWeights)
         std::vector<MaterialHandle> ownedMaterials;     // made by its glTF import: destroyed with it
         std::vector<TextureHandle>  ownedTextures;
+        std::vector<MeshLabel>      labels;             // its labels, each a slot of every entity drawn with it
         uint32_t                    users       = 0;    // entities that use it
     };
 

@@ -62,6 +62,7 @@ target_sources(rasm_renderer PRIVATE
     "scene/transform.cpp"
     "scene/terrain.cpp"
     "scene/vector.cpp"
+    "scene/text.cpp"
     "scene/tileResidency.cpp"
     "scene/tileStreamer.cpp"
     "renderer/blendSort.cpp"
@@ -74,6 +75,7 @@ target_sources(rasm_renderer PRIVATE
     "renderer/animation.cpp"
     "renderer/animationTime.cpp"
     "renderer/gpuTable.cpp"
+    "renderer/labelPlacement.cpp"
     "renderer/renderGraph.cpp"
     "renderer/renderer.cpp"
     "renderer/renderSpace.cpp"
@@ -113,6 +115,7 @@ target_sources(rasm PRIVATE
     "core/workerPool.cpp"
     "platform/sdlPlatform.cpp"
     "assets/assetLoader.cpp"
+    "assets/fontLoad.cpp"
     "assets/meshLoad.cpp"
     "assets/materialImport.cpp"
     "assets/textureLoad.cpp"
@@ -197,7 +200,7 @@ if (RASM_C_API)
     # Linked into the shared libraries, so their code must be position independent where that is not the default.
     set_target_properties(rasm_renderer rasm PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-    add_library(rasm_c_objects OBJECT "c/cApi.cpp" "c/cRenderer.cpp" "c/cScene.cpp" "c/cInput.cpp" "c/cViews.cpp" "c/cAnimation.cpp" "c/cTiles.cpp" "c/cTerrain.cpp" "c/cVector.cpp")
+    add_library(rasm_c_objects OBJECT "c/cApi.cpp" "c/cRenderer.cpp" "c/cScene.cpp" "c/cInput.cpp" "c/cViews.cpp" "c/cAnimation.cpp" "c/cTiles.cpp" "c/cTerrain.cpp" "c/cVector.cpp" "c/cText.cpp")
     target_link_libraries(rasm_c_objects PRIVATE rasm_renderer spdlog::spdlog)
 
     add_library(rasm_c_renderer SHARED)

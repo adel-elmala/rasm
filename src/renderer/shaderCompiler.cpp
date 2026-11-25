@@ -605,7 +605,8 @@ namespace rasm
                                      {"meshletDataPtr", offsetof(gfx::SceneData, meshletDataPtr)},
                                      {"originLow", offsetof(gfx::SceneData, originLow)},
                                      {"zero", offsetof(gfx::SceneData, zero)},
-                                     {"environmentOrientation", offsetof(gfx::SceneData, environmentOrientation)}});
+                                     {"environmentOrientation", offsetof(gfx::SceneData, environmentOrientation)},
+                                     {"labelsPtr", offsetof(gfx::SceneData, labelsPtr)}});
 
             valid &= validateStruct(fieldStruct(layouts, scene, "meshletsPtr"), "GeometryMeshlet", sizeof(gfx::GeometryMeshlet),
                                     {{"center", offsetof(gfx::GeometryMeshlet, center)},
@@ -690,7 +691,9 @@ namespace rasm
                                      {"dashLength", offsetof(gfx::VectorData, dashLength)},
                                      {"gapLength", offsetof(gfx::VectorData, gapLength)},
                                      {"flags", offsetof(gfx::VectorData, flags)},
-                                     {"drawOrder", offsetof(gfx::VectorData, drawOrder)}});
+                                     {"drawOrder", offsetof(gfx::VectorData, drawOrder)},
+                                     {"font", offsetof(gfx::VectorData, font)},
+                                     {"distanceRange", offsetof(gfx::VectorData, distanceRange)}});
 
             valid &= validateStruct(fieldStruct(layouts, materialData, "terrain"), "TerrainData", sizeof(gfx::TerrainData),
                                     {{"heights", offsetof(gfx::TerrainData, heights)},

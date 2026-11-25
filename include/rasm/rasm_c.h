@@ -24,7 +24,7 @@
 
 // NOLINTBEGIN(readability-identifier-naming): C names, snake_case with the rasm_ prefix, as C APIs and their bindings expect
 #define RASM_C_API_VERSION_MAJOR    1
-#define RASM_C_API_VERSION_MINOR    5
+#define RASM_C_API_VERSION_MINOR    6
 #define RASM_C_API_VERSION          (((uint32_t)RASM_C_API_VERSION_MAJOR << 16) | (uint32_t)RASM_C_API_VERSION_MINOR)
 
 #if defined(_WIN32)
@@ -132,6 +132,7 @@ enum
     RASM_FORMAT_R16G16_SFLOAT       = 25,
     RASM_FORMAT_R16_UNORM           = 26,       /* 1.4: a terrain tile's heights */
     RASM_FORMAT_R32_SFLOAT          = 27,       /* 1.4: a terrain tile's heights */
+    RASM_FORMAT_R8_UNORM            = 28,       /* 1.6: a font's distance atlas */
 };
 
 typedef uint32_t                    rasm_anti_aliasing;
@@ -235,6 +236,7 @@ typedef struct rasm_light           { uint64_t id; } rasm_light;
 typedef struct rasm_camera          { uint64_t id; } rasm_camera;
 typedef struct rasm_environment     { uint64_t id; } rasm_environment;
 typedef struct rasm_readback        { uint64_t id; } rasm_readback;
+typedef struct rasm_font            { uint64_t id; } rasm_font;                 /* 1.6: a font's atlas on the GPU */
 
 typedef struct rasm_vec2            { float x, y; } rasm_vec2;
 typedef struct rasm_vec3            { float x, y, z; } rasm_vec3;
@@ -407,6 +409,7 @@ typedef struct rasm_material_desc
     float                           alpha_cutoff;
     rasm_terrain_material           terrain;                                   /* 1.4: TERRAIN only; textures[ALBEDO] is the imagery */
     rasm_vector_material            vector;                                    /* 1.5: VECTOR only; textures[ALBEDO] is the points' icon atlas */
+    rasm_font                       font;                                      /* 1.6: VECTOR labels' glyphs; vector.width is the text's size, outline its halo */
 } rasm_material_desc;
 
 typedef struct rasm_texture_desc
@@ -969,6 +972,44 @@ typedef struct rasm_vector_placement
     rasm_terrain_heights            drape_heights;
 } rasm_vector_placement;
 
+/* 1.6: text and labels (rasm/text.h). A font atlas is a signed distance field of a font's glyphs with their metrics,
+ * built on any thread (FontAtlas in C++). */
+typedef struct rasm_font_atlas      rasm_font_atlas;
+
+#define RASM_MAX_FONTS              64          /* 1.6: fonts alive at once */
+#define RASM_MAX_LABELS             65536       /* 1.6: labels of every entity alive at once */
+#define RASM_MAX_LABEL_REACH        12.0f       /* 1.6: ems a label's text may reach from its anchor */
+
+typedef struct rasm_font_load_options
+{
+    uint32_t                        size;
+    float                           em_size;                                   /* atlas pixels per em; 32 by default */
+    float                           distance_range;                            /* atlas pixels the stored distance spans; 16 by default */
+    const uint32_t*                 codepoints;                                /* NULL: ASCII and Latin-1 */
+    uint32_t                        codepoint_count;
+} rasm_font_load_options;
+
+typedef uint32_t                    rasm_label_anchor;
+enum
+{
+    RASM_LABEL_ANCHOR_CENTER        = 0,        /* the text's middle on the anchor */
+    RASM_LABEL_ANCHOR_BOTTOM        = 1,        /* the text above the anchor */
+    RASM_LABEL_ANCHOR_TOP           = 2,        /* the text below the anchor */
+    RASM_LABEL_ANCHOR_LEFT          = 3,        /* the text right of the anchor */
+    RASM_LABEL_ANCHOR_RIGHT         = 4,        /* the text left of the anchor */
+};
+
+typedef struct rasm_label_desc
+{
+    uint32_t                        size;
+    rasm_dvec3                      position;                                  /* the anchor, world space */
+    const char*                     text;                                      /* UTF-8; a line feed starts a new line */
+    float                           priority;                                  /* collision keeps the higher first */
+    rasm_label_anchor               anchor;
+    rasm_vec2                       offset;                                    /* ems from the anchor, +y up */
+    uint32_t                        feature_id;
+} rasm_label_desc;
+
 typedef void (RASM_CALL* rasm_log_callback)(void* user_data, rasm_log_level level, const char* message);
 
 /* The library */
@@ -1207,6 +1248,21 @@ RASM_C_API rasm_result      RASM_CALL rasm_vector_add_lines(rasm_vector_geometry
 RASM_C_API rasm_result      RASM_CALL rasm_vector_add_polygons(rasm_vector_geometry* geometry, rasm_dvec3 origin, const rasm_dvec3* points, const uint32_t* ring_sizes, const uint32_t* ring_counts, uint32_t polygon_count, const rasm_vector_placement* placement, const uint32_t* feature_ids);
 RASM_C_API rasm_result      RASM_CALL rasm_vector_add_points(rasm_vector_geometry* geometry, rasm_dvec3 origin, const rasm_dvec3* points, uint32_t point_count, const rasm_vector_placement* placement, const uint32_t* feature_ids, const rasm_vec4* icon_rects);
 RASM_C_API rasm_result      RASM_CALL rasm_build_vector_mesh(rasm_vector_geometry* geometry, rasm_mesh_build** build);
+
+/* Added in 1.6: text and labels. rasm_build_font_atlas builds a TrueType or OpenType font's atlas on any thread, and
+ * rasm_asset_loader_load_font reads the file first; rasm_create_font uploads an atlas, which the caller keeps for
+ * laying labels out. rasm_vector_add_labels lays each label's text out with the atlas (kerning, lines centred, no
+ * complex shaping) into the geometry, on any thread; labels is an array of sized structs, each the size of the first.
+ * Each view and frame the renderer places the labels: the higher priority first, never overlapping, fading in and out.
+ * Draw the mesh with a VECTOR material whose font is the atlas's rasm_create_font. */
+RASM_C_API rasm_result      RASM_CALL rasm_font_load_options_init(rasm_font_load_options* options, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_label_desc_init(rasm_label_desc* desc, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_build_font_atlas(const void* data, uint64_t data_size, const rasm_font_load_options* options, rasm_font_atlas** atlas);
+RASM_C_API rasm_result      RASM_CALL rasm_asset_loader_load_font(rasm_asset_loader* loader, const char* path, const rasm_font_load_options* options, rasm_font_atlas** atlas);
+RASM_C_API void             RASM_CALL rasm_font_atlas_destroy(rasm_font_atlas* atlas);
+RASM_C_API rasm_font        RASM_CALL rasm_create_font(rasm_renderer* renderer, const rasm_font_atlas* atlas);
+RASM_C_API rasm_result      RASM_CALL rasm_destroy_font(rasm_renderer* renderer, rasm_font font);
+RASM_C_API rasm_result      RASM_CALL rasm_vector_add_labels(rasm_vector_geometry* geometry, rasm_dvec3 origin, const rasm_font_atlas* atlas, const rasm_label_desc* labels, uint32_t label_count, const rasm_vector_placement* placement);
 
 #ifdef __cplusplus
 }

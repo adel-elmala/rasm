@@ -18,6 +18,7 @@ static const uint   VECTOR_METRES       = 1 << 0;
 static const uint   VECTOR_GROUND       = 1 << 1;
 static const uint   VECTOR_OVERLAY      = 1 << 2;
 static const uint   VECTOR_ICON         = 1 << 3;
+static const uint   VECTOR_TEXT         = 1 << 4;
 // Must match rasm::gfx::VECTOR_ORDER_SCENE.
 static const int    VECTOR_ORDER_SCENE  = 128;
 
@@ -25,6 +26,9 @@ static const int    VECTOR_ORDER_SCENE  = 128;
 static const uint   VECTOR_KIND_FILL    = 1;
 static const uint   VECTOR_KIND_LINE    = 2;
 static const uint   VECTOR_KIND_POINT   = 3;
+static const uint   VECTOR_KIND_GLYPH   = 4;    // a label's glyph: uv[0] its corner in ems from the anchor, uv[1] its atlas
+                                                // coordinates, uv[2].y 1 on a halo's quad, tangent.x the bits of its
+                                                // label's index in the mesh
 // uv[2].y: the distance to the edge, in half widths, from the offset.
 static const uint   VECTOR_METRIC_ROUND     = 0;    // its length: round caps, round joins, round points
 static const uint   VECTOR_METRIC_BOX       = 1;    // the larger of |x| and |y|: square caps, square icons
@@ -39,6 +43,9 @@ static const float  VECTOR_DEPTH_BIAS   = 1.0 / 4096.0;
 static const float  VECTOR_MAX_OFFSET   = 2.0;
 // Must match rasm::MAX_VECTOR_MITER.
 static const float  MAX_VECTOR_MITER    = 2.0;
+// Ems a label's text may reach from its anchor: culling pads a text draw's sphere by it. Must match
+// rasm::MAX_LABEL_REACH.
+static const float  VECTOR_LABEL_REACH  = 12.0;
 
 struct VectorVertex
 {
@@ -170,7 +177,8 @@ float4 getGroundPoint(SceneData *scene, float4x4 viewProjection, float3 anchor, 
     return float4(anchor + axisX * a + axisZ * b, 1.0);
 }
 
-VectorVertex getVectorVertex(SceneData *scene, VectorData style, float4x4 world, VertexFull vert)
+// firstLabel: the instance's first label slot (InstanceData::meshletVisibility of a mesh with labels), -1 for none.
+VectorVertex getVectorVertex(SceneData *scene, VectorData style, float4x4 world, VertexFull vert, int firstLabel)
 {
     float4x4 viewProjection = mul(scene->projection, scene->view);
     float3x3 world3         = (float3x3)world;
@@ -189,7 +197,35 @@ VectorVertex getVectorVertex(SceneData *scene, VectorData style, float4x4 world,
     output.kind             = float(kind);
     // The world point whose depth the vertex takes: the anchor, the vertex itself, or the ground under it.
     float3 depthPoint       = anchor;
-    if (kind == VECTOR_KIND_LINE || kind == VECTOR_KIND_POINT)
+    if (kind == VECTOR_KIND_GLYPH)
+    {
+        // A glyph of a label: its corner in ems times the text's size, across the screen's axes, and its label's alpha
+        // from this view's placement (0: placed nowhere, the quad collapses). metric is 1 on the halo's quads, which
+        // collapse without a halo; dash carries the halo in pixels.
+        float alpha         = 1.0;
+        if (scene->labelsPtr != nullptr && firstLabel >= 0)
+            alpha           = scene->labelsPtr[uint(firstLabel) + asuint(vert.tangent.x)];
+        float pixelWorld    = getPixelWorld(scene, output.clipPosition.w);
+        bool metres         = (style.flags & VECTOR_METRES) != 0;
+        float textPixels    = metres ? style.width / pixelWorld : style.width;
+        float halo          = metres ? style.outlineWidth / pixelWorld : style.outlineWidth;
+        if (alpha <= 0.0 || style.font == INVALID_TEXTURE_INDEX || (vert.uv[2].y > 0.5 && halo <= 0.0))
+        {
+            output.clipPosition = float4(0.0, 0.0, -1.0, 1.0);
+            return output;
+        }
+        output.fade         = alpha;
+        output.dash         = halo;
+        float2 base         = toPixels(scene, output.clipPosition);
+        float2 pixels       = vert.uv[0] * textPixels;
+        float4 ground       = getGroundPoint(scene, viewProjection, anchor, up, base, pixels, pixelWorld);
+        if (ground.w > 0.0 && getViewDepth(scene, ground.xyz) < getViewDepth(scene, anchor))
+            depthPoint      = ground.xyz;
+        output.clipPosition.xy += pixels / (float2(scene->viewportWidth, scene->viewportHeight) * 0.5) * getSafeW(scene, output.clipPosition.w);
+        // Without TAA's jitter: a still label is drawn on the same pixels every frame, so the history stays sharp.
+        output.clipPosition = removeJitter(scene, output.clipPosition);
+    }
+    else if (kind == VECTOR_KIND_LINE || kind == VECTOR_KIND_POINT)
     {
         float pixelWorld    = getPixelWorld(scene, output.clipPosition.w);
         bool metres         = (style.flags & VECTOR_METRES) != 0;
@@ -299,15 +335,35 @@ float4 shadeVector(VectorData style, float4 vertexColor, float2 edge, float metr
     return color;
 }
 
-// Culling's pad for a VECTOR draw: its offsets reach VECTOR_MAX_OFFSET half widths and a pixel past its anchors, in
-// world units at the far side of its sphere for this view (perspective: the pixel grows with depth).
+// A glyph's color with its coverage in alpha, from the atlas's distances (0.5 + distance / distanceRange), smooth over
+// one pixel at any size. A label draws its halo's quads first (haloPass: the outline color, halo pixels past the edge,
+// at most what the atlas stores), then its fill's, so a glyph's halo never covers its neighbour's fill.
+float4 shadeGlyph(Sampler2D atlas, VectorData style, float4 vertexColor, float2 uv, float halo, float fade, bool haloPass)
+{
+    uint width;
+    uint height;
+    atlas.GetDimensions(width, height);
+    float value         = atlas.Sample(uv).r;
+    // Screen pixels per unit of stored distance, from how fast uv moves over the screen.
+    float2 unitRange    = style.distanceRange / float2(width, height);
+    float screenRange   = max(0.5 * dot(unitRange, 1.0 / max(fwidth(uv), float2(1e-8))), 1.0);
+    float distance      = (value - 0.5) * screenRange;
+    float reach         = haloPass ? clamp(halo, 0.0, 0.5 * screenRange - 1.0) : 0.0;
+    float4 color        = haloPass ? style.outlineColor : style.color * vertexColor;
+    color.a            *= saturate(distance + reach + 0.5) * fade;
+    return color;
+}
+
+// Culling's pad for a VECTOR draw: its offsets reach VECTOR_MAX_OFFSET half widths (a label's VECTOR_LABEL_REACH ems and
+// its halo) and a pixel past its anchors, in world units at the far side of its sphere for this view (perspective: the
+// pixel grows with depth).
 float getVectorPadding(SceneData *scene, VectorData style, float3 center, float radius)
 {
     bool orthographic   = dot(scene->lodDepthPlane, scene->lodDepthPlane) == 0.0;
     float depth         = orthographic ? 1.0 : max(dot(scene->lodDepthPlane, float4(center, 1.0)) + radius, 0.0);
     float pixelWorld    = depth / max(scene->lodPixelsPerUnit, 1e-6);
     bool metres         = (style.flags & VECTOR_METRES) != 0;
-    float halfWidths    = VECTOR_MAX_OFFSET * 0.5 * style.width;
+    float halfWidths    = (style.flags & VECTOR_TEXT) != 0 ? VECTOR_LABEL_REACH * style.width + style.outlineWidth : VECTOR_MAX_OFFSET * 0.5 * style.width;
     return (metres ? halfWidths : 0.0) + ((metres ? 0.0 : halfWidths) + VECTOR_MAX_OFFSET + 1.0) * pixelWorld;
 }
 

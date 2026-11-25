@@ -56,6 +56,7 @@ namespace rasm
     struct EnvironmentTag;
     struct ReadbackTag;
     struct TileTag;
+    struct FontTag;
 
     using MeshHandle                = Handle<MeshTag>;
     using BufferHandle              = Handle<BufferTag>;
@@ -80,6 +81,7 @@ namespace rasm
     using EnvironmentHandle         = Handle<EnvironmentTag>;
     using ReadbackHandle            = Handle<ReadbackTag>;
     using TileHandle                = Handle<TileTag>;
+    using FontHandle                = Handle<FontTag>;
 
 
     struct HandleSlot

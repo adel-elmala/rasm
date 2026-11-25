@@ -34,6 +34,7 @@ int main(void)
     rasm_mesh_build *build = NULL;
     rasm_dvec3 line[2] = {{0.0, 0.0, 0.0}, {10.0, 0.0, 0.0}};
     uint32_t lineSize = 2;
+    rasm_label_desc label;
 
     if (rasm_get_version() != RASM_C_API_VERSION)
         return 1;
@@ -77,6 +78,9 @@ int main(void)
         rasm_build_vector_mesh(geometry, &build) != RASM_OK)
         return 14;
     rasm_mesh_build_destroy(build);
+    if (rasm_label_desc_init(&label, sizeof(label)) != RASM_OK || label.size != sizeof(label) || label.anchor != RASM_LABEL_ANCHOR_CENTER ||
+        rasm_vector_add_labels(geometry, line[0], NULL, &label, 1, NULL) != RASM_ERROR_INVALID_ARGUMENT)
+        return 15;
     rasm_vector_geometry_destroy(geometry);
     printf("rasm_c.h %u.%u compiles as C (__STDC_VERSION__ %ld) and links rasm_c_renderer.\n", RASM_C_API_VERSION_MAJOR, RASM_C_API_VERSION_MINOR, (long)__STDC_VERSION__);
     return 0;

@@ -70,7 +70,7 @@ VSOutput getVertexOutput(InstanceData *instance, int vertexOffset, uint vertexID
     {
         // A line, polygon or point spread by its style (lib/vector.slang). The varyings carry what fragMain needs:
         // uv0 the offset to the edge, uv1 an icon's coordinates, uv2 the metric and the fade, worldTangent.x the dash.
-        VectorVertex feature        = getVectorVertex(pc.scene, model->vector, modelMat, vert);
+        VectorVertex feature        = getVectorVertex(pc.scene, model->vector, modelMat, vert, instance->meshletVisibility);
         output.clipPosition         = feature.clipPosition;
         output.worldPosition        = feature.anchor;
         output.worldNormal          = float3(0.0, 1.0, 0.0);
@@ -284,6 +284,8 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     {
         VectorData style = model->vector;
         uint kind = uint(input.worldTangent.y + 0.5);
+        if (kind == VECTOR_KIND_GLYPH)
+            return VECTOR_OUTPUT(toTarget(shadeGlyph(gTextures[style.font], style, input.color, input.uv1, input.worldTangent.x, input.uv2.y, input.uv2.x > 0.5), 1.0));
         float4 color = shadeVector(style, input.color, input.uv0, input.uv2.x, input.uv2.y, input.worldTangent.x, kind);
         uint icon = model->material.metallicRoughness.baseColorTextureIndex;
         if (kind == VECTOR_KIND_POINT && (style.flags & VECTOR_ICON) != 0 && icon != INVALID_TEXTURE_INDEX)

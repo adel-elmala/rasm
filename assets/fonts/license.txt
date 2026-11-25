@@ -1,0 +1,4 @@
+Roboto-Medium.ttf
+by Christian Robertson, Google: https://fonts.google.com/specimen/Roboto
+Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
+Copied unchanged from Dear ImGui 1.92.6, misc/fonts/Roboto-Medium.ttf (its docs/FONTS.md lists the license).

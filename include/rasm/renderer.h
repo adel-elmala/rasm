@@ -15,6 +15,7 @@
 #include "rasm/mesh.h"
 #include "rasm/readback.h"
 #include "rasm/terrain.h"
+#include "rasm/text.h"
 #include "rasm/tileStreamer.h"
 #include "rasm/view.h"
 #include "rasm/handle.h"
@@ -151,6 +152,11 @@ namespace rasm
         // the cells (their width - 3). Both invalid on failure. To change the heights' range later, update the
         // material's terrain and the entity's transform together.
         TerrainTile                 createTerrainTile(const TerrainTileDesc& desc);
+        // Uploads a font's distance atlas (an R8_UNORM texture, its own bindless slot) for labels: a VECTOR material
+        // draws glyphs from the font it names. Invalid for an empty atlas or a full font table (MAX_FONTS).
+        FontHandle                  createFont(const FontAtlas& atlas);
+        // Its atlas goes through the release queue; materials that name it lose it (their labels draw nothing).
+        void                        destroyFont(FontHandle font);
         // A mesh, texture or environment from an AssetLoader is in: its data is on the GPU (an environment: baked).
         // Made with createMesh or createTexture, it is in at once.
         bool                        isLoaded(MeshHandle mesh) const;
@@ -488,6 +494,7 @@ namespace rasm
         uint32_t                    createSceneView(SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, uint32_t face, const SceneShadow* shadows, uint32_t shadowCount, bool depthOnly);
         void                        releaseSceneView(uint32_t view);
         void                        prepareSceneView(uint32_t view);
+        void                        placeViewLabels(uint32_t view, const glm::mat4& projection, const glm::dmat4& worldView, uint32_t width, uint32_t height, gfx::SceneData& sceneData);
         void                        recordSceneCulling(uint32_t view, uint32_t phase);
         void                        recordMeshletCulling(uint32_t view, uint32_t phase);
         bool                        createMeshletPipelines(uint32_t view, bool opaque, bool mask);
@@ -527,6 +534,7 @@ namespace rasm
         bool                        isLive(const LightHandle& light) const;
         bool                        isLive(const SceneHandle& scene) const;
         bool                        isLive(const EnvironmentHandle& environment) const;
+        bool                        isLive(const FontHandle& font) const;
         void                        releaseEntityRows(EntityHandle entity);
         void                        releaseEntityAnimation(EntityHandle entity);
         void                        releaseMeshAnimation(MeshHandle mesh);
@@ -544,6 +552,7 @@ namespace rasm
             HandlePool               lightHandles;                                          // RendererConfig::maxLights + 1, set by the constructor
             HandlePool               sceneHandles           = HandlePool(MAX_SCENES);
             HandlePool               environmentHandles;
+            HandlePool               fontHandles            = HandlePool(MAX_FONTS);
             HandlePool               readbackHandles;
             std::vector<Entity>      entities;
             std::vector<Material>    materials;
@@ -551,6 +560,7 @@ namespace rasm
             std::vector<Mesh>        meshes;
             std::vector<Light>       lights;
             std::vector<Scene>       scenes;
+            std::vector<Font>        fonts;
 
             std::vector<uint32_t>                                       materialUsers;      // by material index: entities made with it
             std::vector<MeshHandle>                                     materialOwners;     // by material index: the mesh whose glTF import made it
