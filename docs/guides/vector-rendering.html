@@ -309,7 +309,7 @@
 
 <h2 id="in-rasm"><span class="n">13</span>In RASM</h2>
 
-<p>A layer of vector features is an ordinary entity: a mesh built by the vector builders (<code>include/rasm/vector.h</code>), drawn with a <code>MaterialType::VECTOR</code> material whose <code>VectorMaterial</code> is the style. So it goes through the GPU culling, the Transparent pass's sort, TAA and MSAA like any blended mesh, and is a <a href="tile-streaming.html">TileStreamer</a> tile's content like any other.</p>
+<p>A layer of vector features is an ordinary entity: a mesh built by the vector builders (<code>include/rasm/vector.h</code>), drawn with a <code>MaterialType::VECTOR</code> material whose <code>VectorMaterial</code> is the style. So it goes through the GPU culling, the Transparent pass's sort, TAA and MSAA like any blended mesh, and is a <a href="tile-streaming.html">TileStreamer</a> tile's content like any other. Labels are vector features too: a fourth kind of vertex, the glyph, with its own page, <a href="text-and-labels.html">Text and labels</a>.</p>
 
 <div class="legend">
   <span><i class="cpu"></i>any thread</span>
@@ -404,7 +404,7 @@ const rasm::EntityHandle entity = engine.createEntity("layer", mesh, roads, rasm
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>Text and labels (the next part of this plan item). See-through lines blend twice where their pieces overlap (<code>D45</code>). Dashes in pixels are close, not exact, on a line that runs into the distance. Decoding vector tile files (MVT) is the application's.</p>
+  <p>See-through lines blend twice where their pieces overlap (<code>D45</code>). Dashes in pixels are close, not exact, on a line that runs into the distance. Decoding vector tile files (MVT) is the application's.</p>
 </div>
 
 <h3>Further reading</h3>

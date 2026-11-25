@@ -69,6 +69,7 @@ const SECTIONS = [
             { path: "guides/pbr.html",                   title: "PBR shading",                         blurb: "The light math behind metal and roughness." },
             { path: "guides/transparency.html",          title: "Transparency and alpha modes",        blurb: "Cut-outs, see-through surfaces, blend order and see-through shadows." },
             { path: "guides/vector-rendering.html",      title: "Vector lines, polygons and points",   blurb: "Lines spread from their center line, joins and caps, edges smoothed by distance, polygons with holes, draping and culling for pixel widths." },
+            { path: "guides/text-and-labels.html",       title: "Text and labels",                     blurb: "Glyphs as signed distances, a halo, text laid out from a font's metrics, labels anchored in the world and placed each frame by priority so they never overlap." },
             { path: "guides/terrain.html",               title: "Terrain from height maps",            blurb: "One shared grid lifted by each tile's heights, skirts between levels, matching normals, and tiles bent onto a planet." },
             { path: "guides/image-based-lighting.html",  title: "Image-based lighting",                blurb: "Light from a photo of the whole sky: irradiance, prefiltered mips and the split sum." },
             { path: "guides/tone-mapping.html",          title: "Tone mapping and exposure",           blurb: "Bring unbounded scene light into the screen's 0 to 1." },
