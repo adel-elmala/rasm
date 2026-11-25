@@ -305,7 +305,8 @@ namespace rasm
         bool validateInstanceTransform(const StructLayout *transform)
         {
             return validateStruct(transform, "InstanceTransform", sizeof(gfx::InstanceTransform),
-                                  {{"worldMatrix", offsetof(gfx::InstanceTransform, worldMatrix)},
+                                  {{"world", offsetof(gfx::InstanceTransform, world)},
+                                   {"translationLow", offsetof(gfx::InstanceTransform, translationLow)},
                                    {"normalMatrix", offsetof(gfx::InstanceTransform, normalMatrix)},
                                    {"previousWorld", offsetof(gfx::InstanceTransform, previousWorld)},
                                    {"boundsCenter", offsetof(gfx::InstanceTransform, boundsCenter)},
@@ -337,6 +338,7 @@ namespace rasm
             auto mesh = fieldStruct(layouts, entity, "mesh");
             bool valid = validateStruct(pushConstants, "AnimatePushConstants", sizeof(gfx::AnimatePushConstants),
                                         {{"frame", offsetof(gfx::AnimatePushConstants, frame)},
+                                         {"zero", offsetof(gfx::AnimatePushConstants, zero)},
                                          {"padding", offsetof(gfx::AnimatePushConstants, padding)}});
             valid &= validateStruct(frame, "AnimationFrame", sizeof(gfx::AnimationFrame),
                                     {{"entities", offsetof(gfx::AnimationFrame, entities)},
@@ -356,7 +358,9 @@ namespace rasm
                                      {"weightOverrides", offsetof(gfx::AnimationFrame, weightOverrides)},
                                      {"morphs", offsetof(gfx::AnimationFrame, morphs)}});
             valid &= validateStruct(entity, "AnimatedEntity", sizeof(gfx::AnimatedEntity),
-                                    {{"entityMatrix", offsetof(gfx::AnimatedEntity, entityMatrix)},
+                                    {{"entity", offsetof(gfx::AnimatedEntity, entity)},
+                                     {"translationLow", offsetof(gfx::AnimatedEntity, translationLow)},
+                                     {"rowPadding", offsetof(gfx::AnimatedEntity, rowPadding)},
                                      {"mesh", offsetof(gfx::AnimatedEntity, mesh)},
                                      {"phase", offsetof(gfx::AnimatedEntity, phase)},
                                      {"speed", offsetof(gfx::AnimatedEntity, speed)},
@@ -528,7 +532,7 @@ namespace rasm
             valid &= validateStruct(scene, "SceneData", sizeof(gfx::SceneData),
                                     {{"projection", offsetof(gfx::SceneData, projection)},
                                      {"view", offsetof(gfx::SceneData, view)},
-                                     {"cameraWorldPosition", offsetof(gfx::SceneData, cameraWorldPosition)},
+                                     {"originHigh", offsetof(gfx::SceneData, originHigh)},
                                      {"shadowedLightCount", offsetof(gfx::SceneData, shadowedLightCount)},
                                      {"vertsPtr", offsetof(gfx::SceneData, vertsPtr)},
                                      {"drawInfoPtr", offsetof(gfx::SceneData, drawInfoPtr)},
@@ -597,7 +601,9 @@ namespace rasm
                                      {"runMeshletBudget", offsetof(gfx::SceneData, runMeshletBudget)},
                                      {"meshletRuns", offsetof(gfx::SceneData, meshletRuns)},
                                      {"coneRuns", offsetof(gfx::SceneData, coneRuns)},
-                                     {"meshletDataPtr", offsetof(gfx::SceneData, meshletDataPtr)}});
+                                     {"meshletDataPtr", offsetof(gfx::SceneData, meshletDataPtr)},
+                                     {"originLow", offsetof(gfx::SceneData, originLow)},
+                                     {"zero", offsetof(gfx::SceneData, zero)}});
 
             valid &= validateStruct(fieldStruct(layouts, scene, "meshletsPtr"), "GeometryMeshlet", sizeof(gfx::GeometryMeshlet),
                                     {{"center", offsetof(gfx::GeometryMeshlet, center)},
@@ -624,7 +630,8 @@ namespace rasm
                                      {"direction", offsetof(gfx::Light, direction)},
                                      {"type", offsetof(gfx::Light, type)},
                                      {"spotScale", offsetof(gfx::Light, spotScale)},
-                                     {"spotOffset", offsetof(gfx::Light, spotOffset)}});
+                                     {"spotOffset", offsetof(gfx::Light, spotOffset)},
+                                     {"positionLow", offsetof(gfx::Light, positionLow)}});
 
             valid &= validateStruct(fieldStruct(layouts, scene, "shadowMaps"), "ShadowMap", sizeof(gfx::ShadowMap),
                                     {{"matrix", offsetof(gfx::ShadowMap, matrix)},
@@ -645,7 +652,8 @@ namespace rasm
                                      {"firstInstance", offsetof(gfx::DrawInfo, firstInstance)}});
 
             valid &= validateStruct(fieldStruct(layouts, scene, "instancesPtr"), "InstanceData", sizeof(gfx::InstanceData),
-                                    {{"worldMatrix", offsetof(gfx::InstanceData, worldMatrix)},
+                                    {{"world", offsetof(gfx::InstanceData, world)},
+                                     {"translationLow", offsetof(gfx::InstanceData, translationLow)},
                                      {"normalMatrix", offsetof(gfx::InstanceData, normalMatrix)},
                                      {"geometryIndex", offsetof(gfx::InstanceData, geometryIndex)},
                                      {"materialIndex", offsetof(gfx::InstanceData, materialIndex)},

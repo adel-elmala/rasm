@@ -47,6 +47,7 @@ namespace rasm::gfx
         LightType   type;
         float       spotScale;      // the cone's falloff: saturate(dot(direction, -l) * spotScale + spotOffset)
         float       spotOffset;
+        glm::vec3   positionLow;    // position is the high part: the light is at position + positionLow (splitPosition)
     };
 
     // A light of the view that has a shadow, and its maps in SceneData::shadowMaps.
@@ -59,7 +60,7 @@ namespace rasm::gfx
 
     struct ShadowMap
     {
-        glm::mat4   matrix;         // world to clip: a cascade's or a spot's projection * view; a point light's face projection
+        glm::mat4   matrix;         // render space to clip: a cascade's or a spot's projection * view; a point light's face projection
         uint32_t    texture;        // bindless index of the depth; a point light's is a cube
         float       split;          // a cascade's: the view depth where it ends
     };
@@ -133,18 +134,20 @@ namespace rasm::gfx
 
     struct InstanceData
     {
-        glm::mat4       worldMatrix;
+        glm::vec4       world[3];                   // the rows of the affine world matrix; w: the translation's high part
+        glm::vec3       translationLow;             // the translation is w + translationLow (splitPosition)
         glm::mat3       normalMatrix;
         uint32_t        geometryIndex;
         uint32_t        materialIndex;
-        glm::vec4       previousWorld[3];           // the rows of the affine world matrix the frame before drew, for motion
+        glm::vec4       previousWorld[3];           // the rows the frame before drew, for motion; w: its translation minus this one
         int32_t         animationRow;               // its InstanceTransform in SceneData::animatedTransformsPtr, -1: the matrices above
         int32_t         meshletVisibility;          // its first word in each view's meshlet visibility bits, -1: none
     };
 
     struct InstanceTransform
     {
-        glm::mat4       worldMatrix;
+        glm::vec4       world[3];
+        glm::vec3       translationLow;
         glm::mat3       normalMatrix;
         glm::vec4       previousWorld[3];
         glm::vec3       boundsCenter;               // a skinned sub-mesh's sphere around its posed vertices, object space
@@ -227,7 +230,9 @@ namespace rasm::gfx
 
     struct AnimatedEntity
     {
-        glm::mat4       entityMatrix;
+        glm::vec4       entity[3];                  // the rows of the entity's matrix; w: the translation's high part
+        glm::vec3       translationLow;
+        uint32_t        rowPadding;
         uint64_t        mesh;                       // AnimationMeshData in the animation pool
         float           phase;                      // the clip's time at the clock's base
         float           speed;
@@ -266,7 +271,8 @@ namespace rasm::gfx
     struct AnimatePushConstants
     {
         uint64_t        frame;                      // AnimationFrame
-        uint32_t        padding[2];
+        uint32_t        zero;                       // always 0: the shaders' render-space sums keep their order (renderSpace.slang)
+        uint32_t        padding;
     };
 
     struct GeometryLod
@@ -308,7 +314,7 @@ namespace rasm::gfx
     {
         glm::mat4        projection;
         glm::mat4        view;
-        glm::vec3        cameraWorldPosition;
+        glm::vec3        originHigh;                // the view's origin in the world, its camera: render space = world - origin
         uint32_t         shadowedLightCount;
         uint64_t         vertsPtr;
         uint64_t         drawInfoPtr;
@@ -379,6 +385,8 @@ namespace rasm::gfx
         uint32_t         coneRuns;                  // a bit per run culled by face, where the cone test holds
         uint32_t         padding;
         uint64_t         meshletDataPtr;            // the meshlets' vertices and triangles, for the mesh shaders; 0 without them
+        glm::vec3        originLow;                 // the origin is originHigh + originLow (splitPosition)
+        uint32_t         zero;                      // always 0: the shaders' render-space sums keep their order (renderSpace.slang)
     };
 
     struct PushConstants
@@ -485,9 +493,10 @@ namespace rasm::gfx
     // These structs are read by shaders/passes/rasm.slang through buffer-device-address pointers,
     // compiled with GLSL scalar layout. Any drift here silently corrupts the GPU reads (a wrong
     // vertsPtr/instancesPtr turns into a device lost on the first draw).
-    static_assert(sizeof(Light) == 56, "Light must match the shader's scalar layout");
+    static_assert(sizeof(Light) == 68, "Light must match the shader's scalar layout");
     static_assert(offsetof(Light, type) == 44, "Light must match the shader's scalar layout");
     static_assert(offsetof(Light, spotOffset) == 52, "Light must match the shader's scalar layout");
+    static_assert(offsetof(Light, positionLow) == 56, "Light must match the shader's scalar layout");
     static_assert(sizeof(ShadowedLight) == 12, "ShadowedLight must match the shader's scalar layout");
     static_assert(sizeof(ShadowMap) == 72, "ShadowMap must match the shader's scalar layout");
     static_assert(offsetof(ShadowMap, texture) == 64, "ShadowMap must match the shader's scalar layout");
@@ -502,9 +511,10 @@ namespace rasm::gfx
     static_assert(offsetof(MaterialData, alphaMode) == 88, "MaterialData must match the shader's scalar layout");
     static_assert(offsetof(MaterialData, flags) == 96, "MaterialData must match the shader's scalar layout");
     static_assert(offsetof(MaterialData, textureTransforms) == 100, "MaterialData must match the shader's scalar layout");
-    static_assert(offsetof(InstanceData, normalMatrix) == 64, "InstanceData must match the shader's scalar layout");
-    static_assert(offsetof(InstanceData, geometryIndex) == 100, "InstanceData must match the shader's scalar layout");
-    static_assert(offsetof(InstanceData, materialIndex) == 104, "InstanceData must match the shader's scalar layout");
+    static_assert(offsetof(InstanceData, translationLow) == 48, "InstanceData must match the shader's scalar layout");
+    static_assert(offsetof(InstanceData, normalMatrix) == 60, "InstanceData must match the shader's scalar layout");
+    static_assert(offsetof(InstanceData, geometryIndex) == 96, "InstanceData must match the shader's scalar layout");
+    static_assert(offsetof(InstanceData, materialIndex) == 100, "InstanceData must match the shader's scalar layout");
     static_assert(sizeof(GeometryLod) == 20, "GeometryLod must match the shader's scalar layout");
     static_assert(offsetof(GeometryLod, error) == 8, "GeometryLod must match the shader's scalar layout");
     static_assert(offsetof(GeometryLod, meshletCount) == 16, "GeometryLod must match the shader's scalar layout");
@@ -521,8 +531,9 @@ namespace rasm::gfx
     static_assert(offsetof(GeometryData, boundsRadius) == 16, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, lodCount) == 20, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, lods) == 24, "GeometryData must match the shader's scalar layout");
-    static_assert(sizeof(SceneData) == 2016, "SceneData must match the shader's scalar layout");
+    static_assert(sizeof(SceneData) == 2032, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, meshletDataPtr) == 2008, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, originLow) == 2016, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, previousSkinnedVertsPtr) == 1816, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, animatedTransformsPtr) == 1800, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, meshletsPtr) == 1824, "SceneData must match the shader's scalar layout");
@@ -531,17 +542,17 @@ namespace rasm::gfx
     static_assert(offsetof(SceneData, runChunkFirst) == 1912, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, runMeshletBudget) == 1968, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, coneRuns) == 2000, "SceneData must match the shader's scalar layout");
-    static_assert(sizeof(InstanceData) == 164, "InstanceData must match the shader's scalar layout");
-    static_assert(offsetof(InstanceData, previousWorld) == 108, "InstanceData must match the shader's scalar layout");
-    static_assert(offsetof(InstanceData, animationRow) == 156, "InstanceData must match the shader's scalar layout");
-    static_assert(offsetof(InstanceData, meshletVisibility) == 160, "InstanceData must match the shader's scalar layout");
-    static_assert(sizeof(InstanceTransform) == 172, "InstanceTransform must match the shader's scalar layout");
-    static_assert(offsetof(InstanceTransform, boundsCenter) == 148, "InstanceTransform must match the shader's scalar layout");
-    static_assert(offsetof(InstanceTransform, skinnedMotion) == 168, "InstanceTransform must match the shader's scalar layout");
+    static_assert(sizeof(InstanceData) == 160, "InstanceData must match the shader's scalar layout");
+    static_assert(offsetof(InstanceData, previousWorld) == 104, "InstanceData must match the shader's scalar layout");
+    static_assert(offsetof(InstanceData, animationRow) == 152, "InstanceData must match the shader's scalar layout");
+    static_assert(offsetof(InstanceData, meshletVisibility) == 156, "InstanceData must match the shader's scalar layout");
+    static_assert(sizeof(InstanceTransform) == 168, "InstanceTransform must match the shader's scalar layout");
+    static_assert(offsetof(InstanceTransform, boundsCenter) == 144, "InstanceTransform must match the shader's scalar layout");
+    static_assert(offsetof(InstanceTransform, skinnedMotion) == 164, "InstanceTransform must match the shader's scalar layout");
     static_assert(sizeof(SkinVertex) == 16, "SkinVertex must match the shader's scalar layout");
     static_assert(sizeof(AnimationSubMeshData) == 36, "AnimationSubMeshData must match the shader's scalar layout");
     static_assert(sizeof(AnimationJointData) == 52, "AnimationJointData must match the shader's scalar layout");
-    static_assert(offsetof(InstanceTransform, previousWorld) == 100, "InstanceTransform must match the shader's scalar layout");
+    static_assert(offsetof(InstanceTransform, previousWorld) == 96, "InstanceTransform must match the shader's scalar layout");
     static_assert(sizeof(AnimationNodeData) == 96, "AnimationNodeData must match the shader's scalar layout");
     static_assert(offsetof(AnimationNodeData, parent) == 60, "AnimationNodeData must match the shader's scalar layout");
     static_assert(offsetof(AnimationNodeData, scale) == 80, "AnimationNodeData must match the shader's scalar layout");
@@ -553,6 +564,8 @@ namespace rasm::gfx
     static_assert(offsetof(AnimatedEntity, firstWeight) == 112, "AnimatedEntity must match the shader's scalar layout");
     static_assert(offsetof(AnimatedEntity, firstSkinnedVertex) == 108, "AnimatedEntity must match the shader's scalar layout");
     static_assert(offsetof(AnimatedEntity, mesh) == 64, "AnimatedEntity must match the shader's scalar layout");
+    static_assert(offsetof(AnimatedEntity, translationLow) == 48, "AnimatedEntity must match the shader's scalar layout");
+    static_assert(offsetof(InstanceTransform, translationLow) == 48, "InstanceTransform must match the shader's scalar layout");
     static_assert(offsetof(AnimatedEntity, resetSync) == 100, "AnimatedEntity must match the shader's scalar layout");
     static_assert(sizeof(AnimationFrame) == 112, "AnimationFrame must match the shader's scalar layout");
     static_assert(offsetof(AnimationFrame, morphs) == 104, "AnimationFrame must match the shader's scalar layout");

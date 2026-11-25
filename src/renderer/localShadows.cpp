@@ -26,10 +26,11 @@ namespace rasm
         constexpr float MAX_SPOT_HALF_ANGLE = 1.396263402f; // 80 degrees
     }
 
-    glm::mat4 getSpotShadowView(const glm::vec3 &position, const glm::vec3 &direction)
+    // The views are in world space, in doubles; each view that draws or reads the map moves them into its render space.
+    glm::dmat4 getSpotShadowView(const glm::dvec3 &position, const glm::vec3 &direction)
     {
-        const glm::vec3 forward = glm::normalize(direction);
-        const glm::vec3 up = std::abs(forward.y) > 0.99f ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(0.0f, 1.0f, 0.0f);
+        const glm::dvec3 forward = glm::normalize(glm::dvec3(direction));
+        const glm::dvec3 up = std::abs(forward.y) > 0.99 ? glm::dvec3(0.0, 0.0, 1.0) : glm::dvec3(0.0, 1.0, 0.0);
         return glm::lookAt(position, position + forward, up);
     }
 
@@ -44,10 +45,10 @@ namespace rasm
     // Vulkan samples a cube face's texel (s, t) at the direction forward + S * (2s - 1) + T * (2t - 1). The face's
     // camera puts s along clip x and t down the image (clip y up, as in every RASM target), so its rows are S, -T and
     // -forward. That frame is mirrored: seen through it, the world's front faces turn clockwise.
-    glm::mat4 getCubeFaceView(const glm::vec3 &position, uint32_t face)
+    glm::dmat4 getCubeFaceView(const glm::dvec3 &position, uint32_t face)
     {
-        const glm::vec3 rows[3] = {CUBE_S[face], -CUBE_T[face], -CUBE_FORWARD[face]};
-        glm::mat4 view(1.0f);
+        const glm::dvec3 rows[3] = {glm::dvec3(CUBE_S[face]), -glm::dvec3(CUBE_T[face]), -glm::dvec3(CUBE_FORWARD[face])};
+        glm::dmat4 view(1.0);
         for (uint32_t row = 0; row < 3; ++row)
         {
             for (uint32_t column = 0; column < 3; ++column)

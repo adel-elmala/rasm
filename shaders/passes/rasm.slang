@@ -26,7 +26,6 @@ struct VSOutput
     float2 uv0            : TEXCOORD0;
     float2 uv1            : TEXCOORD1;
     float2 uv2            : TEXCOORD2;
-    float3 worldCameraPosition : TEXCOORD3;
     nointerpolation uint materialIndex;
     nointerpolation float handedness;   // -1 when the model matrix mirrors the mesh
 #if defined(RASM_MOTION_VECTORS)
@@ -61,7 +60,6 @@ VSOutput getVertexOutput(InstanceData *instance, int vertexOffset, uint vertexID
     float handedness            = determinant(modelMat3) < 0.0 ? -1.0 : 1.0;
     output.worldTangent         = float4(mul(modelMat3, vert.tangent.xyz), vert.tangent.w * handedness);
     output.color                = getVertexColor(pc.scene, instance->geometryIndex, vertexID);
-    output.worldCameraPosition  = pc.scene->cameraWorldPosition;
     output.uv0                  = vert.uv[0];
     output.uv1                  = vert.uv[1];
     output.uv2                  = vert.uv[2];
@@ -70,7 +68,7 @@ VSOutput getVertexOutput(InstanceData *instance, int vertexOffset, uint vertexID
 #if defined(RASM_MOTION_VECTORS)
     // The point where the frame before drew it: its last position, world matrix and view.
     float3 previousPosition     = getPreviousObjectPosition(pc.scene, instance, vertexID, vert.pos);
-    float3 previousWorld        = getPreviousWorldPosition(pc.scene, instance, float4(previousPosition, 1.0));
+    float3 previousWorld        = getPreviousWorldPosition(pc.scene, instance, previousPosition);
     output.currentClip          = removeJitter(pc.scene, output.clipPosition);
     output.previousClip         = mul(pc.scene->previousViewProjection, float4(previousWorld, 1.0));
 #endif
@@ -244,7 +242,7 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     info.vPosition              = input.worldPosition;
     info.vNormal                = input.worldNormal;
     info.vTangent               = input.worldTangent;
-    info.cameraPosition         = input.worldCameraPosition;
+    info.cameraPosition         = float3(0.0);  // render space: the camera is at the origin
     info.backFace               = isBackFace(input.handedness, isFrontFace);
     // Each texture samples the UV set the glTF material asked for, through its KHR_texture_transform: one branch for
     // all five, uniform over the draw.

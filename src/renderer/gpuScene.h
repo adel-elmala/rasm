@@ -37,7 +37,7 @@ namespace rasm
         uint16_t                        scenes                                                              = 0;
         bool                            waitingForTextures                                                  = false;
         uint32_t                        movedSync                                                           = UINT32_MAX;   // GpuScene::syncCount when its rows last changed
-        glm::mat4                       syncedMatrix                                                        = glm::mat4(1.0f); // the entity matrix the last synced frame drew
+        Transform                       syncedTransform                                                     = {};   // the entity transform the last synced frame drew
         uint32_t                        listStamp                                                           = 0;    // the draw list rebuild that last met it, so it is drawn once
     };
 
@@ -108,17 +108,18 @@ namespace rasm
         bool                            late                                                                = false;
         DebugView                       debugView                                                           = DebugView::NONE;
         bool                            frozen                                                              = false;
+        glm::dvec3                      frozenOrigin                                                        = glm::dvec3(0.0);  // the render space of the frozen values below
         glm::vec4                       frozenPlanes[6]                                                     = {};
         float                           frozenLodPixelsPerUnit                                              = 0.0f;
         glm::vec4                       frozenLodDepthPlane                                                 = glm::vec4(0.0f);
-        glm::mat4                       frozenViewProjection                                                = glm::mat4(1.0f);
+        glm::dmat4                      frozenViewProjection                                                = glm::dmat4(1.0);  // world space
         glm::vec4                       frozenViewPoint                                                     = glm::vec4(0.0f);
         uint32_t                        width                                                               = 0;
         uint32_t                        height                                                              = 0;
         bool                            jitter                                                              = false;    // addTaaPass: the projection takes a sub-pixel offset per frame
         uint32_t                        jitterFrame                                                         = 0;        // counts the jittered frames, for getTaaJitter
         bool                            hasPrevious                                                         = false;
-        glm::mat4                       previousViewProjection                                              = glm::mat4(1.0f); // the frame before's, without jitter
+        glm::dmat4                      previousViewProjection                                              = glm::dmat4(1.0);  // the frame before's, world space, without jitter
     };
 
     // A shaded view's pipelines for one sample count of its target: they must match the attachments they draw into.

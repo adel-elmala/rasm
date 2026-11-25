@@ -17,6 +17,7 @@
 #include "rasm/mesh.h"
 #include "rasm/animation.h"
 #include "rasm/readback.h"
+#include "rasm/renderSpace.h"
 #include "rasm/view.h"
 #include "rasm/render/renderGraph.h"
 

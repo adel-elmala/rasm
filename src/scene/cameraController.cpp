@@ -71,7 +71,7 @@ namespace rasm
 
             if (glm::dot(move, move) > 1e-6f)
             {
-                transform.position += glm::normalize(move) * freeFly.speed * input.deltaTime;
+                transform.position += glm::dvec3(glm::normalize(move) * freeFly.speed * input.deltaTime);
             }
         }
 
@@ -111,7 +111,7 @@ namespace rasm
                 trackBall.radius = glm::max(radius, 0.0f);
             }
 
-            transform.position = trackBall.center + trackBall.radius * (transform.rotation * glm::vec3(0.0f, 0.0f, 1.0f));
+            transform.position = trackBall.center + glm::dvec3(trackBall.radius * (transform.rotation * glm::vec3(0.0f, 0.0f, 1.0f)));
         }
 
         void ease(CameraRig &rig, float deltaTime)
@@ -122,7 +122,8 @@ namespace rasm
             // Easing between (nearly) equal values still rounds by an amount that depends on deltaTime, so a
             // camera at rest would move by float noise every frame. Close enough, it snaps to the target (B24).
             const glm::quat remaining = glm::conjugate(current.rotation) * target.rotation;
-            const bool settled = glm::length(target.position - current.position) <= 1e-6f * glm::max(1.0f, glm::length(target.position)) &&
+            // The position is a double, so a camera far from the origin settles within 1e-6 of a unit, like one near it.
+            const bool settled = glm::length(target.position - current.position) <= 1e-6 &&
                                  glm::length(glm::vec3(remaining.x, remaining.y, remaining.z)) <= 1e-6f &&
                                  glm::length(target.scale - current.scale) <= 1e-6f;
             if (easingSpeed <= 0.0f || deltaTime <= 0.0f || settled)
@@ -142,13 +143,13 @@ namespace rasm
                 // Linearly interpolating the position would cut across the arc and
                 // make the camera drift closer to the orbit center.
                 const auto &trackBall = rig.controller.trackBall;
-                const float currentRadius = glm::length(current.position - trackBall.center);
+                const auto currentRadius = static_cast<float>(glm::length(current.position - trackBall.center));
                 const float radius = glm::mix(currentRadius, trackBall.radius, t);
-                current.position = trackBall.center + radius * (current.rotation * glm::vec3(0.0f, 0.0f, 1.0f));
+                current.position = trackBall.center + glm::dvec3(radius * (current.rotation * glm::vec3(0.0f, 0.0f, 1.0f)));
             }
             else
             {
-                current.position = glm::mix(current.position, target.position, t);
+                current.position = glm::mix(current.position, target.position, static_cast<double>(t));
             }
         }
     }

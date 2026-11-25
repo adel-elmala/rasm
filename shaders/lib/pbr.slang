@@ -206,7 +206,7 @@ float4 shadePBR(Sampler2D gTextures[], SamplerCube gCubeTextures[], PBRInfo pbrI
     for (uint s = 0; s < scene->shadowedLightCount; ++s)
     {
         ShadowedLight shadowed = scene->shadowedLights[s];
-        Light light = scene->lightsPtr[shadowed.light];
+        Light light = getLight(scene, shadowed.light);
         float3 lit = shadeLight(light, 1.0, position, n, v, NoV, f0, diffuseColor, alpha);
         if (all(lit == float3(0.0)))
             continue;
@@ -217,7 +217,7 @@ float4 shadePBR(Sampler2D gTextures[], SamplerCube gCubeTextures[], PBRInfo pbrI
     {
         uint row = scene->sceneLightsPtr[i];
         if (!isShadowedLight(scene, row))
-            totalDirectLighting += shadeLight(scene->lightsPtr[row], 1.0, position, n, v, NoV, f0, diffuseColor, alpha);
+            totalDirectLighting += shadeLight(getLight(scene, row), 1.0, position, n, v, NoV, f0, diffuseColor, alpha);
     }
     // c. The local lights: those of the pixel's cluster, or every one when the view has no clusters.
     uint32_t *clusters = scene->clustersPtr;
@@ -228,7 +228,7 @@ float4 shadePBR(Sampler2D gTextures[], SamplerCube gCubeTextures[], PBRInfo pbrI
         uint count = cluster < 0 ? 0 : min(clusters[CLUSTER_COUNTS + cluster], MAX_CLUSTER_LIGHTS);
         uint list = CLUSTER_LISTS + uint(max(cluster, 0)) * MAX_CLUSTER_LIGHTS;
         for (uint i = 0; i < count; ++i)
-            totalDirectLighting += shadeLight(scene->lightsPtr[clusters[list + i]], 1.0, position, n, v, NoV, f0, diffuseColor, alpha);
+            totalDirectLighting += shadeLight(getLight(scene, clusters[list + i]), 1.0, position, n, v, NoV, f0, diffuseColor, alpha);
     }
     else
     {
@@ -236,7 +236,7 @@ float4 shadePBR(Sampler2D gTextures[], SamplerCube gCubeTextures[], PBRInfo pbrI
         {
             uint row = scene->sceneLightsPtr[scene->globalLightCount + i];
             if (!isShadowedLight(scene, row))
-                totalDirectLighting += shadeLight(scene->lightsPtr[row], 1.0, position, n, v, NoV, f0, diffuseColor, alpha);
+                totalDirectLighting += shadeLight(getLight(scene, row), 1.0, position, n, v, NoV, f0, diffuseColor, alpha);
         }
     }
 

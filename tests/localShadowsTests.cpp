@@ -62,7 +62,7 @@ TEST_CASE("Each cube face's camera draws a direction where Vulkan samples it")
         uint32_t face = 0;
         glm::vec2 st;
         vulkanCubeLookup(direction, face, st);
-        const glm::vec3 drawn = drawnAt(projection * rasm::getCubeFaceView(light, face), light + direction * 5.0f);
+        const glm::vec3 drawn = drawnAt(projection * glm::mat4(rasm::getCubeFaceView(light, face)), light + direction * 5.0f);
         CHECK(drawn.x == doctest::Approx(st.x).epsilon(1e-4));
         CHECK(drawn.y == doctest::Approx(st.y).epsilon(1e-4));
         CHECK(drawn.z > 0.0f);
@@ -73,7 +73,7 @@ TEST_CASE("Each cube face's camera draws a direction where Vulkan samples it")
 TEST_CASE("A cube face's depth is 1 at the near plane and 0 at the shadow's distance, along the face's axis")
 {
     const glm::vec3 light(0.0f);
-    const glm::mat4 faceView = rasm::getCubeFaceProjection(DISTANCE) * rasm::getCubeFaceView(light, 2);
+    const glm::mat4 faceView = rasm::getCubeFaceProjection(DISTANCE) * glm::mat4(rasm::getCubeFaceView(light, 2));
     CHECK(drawnAt(faceView, glm::vec3(0.0f, DISTANCE, 0.0f)).z == doctest::Approx(0.0f).epsilon(1e-5));
     CHECK(drawnAt(faceView, glm::vec3(0.0f, DISTANCE * 0.005f, 0.0f)).z == doctest::Approx(1.0f).epsilon(1e-5));
     // A point off the axis has the depth of its distance along the axis.

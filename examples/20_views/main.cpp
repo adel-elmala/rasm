@@ -349,8 +349,8 @@ int main(int argc, char **argv)
         {
             const rasm::Transform pose = orbit.rig.transform;
             const glm::quat turn = glm::angleAxis(0.2f * engine.getDeltaTime(), glm::vec3(0.0f, 1.0f, 0.0f));
-            const glm::vec3 center(0.0f, 1.0f, 0.0f);
-            orbit.rig = rasm::createCameraRig(orbit.rig.controller, rasm::Transform{center + turn * (pose.position - center), turn * pose.rotation, pose.scale});
+            const glm::dvec3 center(0.0, 1.0, 0.0);
+            orbit.rig = rasm::createCameraRig(orbit.rig.controller, rasm::Transform{center + glm::dvec3(turn * glm::vec3(pose.position - center)), turn * pose.rotation, pose.scale});
             engine.setCameraTransform(orbit.camera, orbit.rig.transform);
         }
 

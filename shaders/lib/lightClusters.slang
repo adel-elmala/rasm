@@ -82,7 +82,7 @@ bool isShadowedLight(SceneData *scene, uint row)
     return false;
 }
 
-// The world-space sphere around everything a local light reaches: a point light's range, or the smallest sphere
+// The render-space sphere around everything a local light reaches: a point light's range, or the smallest sphere
 // around a spot light's cone of that length, cut off by the range's sphere. Up to 45 degrees that sphere goes through
 // the apex and the rim of the cone's end; past it, it is centred on the rim's circle.
 float4 getLightSphere(Light light)
