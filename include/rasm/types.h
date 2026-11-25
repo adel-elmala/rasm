@@ -15,7 +15,9 @@ namespace rasm
     constexpr uint32_t  MAX_FRAMES_IN_FLIGHT        = 2;
     constexpr uint32_t  MAX_COLOR_ATTACHMENTS       = 4;
     constexpr uint32_t  MAX_DESCRIPTOR_TYPES        = 2;
-    constexpr uint32_t  MAX_BINDLESS_TEXTURES       = 1024;
+    // The most slots of binding 0 of the bindless set RendererConfig::maxBindlessTextures may ask for (a bindless index
+    // fits 16 bits), and the slot argument that asks for any free slot.
+    constexpr uint32_t  MAX_BINDLESS_TEXTURES       = 1u << 16;
     // Binding 1 of the bindless set: storage images, each one mip of a texture, that compute shaders write. The slots
     // below RESERVED_STORAGE_IMAGES are the environment bake's; storage render targets take the others.
     constexpr uint32_t  MAX_BINDLESS_STORAGE_IMAGES = 1024;
@@ -242,6 +244,7 @@ namespace rasm
         uint32_t     maxInstances            = 1u << 16; // 164 B each, twice (one copy per frame slot)
         uint32_t     maxLights               = 1u << 14; // 56 B each, twice
         uint32_t     maxMaterials            = 1u << 12; // materials alive at once, 220 B each, twice
+        uint32_t     maxBindlessTextures     = 1u << 14; // sampled textures at once (slots of the bindless set), at most MAX_BINDLESS_TEXTURES and what the device allows
         uint32_t     maxAnimatedEntities     = 1u << 14; // entities that play a clip, 120 B each, twice
         uint32_t     animationPoolBytes      = 16u << 20; // the nodes, key times and values of every loaded animation
         uint32_t     maxMorphWeights         = 1u << 16; // the morph weights of every posed entity, 4 B each, four times
@@ -289,6 +292,7 @@ namespace rasm
         uint32_t     maxInstances            = 1u << 16; // 164 B each, twice (one copy per frame slot)
         uint32_t     maxLights               = 1u << 14; // 56 B each, twice
         uint32_t     maxMaterials            = 1u << 12; // materials alive at once, 220 B each, twice
+        uint32_t     maxBindlessTextures     = 1u << 14; // sampled textures at once (slots of the bindless set), at most MAX_BINDLESS_TEXTURES and what the device allows
         uint32_t     maxAnimatedEntities     = 1u << 14; // entities that play a clip, 120 B each, twice
         uint32_t     animationPoolBytes      = 16u << 20; // the nodes, key times and values of every loaded animation
         uint32_t     maxMorphWeights         = 1u << 16; // the morph weights of every posed entity, 4 B each, four times
@@ -337,6 +341,7 @@ namespace rasm
             .maxInstances            = config.maxInstances,
             .maxLights               = config.maxLights,
             .maxMaterials            = config.maxMaterials,
+            .maxBindlessTextures     = config.maxBindlessTextures,
             .maxAnimatedEntities     = config.maxAnimatedEntities,
             .animationPoolBytes      = config.animationPoolBytes,
             .maxMorphWeights         = config.maxMorphWeights,
@@ -385,6 +390,7 @@ namespace rasm
             .maxInstances            = config.maxInstances,
             .maxLights               = config.maxLights,
             .maxMaterials            = config.maxMaterials,
+            .maxBindlessTextures     = config.maxBindlessTextures,
             .maxAnimatedEntities     = config.maxAnimatedEntities,
             .animationPoolBytes      = config.animationPoolBytes,
             .maxMorphWeights         = config.maxMorphWeights,

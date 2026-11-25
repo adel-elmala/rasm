@@ -35,6 +35,7 @@ TEST_CASE("The config conversions copy every field")
         .maxInstances = 19,
         .maxLights = 20,
         .maxMaterials = 21,
+        .maxBindlessTextures = 28,
         .maxAnimatedEntities = 22,
         .animationPoolBytes = 23,
         .maxMorphWeights = 24,
@@ -85,6 +86,7 @@ TEST_CASE("The config conversions copy every field")
     CHECK(renderer.maxInstances == 19);
     CHECK(renderer.maxLights == 20);
     CHECK(renderer.maxMaterials == 21);
+    CHECK(renderer.maxBindlessTextures == 28);
     CHECK(renderer.maxAnimatedEntities == 22);
     CHECK(renderer.animationPoolBytes == 23);
     CHECK(renderer.maxMorphWeights == 24);

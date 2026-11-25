@@ -104,11 +104,14 @@ namespace rasm
                              .transferQueue = config.transferQueue,
                              .hostImageCopy = config.hostImageCopy,
                              .sampledDepth = config.occlusionCulling,
+                             .bindlessTextures = config.maxBindlessTextures,
                              .cacheDir = this->config.cacheDir}))
         {
             spdlog::error("Failed to initialize render context.");
             return;
         }
+        // getConfig gives the slots the set has, lowered to the device's limit.
+        this->config.maxBindlessTextures = ctx.getBindlessTextureCapacity();
 
         // Each frame submit signals the next value; a slot is free again once its last value is reached.
         frameFence = ctx.createFence("Frame Fence");
