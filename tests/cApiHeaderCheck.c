@@ -18,6 +18,11 @@ int main(void)
     rasm_view views[2];
     rasm_view_rect rect = {0.0f, 0.0f, 0.5f, 1.0f};
     rasm_view_pixels pixels;
+    rasm_dvec3 origin = {4197000.25, 168000.5, 4786000.75};
+    rasm_vec3 offset = {2.5f, 0.0f, 0.0f};
+    rasm_dvec3 world;
+    rasm_transform_d pose;
+    rasm_entity entity = {0};
 
     if (rasm_get_version() != RASM_C_API_VERSION)
         return 1;
@@ -41,6 +46,11 @@ int main(void)
     pixels = rasm_get_view_pixels(&rect, 100, 10);
     if (pixels.width != 50 || rasm_render_views(NULL, views, 2) != RASM_ERROR_INVALID_ARGUMENT)
         return 8;
+    world = rasm_to_world_position(offset, origin);
+    if (world.x != origin.x + 2.5 || rasm_to_render_position(world, origin).x != 2.5f)
+        return 9;
+    if (rasm_get_transform_d(NULL, entity, &pose) != RASM_ERROR_INVALID_ARGUMENT)
+        return 10;
     printf("rasm_c.h %u.%u compiles as C (__STDC_VERSION__ %ld) and links rasm_c_renderer.\n", RASM_C_API_VERSION_MAJOR, RASM_C_API_VERSION_MINOR, (long)__STDC_VERSION__);
     return 0;
 }

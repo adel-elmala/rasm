@@ -5,7 +5,10 @@
 #include "rasm/types.h"
 
 #include "doctest/doctest.h"
+#include "glm/gtc/quaternion.hpp"
 
+#include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <filesystem>
 #include <string>
@@ -417,4 +420,112 @@ TEST_CASE("view rects and input areas map as in C++")
     CHECK(center.x == doctest::Approx(0.0f));
     CHECK(center.y == doctest::Approx(0.0f));
     CHECK(rasm_render_views(nullptr, nullptr, 0) == RASM_ERROR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("a 1.1 program is still accepted")
+{
+    // The version check passes and the call goes on to check the config, which a bad enum fails.
+    rasm_renderer_config config;
+    rasm_renderer_config_init(&config, sizeof(config));
+    config.anti_aliasing = 9;
+    rasm_renderer *renderer = nullptr;
+    CHECK(rasm_renderer_create((1u << 16) | 1u, &config, &renderer) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(contains(rasm_get_last_error(), "config->anti_aliasing"));
+
+    // A 1.1 caller's controller ends at free_fly_look_sensitivity: the 1.2 fields keep their defaults.
+    rasm_camera_controller controller;
+    std::memset(&controller, 0xAB, sizeof(controller));
+    const uint32_t size11 = static_cast<uint32_t>(offsetof(rasm_camera_controller, free_fly_look_sensitivity) + sizeof(float));
+    REQUIRE(rasm_camera_controller_init(&controller, size11) == RASM_OK);
+    CHECK(controller.free_fly_look_sensitivity == 1.0f);
+    CHECK(reinterpret_cast<const uint8_t *>(&controller.free_fly_up)[0] == 0xAB);
+    controller.type = RASM_CAMERA_CONTROLLER_TYPE_FREE_FLY;
+    rasm_camera_rig *rig = rasm_camera_rig_create(&controller, nullptr);
+    REQUIRE(rig != nullptr);
+    rasm_camera_rig_destroy(rig);
+}
+
+TEST_CASE("the 1.2 fields start from the C++ defaults")
+{
+    rasm_camera_controller controller;
+    REQUIRE(rasm_camera_controller_init(&controller, sizeof(controller)) == RASM_OK);
+    CHECK(controller.free_fly_up.y == 1.0f);
+    CHECK(controller.track_ball_center_d.x == 0.0);
+
+    rasm_scene_environment environment;
+    REQUIRE(rasm_scene_environment_init(&environment, sizeof(environment)) == RASM_OK);
+    CHECK(environment.orientation.w == 1.0f);
+    CHECK(environment.orientation.x == 0.0f);
+
+    rasm_light_desc light;
+    REQUIRE(rasm_light_desc_init(&light, sizeof(light)) == RASM_OK);
+    CHECK(light.position.x == 1.0f);
+    CHECK(light.position_d.x == 0.0);
+}
+
+// Earth-centred coordinates of Paris, with centimetres and less that a float cannot hold.
+TEST_CASE("a position in doubles goes in and comes out bit for bit")
+{
+    const rasm_dvec3 paris = {4197000.123456789, 168000.987654321, 4786000.000001};
+    rasm_camera_controller controller;
+    rasm_camera_controller_init(&controller, sizeof(controller));
+    rasm_transform_d pose = {paris, {0.0f, 0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}};
+    rasm_camera_rig *rig = rasm_camera_rig_create_d(&controller, &pose);
+    REQUIRE(rig != nullptr);
+    rasm_camera_input input;
+    rasm_camera_input_init(&input, sizeof(input));
+    input.delta_time = 1.0f / 60.0f;
+    REQUIRE(rasm_camera_rig_update(rig, &input) == RASM_OK);
+    rasm_transform_d transform;
+    rasm_transform_d target;
+    REQUIRE(rasm_camera_rig_get_transform_d(rig, &transform, &target) == RASM_OK);
+    CHECK((transform.position.x == paris.x && transform.position.y == paris.y && transform.position.z == paris.z));
+    CHECK((target.position.x == paris.x && target.position.y == paris.y && target.position.z == paris.z));
+    rasm_transform rounded;
+    REQUIRE(rasm_camera_rig_get_transform(rig, &rounded, nullptr) == RASM_OK);
+    CHECK(rounded.position.x == static_cast<float>(paris.x));
+    rasm_camera_rig_destroy(rig);
+
+    // Render space: a point 2.5 m east of the camera is 2.5 m east of the origin there, and back to the same double.
+    const rasm_dvec3 point = {paris.x + 2.5, paris.y, paris.z};
+    const rasm_vec3 render = rasm_to_render_position(point, paris);
+    CHECK(render.x == 2.5f);
+    CHECK(render.y == 0.0f);
+    const rasm_dvec3 back = rasm_to_world_position(render, paris);
+    CHECK(back.x == paris.x + 2.5);
+    CHECK(back.z == paris.z);
+}
+
+// The free-fly controller turns around its up axis: after a drag across the screen, the camera's up is still the
+// axis (its pitch is 0), here +Z as at the North Pole.
+TEST_CASE("a free-fly rig turns around its up axis")
+{
+    rasm_camera_controller controller;
+    rasm_camera_controller_init(&controller, sizeof(controller));
+    controller.type = RASM_CAMERA_CONTROLLER_TYPE_FREE_FLY;
+    controller.easing_speed = 0.0f;
+    controller.free_fly_up = {0.0f, 0.0f, 1.0f};
+    // Level with the +Z horizon: the turn of 120 degrees around (1, 1, 1) takes the camera's +Y to +Z and its -Z to -X.
+    const rasm_transform_d pose = {{0.0, 0.0, 6356752.0}, {0.5f, 0.5f, 0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}};
+    rasm_camera_rig *rig = rasm_camera_rig_create_d(&controller, &pose);
+    REQUIRE(rig != nullptr);
+    rasm_camera_input input;
+    rasm_camera_input_init(&input, sizeof(input));
+    input.mouse_start = {0.0f, 0.0f};
+    input.mouse_end = {0.6f, 0.0f};
+    input.delta_time = 1.0f / 60.0f;
+    REQUIRE(rasm_camera_rig_update(rig, &input) == RASM_OK);
+    rasm_transform_d transform;
+    REQUIRE(rasm_camera_rig_get_transform_d(rig, &transform, nullptr) == RASM_OK);
+    const glm::quat rotation(transform.rotation.w, transform.rotation.x, transform.rotation.y, transform.rotation.z);
+    const glm::vec3 up = rotation * glm::vec3(0.0f, 1.0f, 0.0f);
+    const glm::vec3 forward = rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+    CHECK(up.z == doctest::Approx(1.0f).epsilon(1e-5));
+    CHECK(forward.z == doctest::Approx(0.0f).epsilon(1e-5));
+    CHECK(forward.x > -0.99f);
+    // A new up for the next frames, as a globe's normal changes along a flight.
+    CHECK(rasm_camera_rig_set_free_fly_up(rig, rasm_vec3{0.0f, 1.0f, 0.0f}) == RASM_OK);
+    CHECK(rasm_camera_rig_set_free_fly_up(rig, rasm_vec3{NAN, 0.0f, 0.0f}) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(rasm_camera_rig_set_free_fly_up(nullptr, rasm_vec3{0.0f, 1.0f, 0.0f}) == RASM_ERROR_INVALID_ARGUMENT);
+    rasm_camera_rig_destroy(rig);
 }

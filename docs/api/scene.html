@@ -960,7 +960,7 @@ engine.setSceneEnvironment(scene, {});</code></pre>
 <div class="api" id="setSceneEnvironment">
   <pre class="sig">void setSceneEnvironment(SceneHandle scene, const SceneEnvironment& environment);</pre>
   <div class="body">
-    <p>Gives the scene an environment, or takes it away with an invalid handle (<code>SceneEnvironment{}</code>). The scene's views read it every frame, so a change shows in the next frame and needs no new render graph. An invalid scene, a handle <code>loadEnvironment</code> did not return, a negative or non-finite intensity, or a non-finite rotation logs an error and changes nothing. Several scenes can share one environment.</p>
+    <p>Gives the scene an environment, or takes it away with an invalid handle (<code>SceneEnvironment{}</code>). The scene's views read it every frame, so a change shows in the next frame and needs no new render graph. An invalid scene, a handle <code>loadEnvironment</code> did not return, a negative or non-finite intensity, a non-finite rotation, or an orientation that is not finite logs an error and changes nothing; a zero orientation is the identity. Several scenes can share one environment.</p>
   </div>
 </div>
 
@@ -971,6 +971,7 @@ engine.setSceneEnvironment(scene, {});</code></pre>
     float                       intensity                           = 1.0f;
     float                       rotation                            = 0.0f;
     bool                        sky                                 = true;
+    glm::quat                   orientation                         = glm::identity&lt;glm::quat&gt;();
 };</pre>
   <div class="body">
     <dl>
@@ -978,6 +979,7 @@ engine.setSceneEnvironment(scene, {});</code></pre>
       <dt>intensity</dt><dd>Multiplies its light and its sky. 0 turns its light off and keeps a black sky.</dd>
       <dt>rotation</dt><dd>Radians around +Y, counter-clockwise seen from above. Turn the photo so its sun lines up with a directional light (<code>examples/08_ibl</code> does). Costs nothing: the light is not prepared again.</dd>
       <dt>sky</dt><dd>Draw the environment behind the scene, where nothing else was drawn. false keeps the clear color but still lights the scene.</dd>
+      <dt>orientation</dt><dd>The frame the environment is placed in, after <code>rotation</code>: its +Y becomes the sky's up. Identity keeps the world's +Y. On a globe, give it the local frame (east, up and south of a place), so the horizon of the photo lies on the local ground (<code>examples/23_large_world</code>, <a href="../guides/large-world-precision.html">large worlds</a>). It is normalized; it costs nothing either.</dd>
     </dl>
     <p>The environment's light is not shadowed: shadow maps darken only the lights (<code>D23</code>).</p>
   </div>

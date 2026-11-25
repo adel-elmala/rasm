@@ -101,9 +101,20 @@ namespace rasm::c
     inline rasm_vec2        toC(const glm::vec2& v)         { return {v.x, v.y}; }
     inline rasm_vec3        toC(const glm::vec3& v)         { return {v.x, v.y, v.z}; }
     inline rasm_vec4        toC(const glm::vec4& v)         { return {v.x, v.y, v.z, v.w}; }
+    inline glm::dvec3       toCpp(const rasm_dvec3& v)      { return {v.x, v.y, v.z}; }
+    inline rasm_dvec3       toC(const glm::dvec3& v)        { return {v.x, v.y, v.z}; }
 
     Transform               toCpp(const rasm_transform& transform);
     rasm_transform          toC(const Transform& transform);
+    Transform               toCpp(const rasm_transform_d& transform);
+    rasm_transform_d        toTransformD(const Transform& transform);
+    // A double as a float and the double of what the float left over: float + remainder is the double again.
+    rasm_vec3               toFloatPart(const glm::dvec3& v);
+    rasm_dvec3              toRemainder(const glm::dvec3& v);
+    bool                    checkFinite(const rasm_dvec3& v, const char* function, const char* name);
+    // A 1.1 caller's update of a position split in a float and a double rest, which it cannot see: the float position,
+    // or the exact one when the caller left the float part as a get gave it.
+    rasm_dvec3              keepRemainder(const rasm_vec3& given, const rasm_vec3& current, const rasm_dvec3& currentRemainder);
     rasm_mat4               toC(const glm::mat4& matrix);
     NativeWindow            toCpp(const rasm_native_window& window);
     rasm_native_window      toC(const NativeWindow& window);
@@ -160,6 +171,8 @@ namespace rasm::c
     constexpr size_t        MATERIAL_DESC_SIZE_1_0          = offsetof(rasm_material_desc, alpha_cutoff) + sizeof(float);
     constexpr size_t        TEXTURE_DESC_SIZE_1_0           = offsetof(rasm_texture_desc, format) + sizeof(rasm_format);
     constexpr size_t        LIGHT_DESC_SIZE_1_0             = offsetof(rasm_light_desc, outer_cone_angle) + sizeof(float);
+    constexpr size_t        LIGHT_DESC_SIZE_1_2             = offsetof(rasm_light_desc, position_d) + sizeof(rasm_dvec3);
+    constexpr size_t        CAMERA_CONTROLLER_SIZE_1_2      = offsetof(rasm_camera_controller, free_fly_up) + sizeof(rasm_vec3);
     constexpr size_t        SCENE_ENVIRONMENT_SIZE_1_0      = offsetof(rasm_scene_environment, sky) + sizeof(rasm_bool);
     constexpr size_t        CAMERA_PROJECTION_SIZE_1_0      = offsetof(rasm_camera_projection, top) + sizeof(float);
     // The structs of version 1.1.

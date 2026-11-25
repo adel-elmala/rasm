@@ -24,7 +24,7 @@
 
 // NOLINTBEGIN(readability-identifier-naming): C names, snake_case with the rasm_ prefix, as C APIs and their bindings expect
 #define RASM_C_API_VERSION_MAJOR    1
-#define RASM_C_API_VERSION_MINOR    1
+#define RASM_C_API_VERSION_MINOR    2
 #define RASM_C_API_VERSION          (((uint32_t)RASM_C_API_VERSION_MAJOR << 16) | (uint32_t)RASM_C_API_VERSION_MINOR)
 
 #if defined(_WIN32)
@@ -236,6 +236,7 @@ typedef struct rasm_vec3            { float x, y, z; } rasm_vec3;
 typedef struct rasm_vec4            { float x, y, z, w; } rasm_vec4;
 typedef struct rasm_quat            { float x, y, z, w; } rasm_quat;
 typedef struct rasm_mat4            { float m[16]; } rasm_mat4;                 /* column-major */
+typedef struct rasm_dvec3           { double x, y, z; } rasm_dvec3;             /* 1.2: a world position in doubles */
 
 typedef struct rasm_transform
 {
@@ -243,6 +244,14 @@ typedef struct rasm_transform
     rasm_quat                       rotation;
     rasm_vec3                       scale;
 } rasm_transform;
+
+/* 1.2: a transform whose position is in doubles, as the engine keeps it: precise millions of metres from the origin. */
+typedef struct rasm_transform_d
+{
+    rasm_dvec3                      position;
+    rasm_quat                       rotation;
+    rasm_vec3                       scale;
+} rasm_transform_d;
 
 typedef struct rasm_native_window
 {
@@ -362,6 +371,7 @@ typedef struct rasm_light_desc
     rasm_vec3                       direction;
     float                           inner_cone_angle;
     float                           outer_cone_angle;
+    rasm_dvec3                      position_d;                                /* 1.2: added to position: the light is at position + position_d, in doubles */
 } rasm_light_desc;
 
 typedef struct rasm_camera_projection
@@ -385,6 +395,7 @@ typedef struct rasm_scene_environment
     float                           intensity;
     float                           rotation;
     rasm_bool                       sky;
+    rasm_quat                       orientation;                               /* 1.2: the environment's frame after rotation: its +Y is the sky's up */
 } rasm_scene_environment;
 
 typedef struct rasm_image_data
@@ -662,6 +673,8 @@ typedef struct rasm_camera_controller
     float                           free_fly_pitch;
     float                           free_fly_speed;
     float                           free_fly_look_sensitivity;
+    rasm_dvec3                      track_ball_center_d;                       /* 1.2: added to track_ball_center, in doubles */
+    rasm_vec3                       free_fly_up;                               /* 1.2: the axis yaw turns around; 0, 1, 0 by default */
 } rasm_camera_controller;
 
 typedef struct rasm_view
@@ -921,6 +934,20 @@ RASM_C_API rasm_result      RASM_CALL rasm_get_frame_stats(rasm_renderer* render
 RASM_C_API rasm_result      RASM_CALL rasm_get_pool_stats(rasm_renderer* renderer, rasm_pool_stats* stats);
 RASM_C_API rasm_result      RASM_CALL rasm_get_load_stats(rasm_renderer* renderer, rasm_load_stats* stats);
 RASM_C_API rasm_result      RASM_CALL rasm_asset_loader_get_load_stats(rasm_asset_loader* loader, rasm_load_stats* stats);
+
+/* Added in 1.2: positions in doubles. Each view draws in its camera's render space, the world minus the camera's
+ * position; rasm_to_render_position and rasm_to_world_position convert between the two (picking, readbacks). */
+RASM_C_API rasm_result      RASM_CALL rasm_get_transform_d(rasm_renderer* renderer, rasm_entity entity, rasm_transform_d* transform);
+RASM_C_API rasm_result      RASM_CALL rasm_update_transform_d(rasm_renderer* renderer, rasm_entity entity, const rasm_transform_d* transform);
+RASM_C_API rasm_result      RASM_CALL rasm_get_camera_transform_d(rasm_renderer* renderer, rasm_camera camera, rasm_transform_d* transform);
+RASM_C_API rasm_result      RASM_CALL rasm_set_camera_transform_d(rasm_renderer* renderer, rasm_camera camera, const rasm_transform_d* transform);
+RASM_C_API rasm_result      RASM_CALL rasm_get_light_position_d(rasm_renderer* renderer, rasm_light light, rasm_dvec3* position);
+RASM_C_API rasm_result      RASM_CALL rasm_set_light_position_d(rasm_renderer* renderer, rasm_light light, const rasm_dvec3* position);
+RASM_C_API rasm_camera_rig* RASM_CALL rasm_camera_rig_create_d(const rasm_camera_controller* controller, const rasm_transform_d* transform);
+RASM_C_API rasm_result      RASM_CALL rasm_camera_rig_get_transform_d(const rasm_camera_rig* rig, rasm_transform_d* transform, rasm_transform_d* target_transform);
+RASM_C_API rasm_result      RASM_CALL rasm_camera_rig_set_free_fly_up(rasm_camera_rig* rig, rasm_vec3 up);
+RASM_C_API rasm_vec3        RASM_CALL rasm_to_render_position(rasm_dvec3 world_position, rasm_dvec3 origin);
+RASM_C_API rasm_dvec3       RASM_CALL rasm_to_world_position(rasm_vec3 render_position, rasm_dvec3 origin);
 
 #ifdef __cplusplus
 }

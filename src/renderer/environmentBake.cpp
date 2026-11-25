@@ -118,6 +118,7 @@ namespace rasm
         sceneData.environmentSpecularMips = 0;
         sceneData.environmentIntensity = 0.0f;
         sceneData.environmentRotation = glm::vec2(1.0f, 0.0f);
+        sceneData.environmentOrientation = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
 
         const uint64_t index = environment.environment.index;
         if (!environment.environment.isValid() || index >= environments.environments.size() || !isBakeUsable(environments.brdfLutState))
@@ -132,6 +133,8 @@ namespace rasm
         sceneData.brdfLut = environments.brdfLutSlot;
         sceneData.environmentIntensity = environment.intensity;
         sceneData.environmentRotation = glm::vec2(std::cos(environment.rotation), std::sin(environment.rotation));
+        const glm::quat orientation = glm::normalize(environment.orientation);
+        sceneData.environmentOrientation = glm::vec4(orientation.x, orientation.y, orientation.z, orientation.w);
         if (environment.sky)
             sceneData.environmentSky = source.cubeSlot;
         return environment.sky;

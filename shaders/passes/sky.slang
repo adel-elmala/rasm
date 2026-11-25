@@ -51,7 +51,7 @@ float4 fragMain(VSOutput input) : SV_TARGET
         viewRay         = float3(ndc.x / projection[0][0], ndc.y / projection[1][1], -1.0);
     // The view matrix's 3x3 is a rotation, so its transpose turns view space back into world space.
     float3 direction    = normalize(mul(transpose((float3x3)pc.scene->view), viewRay));
-    float3 color        = gCubeTextures[pc.scene->environmentSky].SampleLevel(toEnvironment(direction, pc.scene->environmentRotation), 0.0).rgb;
+    float3 color        = gCubeTextures[pc.scene->environmentSky].SampleLevel(toEnvironment(direction, pc.scene->environmentRotation, pc.scene->environmentOrientation), 0.0).rgb;
     float4 sky          = float4(color * pc.scene->environmentIntensity, 1.0);
 #if defined(RASM_MOTION_VECTORS)
     // A direction has w = 0, so the camera's move drops out and only its turn moves the sky. An orthographic camera

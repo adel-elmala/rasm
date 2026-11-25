@@ -6,9 +6,11 @@
 // rewrites no row. Near the camera the scene is as sharp as at the origin: no jitter, no z-fighting.
 //
 // The scene is built in a local frame, metres east, up and south of a place (ENU, with RASM's Y up), and placed at
-// --origin turned so that its up is the ellipsoid's normal there: a map engine's setup. It has sun cascades, a spot and a
-// point light with shadows, local lights in the light clusters, skinned characters, an animated node, a grid of
-// pillars for culling, and TAA. The camera flies past it.
+// --origin turned so that its up is the ellipsoid's normal there: a map engine's setup. Its sky is the environment
+// turned into that frame (SceneEnvironment::orientation). It has sun cascades, a spot and a point light with shadows,
+// local lights in the light clusters, skinned characters, an animated node, a grid of pillars for culling, and TAA.
+// The camera is a free-fly rig whose up is the ellipsoid's normal (CameraController::FreeFly::up): headless it flies
+// forward and turns by a script, with a window W, A, S, D and the mouse fly it.
 //
 // Options:
 //   --origin x,y,z       where the scene is, in metres (default 4197000,168000,4786000: Paris, on the ellipsoid)
@@ -68,6 +70,7 @@ namespace
         rasm::LightHandle spot;
         rasm::LightHandle lamp;
         Placement placement;
+        rasm::CameraRig rig;
     };
 
     // The frame whose X is east, Y up (the ellipsoid's normal) and Z south, at a point near the surface. Near the
@@ -143,18 +146,23 @@ namespace
             engine.playAnimation(entity, rasm::AnimationPlay{.clip = static_cast<uint32_t>(clip)});
     }
 
-    // Where the camera is in the local frame at a time: it flies east past the scene and looks at its middle.
-    rasm::Transform getCameraPose(const Placement &placement, double seconds)
+    // Where the camera starts in the local frame: south-west of the scene, looking at its middle.
+    rasm::Transform getStartPose(const Placement &placement)
     {
-        const auto t = static_cast<float>(seconds);
-        const glm::vec3 eye(-9.0f + 1.8f * t, 2.4f + 0.4f * std::sin(0.7f * t), 9.0f - 0.6f * t);
-        const glm::vec3 target(0.5f * t - 1.0f, 0.8f, 0.0f);
-        const glm::quat look = glm::quatLookAt(glm::normalize(target - eye), glm::vec3(0.0f, 1.0f, 0.0f));
+        const glm::vec3 eye(-9.0f, 2.4f, 9.0f);
+        const glm::quat look = glm::quatLookAt(glm::normalize(glm::vec3(-1.0f, 0.8f, 0.0f) - eye), glm::vec3(0.0f, 1.0f, 0.0f));
         return place(placement, eye, look, glm::vec3(1.0f));
     }
 
+    // The scripted flight of a headless run: forward, turning slowly to the right.
+    rasm::CameraInput getScriptedInput(double step)
+    {
+        return rasm::CameraInput{.mouseStart = glm::vec2(0.0f), .mouseEnd = glm::vec2(0.002f, 0.0f), .deltaTime = static_cast<float>(step), .forward = true};
+    }
+
     // The scene in its local frame, placed with placement.
-    bool buildScene(rasm::Engine &engine, const Meshes &meshes, const Placement &placement, uint32_t pillars, int32_t foxRun, float aspect, Content &content)
+    bool buildScene(rasm::Engine &engine, const Meshes &meshes, const Placement &placement, rasm::EnvironmentHandle sky, uint32_t pillars, int32_t foxRun, float aspect,
+                    Content &content)
     {
         content.placement = placement;
         content.scene = engine.createScene();
@@ -192,8 +200,16 @@ namespace
             engine.addLightToScene(content.scene, light);
         }
 
+        // The sky and its light turned into the local frame: its up is the ellipsoid's normal.
+        engine.setSceneEnvironment(content.scene, rasm::SceneEnvironment{.environment = sky, .intensity = 0.7f, .orientation = glm::quat(placement.rotation)});
+
+        // The application flies the camera with a rig of its own; the engine's controller stays off.
+        const glm::vec3 up = glm::vec3(placement.rotation * glm::dvec3(0.0, 1.0, 0.0));
+        content.rig = rasm::createCameraRig(rasm::CameraController{.type = rasm::CameraController::Type::FREE_FLY,
+                                                                   .freeFly = {.yaw = 0.0f, .pitch = 0.0f, .speed = 1.8f, .lookSensitivity = 1.0f, .up = up}},
+                                            getStartPose(placement));
         content.camera = engine.createCamera(rasm::CameraProjection{.type = rasm::CameraProjection::Type::PERSPECTIVE, .perspective{.fovY = 50.0f, .aspect = aspect, .nearZ = 0.05f}},
-                                             getCameraPose(placement, 0.0));
+                                             content.rig.transform);
         engine.setCameraController(content.camera, rasm::CameraController{.type = rasm::CameraController::Type::NONE});
         engine.addCameraToScene(content.scene, content.camera);
         return content.scene.isValid() && content.camera.isValid() && content.sun.isValid() && content.spot.isValid() && content.lamp.isValid();
@@ -330,8 +346,9 @@ int main(int argc, char **argv)
                            .box = engine.loadGLTF("models/gltf/BoxAnimated/BoxAnimated.glb")};
     // The clips' names are known once the meshes are loaded.
     engine.waitForLoads();
+    const rasm::EnvironmentHandle sky = engine.loadEnvironment("environments/venice_sunset_2k.hdr");
     const int32_t foxRun = engine.findAnimation(meshes.fox, "Run");
-    if (!engine.isLoaded(meshes.man) || !engine.isLoaded(meshes.fox) || !engine.isLoaded(meshes.box) || foxRun < 0)
+    if (!engine.isLoaded(meshes.man) || !engine.isLoaded(meshes.fox) || !engine.isLoaded(meshes.box) || foxRun < 0 || !sky.isValid())
         return 1;
 
     // --compare: the scene at the world's origin on the left, the same scene moved by a pure translation on the right.
@@ -342,7 +359,7 @@ int main(int argc, char **argv)
     const Placement placements[2] = {compare ? Placement{} : Placement{.origin = origin, .rotation = getEnuRotation(origin)}, Placement{.origin = origin}};
     for (size_t i = 0; i < contents.size(); ++i)
     {
-        if (!buildScene(engine, meshes, placements[i], pillars, foxRun, aspect, contents[i]))
+        if (!buildScene(engine, meshes, placements[i], sky, pillars, foxRun, aspect, contents[i]))
             return 1;
     }
 
@@ -364,11 +381,18 @@ int main(int argc, char **argv)
     while (exampleRunning(engine, args))
     {
         const auto now = std::chrono::steady_clock::now();
-        seconds += args.fixedStep ? FIXED_STEP_SECONDS : std::chrono::duration<double>(now - lastTime).count();
+        const double step = args.fixedStep ? FIXED_STEP_SECONDS : std::chrono::duration<double>(now - lastTime).count();
+        seconds += step;
         lastTime = now;
         engine.setAnimationTime(seconds);
-        for (const Content &content : contents)
-            engine.setCameraTransform(content.camera, getCameraPose(content.placement, seconds));
+        // Every rig gets the same input, so the two scenes of --compare see the same flight.
+        engine.pollEvents();
+        const rasm::CameraInput input = args.headless ? getScriptedInput(step) : engine.getCameraInput();
+        for (Content &content : contents)
+        {
+            rasm::updateCameraRig(content.rig, input);
+            engine.setCameraTransform(content.camera, content.rig.transform);
+        }
         graph.execute(contents[0].camera);
     }
 

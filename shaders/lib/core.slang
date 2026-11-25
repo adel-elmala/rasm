@@ -226,6 +226,7 @@ struct SceneData
     uint32_t*           meshletDataPtr;         // the meshlets' vertices and triangles, for the mesh shaders; null without them
     float3              originLow;              // the origin is originHigh + originLow
     uint32_t            zero;                   // 0, which the shader compiler cannot know (renderSpace.slang)
+    float4              environmentOrientation; // quaternion (x, y, z, w): the environment's frame in the world (environment.slang)
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.

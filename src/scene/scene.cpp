@@ -225,11 +225,15 @@ namespace rasm
             spdlog::error("Invalid environment handle for scene {}.", scene.index);
             return;
         }
-        if (!(environment.intensity >= 0.0f) || !std::isfinite(environment.intensity) || !std::isfinite(environment.rotation))
+        const float orientationLength = glm::length(environment.orientation);
+        if (!(environment.intensity >= 0.0f) || !std::isfinite(environment.intensity) || !std::isfinite(environment.rotation) || !std::isfinite(orientationLength))
         {
-            spdlog::error("An environment needs a finite intensity of at least 0 and a finite rotation.");
+            spdlog::error("An environment needs a finite intensity of at least 0, a finite rotation and a finite orientation.");
             return;
         }
         registry.scenes[scene.index].environment = environment;
+        // A zero orientation, as a zero-filled C struct gives, is the identity, like a zero free-fly up.
+        if (orientationLength == 0.0f)
+            registry.scenes[scene.index].environment.orientation = glm::identity<glm::quat>();
     }
 } // namespace rasm

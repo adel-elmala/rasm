@@ -5,6 +5,7 @@
 #include "rasm/renderer.h"
 #include "rasm/view.h"
 
+#include <cmath>
 #include <memory>
 #include <string>
 
@@ -236,9 +237,18 @@ try
     Renderer *r = c::getRenderer(renderer, __func__);
     if (r == nullptr || !c::checkHandle(camera.id, __func__, "camera"))
         return RASM_ERROR_INVALID_ARGUMENT;
-    // A field past the caller's size takes its default: the controller is replaced whole, as in C++.
+    // A field past the caller's size takes its default: the controller is replaced whole, as in C++. Only the
+    // trackball's center keeps its double rest for a 1.1 caller that left the float part as it got it.
     rasm_camera_controller values = c::getControllerDefaults();
-    if (!c::readSized(controller, c::CAMERA_CONTROLLER_SIZE_1_1, &values, sizeof(values), __func__, "controller") || !c::checkCameraController(values, __func__))
+    if (!c::readSized(controller, c::CAMERA_CONTROLLER_SIZE_1_1, &values, sizeof(values), __func__, "controller"))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    if (controller->size < c::CAMERA_CONTROLLER_SIZE_1_2 && values.type == RASM_CAMERA_CONTROLLER_TYPE_TRACK_BALL)
+    {
+        const CameraController current = r->getCameraController(c::toCpp(camera));
+        if (current.type == CameraController::Type::TRACK_BALL)
+            values.track_ball_center_d = c::keepRemainder(values.track_ball_center, c::toFloatPart(current.trackBall.center), c::toRemainder(current.trackBall.center));
+    }
+    if (!c::checkCameraController(values, __func__))
         return RASM_ERROR_INVALID_ARGUMENT;
     const c::CallErrors errors;
     r->setCameraController(c::toCpp(camera), c::toCpp(values));
@@ -285,6 +295,47 @@ try
     if (!c::checkPointer(rig, __func__, "rig") || !c::readSized(input, c::CAMERA_INPUT_SIZE_1_1, &values, sizeof(values), __func__, "input"))
         return RASM_ERROR_INVALID_ARGUMENT;
     updateCameraRig(rig->rig, c::toCpp(values));
+    return RASM_OK;
+}
+RASM_C_CATCH_RESULT
+
+rasm_camera_rig *RASM_CALL rasm_camera_rig_create_d(const rasm_camera_controller *controller, const rasm_transform_d *transform)
+try
+{
+    rasm_camera_controller values = c::getControllerDefaults();
+    if (!c::readSized(controller, c::CAMERA_CONTROLLER_SIZE_1_1, &values, sizeof(values), __func__, "controller") || !c::checkCameraController(values, __func__))
+        return nullptr;
+    auto rig = std::make_unique<rasm_camera_rig>();
+    rig->rig = createCameraRig(c::toCpp(values), transform != nullptr ? c::toCpp(*transform) : Transform{});
+    return rig.release();
+}
+RASM_C_CATCH(nullptr)
+
+rasm_result RASM_CALL rasm_camera_rig_set_free_fly_up(rasm_camera_rig *rig, rasm_vec3 up)
+try
+{
+    if (!c::checkPointer(rig, __func__, "rig"))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    if (!std::isfinite(up.x) || !std::isfinite(up.y) || !std::isfinite(up.z))
+    {
+        c::reportError(__func__, "up is not finite.");
+        return RASM_ERROR_INVALID_ARGUMENT;
+    }
+    if (rig->rig.controller.type == CameraController::Type::FREE_FLY)
+        rig->rig.controller.freeFly.up = c::toCpp(up);
+    return RASM_OK;
+}
+RASM_C_CATCH_RESULT
+
+rasm_result RASM_CALL rasm_camera_rig_get_transform_d(const rasm_camera_rig *rig, rasm_transform_d *transform, rasm_transform_d *target_transform)
+try
+{
+    if (!c::checkPointer(rig, __func__, "rig"))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    if (transform != nullptr)
+        *transform = c::toTransformD(rig->rig.transform);
+    if (target_transform != nullptr)
+        *target_transform = c::toTransformD(rig->rig.targetTransform);
     return RASM_OK;
 }
 RASM_C_CATCH_RESULT

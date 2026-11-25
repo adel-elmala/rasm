@@ -5,6 +5,8 @@
 #include "rasm/entity.h"
 #include "rasm/light.h"
 
+#include "glm/gtc/quaternion.hpp"
+
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -25,6 +27,7 @@ namespace rasm
         float                       intensity                           = 1.0f;     // scales its light and its sky
         float                       rotation                            = 0.0f;     // radians around +Y, counter-clockwise seen from above
         bool                        sky                                 = true;     // draw it behind the scene
+        glm::quat                   orientation                         = glm::identity<glm::quat>();   // its frame in the world, after rotation: its +Y is the sky's up (a globe's local up)
 
         bool                        operator==(const SceneEnvironment&) const = default;
     };

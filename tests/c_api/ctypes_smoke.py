@@ -2,9 +2,10 @@
 
 It makes a headless renderer, a red quad in front of a camera and a sun, and renders a few frames: one view with
 rasm_render, then the last frame two views with rasm_render_views, the whole image and a small one in the top-right
-corner. It copies the last two frames back and checks their pixels: red in the middle of every view, the background at
-the top-left corner. The structs below mirror
-include/rasm/rasm_c.h field by field.
+corner. The quad and the cameras stand 6370 km from the origin, in Earth-centred coordinates, placed with the 1.2 calls
+in doubles, which give the positions back bit for bit. It copies the last two frames back and checks their pixels: red
+in the middle of every view, the background at the top-left corner. The structs below mirror include/rasm/rasm_c.h
+field by field.
 
     python tests/c_api/ctypes_smoke.py <path to rasm_c.dll / librasm_c.dylib / librasm_c.so>
         [--shader-dir DIR] [--frames N] [--out frame.png] [--validation]
@@ -17,9 +18,9 @@ import argparse
 import ctypes
 import os
 import sys
-from ctypes import CFUNCTYPE, POINTER, Structure, byref, c_char_p, c_float, c_int32, c_uint32, c_uint64, c_uint8, c_void_p
+from ctypes import CFUNCTYPE, POINTER, Structure, byref, c_char_p, c_double, c_float, c_int32, c_uint32, c_uint64, c_uint8, c_void_p
 
-API_VERSION = (1 << 16) | 1
+API_VERSION = (1 << 16) | 2
 OK = 0
 TRUE = 1
 LOG_LEVEL_ERROR = 4
@@ -46,6 +47,14 @@ class Vec4(Structure):
 
 class Transform(Structure):
     _fields_ = [("position", Vec3), ("rotation", Vec4), ("scale", Vec3)]
+
+
+class DVec3(Structure):
+    _fields_ = [("x", c_double), ("y", c_double), ("z", c_double)]
+
+
+class TransformD(Structure):
+    _fields_ = [("position", DVec3), ("rotation", Vec4), ("scale", Vec3)]
 
 
 class NativeWindow(Structure):
@@ -87,7 +96,7 @@ class MaterialDesc(Structure):
 class LightDesc(Structure):
     _fields_ = [("size", c_uint32), ("type", c_uint32), ("intensity", c_float), ("range", c_float), ("color", Vec3),
                 ("position", Vec3), ("direction", Vec3), ("inner_cone_angle", c_float),
-                ("outer_cone_angle", c_float)]
+                ("outer_cone_angle", c_float), ("position_d", DVec3)]
 
 
 class CameraProjection(Structure):
@@ -140,6 +149,14 @@ def declare(lib):
         "rasm_image_destroy": (None, [c_void_p]),
         "rasm_image_get": (ImageData, [c_void_p]),
         "rasm_image_write_png": (c_int32, [c_void_p, c_char_p]),
+        "rasm_get_light": (c_int32, [c_void_p, Handle, POINTER(LightDesc)]),
+        "rasm_get_transform_d": (c_int32, [c_void_p, Handle, POINTER(TransformD)]),
+        "rasm_update_transform_d": (c_int32, [c_void_p, Handle, POINTER(TransformD)]),
+        "rasm_get_camera_transform_d": (c_int32, [c_void_p, Handle, POINTER(TransformD)]),
+        "rasm_set_camera_transform_d": (c_int32, [c_void_p, Handle, POINTER(TransformD)]),
+        "rasm_get_light_position_d": (c_int32, [c_void_p, Handle, POINTER(DVec3)]),
+        "rasm_set_light_position_d": (c_int32, [c_void_p, Handle, POINTER(DVec3)]),
+        "rasm_to_render_position": (Vec3, [DVec3, DVec3]),
     }
     for name, (restype, argtypes) in signatures.items():
         function = getattr(lib, name)
@@ -231,6 +248,40 @@ def main():
         check(camera.id != 0, "rasm_create_camera", lib)
         lib.rasm_add_camera_to_scene(renderer, scene, camera)
 
+        # Far from the origin: Paris in Earth-centred coordinates, with digits a float cannot hold. Each view draws in its
+        # camera's render space, so the picture is the same as at the origin.
+        paris = (4197000.123456789, 168000.987654321, 4786000.000001)
+
+        def far(x, y, z, rotation=Vec4(0.0, 0.0, 0.0, 1.0)):
+            return TransformD(DVec3(paris[0] + x, paris[1] + y, paris[2] + z), rotation, Vec3(1.0, 1.0, 1.0))
+
+        def same(a, b):
+            return (a.x, a.y, a.z) == (b.x, b.y, b.z)
+
+        placed = far(0.0, 0.0, 0.0)
+        check(lib.rasm_update_transform_d(renderer, entity, byref(placed)) == OK, "rasm_update_transform_d", lib)
+        back = TransformD()
+        check(lib.rasm_get_transform_d(renderer, entity, byref(back)) == OK and same(back.position, placed.position),
+              "the entity's position comes back bit for bit", lib)
+        eye_far = far(0.0, 0.0, 3.0)
+        check(lib.rasm_set_camera_transform_d(renderer, camera, byref(eye_far)) == OK, "rasm_set_camera_transform_d", lib)
+        check(lib.rasm_get_camera_transform_d(renderer, camera, byref(back)) == OK and same(back.position, eye_far.position),
+              "the camera's position comes back bit for bit", lib)
+        lamp_desc = LightDesc()
+        lib.rasm_light_desc_init(byref(lamp_desc), ctypes.sizeof(lamp_desc))
+        lamp_desc.type = 1
+        lamp = lib.rasm_create_light(renderer, byref(lamp_desc))
+        lamp_at = DVec3(paris[0] + 1.0, paris[1], paris[2] + 2.0)
+        check(lib.rasm_set_light_position_d(renderer, lamp, byref(lamp_at)) == OK, "rasm_set_light_position_d", lib)
+        lamp_back = DVec3()
+        check(lib.rasm_get_light_position_d(renderer, lamp, byref(lamp_back)) == OK and same(lamp_back, lamp_at),
+              "the light's position comes back bit for bit", lib)
+        check(lib.rasm_get_light(renderer, lamp, byref(lamp_desc)) == OK and
+              (lamp_desc.position.x + lamp_desc.position_d.x, lamp_desc.position.z + lamp_desc.position_d.z) == (lamp_at.x, lamp_at.z),
+              "rasm_get_light's position + position_d is the double", lib)
+        render = lib.rasm_to_render_position(lamp_at, eye_far.position)
+        check((render.x, render.y, render.z) == (1.0, 0.0, -1.0), f"rasm_to_render_position, got {render.x} {render.y} {render.z}", lib)
+
         # Every element has the size of the first: the library steps through the array by it.
         views = (View * 2)()
         for view in views:
@@ -240,6 +291,7 @@ def main():
         # A view is a camera and an output: the small one needs a camera of its own.
         views[1].camera = lib.rasm_create_camera(renderer, byref(projection), byref(eye))
         check(views[1].camera.id != 0, "the second camera", lib)
+        check(lib.rasm_set_camera_transform_d(renderer, views[1].camera, byref(eye_far)) == OK, "the second camera, far", lib)
         views[1].rect = ViewRect(0.75, 0.0, 0.25, 0.25)
 
         # Frame N - 1 is one view through rasm_render, frame N two through rasm_render_views.
@@ -289,7 +341,7 @@ def main():
     check(sum(abs(a - b) for a, b in zip(center, corner)) > 60, f"the corner is background, got {corner}", lib)
     check(not errors, "RASM logged errors: " + " | ".join(errors), lib)
     print(f"OK: {os.path.basename(library)} {lib.rasm_get_version() >> 16}.{lib.rasm_get_version() & 0xFFFF} "
-          f"drew {args.frames} frames from Python")
+          f"drew {args.frames} frames from Python, 6370 km from the origin")
 
 
 if __name__ == "__main__":

@@ -30,24 +30,53 @@ namespace rasm
             return glm::vec3(x, y, z);
         }
 
+        // A zero up, or +Y, is the world's up: the controller then turns exactly as it did before up existed.
+        bool hasOwnUp(const glm::vec3 &up)
+        {
+            return glm::dot(up, up) > 1e-12f && up != glm::vec3(0.0f, 1.0f, 0.0f);
+        }
+
+        // Turns the camera around its own up: from its forward, the yaw turns the forward's part across up, and the
+        // pitch is measured from that plane and clamped. No fixed frame on the sphere of ups is needed, so up may
+        // follow a globe's normal anywhere, and change every frame.
+        glm::quat turnAroundUp(const glm::quat &rotation, const glm::vec3 &upAxis, float yaw, float pitch, float &newPitch)
+        {
+            const glm::vec3 up = glm::normalize(upAxis);
+            const glm::vec3 forward = rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+            glm::vec3 across = forward - up * glm::dot(forward, up);
+            // Looking straight along up: the camera's own up, laid across, gives the direction.
+            if (glm::dot(across, across) < 1e-10f)
+                across = rotation * glm::vec3(0.0f, glm::dot(forward, up) > 0.0f ? -1.0f : 1.0f, 0.0f);
+            across = glm::angleAxis(yaw, up) * glm::normalize(across);
+            const float maxPitch = glm::radians(89.0f);
+            newPitch = glm::clamp(std::asin(glm::clamp(glm::dot(forward, up), -1.0f, 1.0f)) + pitch, -maxPitch, maxPitch);
+            return glm::normalize(glm::quatLookAt(std::cos(newPitch) * across + std::sin(newPitch) * up, up));
+        }
+
         void updateFreeFly(CameraRig &rig, const CameraInput &input)
         {
             auto &freeFly = rig.controller.freeFly;
             auto &transform = rig.targetTransform;
 
-            // Look: yaw around world up, pitch around the camera's local right axis.
+            // Look: yaw around the controller's up, pitch around the camera's local right axis.
             // Rebuilding the rotation from yaw/pitch keeps the horizon level.
             const float deltaX = input.mouseEnd.x - input.mouseStart.x;
             const float deltaY = input.mouseEnd.y - input.mouseStart.y;
 
-            freeFly.yaw -= deltaX * freeFly.lookSensitivity;
-            freeFly.pitch += deltaY * freeFly.lookSensitivity;
-
             const float maxPitch = glm::radians(89.0f);
-            freeFly.pitch = glm::clamp(freeFly.pitch, -maxPitch, maxPitch);
-
-            transform.rotation = glm::normalize(glm::angleAxis(freeFly.yaw, glm::vec3(0.0f, 1.0f, 0.0f)) *
-                                                glm::angleAxis(freeFly.pitch, glm::vec3(1.0f, 0.0f, 0.0f)));
+            if (hasOwnUp(freeFly.up))
+            {
+                freeFly.yaw -= deltaX * freeFly.lookSensitivity;
+                transform.rotation = turnAroundUp(transform.rotation, freeFly.up, -deltaX * freeFly.lookSensitivity, deltaY * freeFly.lookSensitivity, freeFly.pitch);
+            }
+            else
+            {
+                freeFly.yaw -= deltaX * freeFly.lookSensitivity;
+                freeFly.pitch += deltaY * freeFly.lookSensitivity;
+                freeFly.pitch = glm::clamp(freeFly.pitch, -maxPitch, maxPitch);
+                transform.rotation = glm::normalize(glm::angleAxis(freeFly.yaw, glm::vec3(0.0f, 1.0f, 0.0f)) *
+                                                    glm::angleAxis(freeFly.pitch, glm::vec3(1.0f, 0.0f, 0.0f)));
+            }
 
             // Movement: held keys, frame-time based.
             const glm::vec3 forward = transform.rotation * glm::vec3(0.0f, 0.0f, -1.0f);
@@ -168,6 +197,13 @@ namespace rasm
             // Seed the free-fly angles from the current orientation so switching
             // controllers does not snap the view. Roll is intentionally discarded.
             const glm::vec3 forward = transform.rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+            if (hasOwnUp(controller.freeFly.up))
+            {
+                // The yaw has no frame to be measured in: it counts the turns from here.
+                rig.controller.freeFly.pitch = std::asin(glm::clamp(glm::dot(forward, glm::normalize(controller.freeFly.up)), -1.0f, 1.0f));
+                rig.controller.freeFly.yaw = 0.0f;
+                return rig;
+            }
             rig.controller.freeFly.pitch = std::asin(glm::clamp(forward.y, -1.0f, 1.0f));
             rig.controller.freeFly.yaw = std::atan2(-forward.x, -forward.z);
         }
