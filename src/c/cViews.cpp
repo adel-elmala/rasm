@@ -17,6 +17,33 @@ namespace
     }
 }
 
+namespace rasm::c
+{
+    bool readViews(const rasm_view *views, uint32_t viewCount, View *converted, const char *function)
+    {
+        uint32_t stride = 0;
+        if (viewCount > 0)
+            std::memcpy(&stride, views, sizeof(stride));
+        for (uint32_t i = 0; i < viewCount; ++i)
+        {
+            // Every element has the size of the first: the array steps by it.
+            const auto *element = reinterpret_cast<const uint8_t *>(views) + static_cast<size_t>(i) * stride;
+            uint32_t size = 0;
+            std::memcpy(&size, element, sizeof(size));
+            if (size != stride)
+            {
+                reportError(function, ("views[" + std::to_string(i) + "].size is " + std::to_string(size) + ", not the first view's " + std::to_string(stride) + ".").c_str());
+                return false;
+            }
+            rasm_view values = toC(View{});
+            if (!readSized(element, VIEW_SIZE_1_1, &values, sizeof(values), function, "view") || !checkView(values, function))
+                return false;
+            converted[i] = toCpp(values);
+        }
+        return true;
+    }
+}
+
 // NOLINTBEGIN(readability-identifier-naming): the parameters keep their names from rasm_c.h
 rasm_result RASM_CALL rasm_view_init(rasm_view *view, uint32_t size)
 try
@@ -47,25 +74,8 @@ try
         return RASM_ERROR_INVALID_ARGUMENT;
     }
     View converted[MAX_SCENE_VIEWS];
-    uint32_t stride = 0;
-    if (view_count > 0)
-        std::memcpy(&stride, views, sizeof(stride));
-    for (uint32_t i = 0; i < view_count; ++i)
-    {
-        // Every element has the size of the first: the array steps by it.
-        const auto *element = reinterpret_cast<const uint8_t *>(views) + static_cast<size_t>(i) * stride;
-        uint32_t size = 0;
-        std::memcpy(&size, element, sizeof(size));
-        if (size != stride)
-        {
-            c::reportError(__func__, ("views[" + std::to_string(i) + "].size is " + std::to_string(size) + ", not the first view's " + std::to_string(stride) + ".").c_str());
-            return RASM_ERROR_INVALID_ARGUMENT;
-        }
-        rasm_view values = c::toC(View{});
-        if (!c::readSized(element, c::VIEW_SIZE_1_1, &values, sizeof(values), __func__, "view") || !c::checkView(values, __func__))
-            return RASM_ERROR_INVALID_ARGUMENT;
-        converted[i] = c::toCpp(values);
-    }
+    if (!c::readViews(views, view_count, converted, __func__))
+        return RASM_ERROR_INVALID_ARGUMENT;
     const c::CallErrors errors;
     r->render(converted, view_count);
     return errors.result();

@@ -55,6 +55,7 @@ namespace rasm
     struct QueryPoolTag;
     struct EnvironmentTag;
     struct ReadbackTag;
+    struct TileTag;
 
     using MeshHandle                = Handle<MeshTag>;
     using BufferHandle              = Handle<BufferTag>;
@@ -78,6 +79,7 @@ namespace rasm
     using QueryPoolHandle           = Handle<QueryPoolTag>;
     using EnvironmentHandle         = Handle<EnvironmentTag>;
     using ReadbackHandle            = Handle<ReadbackTag>;
+    using TileHandle                = Handle<TileTag>;
 
 
     struct HandleSlot

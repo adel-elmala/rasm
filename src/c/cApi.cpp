@@ -595,6 +595,7 @@ namespace rasm::c
             .maxInstances = config.max_instances,
             .maxLights = config.max_lights,
             .maxMaterials = config.max_materials,
+            .maxBindlessTextures = config.max_bindless_textures,
             .maxAnimatedEntities = config.max_animated_entities,
             .animationPoolBytes = config.animation_pool_bytes,
             .maxMorphWeights = config.max_morph_weights,
@@ -660,6 +661,7 @@ namespace rasm::c
             .bloom = config.bloom ? RASM_TRUE : RASM_FALSE,
             .ui = config.ui ? RASM_TRUE : RASM_FALSE,
             .anti_aliasing = asNumber(config.antiAliasing),
+            .max_bindless_textures = config.maxBindlessTextures,
         };
     }
 

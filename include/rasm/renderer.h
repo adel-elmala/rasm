@@ -14,6 +14,7 @@
 #include "rasm/light.h"
 #include "rasm/mesh.h"
 #include "rasm/readback.h"
+#include "rasm/tileStreamer.h"
 #include "rasm/view.h"
 #include "rasm/handle.h"
 #include "rasm/render/renderContext.h"
@@ -94,6 +95,7 @@ namespace rasm
         friend class RenderGraph;
         friend class ViewGraph;
         friend struct AssetLoader::Impl;
+        friend struct TileStreamer::Impl;
 
     public:
         explicit                    Renderer(const RendererConfig& config);
