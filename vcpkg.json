@@ -20,7 +20,8 @@
         "ktx",
         "shader-slang",
         "doctest",
-        "earcut-hpp"
+        "earcut-hpp",
+        "laszip"
     ],
     "features": {
         "imgui": {

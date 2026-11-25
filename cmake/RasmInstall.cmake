@@ -60,7 +60,7 @@ configure_package_config_file("${PROJECT_SOURCE_DIR}/cmake/rasmConfig.cmake.in" 
                               INSTALL_DESTINATION "${RASM_INSTALL_CONFIG_DIR}"
                               PATH_VARS RASM_PACKAGE_SHADER_DIR)
 write_basic_package_version_file("${PROJECT_BINARY_DIR}/rasmConfigVersion.cmake" COMPATIBILITY SameMinorVersion)
-install(FILES "${PROJECT_BINARY_DIR}/install/rasmConfig.cmake" "${PROJECT_BINARY_DIR}/rasmConfigVersion.cmake"
+install(FILES "${PROJECT_BINARY_DIR}/install/rasmConfig.cmake" "${PROJECT_BINARY_DIR}/rasmConfigVersion.cmake" "${PROJECT_SOURCE_DIR}/cmake/Findlaszip.cmake"
         DESTINATION "${RASM_INSTALL_CONFIG_DIR}")
 
 # Lets another project use a build tree directly, by pointing rasm_DIR at it.
@@ -69,6 +69,7 @@ configure_package_config_file("${PROJECT_SOURCE_DIR}/cmake/rasmConfig.cmake.in" 
                               INSTALL_DESTINATION "${PROJECT_BINARY_DIR}"
                               INSTALL_PREFIX "${PROJECT_BINARY_DIR}"
                               PATH_VARS RASM_PACKAGE_SHADER_DIR)
+configure_file("${PROJECT_SOURCE_DIR}/cmake/Findlaszip.cmake" "${PROJECT_BINARY_DIR}/Findlaszip.cmake" COPYONLY)
 export(EXPORT rasmRendererTargets NAMESPACE rasm:: FILE "${PROJECT_BINARY_DIR}/rasmRendererTargets.cmake")
 export(EXPORT rasmTargets NAMESPACE rasm:: FILE "${PROJECT_BINARY_DIR}/rasmTargets.cmake")
 if (RASM_C_API)

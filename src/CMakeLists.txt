@@ -18,6 +18,7 @@ find_package(tinyobjloader CONFIG REQUIRED)
 find_package(meshoptimizer CONFIG REQUIRED)
 find_package(slang CONFIG REQUIRED)
 find_package(Ktx CONFIG REQUIRED)
+find_package(laszip REQUIRED)
 if (RASM_IMGUI)
     find_package(imgui CONFIG REQUIRED)
 endif()
@@ -64,6 +65,7 @@ target_sources(rasm_renderer PRIVATE
     "scene/vector.cpp"
     "scene/text.cpp"
     "scene/pointCloud.cpp"
+    "scene/pointCloudOctree.cpp"
     "scene/colormap.cpp"
     "scene/tileResidency.cpp"
     "scene/tileStreamer.cpp"
@@ -121,6 +123,7 @@ target_sources(rasm PRIVATE
     "platform/sdlPlatform.cpp"
     "assets/assetLoader.cpp"
     "assets/fontLoad.cpp"
+    "assets/pointCloudLoad.cpp"
     "assets/meshLoad.cpp"
     "assets/materialImport.cpp"
     "assets/textureLoad.cpp"
@@ -163,6 +166,7 @@ target_link_libraries(rasm PRIVATE Vulkan::Headers)
 target_link_libraries(rasm PRIVATE tinyobjloader::tinyobjloader)
 target_link_libraries(rasm PRIVATE SDL3::SDL3)
 target_link_libraries(rasm PRIVATE KTX::ktx)
+target_link_libraries(rasm PRIVATE laszip::laszip)
 
 # Library configuration macros live here, never in a .cpp (B2). PUBLIC so every consumer that
 # includes glm sees the same definitions (ODR) and gets a Vulkan [0, 1] clip-space depth range.

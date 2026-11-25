@@ -54,7 +54,7 @@ PointVertex vertMain(uint vertexID : SV_VertexID)
     float3 position         = mul(world, float4(local, 1.0)).xyz;
     float4 viewPosition     = mul(scene->view, float4(position, 1.0));
     float4 clip             = mul(scene->projection, viewPosition);
-    float diameter          = getPointDiameter(scene, style, clip.w);
+    float diameter          = getPointDiameter(scene, style, chunk.spacing, getPointFinerShare(instance->meshletVisibility, local), clip.w);
     float pixelWorld        = 2.0 * max(abs(clip.w), 1e-6) / (abs(scene->projection[1][1]) * float(scene->viewportHeight));
     float radius            = 0.5 * diameter * pixelWorld;
     // A round point under 3 pixels is drawn square: its disc would miss the pixel centres it covers.

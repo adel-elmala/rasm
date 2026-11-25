@@ -209,6 +209,7 @@ struct PointData
     float               rangeMin;           // the scalars the colormap spans (their logarithms with POINT_LOG)
     float               rangeMax;
     float               density;            // points drawn per point-size square of the chunk on screen; 0: all
+    float               maxSize;            // POINT_ADAPTIVE: the largest diameter, in pixels
 };
 
 // The texture transforms come after the rest, so a shader copies Material without them and reads them only for a
@@ -235,7 +236,7 @@ struct InstanceData
     uint32_t        materialIndex;
     float4          previousWorld[3];   // the rows the frame before drew, for motion; w: its translation minus this one
     int32_t         animationRow;       // its InstanceTransform in SceneData::animatedTransformsPtr, -1: the matrices above
-    int32_t         meshletVisibility;  // its first word in each view's meshlet visibility bits, -1: none; a VECTOR mesh with labels (no meshlets): its first label slot
+    int32_t         meshletVisibility;  // its first word in each view's meshlet visibility bits, -1: none; a VECTOR mesh with labels (no meshlets): its first label slot; a point chunk: its PointChunkLod (lib/points.slang)
 };
 
 struct SceneData

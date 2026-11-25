@@ -20,6 +20,7 @@ namespace rasm
         uint64_t                indices                 = 0;
         uint64_t                subMeshes               = 0;
         uint64_t                meshlets                = 0;
+        uint64_t                points                  = 0;
         uint64_t                largestFreeVertices     = 0;
         uint64_t                largestFreeIndices      = 0;
     };

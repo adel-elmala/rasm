@@ -114,6 +114,12 @@ namespace rasm
         SPHERE,         // round, with the depth of a sphere
     };
 
+    enum class PointSizeMode : uint32_t
+    {
+        FIXED,          // size in sizeUnit
+        ADAPTIVE,       // from size, grown to the chunk's spacing on screen, up to maxSize pixels
+    };
+
     enum class PointColorMode : uint32_t
     {
         COLOR,          // the points' own colors, white without them
@@ -130,6 +136,8 @@ namespace rasm
         TextureHandle  colormap;                        // Renderer::createColormap
         ScalarRange    range        = {};
         float          density      = 2.0f;             // points drawn per point-size square of the chunk on screen; 0: all
+        PointSizeMode  sizeMode     = PointSizeMode::FIXED;
+        float          maxSize      = 8.0f;             // ADAPTIVE: the largest diameter, in pixels
     };
 
     constexpr uint32_t MAX_TEXTURE_SLOTS = static_cast<uint32_t>(PbrSlot::COUNT);

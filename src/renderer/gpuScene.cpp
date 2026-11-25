@@ -403,9 +403,10 @@ namespace rasm
                 row.points = {.color = points.color,
                               .size = points.size,
                               .flags = (points.sizeUnit == VectorUnit::METRES ? gfx::POINT_METRES : 0u) | shapes[std::min(static_cast<uint32_t>(points.shape), 2u)] |
-                                       (points.colorMode == PointColorMode::SCALAR ? gfx::POINT_SCALAR : 0u),
+                                       (points.colorMode == PointColorMode::SCALAR ? gfx::POINT_SCALAR : 0u) | (points.sizeMode == PointSizeMode::ADAPTIVE ? gfx::POINT_ADAPTIVE : 0u),
                               .colormap = engine.getBindlessTextureIndex(points.colormap),
-                              .density = std::max(points.density, 0.0f)};
+                              .density = std::max(points.density, 0.0f),
+                              .maxSize = std::max(points.maxSize, 1.0f)};
                 writeScalarRange(points.range, row.points);
             }
             return row;
@@ -713,7 +714,7 @@ namespace rasm
                                   .geometryIndex = subMesh.geometry.geometryIndex,
                                   .materialIndex = static_cast<uint32_t>(getSubMeshMaterial(*this, entityRef, subMesh).handle.index),
                                   .animationRow = getAnimationRow(entity, i),
-                                  .meshletVisibility = state.labelCount > 0 ? state.firstLabel : gpuScene->instanceMeshletWords[state.firstInstance + i]};
+                                  .meshletVisibility = subMesh.geometry.pointCount > 0 ? state.pointLod : (state.labelCount > 0 ? state.firstLabel : gpuScene->instanceMeshletWords[state.firstInstance + i])};
             writeWorldRows(model, row.world, row.translationLow);
             writePreviousRows(syncedMatrix * glm::dmat4(subMesh.transform), model, row.previousWorld);
             gpuScene->instances.setRow(state.firstInstance + i, &row);

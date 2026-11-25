@@ -23,6 +23,7 @@ namespace rasm
         INSTANCES,
         MATERIALS,
         TEXTURES,       // bindless slots
+        POINTS,         // the point pool's 8 B units
         COUNT,
     };
 

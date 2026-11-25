@@ -157,17 +157,21 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
             // A chunk keeps a prefix of its points: the count goes above CULL_LOD_SHIFT, less one, in place of a LOD
             // (16 bits, up to MAX_POINT_CHUNK_POINTS).
             uint total      = draw.indexCount / POINT_INDICES;
-            PointData style = (scene->materialsPtr + scene->instancesPtr[draw.firstInstance].materialIndex)->points;
-            uint count      = selectPointCount(scene, style, total, sphere.center, sphere.radius);
-            counted         = earlyFlags == 0;
+            InstanceData *instance = scene->instancesPtr + draw.firstInstance;
+            PointData style = (scene->materialsPtr + instance->materialIndex)->points;
+            float drawn     = getPointDrawnShare(instance->meshletVisibility);
+            uint count      = selectPointCount(scene, style, total, drawn, sphere.center, sphere.radius);
+            // A chunk faded out draws nothing.
+            counted         = earlyFlags == 0 && count > 0;
             // Small points go to the compute path, the others to the run's triangles. The chunk takes no slot, and the
             // late phase sees it drawn.
             uint4 rect      = uint4(0);
+            float spacing   = (style.flags & POINT_ADAPTIVE) != 0 ? loadPointSpacing(scene, uint(getDrawGeometry(scene, draw)->vertexOffset)) : 0.0;
             bool raster     = counted && scene->pointRasterPtr != nullptr && draw.firstInstance < POINT_RASTER_MAX_ROWS &&
-                              isRasterChunk(scene, style, sphere.center, sphere.radius, count, rect) && appendPointBatches(scene, draw.firstInstance, count, count < total, rect);
+                              isRasterChunk(scene, style, spacing, sphere.center, sphere.radius, count, rect) && appendPointBatches(scene, draw.firstInstance, count, count < total, rect);
             visible         = counted && !raster;
             packed          = raster ? CULL_RASTER : CULLED;
-            lod             = count - 1;
+            lod             = max(count, 1u) - 1;
             triangles       = counted ? count : 0;
             lod0Triangles   = counted ? total : 0;
             lodTriangles    = triangles;
