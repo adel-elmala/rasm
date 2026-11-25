@@ -654,6 +654,66 @@ namespace
         return assets.cube.isValid() && addSunsetLight(engine, assets, content, 0.8f, glm::vec3(0.4f, -0.8f, -0.3f), 2.5f);
     }
 
+    // Labels from Roboto's distance atlas: places with a point each and their names beside them (UTF-8 past ASCII), two
+    // names over each other where the higher priority wins, two lines, light text with a dark halo, names in metres on
+    // the ground that shrink with distance, a name over a box and one behind it that the box hides by depth.
+    bool buildLabels(rasm::Engine &engine, const Assets &assets, Content &content)
+    {
+        addGround(engine, assets, content, 8.0f, glm::vec3(0.75f, 0.74f, 0.7f));
+        rasm::FontAtlas atlas;
+        if (!engine.loadFont("fonts/Roboto-Medium.ttf", atlas))
+            return false;
+        const rasm::FontHandle font = engine.createFont(atlas);
+        const glm::dvec3 origin(0.0);
+        const rasm::MaterialHandle text =
+            createVectorMaterial(engine, {.color = glm::vec4(0.12f, 0.1f, 0.08f, 1.0f), .width = 14.0f, .outlineColor = glm::vec4(1.0f), .outlineWidth = 2.0f, .drawOrder = 40, .font = font});
+
+        rasm::VectorGeometry points;
+        rasm::VectorGeometry names;
+        const char *placeNames[4] = {"Caf\u00E9 Ost", "Stra\u00DFe 2", "\u00C5lesund", "AVA Tower"};
+        rasm::LabelDesc labels[4];
+        glm::dvec3 places[4];
+        for (int32_t k = 0; k < 4; ++k)
+        {
+            places[k] = {-3.4 + 1.9 * k, 0.0, 1.5};
+            labels[k] = {.position = places[k], .text = placeNames[k], .priority = 1.0f, .anchor = rasm::LabelAnchor::LEFT, .offset = glm::vec2(0.2f, 0.0f)};
+        }
+        rasm::addVectorPoints(points, origin, places, 4);
+        rasm::addVectorLabels(names, origin, atlas, labels, 4);
+        addVectorEntity(engine, content, std::move(points),
+                        createVectorMaterial(engine, {.color = glm::vec4(0.85f, 0.1f, 0.2f, 1.0f), .width = 10.0f, .outlineColor = glm::vec4(1.0f), .outlineWidth = 2.0f, .drawOrder = 5}));
+        // Over each other: the higher priority is placed, the other hidden.
+        const rasm::LabelDesc overlap[3] = {{.position = {-0.6, 0.0, -0.8}, .text = "Old Town", .priority = 1.0f},
+                                            {.position = {-0.4, 0.0, -0.75}, .text = "Harbour", .priority = 5.0f},
+                                            {.position = {-3.2, 0.0, -0.6}, .text = "Two lines\nof text", .priority = 2.0f}};
+        rasm::addVectorLabels(names, origin, atlas, overlap, 3);
+        addVectorEntity(engine, content, std::move(names), text);
+
+        rasm::VectorGeometry night;
+        const rasm::LabelDesc nightLabel = {.position = {2.6, 0.0, -0.4}, .text = "Night", .priority = 3.0f};
+        rasm::addVectorLabels(night, origin, atlas, &nightLabel, 1);
+        addVectorEntity(engine, content, std::move(night),
+                        createVectorMaterial(engine, {.color = glm::vec4(1.0f, 0.95f, 0.6f, 1.0f), .width = 20.0f, .outlineColor = glm::vec4(0.05f, 0.05f, 0.15f, 1.0f), .outlineWidth = 3.0f, .drawOrder = 40, .font = font}));
+
+        rasm::VectorGeometry metres;
+        const rasm::LabelDesc metreLabels[2] = {{.position = {-1.5, 0.0, -3.5}, .text = "Far"}, {.position = {-1.2, 0.0, 0.5}, .text = "Near"}};
+        rasm::addVectorLabels(metres, origin, atlas, metreLabels, 2);
+        addVectorEntity(engine, content, std::move(metres),
+                        createVectorMaterial(engine, {.color = glm::vec4(0.2f, 0.25f, 0.6f, 1.0f), .width = 0.3f, .widthUnit = rasm::VectorUnit::METRES, .outlineColor = glm::vec4(1.0f), .outlineWidth = 0.03f, .drawOrder = 30, .font = font}));
+
+        addEntity(engine, content, "box", assets.cube, createColorMaterial(engine, glm::vec3(0.5f, 0.5f, 0.55f), 0.6f),
+                  rasm::Transform{glm::vec3(1.4f, 0.4f, -1.2f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(0.8f)});
+        rasm::VectorGeometry box;
+        const rasm::LabelDesc boxLabels[2] = {{.position = {1.4, 0.81, -1.2}, .text = "On top", .anchor = rasm::LabelAnchor::BOTTOM}, {.position = {1.4, 0.0, -2.1}, .text = "Behind the box"}};
+        rasm::addVectorLabels(box, origin, atlas, boxLabels, 2);
+        addVectorEntity(engine, content, std::move(box), text);
+
+        content.eye = glm::vec3(0.0f, 4.0f, 5.5f);
+        content.center = glm::vec3(0.0f, 0.0f, -0.6f);
+        content.fovY = 45.0f;
+        return assets.cube.isValid() && font.isValid() && addSunsetLight(engine, assets, content, 0.8f, glm::vec3(0.4f, -0.8f, -0.3f), 2.5f);
+    }
+
     // The tile_streaming test's frame: the streamer's update, and the tiles it hands out get their boxes at once.
     void updateTiles(rasm::Engine &engine, const Assets &assets, const Content &content, rasm::CameraHandle camera)
     {
@@ -700,6 +760,9 @@ namespace
         {.name = "vectors",       .build = buildVectors},
         {.name = "vectors_msaa4", .build = buildVectors,       .samples = 4},
         {.name = "vectors_taa",   .build = buildVectors,       .taa = true, .frames = 16},
+        {.name = "labels",        .build = buildLabels},
+        {.name = "labels_msaa4",  .build = buildLabels,        .samples = 4},
+        {.name = "labels_taa",    .build = buildLabels,        .taa = true, .frames = 16},
         // The same images drawn by meshlets: the same triangles, so the same pixels. The mesh_ tests take the mesh shaders
         // where the device has them (lavapipe and the desktop GPUs do), else vertex pulling. lavapipe's mesh shaders round a
         // few positions differently from its vertex shaders: up to 3 levels on 0.2% of the pixels after TAA, and a few edge
@@ -718,6 +781,7 @@ namespace
         {.name = "far_skinning",  .build = buildSkinning,      .time = 1.25, .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "skinning"},
         {.name = "far_taa",       .build = buildHelmet,        .taa = true, .frames = 16, .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "taa"},
         {.name = "far_terrain",   .build = buildTerrain,       .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "terrain"},
+        {.name = "far_labels",    .build = buildLabels,        .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "labels"},
     };
     // clang-format on
 
