@@ -21,6 +21,7 @@ rasm_add_example(18_meshlets)
 rasm_add_example(20_views)
 rasm_add_example(23_large_world)
 rasm_add_example(24_map_tiles)
+rasm_add_example(25_vector_map)
 # The renderer alone: no window, no SDL, no loaders. It links rasm::renderer only, so the build checks that the renderer
 # needs neither the SDL platform nor the file loaders.
 rasm_add_example(21_renderer rasm::renderer)

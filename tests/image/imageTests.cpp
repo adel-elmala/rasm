@@ -560,6 +560,100 @@ namespace
         return addSunsetLight(engine, assets, content, 0.6f, glm::vec3(0.7f, -0.3f, -0.3f), 3.0f);
     }
 
+    rasm::MaterialHandle createVectorMaterial(rasm::Engine &engine, const rasm::VectorMaterial &style)
+    {
+        const rasm::MaterialHandle material = engine.createMaterial(rasm::MaterialType::VECTOR);
+        rasm::Material values = engine.getMaterial(material);
+        values.vector = style;
+        engine.updateMaterial(material, values);
+        return material;
+    }
+
+    void addVectorEntity(rasm::Engine &engine, Content &content, rasm::VectorGeometry geometry, rasm::MaterialHandle material)
+    {
+        addEntity(engine, content, "vectors", engine.createMesh(rasm::buildVectorMesh(std::move(geometry))), material, rasm::Transform{});
+    }
+
+    // Vector features on a flat ground: three zigzags with round, miter and bevel joins and round, square and butt caps,
+    // outlined; a dashed line, a line 0.3 px wide (it keeps one pixel and fades), a line in metres on the ground's plane, a
+    // see-through polygon with a hole under the lines (its draw order is lower), points with a ring, a box with a line
+    // behind it (hidden) and an overlay line (over it), and a short line with 120 px round caps just past the left edge,
+    // whose anchors are off screen: culling's pad must keep it.
+    bool buildVectors(rasm::Engine &engine, const Assets &assets, Content &content)
+    {
+        addGround(engine, assets, content, 8.0f, glm::vec3(0.75f, 0.74f, 0.7f));
+        const glm::dvec3 origin(0.0);
+        const rasm::MaterialHandle zigzag = createVectorMaterial(engine, {.color = glm::vec4(1.0f, 0.6f, 0.15f, 1.0f), .width = 14.0f, .outlineColor = glm::vec4(0.3f, 0.15f, 0.05f, 1.0f), .outlineWidth = 3.0f});
+        rasm::VectorGeometry zigzags;
+        const rasm::LineJoin joins[3] = {rasm::LineJoin::ROUND, rasm::LineJoin::MITER, rasm::LineJoin::BEVEL};
+        const rasm::LineCap caps[3] = {rasm::LineCap::ROUND, rasm::LineCap::SQUARE, rasm::LineCap::BUTT};
+        for (uint32_t i = 0; i < 3; ++i)
+        {
+            const double z = -2.2 + 1.1 * i;
+            const glm::dvec3 points[4] = {{-3.6, 0.0, z}, {-2.8, 0.0, z + 0.7}, {-2.0, 0.0, z}, {-1.0, 0.0, z + 0.5}};
+            const uint32_t size = 4;
+            rasm::addVectorLines(zigzags, origin, points, &size, 1, {.join = joins[i], .cap = caps[i]});
+        }
+        addVectorEntity(engine, content, std::move(zigzags), zigzag);
+
+        rasm::VectorGeometry dashed;
+        std::vector<glm::dvec3> wave;
+        for (int32_t k = 0; k <= 40; ++k)
+            wave.push_back({0.2 + 0.09 * k, 0.0, -2.0 + 0.25 * std::sin(0.4 * k)});
+        const auto waveSize = static_cast<uint32_t>(wave.size());
+        rasm::addVectorLines(dashed, origin, wave.data(), &waveSize, 1);
+        addVectorEntity(engine, content, std::move(dashed), createVectorMaterial(engine, {.color = glm::vec4(0.1f, 0.1f, 0.1f, 1.0f), .width = 4.0f, .dashLength = 12.0f, .gapLength = 8.0f}));
+
+        rasm::VectorGeometry thin;
+        const glm::dvec3 thinPoints[2] = {{0.2, 0.0, -1.2}, {3.8, 0.0, -0.9}};
+        const uint32_t two = 2;
+        rasm::addVectorLines(thin, origin, thinPoints, &two, 1);
+        addVectorEntity(engine, content, std::move(thin), createVectorMaterial(engine, {.color = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f), .width = 0.3f}));
+
+        rasm::VectorGeometry metres;
+        const glm::dvec3 metrePoints[3] = {{0.2, 0.0, -0.4}, {2.0, 0.0, 0.1}, {3.8, 0.0, -0.4}};
+        const uint32_t three = 3;
+        rasm::addVectorLines(metres, origin, metrePoints, &three, 1, {.join = rasm::LineJoin::MITER});
+        addVectorEntity(engine, content, std::move(metres),
+                        createVectorMaterial(engine, {.color = glm::vec4(0.2f, 0.5f, 0.2f, 1.0f), .width = 0.2f, .widthUnit = rasm::VectorUnit::METRES, .facing = rasm::VectorFacing::GROUND}));
+
+        rasm::VectorGeometry polygon;
+        const glm::dvec3 rings[8] = {{0.4, 0.0, -2.6}, {2.6, 0.0, -2.6}, {2.6, 0.0, -0.8}, {0.4, 0.0, -0.8}, {1.2, 0.0, -2.0}, {1.8, 0.0, -2.0}, {1.8, 0.0, -1.4}, {1.2, 0.0, -1.4}};
+        const uint32_t ringSizes[2] = {4, 4};
+        const uint32_t ringCount = 2;
+        rasm::addVectorPolygons(polygon, origin, rings, ringSizes, &ringCount, 1);
+        addVectorEntity(engine, content, std::move(polygon), createVectorMaterial(engine, {.color = glm::vec4(0.2f, 0.4f, 0.9f, 0.6f), .drawOrder = -5}));
+
+        rasm::VectorGeometry points;
+        glm::dvec3 places[5];
+        for (int32_t k = 0; k < 5; ++k)
+            places[k] = {-3.2 + 1.6 * k, 0.0, 1.6};
+        rasm::addVectorPoints(points, origin, places, 5);
+        addVectorEntity(engine, content, std::move(points),
+                        createVectorMaterial(engine, {.color = glm::vec4(0.85f, 0.1f, 0.2f, 1.0f), .width = 16.0f, .outlineColor = glm::vec4(1.0f), .outlineWidth = 3.0f, .drawOrder = 5}));
+
+        addEntity(engine, content, "box", assets.cube, createColorMaterial(engine, glm::vec3(0.5f, 0.5f, 0.55f), 0.6f),
+                  rasm::Transform{glm::vec3(1.2f, 0.35f, 0.9f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(0.7f)});
+        rasm::VectorGeometry behind;
+        const glm::dvec3 behindPoints[2] = {{0.2, 0.0, 0.5}, {2.4, 0.0, 0.5}};
+        rasm::addVectorLines(behind, origin, behindPoints, &two, 1);
+        addVectorEntity(engine, content, std::move(behind), createVectorMaterial(engine, {.color = glm::vec4(0.1f, 0.6f, 0.6f, 1.0f), .width = 6.0f}));
+        rasm::VectorGeometry over;
+        const glm::dvec3 overPoints[2] = {{0.2, 0.0, 0.2}, {2.4, 0.0, 0.2}};
+        rasm::addVectorLines(over, origin, overPoints, &two, 1);
+        addVectorEntity(engine, content, std::move(over), createVectorMaterial(engine, {.color = glm::vec4(0.7f, 0.1f, 0.8f, 1.0f), .width = 6.0f, .drawOrder = 20, .depth = rasm::VectorDepth::OVERLAY}));
+
+        rasm::VectorGeometry edge;
+        const glm::dvec3 edgePoints[2] = {{-5.55, 0.0, 0.0}, {-5.55, 0.0, 0.05}};
+        rasm::addVectorLines(edge, origin, edgePoints, &two, 1, {.cap = rasm::LineCap::ROUND});
+        addVectorEntity(engine, content, std::move(edge), createVectorMaterial(engine, {.color = glm::vec4(0.1f, 0.3f, 0.9f, 1.0f), .width = 120.0f}));
+
+        content.eye = glm::vec3(0.0f, 4.0f, 5.5f);
+        content.center = glm::vec3(0.0f, 0.0f, -0.3f);
+        content.fovY = 45.0f;
+        return assets.cube.isValid() && addSunsetLight(engine, assets, content, 0.8f, glm::vec3(0.4f, -0.8f, -0.3f), 2.5f);
+    }
+
     // The tile_streaming test's frame: the streamer's update, and the tiles it hands out get their boxes at once.
     void updateTiles(rasm::Engine &engine, const Assets &assets, const Content &content, rasm::CameraHandle camera)
     {
@@ -603,6 +697,9 @@ namespace
         {.name = "views_window2", .build = buildViews,         .views = true, .secondWindow = true},
         {.name = "tile_streaming", .build = buildTiles},
         {.name = "terrain",       .build = buildTerrain},
+        {.name = "vectors",       .build = buildVectors},
+        {.name = "vectors_msaa4", .build = buildVectors,       .samples = 4},
+        {.name = "vectors_taa",   .build = buildVectors,       .taa = true, .frames = 16},
         // The same images drawn by meshlets: the same triangles, so the same pixels. The mesh_ tests take the mesh shaders
         // where the device has them (lavapipe and the desktop GPUs do), else vertex pulling. lavapipe's mesh shaders round a
         // few positions differently from its vertex shaders: up to 3 levels on 0.2% of the pixels after TAA, and a few edge
