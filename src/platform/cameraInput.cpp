@@ -15,6 +15,24 @@ namespace rasm
         {
             return x >= area.x && x < area.x + area.width && y >= area.y && y < area.y + area.height;
         }
+
+        CameraDrag getDrag(const CameraButtons &buttons, const InputEvent &event)
+        {
+            switch (event.button)
+            {
+            case MouseButton::LEFT:
+                return (event.modifiers & KEY_MOD_SHIFT) != 0 ? buttons.shiftLeft : buttons.left;
+            case MouseButton::RIGHT:
+                return buttons.right;
+            case MouseButton::MIDDLE:
+                return buttons.middle;
+            case MouseButton::BACK:
+                return buttons.back;
+            case MouseButton::FORWARD:
+                return buttons.forward;
+            }
+            return CameraDrag::NONE;
+        }
     }
 
     glm::vec2 toInputNdc(float x, float y, const InputArea &area)
@@ -42,25 +60,42 @@ namespace rasm
             state.pointerY = event.y;
             state.pointerInWindow = true;
             state.pointerSeen = true;
+            state.pointerNdc = toInputNdc(event.x, event.y, area);
             if (!event.down)
             {
-                state.dragActive = false;
+                if (event.button == state.dragButton)
+                    state.dragActive = false;
                 break;
             }
-            if (capture.mouse || !isInArea(event.x, event.y, area))
+            // A drag released since the last frame keeps its motion until takeCameraInput gives it: a press before that
+            // starts nothing.
+            if (state.dragActive || state.drag != CameraDrag::NONE || capture.mouse || !isInArea(event.x, event.y, area))
                 break;
-            state.dragStart = toInputNdc(event.x, event.y, area);
+            state.drag = getDrag(state.buttons, event);
+            if (state.drag == CameraDrag::NONE)
+                break;
+            state.dragButton = event.button;
+            state.dragStart = state.pointerNdc;
             state.dragEnd = state.dragStart;
             state.dragActive = true;
             break;
         case InputEventType::MOUSE_MOVE:
+        {
+            // A drag follows the motion, not the position: during a mouse grab the pointer stands still and only dx and
+            // dy move, and a drag that leaves the area or the window goes on at the same pace. An event without them
+            // (a script, an application's own window) moves by its change of position.
+            glm::vec2 motion(event.dx, event.dy);
+            if (motion == glm::vec2(0.0f) && state.pointerSeen)
+                motion = glm::vec2(event.x - state.pointerX, event.y - state.pointerY);
+            if (state.dragActive)
+                state.dragEnd += toInputNdc(area.x + 0.5f * area.width + motion.x, area.y + 0.5f * area.height + motion.y, area);
             state.pointerX = event.x;
             state.pointerY = event.y;
             state.pointerInWindow = true;
             state.pointerSeen = true;
-            if (state.dragActive)
-                state.dragEnd = toInputNdc(event.x, event.y, area);
+            state.pointerNdc = toInputNdc(event.x, event.y, area);
             break;
+        }
         case InputEventType::MOUSE_WHEEL:
             // Wheel events carry no position. Before the first move, a wheel over the window counts.
             if (!capture.mouse && (!state.pointerSeen || (state.pointerInWindow && isInArea(state.pointerX, state.pointerY, area))))
@@ -87,12 +122,21 @@ namespace rasm
 
     CameraInput takeCameraInput(CameraInputState &state, const UiInputCapture &capture, float deltaTime)
     {
-        CameraInput input = {.wheelDelta = state.wheel, .deltaTime = deltaTime};
-        if (state.dragActive)
+        // A drag released since the last frame still gives its motion, so a press, a move and a release within one
+        // frame (a slow frame, or a script) move the camera; then the drag is over.
+        CameraInput input = {.wheelDelta = state.wheel, .deltaTime = deltaTime, .pointer = state.pointerNdc};
+        if (state.drag == CameraDrag::ORBIT)
         {
             input.mouseStart = state.dragStart;
             input.mouseEnd = state.dragEnd;
         }
+        else if (state.drag == CameraDrag::PAN)
+        {
+            input.panStart = state.dragStart;
+            input.panEnd = state.dragEnd;
+        }
+        if (!state.dragActive)
+            state.drag = CameraDrag::NONE;
         if (!capture.keyboard)
         {
             input.forward = isDown(state, Key::W);

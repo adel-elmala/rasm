@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cameras and Input · RASM</title>
 <meta name="description" content="Create and control cameras: projections, trackball and free-fly controllers, view and projection matrices, and the input that drives them.">
-<meta name="rasm-sources" content="include/rasm/camera.h include/rasm/renderSpace.h src/renderer/renderSpace.cpp include/rasm/cameraController.h include/rasm/cameraInput.h include/rasm/input.h src/scene/cameraController.cpp src/platform/cameraInput.cpp include/rasm/renderer.h include/rasm/window.h include/rasm/scene.h src/scene/camera.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/renderer/renderer.cpp src/renderer/gpuScene.cpp src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/taa.cpp src/scene/scene.cpp src/core/handle.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp">
+<meta name="rasm-sources" content="include/rasm/camera.h include/rasm/grid.h include/rasm/renderSpace.h src/renderer/renderSpace.cpp include/rasm/cameraController.h include/rasm/cameraInput.h include/rasm/input.h src/scene/cameraController.cpp src/platform/cameraInput.cpp include/rasm/renderer.h include/rasm/window.h include/rasm/scene.h src/scene/camera.cpp src/platform/sdlPlatform.cpp src/platform/platform.h src/renderer/renderer.cpp src/renderer/gpuScene.cpp src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/taa.cpp src/scene/scene.cpp src/core/handle.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -222,12 +222,15 @@ engine.addCameraToScene(scene, camera);</code></pre>
   <pre class="sig">struct CameraController
 {
     enum class Type { TRACK_BALL, FREE_FLY, NONE };
+    enum class OrbitStyle : uint32_t { TURNTABLE, ARCBALL };
 
     struct TrackBall
     {
         float       radius;
         glm::dvec3  center;
         float       orbitSensitivity;
+        OrbitStyle  style;
+        glm::vec3   up;
     };
 
     struct FreeFly
@@ -252,9 +255,11 @@ engine.addCameraToScene(scene, camera);</code></pre>
     <p>How input moves the camera. <code>type</code> says which member of the union is used. In <code>rasm/cameraController.h</code>, which <code>rasm/camera.h</code> includes.</p>
     <dl>
       <dt>type</dt><dd><code>TRACK_BALL</code> or <code>FREE_FLY</code>, or <code>NONE</code>: no controller. <code>beginFrame</code> then leaves the camera alone, and it keeps the pose you set with <code>setCameraTransform</code>. A <code>CameraRig</code> with <code>NONE</code> only eases toward its target.</dd>
-      <dt>radius</dt><dd>Orbit distance from <code>center</code>. The wheel subtracts its steps from it (never below 0). The rendered distance eases toward it.</dd>
+      <dt>radius</dt><dd>Orbit distance from <code>center</code>. Each wheel step multiplies it by <code>CAMERA_WHEEL_ZOOM</code> (0.9 forward, 1 / 0.9 backward), never below <code>MIN_TRACK_BALL_RADIUS</code>. The rendered distance eases toward it. With an orthographic projection the wheel scales the box instead (<a href="#updateCameraRig"><code>updateCameraRig</code></a>). A pan drag moves <code>center</code> across the view, at once. <code>orbitSensitivity</code> 0 makes a plan view that only pans and zooms.</dd>
       <dt>center</dt><dd>The point the camera orbits and looks at, in world space, in doubles.</dd>
-      <dt>orbitSensitivity</dt><dd>Multiplies the drag rotation. 1 means the scene follows the cursor.</dd>
+      <dt>orbitSensitivity</dt><dd>Multiplies the drag rotation: at 1 a turntable turns 90° per NDC unit of drag (half the view's smaller side), and an arcball's scene follows the cursor. 0: a plan view that only pans and zooms.</dd>
+      <dt>style</dt><dd><code>TURNTABLE</code> (the default, 0): the drag's motion turns around <code>up</code> and tilts, short of the poles, with no roll, the same anywhere in the view. <code>ARCBALL</code>: free rotation from the drag's points on Holroyd's ball (a sphere near the centre, a hyperbola outside), rolls included, smooth past the view's edge. How they differ: <a href="../guides/camera-controllers.html#edges">At the edge of the view</a>.</dd>
+      <dt>up (trackball)</dt><dd>The turntable's axis, a globe's local up for example. Zero: +Y.</dd>
       <dt>yaw, pitch</dt><dd>Radians. <code>setCameraController</code> overwrites them from the current view direction, so the view does not jump. Pitch stays within ±89°.</dd>
       <dt>speed</dt><dd>World units per second for W, A, S, D.</dd>
       <dt>lookSensitivity</dt><dd>Radians per NDC unit of mouse drag.</dd>
@@ -502,6 +507,24 @@ engine.render(city.scene, camera);</code></pre>
   </div>
 </div>
 
+<div class="api" id="setCameraButtons">
+  <pre class="sig">void setCameraButtons(const CameraButtons&amp; buttons);</pre>
+  <div class="body">
+    <p>Which drag each mouse button starts for the engine's own camera input, the one <code>getCameraInput</code> gives (<a href="#CameraButtons"><code>CameraButtons</code></a>). By default the left button orbits, and the right and middle buttons and Shift + left pan. Set every button to <code>CameraDrag::ORBIT</code> to orbit with any button, as before pans existed.</p>
+  </div>
+</div>
+
+<div class="api" id="setMouseGrab">
+  <pre class="sig">void setMouseGrab(bool on, WindowHandle window = {});</pre>
+  <div class="body">
+    <p>Grabs the mouse for a camera drag: the SDL platform hides the pointer and sends motion only (<code>InputEvent::dx</code>, <code>dy</code>), so the drag goes on past the window's and the screen's edge, and on release puts the pointer back where the grab began. The engine's own camera input grabs during its drags by itself (in <code>beginFrame</code>, for a camera with a controller). An application with its own <code>CameraInputState</code> per view calls it each frame with the drag's state; one that owns its window (<code>NATIVE</code>) grabs the mouse itself and sends the motion in <code>dx</code>, <code>dy</code>. A headless renderer does nothing.</p>
+    <pre><code>bool dragging = false;
+for (ViewCamera &amp;view : views)
+    dragging = dragging || view.input.dragActive;
+engine.setMouseGrab(dragging);</code></pre>
+  </div>
+</div>
+
 <div class="api" id="getInputEvents">
   <pre class="sig">const InputEvent* getInputEvents(uint32_t&amp; count) const;</pre>
   <div class="body">
@@ -538,11 +561,17 @@ engine.render(city.scene, camera);</code></pre>
     bool      backward = false;
     bool      left     = false;
     bool      right    = false;
+
+    glm::vec2 panStart = glm::vec2(0.0f);
+    glm::vec2 panEnd   = glm::vec2(0.0f);
+    glm::vec2 pointer  = glm::vec2(0.0f);
 };</pre>
   <div class="body">
     <p>One frame of input for <code>updateCamera</code> and <a href="#updateCameraRig"><code>updateCameraRig</code></a>, from <a href="#takeCameraInput"><code>takeCameraInput</code></a> or your own code.</p>
     <dl>
-      <dt>mouseStart, mouseEnd</dt><dd>The drag of this frame, in NDC with +Y up (<a href="#toInputNdc"><code>toInputNdc</code></a>). Both axes are divided by the smaller side of the window or area, so the short axis spans [−1, 1] and the long one is wider. Equal values mean no drag.</dd>
+      <dt>mouseStart, mouseEnd</dt><dd>The orbit drag of this frame (a free-fly camera's look), in NDC with +Y up (<a href="#toInputNdc"><code>toInputNdc</code></a>). Both axes are divided by the smaller side of the window or area, so the short axis spans [−1, 1] and the long one is wider. Equal values mean no drag.</dd>
+      <dt>panStart, panEnd</dt><dd>The pan drag of this frame, in the same NDC: a trackball moves its center by it; a free-fly camera looks with it too. Which button gives which drag: <a href="#CameraButtons"><code>CameraButtons</code></a>.</dd>
+      <dt>pointer</dt><dd>The pointer in the same NDC, where an orthographic view zooms. 0 (the center) when no event told where it is.</dd>
       <dt>wheelDelta</dt><dd>Wheel steps this frame (positive = away from you).</dd>
       <dt>deltaTime</dt><dd>Seconds since the last frame, or <code>EngineConfig::fixedDeltaTime</code> when it is set. Used for free-fly movement and easing.</dd>
       <dt>forward … right</dt><dd>Held keys: W, S, A, D by position.</dd>
@@ -550,11 +579,19 @@ engine.render(city.scene, camera);</code></pre>
   </div>
 </div>
 
+<div class="api" id="CAMERA_WHEEL_ZOOM">
+  <pre class="sig">constexpr float     CAMERA_WHEEL_ZOOM       = 0.9f;
+constexpr float     MIN_TRACK_BALL_RADIUS   = 1e-4f;</pre>
+  <div class="body">
+    <p>A wheel step scales a trackball's radius, or an orthographic view's box, by <code>CAMERA_WHEEL_ZOOM</code>: toward the target for a forward step, away for a backward one, so a zoom feels the same at a millimetre and at a kilometre. The radius never goes under <code>MIN_TRACK_BALL_RADIUS</code>, so a zoom out always works again, nor over 10<sup>9</sup>; an orthographic box's smaller half side stays in the same range. In <code>rasm/cameraController.h</code>. How it works: <a href="../guides/camera-controllers.html#pan-zoom">Pan and zoom</a>.</p>
+  </div>
+</div>
+
 <div class="api" id="updateCamera">
   <pre class="sig">void updateCamera(CameraHandle camera, const CameraInput&amp; input);</pre>
   <div class="body">
     <p>Moves the target transform with the camera's controller, then eases the rendered transform toward it. The trackball eases along the orbit sphere, so the camera does not cut inside the orbit. The next matrices use the result.</p>
-    <p>It runs <a href="#updateCameraRig"><code>updateCameraRig</code></a> on the camera's rig. <code>beginFrame</code> calls it for its camera with <code>getCameraInput()</code>; you can call it with any input for any camera. A camera with the <code>NONE</code> controller only eases.</p>
+    <p>It runs <a href="#updateCameraRig"><code>updateCameraRig</code></a> on the camera's rig and its projection, so a trackball pans by the camera's own field of view or box, and the wheel zooms an orthographic camera's box at the pointer. <code>beginFrame</code> calls it for its camera with <code>getCameraInput()</code>; you can call it with any input for any camera. A camera with the <code>NONE</code> controller only eases.</p>
   </div>
 </div>
 
@@ -604,9 +641,14 @@ engine.render(scene, camera);</code></pre>
 </div>
 
 <div class="api" id="updateCameraRig">
-  <pre class="sig">void updateCameraRig(CameraRig&amp; rig, const CameraInput&amp; input);</pre>
+  <pre class="sig">void updateCameraRig(CameraRig&amp; rig, const CameraInput&amp; input);
+void updateCameraRig(CameraRig&amp; rig, CameraProjection&amp; projection, const CameraInput&amp; input);</pre>
   <div class="body">
     <p>One frame: the controller moves <code>targetTransform</code> by the input, then <code>transform</code> eases toward it with <code>easingSpeed</code>. With <code>NONE</code> only the easing runs. The same function moves the engine's cameras, so a rig and an engine camera with the same controller and input end in the same pose.</p>
+    <p>With the camera's <code>projection</code>, a trackball pans by the projection's size at its center (<var>r</var> · tan(<var>fovY</var> / 2), or half the box's smaller side), and for an orthographic projection the wheel scales the box by <code>CAMERA_WHEEL_ZOOM</code> a step and moves the center by the pointer's offset times (1 − the scale), at once: the point under <code>CameraInput::pointer</code> stays put. Set the changed projection back with <a href="#setCameraProjection"><code>setCameraProjection</code></a>. Keep the box's aspect the view's (<code>D49</code>): the engine fits the box's width to the view, so fit the height before each update, as <code>examples/27_cad_views</code> does. Without a projection, a trackball pans as a 45° perspective camera would, and the wheel scales the radius.</p>
+    <pre><code>rasm::updateCameraRig(view.rig, view.projection, rasm::takeCameraInput(view.input, capture, engine.getDeltaTime()));
+engine.setCameraTransform(view.camera, view.rig.transform);
+engine.setCameraProjection(view.camera, view.projection);</code></pre>
   </div>
 </div>
 
@@ -619,9 +661,13 @@ engine.render(scene, camera);</code></pre>
     bool        pointerInWindow = false;
     bool        pointerSeen     = false;
     bool        dragActive      = false;
+    CameraDrag  drag            = CameraDrag::NONE;
+    MouseButton dragButton      = MouseButton::LEFT;
     glm::vec2   dragStart       = glm::vec2(0.0f);
     glm::vec2   dragEnd         = glm::vec2(0.0f);
+    glm::vec2   pointerNdc      = glm::vec2(0.0f);
     float       wheel           = 0.0f;
+    CameraButtons buttons       = {};
 };</pre>
   <div class="body">
     <p>What one camera's input keeps between events, in <code>rasm/cameraInput.h</code>. Feed it a frame's events with <code>addCameraInputEvent</code>, then take the frame's <code>CameraInput</code> with <code>takeCameraInput</code>. The engine keeps one for the main window; keep one per view of your own.</p>
@@ -630,8 +676,35 @@ engine.render(scene, camera);</code></pre>
       <dt>pointerX, pointerY, pointerInWindow</dt><dd>The pointer in window points, from the last move or button event; <code>MOUSE_LEAVE</code> clears <code>pointerInWindow</code>.</dd>
       <dt>pointerSeen</dt><dd>A move, button or leave event told where the pointer is. Until then a wheel event counts in every area, since it carries no position.</dd>
       <dt>dragActive, dragStart, dragEnd</dt><dd>A drag that began with a press in the area, outside the UI, in NDC.</dd>
+      <dt>drag, dragButton</dt><dd>What the drag does, from <code>buttons</code>, and the button that started it: only that button's release ends it, and other presses during it do nothing.</dd>
+      <dt>pointerNdc</dt><dd>The pointer in the area's NDC, from the last move or button event: <code>CameraInput::pointer</code>.</dd>
       <dt>wheel</dt><dd>This frame's wheel steps with the pointer in the area, or not seen yet.</dd>
+      <dt>buttons</dt><dd>Which drag each mouse button starts (<a href="#CameraButtons"><code>CameraButtons</code></a>). Set it before the events, for example a left-button pan in a flat view.</dd>
     </dl>
+  </div>
+</div>
+
+<div class="api" id="CameraButtons">
+  <pre class="sig">enum class CameraDrag : uint8_t
+{
+    NONE,
+    ORBIT,
+    PAN,
+};
+
+struct CameraButtons
+{
+    CameraDrag  left            = CameraDrag::ORBIT;
+    CameraDrag  right           = CameraDrag::PAN;
+    CameraDrag  middle          = CameraDrag::PAN;
+    CameraDrag  back            = CameraDrag::NONE;
+    CameraDrag  forward         = CameraDrag::NONE;
+    CameraDrag  shiftLeft       = CameraDrag::PAN;
+};</pre>
+  <div class="body">
+    <p>Which drag each mouse button starts, in <code>rasm/cameraInput.h</code>. A trackball orbits with an <code>ORBIT</code> drag and moves its center with a <code>PAN</code> drag; a free-fly camera looks with either. <code>NONE</code>: the button does not move the camera. <code>shiftLeft</code> is the left button with Shift held, for a pointer with no middle button. Every button <code>ORBIT</code> is how the camera moved before pans existed. The engine's own: <a href="#setCameraButtons"><code>setCameraButtons</code></a>.</p>
+    <pre><code>rasm::CameraInputState input;
+input.buttons.left = rasm::CameraDrag::PAN; // a CAD convention for a flat view</code></pre>
   </div>
 </div>
 
@@ -651,7 +724,7 @@ engine.render(scene, camera);</code></pre>
 <div class="api" id="addCameraInputEvent">
   <pre class="sig">void addCameraInputEvent(CameraInputState&amp; state, const InputEvent&amp; event, const InputArea&amp; area, const UiInputCapture&amp; capture);</pre>
   <div class="body">
-    <p>Applies one event. A press in the area starts a drag, which goes on outside the area until the release. The wheel counts while the pointer is in the area, or before any event told where it is. A lost <code>FOCUS</code> lets go of every key and ends the drag.</p>
+    <p>Applies one event. A press in the area starts the drag <code>state.buttons</code> maps its button to, which goes on outside the area until that button's release; a drag released since the last <code>takeCameraInput</code> keeps its motion for it, and a press before then starts nothing. A move adds its <code>dx</code>, <code>dy</code> to the drag (or its change of position, without them). The wheel counts while the pointer is in the area, or before any event told where it is. A lost <code>FOCUS</code> lets go of every key and ends the drag.</p>
     <dl>
       <dt>capture</dt><dd>What the UI took (<code>getUiInputCapture</code>): a press or the wheel over a UI window does not reach the camera. Pass <code>{}</code> without a UI.</dd>
     </dl>
@@ -661,7 +734,7 @@ engine.render(scene, camera);</code></pre>
 <div class="api" id="takeCameraInput">
   <pre class="sig">CameraInput takeCameraInput(CameraInputState&amp; state, const UiInputCapture&amp; capture, float deltaTime);</pre>
   <div class="body">
-    <p>The frame's <code>CameraInput</code>: the drag while a button is down, the wheel steps, and W, S, A, D held by position unless the UI has the keyboard. The next frame's drag starts where this one ended, with no wheel steps yet. Call it once per frame.</p>
+    <p>The frame's <code>CameraInput</code>: the drag while its button is down (as <code>mouseStart</code> and <code>mouseEnd</code> for an orbit, <code>panStart</code> and <code>panEnd</code> for a pan), the pointer, the wheel steps, and W, S, A, D held by position unless the UI has the keyboard. The next frame's drag starts where this one ended, with no wheel steps yet. Call it once per frame.</p>
   </div>
 </div>
 
@@ -689,7 +762,63 @@ engine.render(scene, camera);</code></pre>
   </div>
 </div>
 
-<h2><span class="n">7</span>The camera type and limits</h2>
+<h2 id="grid"><span class="n">7</span>A reference grid</h2>
+
+<p>A camera can draw a reference grid in each of its shaded views: an endless (or bounded) plane of lines that stays crisp at any zoom, with the axes in color. It goes over the opaque scene and under see-through draws, vectors and labels. How it works: <a href="../guides/reference-grid.html">Reference grids</a>.</p>
+
+<div class="api" id="Grid">
+  <pre class="sig">struct Grid
+{
+    bool        enabled         = false;
+    glm::dvec3  origin          = glm::dvec3(0.0);
+    glm::quat   orientation     = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    double      cellSize        = 1.0;
+    uint32_t    subdivisions    = 10;
+    glm::vec2   extent          = glm::vec2(0.0f);
+    glm::vec4   minorColor      = glm::vec4(0.5f, 0.5f, 0.5f, 0.35f);
+    glm::vec4   majorColor      = glm::vec4(0.5f, 0.5f, 0.5f, 0.7f);
+    float       lineWidth       = 1.0f;
+    float       majorLineWidth  = 1.5f;
+    bool        axes            = true;
+    glm::vec4   xAxisColor      = glm::vec4(0.85f, 0.12f, 0.1f, 1.0f);
+    glm::vec4   zAxisColor      = glm::vec4(0.1f, 0.28f, 0.9f, 1.0f);
+    float       fadeDistance    = 0.0f;
+};</pre>
+  <div class="body">
+    <p>In <code>rasm/grid.h</code>. The plane is the local XZ plane of <code>origin</code> and <code>orientation</code>, its normal the local +Y. The lines come in levels of <code>cellSize</code> × <code>subdivisions</code><sup><var>k</var></sup>; each pixel shows the levels whose cells are wide enough there, so a view at any zoom has minor and major lines a few dozen pixels apart.</p>
+    <dl>
+      <dt>origin</dt><dd>A point of the plane, in the world, where the axes cross. Lines sit on exact multiples of <code>cellSize</code> from it, also 6 000 km from the world's origin.</dd>
+      <dt>orientation</dt><dd>Turns the XZ plane: <code class="lang-text">angleAxis(90°, +X)</code> gives a wall facing +Z (a front view's grid), <code class="lang-text">angleAxis(−90°, +Z)</code> one facing +X.</dd>
+      <dt>cellSize</dt><dd>The finest level's cells, in world units, a double: 10<sup>−9</sup> to 10<sup>9</sup>. A camera farther from <code>origin</code> than 2<sup>53</sup> cells shows no grid.</dd>
+      <dt>subdivisions</dt><dd>Cells of one level per cell of the next, along a side: 10 for decimal, 2 for binary. 2 to 1000.</dd>
+      <dt>extent</dt><dd>Half the grid's size along its X and Z axes; 0 leaves that axis endless.</dd>
+      <dt>minorColor, majorColor</dt><dd>Linear color and alpha of the lines and of every <code>subdivisions</code>-th line. They go through exposure and tone mapping, like the scene.</dd>
+      <dt>lineWidth, majorLineWidth</dt><dd>In pixels. A line under a pixel wide is drawn a pixel wide and fainter.</dd>
+      <dt>axes, xAxisColor, zAxisColor</dt><dd>The lines through <code>origin</code> along the plane's X and Z axes, <code>majorLineWidth</code> + 0.5 pixels wide. Give a wall's vertical axis the Y color (green).</dd>
+      <dt>fadeDistance</dt><dd>In a perspective view, the lines fade out from half this distance to it; 0: no fade. Every view fades the grid where it is seen edge-on.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="setCameraGrid">
+  <pre class="sig">bool setCameraGrid(CameraHandle camera, const Grid&amp; grid);
+Grid getCameraGrid(CameraHandle camera);</pre>
+  <div class="body">
+    <p>Sets the grid every shaded view of the camera draws, from the next frame; <code>Grid{}</code> turns it off. An invalid camera, or a grid with a value out of range (a <code>cellSize</code> outside 10<sup>−9</sup> to 10<sup>9</sup>, <code>subdivisions</code> outside 2 to 1000, a negative width or extent, NaN), logs an error, keeps the old grid and returns <code>false</code>. Each camera has its own, so each view of a CAD layout can show the plane it looks at.</p>
+    <pre><code>rasm::Grid grid;
+grid.enabled = true;
+grid.cellSize = 0.01; // 1 cm, then 10 cm, 1 m, 10 m ...
+engine.setCameraGrid(camera, grid);
+
+rasm::Grid wall = grid;
+wall.origin = glm::dvec3(0.0, 0.0, -3.0);
+wall.orientation = glm::angleAxis(glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+wall.zAxisColor = glm::vec4(0.15f, 0.7f, 0.15f, 1.0f); // the plane's Z is the world's -Y here
+engine.setCameraGrid(frontCamera, wall);</code></pre>
+  </div>
+</div>
+
+<h2><span class="n">8</span>The camera type and limits</h2>
 
 <div class="api" id="Camera">
   <pre class="sig">struct Camera
@@ -699,6 +828,7 @@ engine.render(scene, camera);</code></pre>
     float            exposure = 1.0f;
     float            bloomStrength = 0.04f;
     uint32_t         historyResets = 0;
+    Grid             grid          = {};
 };</pre>
   <div class="body">
     <p>What the engine stores per camera. You never get a <code>Camera</code> directly; use the getters above.</p>
@@ -707,6 +837,7 @@ engine.render(scene, camera);</code></pre>
       <dt>exposure</dt><dd>The factor the tone-map pass multiplies the scene's light by (<a href="#setCameraExposure"><code>setCameraExposure</code></a>).</dd>
       <dt>historyResets</dt><dd>How many times <a href="#resetCameraHistory"><code>resetCameraHistory</code></a> was called; a TAA pass that sees it change drops its history.</dd>
       <dt>bloomStrength</dt><dd>The bloom's share of the tone-mapped image, 0.04 by default (<a href="#setCameraBloomStrength"><code>setCameraBloomStrength</code></a>).</dd>
+      <dt>grid</dt><dd>The reference grid its shaded views draw (<a href="#setCameraGrid"><code>setCameraGrid</code></a>).</dd>
     </dl>
   </div>
 </div>

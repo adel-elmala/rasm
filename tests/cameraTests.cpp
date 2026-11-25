@@ -216,7 +216,7 @@ TEST_CASE("an update without input keeps a new trackball camera's pose")
     CHECK(isNear(engine.getCameraTransform(camera).position, transform.position));
 }
 
-TEST_CASE("the trackball wheel zooms toward the center and stops there")
+TEST_CASE("the trackball wheel scales the radius by a step each and never reaches the center")
 {
     rasm::Engine engine(headlessConfig());
     rasm::Transform transform;
@@ -225,11 +225,81 @@ TEST_CASE("the trackball wheel zooms toward the center and stops there")
     engine.setCameraController(camera, trackBall(5.0f, glm::vec3(0.0f)));
 
     engine.updateCamera(camera, rasm::CameraInput{.wheelDelta = 2.0f});
-    CHECK(isNear(engine.getCameraTransform(camera).position, glm::vec3(0.0f, 0.0f, 3.0f)));
+    CHECK(isNear(engine.getCameraTransform(camera).position, glm::vec3(0.0f, 0.0f, 5.0f * 0.81f)));
+    engine.updateCamera(camera, rasm::CameraInput{.wheelDelta = -2.0f});
+    CHECK(isNear(engine.getCameraTransform(camera).position, glm::vec3(0.0f, 0.0f, 5.0f)));
 
-    engine.updateCamera(camera, rasm::CameraInput{.wheelDelta = 10.0f});
-    CHECK(isNear(engine.getCameraTransform(camera).position, glm::vec3(0.0f)));
-    CHECK(engine.getCameraController(camera).trackBall.radius == doctest::Approx(0.0f));
+    engine.updateCamera(camera, rasm::CameraInput{.wheelDelta = 1000.0f});
+    CHECK(engine.getCameraController(camera).trackBall.radius == doctest::Approx(rasm::MIN_TRACK_BALL_RADIUS));
+    engine.updateCamera(camera, rasm::CameraInput{.wheelDelta = -1.0f});
+    CHECK(engine.getCameraController(camera).trackBall.radius == doctest::Approx(rasm::MIN_TRACK_BALL_RADIUS / rasm::CAMERA_WHEEL_ZOOM));
+}
+
+TEST_CASE("an orthographic trackball zooms its box at the pointer, which stays on the same world point")
+{
+    rasm::Engine engine(headlessConfig());
+    rasm::Transform transform;
+    transform.position = glm::vec3(0.0f, 0.0f, 10.0f);
+    const rasm::CameraProjection box{.type = rasm::CameraProjection::Type::ORTHOGRAPHIC, .orthographic = {.left = -8.0f, .right = 8.0f, .bottom = -4.0f, .top = 4.0f, .nearZ = 0.1f, .farZ = 50.0f}};
+    auto camera = engine.createCamera(box, transform);
+    engine.setCameraController(camera, trackBall(10.0f, glm::vec3(0.0f)));
+
+    // The pointer at (0.5, 0.25) in the input's NDC, which divides by the smaller side: 4 units a step, at (2, 1).
+    const glm::vec2 pointer(0.5f, 0.25f);
+    engine.updateCamera(camera, rasm::CameraInput{.wheelDelta = 3.0f, .pointer = pointer});
+    const rasm::CameraProjection zoomed = engine.getCameraProjection(camera);
+    const float zoom = 0.9f * 0.9f * 0.9f;
+    CHECK(zoomed.orthographic.right == doctest::Approx(8.0f * zoom));
+    CHECK(zoomed.orthographic.top == doctest::Approx(4.0f * zoom));
+    CHECK(engine.getCameraController(camera).trackBall.radius == doctest::Approx(10.0f));
+    // Under the pointer: the camera's position across the view plus the pointer's offset in the box.
+    const glm::dvec3 position = engine.getCameraTransform(camera).position;
+    const float perNdc = 4.0f * zoom;
+    CHECK(position.x + pointer.x * perNdc == doctest::Approx(2.0));
+    CHECK(position.y + pointer.y * perNdc == doctest::Approx(1.0));
+    CHECK(position.z == doctest::Approx(10.0));
+
+    // A thousand steps either way stop at the limits; the box never collapses to 0 or grows to infinity.
+    engine.updateCamera(camera, rasm::CameraInput{.wheelDelta = 1000.0f});
+    CHECK(engine.getCameraProjection(camera).orthographic.top == doctest::Approx(rasm::MIN_TRACK_BALL_RADIUS));
+    engine.updateCamera(camera, rasm::CameraInput{.wheelDelta = -1000.0f});
+    CHECK(engine.getCameraProjection(camera).orthographic.top == doctest::Approx(1e9f));
+    CHECK(std::isfinite(engine.getCameraTransform(camera).position.x));
+}
+
+TEST_CASE("a pan moves the eased pose with the center, so the distance does not jump while easing")
+{
+    rasm::Engine engine(headlessConfig());
+    rasm::Transform transform;
+    transform.position = glm::vec3(0.0f, 0.0f, 10.0f);
+    auto camera = engine.createCamera(perspective(), transform);
+    rasm::CameraController controller = trackBall(10.0f, glm::vec3(0.0f));
+    controller.easingSpeed = 12.0f;
+    engine.setCameraController(camera, controller);
+    engine.updateCamera(camera, rasm::CameraInput{.deltaTime = 0.016f, .panStart = glm::vec2(0.0f), .panEnd = glm::vec2(0.3f, 0.0f)});
+    const glm::dvec3 center = engine.getCameraController(camera).trackBall.center;
+    CHECK(glm::length(engine.getCameraTransform(camera).position - center) == doctest::Approx(10.0));
+}
+
+TEST_CASE("a pan drag moves the trackball's center with the pointer, in perspective and orthographic views")
+{
+    rasm::Engine engine(headlessConfig());
+    rasm::Transform transform;
+    transform.position = glm::vec3(0.0f, 0.0f, 10.0f);
+    auto camera = engine.createCamera(perspective(), transform);
+    engine.setCameraController(camera, trackBall(10.0f, glm::vec3(0.0f)));
+    // The scene follows the pointer: a drag to the right moves the center to the left, by the view's half height at
+    // the center per NDC unit (perspective() is 60 degrees, aspect 1.5).
+    engine.updateCamera(camera, rasm::CameraInput{.panStart = glm::vec2(0.0f), .panEnd = glm::vec2(0.5f, 0.0f)});
+    const double half = 10.0 * std::tan(glm::radians(30.0));
+    CHECK(engine.getCameraController(camera).trackBall.center.x == doctest::Approx(-0.5 * half).epsilon(1e-5));
+    CHECK(engine.getCameraTransform(camera).position.x == doctest::Approx(-0.5 * half).epsilon(1e-5));
+    CHECK(engine.getCameraTransform(camera).rotation == glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+
+    engine.setCameraProjection(camera, rasm::CameraProjection{.type = rasm::CameraProjection::Type::ORTHOGRAPHIC, .orthographic = {.left = -8.0f, .right = 8.0f, .bottom = -4.0f, .top = 4.0f, .nearZ = 0.1f, .farZ = 50.0f}});
+    engine.setCameraController(camera, trackBall(10.0f, glm::vec3(0.0f)));
+    engine.updateCamera(camera, rasm::CameraInput{.panStart = glm::vec2(0.0f), .panEnd = glm::vec2(0.0f, -0.25f)});
+    CHECK(engine.getCameraController(camera).trackBall.center.y == doctest::Approx(1.0));
 }
 
 TEST_CASE("a trackball drag keeps the camera on the orbit sphere")
@@ -463,4 +533,81 @@ TEST_CASE("a free-fly rig follows an up that sweeps past -Y without a jump")
         CHECK(glm::dot(rig.transform.rotation * glm::vec3(0.0f, 1.0f, 0.0f), up) > 0.0f);
     }
     CHECK(largestTurn < 0.05f);
+}
+
+namespace
+{
+    rasm::CameraRig orbitRig(rasm::CameraController::OrbitStyle style)
+    {
+        const rasm::CameraController controller = {.type = rasm::CameraController::Type::TRACK_BALL,
+                                                   .trackBall = {.radius = 10.0f, .center = glm::dvec3(0.0), .orbitSensitivity = 1.0f, .style = style},
+                                                   .easingSpeed = 0.0f};
+        rasm::Transform start;
+        start.position = glm::dvec3(0.0, 0.0, 10.0);
+        return rasm::createCameraRig(controller, start);
+    }
+
+    float getAngle(const glm::quat &a, const glm::quat &b)
+    {
+        return 2.0f * std::acos(std::min(1.0f, std::abs(glm::dot(a, b))));
+    }
+}
+
+TEST_CASE("a turntable drag turns the same at the center and at the edge of the view")
+{
+    rasm::CameraRig centre = orbitRig(rasm::CameraController::OrbitStyle::TURNTABLE);
+    rasm::CameraRig edge = orbitRig(rasm::CameraController::OrbitStyle::TURNTABLE);
+    rasm::updateCameraRig(centre, rasm::CameraInput{.mouseStart = glm::vec2(0.0f), .mouseEnd = glm::vec2(0.2f, 0.1f)});
+    rasm::updateCameraRig(edge, rasm::CameraInput{.mouseStart = glm::vec2(1.7f, 0.95f), .mouseEnd = glm::vec2(1.9f, 1.05f)});
+    CHECK(getAngle(centre.transform.rotation, edge.transform.rotation) < 1e-5f);
+    // A drag to the right turns the camera to the left around the center: the scene follows the pointer.
+    CHECK(centre.transform.position.x < 0.0);
+    CHECK(glm::length(centre.transform.position) == doctest::Approx(10.0));
+}
+
+TEST_CASE("a turntable never rolls and never passes the pole")
+{
+    rasm::CameraRig rig = orbitRig(rasm::CameraController::OrbitStyle::TURNTABLE);
+    for (int i = 0; i < 40; ++i)
+    {
+        rasm::updateCameraRig(rig, rasm::CameraInput{.mouseStart = glm::vec2(0.0f), .mouseEnd = glm::vec2(0.13f, -0.2f)});
+        const glm::vec3 forward = rig.transform.rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+        const glm::vec3 right = rig.transform.rotation * glm::vec3(1.0f, 0.0f, 0.0f);
+        CHECK(std::abs(right.y) < 1e-4f);
+        CHECK(std::asin(glm::clamp(forward.y, -1.0f, 1.0f)) >= glm::radians(-89.0f) - 1e-4f);
+        CHECK(rig.transform.position.y > 0.0);
+    }
+    // At the limit, more of the same drag only turns around up.
+    const glm::vec3 forward = rig.transform.rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+    CHECK(std::asin(forward.y) == doctest::Approx(glm::radians(-89.0f)).epsilon(1e-3));
+}
+
+TEST_CASE("an arcball drag past the edge of its sphere goes on turning the same way")
+{
+    rasm::CameraRig rig = orbitRig(rasm::CameraController::OrbitStyle::ARCBALL);
+    float last = 0.0f;
+    glm::quat before = rig.transform.rotation;
+    for (int i = 0; i < 12; ++i)
+    {
+        const float x = 0.5f + 0.15f * static_cast<float>(i);
+        rasm::updateCameraRig(rig, rasm::CameraInput{.mouseStart = glm::vec2(x, 0.0f), .mouseEnd = glm::vec2(x + 0.15f, 0.0f)});
+        const float angle = getAngle(before, rig.transform.rotation);
+        // Each step turns around the camera's up, to the same side, and never jumps.
+        CHECK(angle > 1e-4f);
+        CHECK(angle < 0.3f);
+        CHECK(rig.transform.position.x < 0.0);
+        before = rig.transform.rotation;
+        last = angle;
+    }
+    CHECK(last > 0.0f);
+}
+
+TEST_CASE("an arcball drag far past the view's edge turns as much as one at the edge")
+{
+    rasm::CameraRig edge = orbitRig(rasm::CameraController::OrbitStyle::ARCBALL);
+    rasm::CameraRig far = orbitRig(rasm::CameraController::OrbitStyle::ARCBALL);
+    const glm::quat start = edge.transform.rotation;
+    rasm::updateCameraRig(edge, rasm::CameraInput{.mouseStart = glm::vec2(1.0f, 0.0f), .mouseEnd = glm::vec2(1.1f, 0.0f)});
+    rasm::updateCameraRig(far, rasm::CameraInput{.mouseStart = glm::vec2(10.0f, 0.0f), .mouseEnd = glm::vec2(10.1f, 0.0f)});
+    CHECK(getAngle(start, far.transform.rotation) == doctest::Approx(getAngle(start, edge.transform.rotation)).epsilon(1e-3));
 }

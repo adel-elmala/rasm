@@ -1,4 +1,5 @@
 #include "renderer/gpuScene.h"
+#include "renderer/grid.h"
 #include "renderer/taa.h"
 #include "rasm/scene.h"
 #include "rasm/camera.h"
@@ -1233,6 +1234,7 @@ namespace rasm
                 },
                 [this, view](RenderContext &)
                 {
+                    drawGrid(view);
                     drawTransparent(view);
                     drawCullingGhosts(view);
                 });
@@ -1424,6 +1426,7 @@ namespace rasm
         view.ready = false;
         view.culled = false;
         view.sky = false;
+        view.grid = false;
         view.drawMask = false;
         view.drawBlend = false;
         view.sortBlend = false;
@@ -1453,8 +1456,12 @@ namespace rasm
             sceneData.view = toRenderMatrix(worldView, origin);
             writeRenderOrigin(sceneData, origin);
             writeViewMotion(view, sceneData, worldView, origin, target.width, target.height);
-            view.sky = writeSceneEnvironment(*environments, registry.scenes[view.scene.index].environment, sceneData) &&
-                       ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), viewIndex * sizeof(gfx::SceneData));
+            sceneData.grid = makeGridData(registry.cameras[view.camera.index].grid, origin);
+            const bool sky = writeSceneEnvironment(*environments, registry.scenes[view.scene.index].environment, sceneData);
+            if (!ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), viewIndex * sizeof(gfx::SceneData)))
+                return;
+            view.sky = sky;
+            view.grid = sceneData.grid.levelCount != 0;
             return;
         }
 
@@ -1883,6 +1890,8 @@ namespace rasm
         if (!view.depthOnly)
             writeSceneLights(viewIndex, view.scene, sceneData);
         const bool sky = writeSceneEnvironment(*environments, view.depthOnly ? SceneEnvironment{} : sceneRef.environment, sceneData);
+        if (!view.depthOnly)
+            sceneData.grid = makeGridData(cameraRef.grid, origin);
 
         sceneData.lodPixelsPerUnit = std::abs(cameraProjection[1][1]) * 0.5f * static_cast<float>(cameraHeight);
         if (cameraProjection[3][3] == 0.0f)
@@ -1945,6 +1954,7 @@ namespace rasm
         view.height = height;
         view.culled = culled;
         view.sky = sky;
+        view.grid = sceneData.grid.levelCount != 0;
         view.ready = true;
     }
 
@@ -2317,6 +2327,32 @@ namespace rasm
         ctx.bindPipeline(commandBuffer, skyPipeline);
         ctx.bindDescriptorSet(commandBuffer, skyPipeline, bindlessDescriptorSet, 0);
         ctx.pushConstants(commandBuffer, skyPipeline, &pushConstants, sizeof(pushConstants), 0);
+        ctx.setCullMode(commandBuffer, CullMode::NONE);
+        ctx.draw(commandBuffer, 3);
+    }
+
+    // The camera's grid (grid.slang), first in the Transparent pass: one triangle over the target whose pixels find the
+    // plane's depth and test it against the opaque draws and the sky, which it covers; the see-through draws go over it.
+    void Renderer::drawGrid(uint32_t viewIndex)
+    {
+        const SceneView &view = gpuScene->views[viewIndex];
+        if (!view.grid || view.debugView != DebugView::NONE)
+            return;
+        PipelineHandle &gridPipeline = getShadedPipelines(*gpuScene, ctx, view).gridPipeline;
+        if (!gridPipeline.isValid())
+        {
+            gridPipeline = createScenePipeline("grid", "passes/grid.slang", getMotionDefine(ctx, view), view.renderTarget, "vertMain", "fragMain", BlendMode::PREMULTIPLIED_ALPHA, false);
+            if (!gridPipeline.isValid())
+            {
+                spdlog::error("Failed to create the grid pipeline; the view has no grid.");
+                return;
+            }
+        }
+        const auto commandBuffer = frameResources[frameCount].commandBuffer;
+        const gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, static_cast<uint32_t>(frameCount), viewIndex)};
+        ctx.bindPipeline(commandBuffer, gridPipeline);
+        ctx.bindDescriptorSet(commandBuffer, gridPipeline, bindlessDescriptorSet, 0);
+        ctx.pushConstants(commandBuffer, gridPipeline, &pushConstants, sizeof(pushConstants), 0);
         ctx.setCullMode(commandBuffer, CullMode::NONE);
         ctx.draw(commandBuffer, 3);
     }

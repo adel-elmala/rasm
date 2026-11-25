@@ -637,7 +637,7 @@ static_assert(offsetof(Light, intensity) == 12);</code></pre>
     <text x="132" y="42" class="mid title">uberMaterialTypes.h</text>
     <text x="132" y="58" class="mid small">C++, glm default packing</text>
     <text x="28" y="84" class="small">struct SceneData { … }</text>
-    <text x="28" y="104" class="small">static_assert(sizeof(SceneData) == 2056)</text>
+    <text x="28" y="104" class="small">static_assert(sizeof(SceneData) == 2224)</text>
     <text x="28" y="124" class="small">static_assert(offsetof(…) == …)</text>
     <text x="28" y="146" class="small">compile time: pins the C++ side</text>
 
@@ -674,7 +674,7 @@ static_assert(offsetof(Light, intensity) == 12);</code></pre>
 <table>
   <tr><th>Struct</th><th>Bytes</th><th>Read through</th></tr>
   <tr><td><code>PushConstants</code></td><td>16</td><td>the push constant <code>pc</code></td></tr>
-  <tr><td><code>SceneData</code></td><td>2056</td><td><code>pc.scene</code></td></tr>
+  <tr><td><code>SceneData</code></td><td>2224</td><td><code>pc.scene</code></td></tr>
   <tr><td><code>Light</code></td><td>68</td><td><code>lightsPtr</code>, the light table</td></tr>
   <tr><td><code>ShadowMap</code></td><td>72</td><td><code>SceneData::shadowMaps</code>, 16 of them</td></tr>
   <tr><td><code>VertexFull</code></td><td>64</td><td><code>vertsPtr</code>; also tied to <code>rasm::Vertex</code></td></tr>
@@ -699,33 +699,35 @@ static_assert(offsetof(Light, intensity) == 12);</code></pre>
 <h3>SceneData, byte by byte</h3>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 116" role="img" aria-label="SceneData is 2056 bytes: two matrices, the view's origin (high part) and shadowedLightCount to 144, eighteen 8-byte pointers to 288, six frustum planes, 4-byte counts, run starts, sizes and LOD values to 452, sixteen 72-byte shadow maps to 1604, the LOD camera and the environment's slots to 1656, then the shadowed lights, the light counts, nearZ and depthSamples to 1720, the last view-projection, the jitter, the texture mip bias, the debug view and three pointers to 1824, nine pointers of meshlet culling to 1896, the meshlet culling's view point, run arrays and masks to 2008, the meshlet data pointer to 2016, the origin's low part, the zero and the environment's orientation to 2048, and the labels pointer to 2056.">
-    <rect x="20.0" y="30" width="49.0" height="40" rx="2" class="mem"/>
-    <rect x="69.0" y="30" width="49.0" height="40" rx="2" class="hot"/>
-    <rect x="118.0" y="30" width="55.9" height="40" rx="2" class="mem"/>
-    <rect x="173.9" y="30" width="392.3" height="40" rx="2" class="mem"/>
-    <text x="371.4" y="54" class="mid small">shadowMaps[16] · 16 × 72</text>
-    <rect x="566.1" y="30" width="17.7" height="40" rx="2" class="mem"/>
-    <rect x="583.8" y="30" width="21.8" height="40" rx="2" class="mem"/>
-    <rect x="605.6" y="30" width="35.4" height="40" rx="2" class="mem"/>
-    <rect x="641.0" y="30" width="24.5" height="40" rx="2" class="hot"/>
-    <rect x="665.5" y="30" width="38.2" height="40" rx="2" class="mem"/>
-    <rect x="703.6" y="30" width="2.7" height="40" rx="2" class="hot"/>
-    <rect x="706.4" y="30" width="10.9" height="40" rx="2" class="mem"/>
-    <rect x="717.3" y="30" width="2.7" rx="2" class="hot"/>
+  <svg viewBox="0 0 760 116" role="img" aria-label="SceneData is 2224 bytes: two matrices, the view's origin (high part) and shadowedLightCount to 144, eighteen 8-byte pointers to 288, six frustum planes, 4-byte counts, run starts, sizes and LOD values to 452, sixteen 72-byte shadow maps to 1604, the LOD camera and the environment's slots to 1656, then the shadowed lights, the light counts, nearZ and depthSamples to 1720, the last view-projection, the jitter, the texture mip bias, the debug view and three pointers to 1824, nine pointers of meshlet culling to 1896, the meshlet culling's view point, run arrays and masks to 2008, the meshlet data pointer to 2016, the origin's low part, the zero and the environment's orientation to 2048, the labels pointer to 2056, and the camera's grid to 2224.">
+    <rect x="20.0" y="30" width="45.3" height="40" rx="2" class="mem"/>
+    <rect x="65.3" y="30" width="45.3" height="40" rx="2" class="hot"/>
+    <rect x="110.6" y="30" width="51.6" height="40" rx="2" class="mem"/>
+    <rect x="162.3" y="30" width="362.6" height="40" rx="2" class="mem"/>
+    <rect x="524.9" y="30" width="16.4" height="40" rx="2" class="mem"/>
+    <rect x="541.2" y="30" width="20.1" height="40" rx="2" class="mem"/>
+    <rect x="561.4" y="30" width="32.7" height="40" rx="2" class="mem"/>
+    <rect x="594.1" y="30" width="22.7" height="40" rx="2" class="hot"/>
+    <rect x="616.8" y="30" width="35.3" height="40" rx="2" class="mem"/>
+    <rect x="652.0" y="30" width="2.5" height="40" rx="2" class="hot"/>
+    <rect x="654.5" y="30" width="10.1" height="40" rx="2" class="mem"/>
+    <rect x="664.6" y="30" width="2.5" height="40" rx="2" class="hot"/>
+    <rect x="667.1" y="30" width="52.9" height="40" rx="2" class="mem"/>
+    <text x="343.6" y="54" class="mid small">shadowMaps[16] · 16 × 72</text>
+    <text x="693.6" y="54" class="mid small">grid</text>
     <text x="20.0" y="88" class="mid mono small">0</text>
-    <text x="69.0" y="88" class="mid mono small">144</text>
-    <text x="118.0" y="88" class="mid mono small">288</text>
-    <text x="173.9" y="88" class="mid mono small">452</text>
-    <text x="641.0" y="88" class="mid mono small">1824</text>
-    <text x="719.3" y="88" class="mid mono small">2056</text>
+    <text x="65.3" y="88" class="mid mono small">144</text>
+    <text x="110.6" y="88" class="mid mono small">288</text>
+    <text x="162.3" y="88" class="mid mono small">452</text>
+    <text x="594.1" y="88" class="mid mono small">1824</text>
+    <text x="720.0" y="88" class="mid mono small">2224</text>
     <text x="20"  y="22" class="small">matrices, origin</text>
-    <text x="95.3" y="106" class="mid small">pointers</text>
+    <text x="88.0" y="106" class="mid small">pointers</text>
     <text x="150" y="22" class="small">planes, counts, runs, sizes, LOD →</text>
-    <text x="720" y="22" class="end small">meshlet culling ↓</text>
-    <text x="720" y="106" class="end small">1604 to 2056: LOD camera, environment, lights, last frame, meshlets, origin, labels</text>
+    <text x="720" y="22" class="end small">meshlet culling, grid ↓</text>
+    <text x="720" y="106" class="end small">1604 to 2224: LOD camera, environment, lights, last frame, meshlets, origin, labels, grid</text>
   </svg>
-  <figcaption>Scale: 700 px for 2056 bytes. The pointers (outlined) start at 144, a multiple of 8, so no hidden padding is needed before them; the last three are the light table, the scene's light list and the view's light clusters. The frustum planes fill 288 to 384; the 4-byte values from 384 (the seven run starts and the blend run among them) end with <code>forcedLod</code> at 448. <code>shadowMaps</code> (sixteen <code>ShadowMap</code>s of 72 bytes: a <var>float4x4</var>, a texture index and a split) fills 452 to 1604. The four <code>ShadowedLight</code>s (12 bytes each), the two light counts, <code>nearZ</code> and <code>depthSamples</code> end at 1720. TAA's fields follow: <code>previousViewProjection</code> (a <var>float4x4</var>), <code>jitter</code>, <code>textureLodBias</code> and the 4-byte <code>debugView</code> end at 1800, so the last three pointers, <code>animatedTransformsPtr</code> (the Animate pass's matrices), <code>skinnedVertsPtr</code> and <code>previousSkinnedVertsPtr</code> (the Skin pass's vertices of this frame and the frame before), sit 8-aligned from 1800 and end at 1824. The nine pointers of <a href="meshlets.html#in-rasm">meshlet culling</a> follow, 1824 to 1896, then <code>cullViewPoint</code>, the three per-run arrays, <code>meshletRuns</code>, <code>coneRuns</code> and a <code>padding</code> word to 2008, and <code>meshletDataPtr</code> to 2016. The render space's <code>originLow</code> and the 4-byte <code>zero</code> (<a href="large-world-precision.html">large worlds</a>) end at 2032, and <code>environmentOrientation</code>, a <var>float4</var>, at 2048. <code>labelsPtr</code>, the view's label alphas (<a href="text-and-labels.html#in-rasm">labels</a>), ends at 2056, a multiple of 8: the next view's <code>SceneData</code> keeps its pointers aligned too (a <code>static_assert</code> checks it).</figcaption>
+  <figcaption>Scale: 700 px for 2224 bytes. The pointers (outlined) start at 144, a multiple of 8, so no hidden padding is needed before them; the last three are the light table, the scene's light list and the view's light clusters. The frustum planes fill 288 to 384; the 4-byte values from 384 (the seven run starts and the blend run among them) end with <code>forcedLod</code> at 448. <code>shadowMaps</code> (sixteen <code>ShadowMap</code>s of 72 bytes: a <var>float4x4</var>, a texture index and a split) fills 452 to 1604. The four <code>ShadowedLight</code>s (12 bytes each), the two light counts, <code>nearZ</code> and <code>depthSamples</code> end at 1720. TAA's fields follow: <code>previousViewProjection</code> (a <var>float4x4</var>), <code>jitter</code>, <code>textureLodBias</code> and the 4-byte <code>debugView</code> end at 1800, so the last three pointers, <code>animatedTransformsPtr</code> (the Animate pass's matrices), <code>skinnedVertsPtr</code> and <code>previousSkinnedVertsPtr</code> (the Skin pass's vertices of this frame and the frame before), sit 8-aligned from 1800 and end at 1824. The nine pointers of <a href="meshlets.html#in-rasm">meshlet culling</a> follow, 1824 to 1896, then <code>cullViewPoint</code>, the three per-run arrays, <code>meshletRuns</code>, <code>coneRuns</code> and a <code>padding</code> word to 2008, and <code>meshletDataPtr</code> to 2016. The render space's <code>originLow</code> and the 4-byte <code>zero</code> (<a href="large-world-precision.html">large worlds</a>) end at 2032, and <code>environmentOrientation</code>, a <var>float4</var>, at 2048. <code>labelsPtr</code>, the view's label alphas (<a href="text-and-labels.html#in-rasm">labels</a>), ends at 2056. The camera's <code>GridData</code> (<a href="reference-grid.html#in-rasm">reference grid</a>, 168 bytes of 4-byte values, its own <code>zero</code> last) ends at 2224, a multiple of 8: the next view's <code>SceneData</code> keeps its pointers aligned too (a <code>static_assert</code> checks it).</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>

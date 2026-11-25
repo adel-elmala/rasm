@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reference Grids · RASM</title>
+<meta name="description" content="An endless reference grid drawn from one triangle: a ray per pixel meets the plane, lines keep a width in pixels, levels of cells keep it crisp at any zoom, and an exact split keeps the lines in place far from the origin. Then how RASM does it.">
+<meta name="rasm-sources" content="include/rasm/grid.h include/rasm/camera.h src/renderer/grid.h src/renderer/grid.cpp shaders/passes/grid.slang shaders/lib/core.slang src/renderer/uberMaterialTypes.h src/renderer/gpuScene.cpp src/scene/camera.cpp src/c/cScene.cpp tests/gridTests.cpp tests/image/imageTests.cpp examples/27_cad_views/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/reference-grid.js"></script>
+</head>
+<body data-root="../" data-page="guides/reference-grid.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>Reference grids</h1>
+<p class="lead">A reference grid is the floor of a CAD program or a 3D plot: lines every metre, a heavier line every ten, and the axes in color. It must look clean at any zoom, from a millimetre to a continent, in perspective and orthographic views, and stay in place far from the world's origin. This page explains how to draw one from a single triangle. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>Draw <b>one triangle over the screen</b>. Each pixel sends its ray to the grid's plane and finds the point it shows there.</li>
+    <li>The point's <b>depth</b> goes to the depth test, so objects hide the grid where they stand in front of it.</li>
+    <li>Lines have a <b>width in pixels</b>, from the screen derivatives of the plane coordinates. A line thinner than a pixel fades instead of breaking up.</li>
+    <li>Cells come in <b>levels</b> (1, 10, 100, ...). Each pixel shows the levels whose cells are wide enough there, and fades between them, so the grid stays crisp at any zoom.</li>
+    <li>Far from the origin, split the camera's place on the plane into <b>whole cells and a rest</b>, in doubles on the CPU. The lines stay exact anywhere.</li>
+  </ul>
+</div>
+
+<h2 id="why"><span class="n">1</span>Why not a mesh of lines</h2>
+
+<p>The obvious grid is geometry: a quad per line, or a big textured square. Both break at the edges of what a camera can see.</p>
+
+<div class="split">
+  <div class="bad">
+    <h4>Lines as geometry</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="A grid of line quads in perspective: near the horizon the lines get thinner than a pixel and come and go, and the grid ends at its edge.">
+      <path d="M20,130 L150,30 M60,130 L158,30 M100,130 L166,30 M140,130 L174,30 M180,130 L182,30 M220,130 L190,30 M260,130 L198,30 M300,130 L206,30" class="grid"/>
+      <path d="M40,115 H280 M70,92 H250 M95,73 H226 M112,60 H210 M124,51 H200 M133,44 H192 M140,39 H186" class="grid"/>
+      <path d="M150,34 H210" class="arrow bad dashed"/>
+      <text x="160" y="20" class="mid small t-bad">far lines flicker; the grid ends</text>
+    </svg>
+    <p>Far lines get thinner than a pixel and flicker; a fine grid turns into moiré; the mesh has an end, and a mesh as big as a planet has no precision left.</p>
+  </div>
+  <div class="good">
+    <h4>A ray per pixel</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="One triangle covers the screen. Each pixel's ray meets the plane at a point; the grid's lines are computed there, with a width in pixels, and fade before they get too thin.">
+      <path d="M20,130 L150,30 M60,130 L158,30 M100,130 L166,30 M140,130 L174,30 M180,130 L182,30 M220,130 L190,30 M260,130 L198,30 M300,130 L206,30" class="arrow o-50"/>
+      <path d="M40,115 H280 M70,92 H250 M95,73 H226" class="arrow"/>
+      <path d="M112,60 H210 M124,51 H200" class="arrow o-50"/>
+      <path d="M133,44 H192 M140,39 H186" class="arrow o-25"/>
+      <text x="160" y="20" class="mid small t-ok">lines fade before they break up</text>
+    </svg>
+    <p>The grid is a rule, not a mesh: every pixel computes it for its own point. It has no end, no seams, and every line is as wide as it should be on screen.</p>
+  </div>
+</div>
+
+<h2 id="ray"><span class="n">2</span>A ray per pixel</h2>
+
+<p>The triangle covers the whole target. For each pixel the shader builds the ray through the pixel's centre, meets the plane, and computes the hit's coordinates on the plane and its depth.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Side view. A camera and its image, a column of pixels. Rays through the lower pixels go down and meet the ground plane: near pixels meet it close together, far pixels far apart. One ray meets a box first: the depth test hides the grid point behind it. A ray above the horizon never meets the plane and is discarded.">
+    <line x1="30" y1="200" x2="740" y2="200" class="surface"/>
+    <text x="30" y="192" class="small">the grid's plane</text>
+    <rect x="300" y="150" width="60" height="50" class="solid"/>
+    <circle cx="80" cy="70" r="7" class="solid"/>
+    <text x="66" y="74" class="end small">camera</text>
+    <rect x="116" y="40" width="8" height="96" class="mem"/>
+    <path d="M116,52 H124 M116,64 H124 M116,76 H124 M116,88 H124 M116,100 H124 M116,112 H124 M116,124 H124" class="grid"/>
+    <text x="120" y="32" class="mid small">pixels</text>
+    <line x1="80" y1="70" x2="240" y2="-6" class="arrow o-50"/>
+    <text x="214" y="18" class="small t-faint">no hit: discarded</text>
+    <line x1="80" y1="70" x2="300" y2="152.5" class="arrow hot"/>
+    <line x1="300" y1="152.5" x2="426.7" y2="200" class="arrow dashed o-25"/>
+    <circle cx="426.7" cy="200" r="4" class="ghost"/>
+    <text x="440" y="222" class="mid small">behind the box: the depth test hides it</text>
+    <line x1="80" y1="70" x2="253.3" y2="200" class="arrow gpu"/>
+    <line x1="80" y1="70" x2="195.6" y2="200" class="arrow gpu"/>
+    <line x1="80" y1="70" x2="169.7" y2="200" class="arrow gpu"/>
+    <line x1="80" y1="70" x2="730" y2="200" class="arrow gpu"/>
+    <line x1="80" y1="70" x2="580" y2="200" class="arrow gpu"/>
+    <circle cx="730" cy="200" r="4" class="hot"/>
+    <circle cx="580" cy="200" r="4" class="hot"/>
+    <circle cx="253.3" cy="200" r="4" class="hot"/>
+    <circle cx="195.6" cy="200" r="4" class="hot"/>
+    <circle cx="169.7" cy="200" r="4" class="hot"/>
+    <text x="190" y="222" class="mid small">near pixels: hits close together, fine cells</text>
+    <text x="745" y="240" class="end small">far pixels: hits far apart, coarse cells</text>
+  </svg>
+  <figcaption>The hit's depth is written as the fragment's depth: the test against the scene's depth then hides the grid behind the gray box, and the grid hides nothing, since it writes no depth.</figcaption>
+</figure>
+
+<p>A perspective camera's rays start at the camera and spread out. An orthographic camera's rays are parallel: they all have the view's direction, and start across the near plane.</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Perspective: rays leave one point and spread; they meet the plane farther apart with distance.">
+      <line x1="10" y1="110" x2="230" y2="110" class="surface"/>
+      <circle cx="30" cy="30" r="5" class="solid"/>
+      <line x1="30" y1="30" x2="70" y2="110" class="arrow gpu"/>
+      <line x1="30" y1="30" x2="110" y2="110" class="arrow gpu"/>
+      <line x1="30" y1="30" x2="200" y2="110" class="arrow gpu"/>
+    </svg>
+    <h4>Perspective</h4>
+    <p>Ray from the camera through <var>(x / P<sub>00</sub>, y / P<sub>11</sub>, −1)</var> in view space.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Orthographic: parallel rays from a segment of the near plane meet the plane evenly spaced.">
+      <line x1="10" y1="110" x2="230" y2="110" class="surface"/>
+      <line x1="20" y1="20" x2="80" y2="0" class="arrow o-50"/>
+      <line x1="30" y1="40" x2="100" y2="110" class="arrow gpu"/>
+      <line x1="50" y1="33" x2="127" y2="110" class="arrow gpu"/>
+      <line x1="70" y1="26" x2="154" y2="110" class="arrow gpu"/>
+    </svg>
+    <h4>Orthographic</h4>
+    <p>Ray along −Z from <var>((x − P<sub>03</sub>) / P<sub>00</sub>, (y − P<sub>13</sub>) / P<sub>11</sub>, 0)</var>: even spacing everywhere.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The plane test: the ray o + t d meets the plane n · p + h = 0 at t = −(h + n · o) / (n · d).">
+      <line x1="10" y1="100" x2="230" y2="100" class="surface"/>
+      <line x1="40" y1="20" x2="150" y2="100" class="arrow hot"/>
+      <circle cx="150" cy="100" r="4" class="hot"/>
+      <line x1="200" y1="100" x2="200" y2="60" class="arrow" marker-end="url(#ah)"/>
+      <text x="208" y="72" class="small">n</text>
+      <text x="120" y="124" class="mid small mono">t = −(h + n·o) / (n·d)</text>
+    </svg>
+    <h4>The plane</h4>
+    <p><var>h</var> is the camera's height above the plane, so the numbers stay small near the camera.</p>
+  </div>
+</div>
+
+<h2 id="width"><span class="n">3</span>Lines a pixel wide</h2>
+
+<p>The hit's plane coordinates, counted in cells, are <var>uv</var>. Their change from one pixel to the next, the <b>derivative</b>, says how many cells one pixel covers there. With it, a width in pixels becomes a width in cells.</p>
+
+<div class="formula">
+  <p class="eq">d = ( |(∂u/∂x, ∂u/∂y)|, |(∂v/∂x, ∂v/∂y)| )</p>
+  <p class="eq">w = widthPixels · d</p>
+  <p class="eq">distance = 1 − |fract(uv) · 2 − 1|</p>
+  <p class="eq">coverage = smoothstep(w + 1.5 d, w − 1.5 d, distance)</p>
+  <dl>
+    <dt><var>d</var></dt><dd>cells per pixel along each axis, from <code class="lang-text">ddx</code> and <code class="lang-text">ddy</code> of <var>uv</var></dd>
+    <dt><var>w</var></dt><dd>the line's width in cells</dd>
+    <dt>distance</dt><dd>twice the distance to the nearest line, in cells: 0 on a line, 1 halfway between two</dd>
+    <dt>smoothstep</dt><dd>an edge about a pixel and a half wide: the line is smooth, not stair-stepped</dd>
+  </dl>
+</div>
+
+<p>Two more rules keep thin and dense lines quiet (Ben Golus' "pristine grid"):</p>
+
+<div class="split">
+  <div class="bad">
+    <h4>Thin lines drawn thin</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="Lines thinner than a pixel drawn at their width: some pixels get the line, some do not, so it breaks into dashes that crawl as the camera moves.">
+      <path d="M20,30 H300" class="grid"/>
+      <path d="M20,60 H60 M90,60 H110 M150,60 H200 M240,60 H260" class="arrow"/>
+      <path d="M20,90 H40 M120,90 H130 M210,90 H230" class="arrow"/>
+      <text x="160" y="124" class="mid small t-bad">a line under a pixel: dashes that crawl</text>
+    </svg>
+    <p>A line 0.3 pixels wide covers some pixel centres and misses others: it breaks into dashes, and they crawl as the view moves.</p>
+  </div>
+  <div class="good">
+    <h4>Clamp to a pixel, then fade</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="Lines thinner than a pixel are drawn one pixel wide and faded by their width; cells near a pixel wide fade to their average gray.">
+      <path d="M20,30 H300" class="arrow"/>
+      <path d="M20,60 H300" class="arrow o-50"/>
+      <path d="M20,90 H300" class="arrow o-25"/>
+      <text x="160" y="124" class="mid small t-ok">one pixel wide, fainter: steady</text>
+    </svg>
+    <p>A thin line is drawn a pixel wide and faded by <var>w</var> / <var>d</var>. When cells get near two pixels wide, the result blends to the line's share of the cell, the average a far grid would have.</p>
+  </div>
+</div>
+
+<h2 id="levels"><span class="n">4</span>Levels: crisp at any zoom</h2>
+
+<p>One cell size cannot serve every zoom: zoomed out, 1 cm cells are a gray haze; zoomed in, 1 km cells are empty. So the cells come in levels: <var>cellSize</var> × <var>s</var><sup><var>k</var></sup> for <var>s</var> subdivisions. Each pixel picks the level whose cells are <var>F</var> pixels wide there, and draws three levels next to each other.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="Three levels of a grid with 4 subdivisions, drawn as rows of vertical lines. Level A has lines every 12 pixels and fades out. Level B has lines every 48 pixels and turns from major to minor. Level C has lines every 192 pixels and fades in as major. The last row shows them together.">
+    <text x="20" y="34" class="small">A: cells near F / s, fading out</text>
+    <path d="M220,20 V44 M232,20 V44 M244,20 V44 M256,20 V44 M268,20 V44 M280,20 V44 M292,20 V44 M304,20 V44 M316,20 V44 M328,20 V44 M340,20 V44 M352,20 V44 M364,20 V44 M376,20 V44 M388,20 V44 M400,20 V44 M412,20 V44 M424,20 V44 M436,20 V44 M448,20 V44 M460,20 V44 M472,20 V44 M484,20 V44 M496,20 V44 M508,20 V44 M520,20 V44 M532,20 V44 M544,20 V44 M556,20 V44 M568,20 V44 M580,20 V44 M592,20 V44 M604,20 V44 M616,20 V44 M628,20 V44 M640,20 V44 M652,20 V44 M664,20 V44 M676,20 V44 M688,20 V44 M700,20 V44 M712,20 V44 M724,20 V44 M736,20 V44" class="grid o-25"/>
+    <text x="20" y="78" class="small">B: cells near F, major → minor</text>
+    <path d="M220,64 V88 M268,64 V88 M316,64 V88 M364,64 V88 M412,64 V88 M460,64 V88 M508,64 V88 M556,64 V88 M604,64 V88 M652,64 V88 M700,64 V88" class="arrow o-75"/>
+    <text x="20" y="122" class="small">C: cells near F · s, fading in</text>
+    <path d="M220,108 V132 M412,108 V132 M604,108 V132" class="arrow thick o-50"/>
+    <text x="20" y="168" class="small title">together</text>
+    <path d="M220,152 V180 M232,152 V180 M244,152 V180 M256,152 V180 M280,152 V180 M292,152 V180 M304,152 V180 M328,152 V180 M340,152 V180 M352,152 V180 M376,152 V180 M388,152 V180 M400,152 V180 M424,152 V180 M436,152 V180 M448,152 V180 M472,152 V180 M484,152 V180 M496,152 V180 M520,152 V180 M532,152 V180 M544,152 V180 M568,152 V180 M580,152 V180 M592,152 V180 M616,152 V180 M628,152 V180 M640,152 V180 M664,152 V180 M676,152 V180 M688,152 V180 M712,152 V180 M724,152 V180 M736,152 V180" class="grid o-25"/>
+    <path d="M268,152 V180 M316,152 V180 M364,152 V180 M460,152 V180 M508,152 V180 M556,152 V180 M652,152 V180 M700,152 V180" class="arrow o-75"/>
+    <path d="M220,152 V180 M412,152 V180 M604,152 V180" class="arrow thick"/>
+    <text x="478" y="204" class="mid small">zoom out: A fades away, B becomes the minor lines, C the major ones, the next level fades in</text>
+  </svg>
+  <figcaption>The levels nest: every B line is also an A line, every C line a B line. As the zoom changes, each level slides into the next one's role, so the picture changes smoothly, with no jump between levels.</figcaption>
+</figure>
+
+<div class="formula">
+  <p class="eq">lod = max(0, log<sub>s</sub>(max(d<sub>x</sub>, d<sub>y</sub>) · F))</p>
+  <p class="eq">A = ⌊lod⌋ &nbsp;&nbsp; blend = lod − A</p>
+  <dl>
+    <dt><var>d</var></dt><dd>finest cells per pixel, as above</dd>
+    <dt><var>F</var></dt><dd>the width in pixels where a level's cells are fully shown (32 here)</dd>
+    <dt>blend</dt><dd>A's lines fade by 1 − blend, B's turn from major to minor, C's fade in by blend</dd>
+  </dl>
+</div>
+
+<p>In a perspective view, <var>d</var> grows with distance, so near pixels show fine cells and far pixels coarse ones. In an orthographic view, <var>d</var> is the same everywhere, so the whole view shows the same levels.</p>
+
+<figure class="lab" data-lab="grid-levels" data-title="Zoom through the levels">
+  <figcaption>Zoom out slowly and watch a level fade while the next takes its place. Tilt the view to see near and far pixels pick different levels in one picture. Set the subdivisions to 2 for a binary grid.</figcaption>
+</figure>
+
+<h2 id="far"><span class="n">5</span>Far from the origin</h2>
+
+<p>The lines sit at whole cells of the plane's coordinate. Far from the grid's origin, that coordinate is a big number, and a float cannot hold its fraction.</p>
+
+<div class="stats">
+  <div><b>6.4 × 10<sup>8</sup></b><span>cells to the camera</span><small>6 371 km from the origin, 1 cm cells</small></div>
+  <div><b>64 cells</b><span>between two floats there</span><small>a float has 24 bits: 2<sup>29</sup> / 2<sup>23</sup></small></div>
+  <div><b>exact</b><span>with whole cells modulo s<sup>J</sup></span><small>computed in doubles on the CPU</small></div>
+</div>
+
+<p>The fix splits the camera's coordinate on the plane, in doubles, into whole cells <var>n</var> and a rest <var>f</var> in [0, 1). Only <var>n</var> modulo a period matters, and the period can be a power of <var>s</var>, because every level's cells divide it.</p>
+
+<div class="formula">
+  <p class="eq">camera coordinate / cellSize = n + f</p>
+  <p class="eq">R = n mod s<sup>J</sup> &nbsp;(an integer, s<sup>J</sup> ≤ 2<sup>32</sup>)</p>
+  <p class="eq">uv at level k = ((R mod s<sup>k</sup>) + f + q / cellSize) / s<sup>k</sup></p>
+  <dl>
+    <dt><var>q</var></dt><dd>the hit relative to the camera, small near the camera, where the fine levels are</dd>
+    <dt>R mod s<sup>k</sup></dt><dd>exact integer math; the sum stays below a few cells of level <var>k</var>, so a float holds it</dd>
+  </dl>
+</div>
+
+<p>The camera's height above the plane comes from the CPU in doubles too, so the ray meets the plane at the right place however far both are from the origin.</p>
+
+<h2 id="fades"><span class="n">6</span>Fades and edges</h2>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Seen edge-on, the plane is a line of moiré; the grid fades out over the last few degrees.">
+      <line x1="10" y1="80" x2="230" y2="80" class="surface"/>
+      <circle cx="30" cy="70" r="5" class="solid"/>
+      <line x1="30" y1="70" x2="220" y2="78" class="arrow hot"/>
+      <text x="120" y="112" class="mid small">a few degrees: faded</text>
+    </svg>
+    <h4>Grazing angles</h4>
+    <p>Where the ray almost runs along the plane, the grid fades out: an edge-on plane is all moiré.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A distance fade: the lines are full near the camera and fade out between half the fade distance and the fade distance.">
+      <path d="M20,40 V100 M50,40 V100 M80,40 V100" class="arrow"/>
+      <path d="M110,40 V100 M140,40 V100" class="arrow o-50"/>
+      <path d="M170,40 V100" class="arrow o-25"/>
+      <text x="120" y="124" class="mid small">full → gone at the distance</text>
+    </svg>
+    <h4>Distance</h4>
+    <p>A perspective view can fade the grid out with distance, so it does not reach the horizon.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A bounded grid: lines only inside a rectangle, its edges smoothed over a pixel.">
+      <rect x="50" y="25" width="140" height="80" class="zone"/>
+      <path d="M50,25 V105 M85,25 V105 M120,25 V105 M155,25 V105 M190,25 V105 M50,25 H190 M50,65 H190 M50,105 H190" class="grid"/>
+      <text x="120" y="124" class="mid small">inside the extent only</text>
+    </svg>
+    <h4>A bounded grid</h4>
+    <p>An extent cuts the grid to a rectangle, its edge smoothed over a pixel like a line.</p>
+  </div>
+</div>
+
+<h2 id="pitfalls"><span class="n">7</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>The grid shows through objects</dt><dd>It was drawn without its own depth. Write the hit's depth and test it against the scene.</dd></div>
+  <div><dt>Lines flicker and crawl in the distance</dt><dd>A fixed width in world units. Use a width in pixels from the derivatives, and fade lines thinner than a pixel.</dd></div>
+  <div><dt>A gray haze of moiré far away</dt><dd>One level of cells for every pixel. Pick levels per pixel from the derivative.</dd></div>
+  <div><dt>A sudden jump while zooming</dt><dd>Levels switch at a threshold. Blend three levels by the fraction of the level of detail.</dd></div>
+  <div><dt>Lines step or wobble far from the origin</dt><dd>The plane coordinate was a float. Split it into whole cells modulo a period and a rest, in doubles on the CPU.</dd></div>
+  <div><dt>Black pixels or lines along the horizon</dt><dd>The derivatives blow up where the ray runs along the plane. Fade by the grazing angle, and take the derivatives before any discard so all four pixels of a quad have them.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">8</span>In RASM</h2>
+
+<p>A grid belongs to a camera: <code>Renderer::setCameraGrid(camera, Grid)</code> draws it in every shaded view of that camera, so each viewport of a CAD layout can have its own plane. A <code>Grid</code> is the plane (<code>origin</code> in doubles, <code>orientation</code>: its local XZ plane), the finest <code>cellSize</code>, <code>subdivisions</code>, an <code>extent</code> (0: endless), colors and widths, the axes, and a <code>fadeDistance</code>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="A shaded view's passes. Scene 1 and Scene 2 draw the opaque scene and the sky and write depth. Then the Transparent pass draws the grid first, one triangle with its own depth tested but not written, then the blend run: see-through meshes, vector features and labels go over the grid.">
+    <rect x="20" y="40" width="200" height="70" rx="6" class="gpu"/>
+    <text x="120" y="64" class="mid title">Scene 1, Scene 2</text>
+    <text x="120" y="84" class="mid small">opaque draws, the sky</text>
+    <text x="120" y="100" class="mid small">write depth</text>
+    <line x1="220" y1="75" x2="262" y2="75" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="264" y="20" width="476" height="110" rx="6" class="zone"/>
+    <text x="276" y="38" class="small title">Transparent</text>
+    <rect x="280" y="50" width="200" height="66" rx="6" class="shader"/>
+    <text x="380" y="72" class="mid mono small">drawGrid: grid.slang</text>
+    <text x="380" y="90" class="mid small">one triangle, SV_Depth</text>
+    <text x="380" y="106" class="mid small">tested, not written; blended</text>
+    <line x1="480" y1="83" x2="514" y2="83" class="arrow" marker-end="url(#ah)"/>
+    <rect x="516" y="50" width="210" height="66" rx="6" class="gpu"/>
+    <text x="621" y="72" class="mid small">blend run, back to front</text>
+    <text x="621" y="90" class="mid small">see-through meshes, vectors,</text>
+    <text x="621" y="106" class="mid small">labels: over the grid</text>
+    <rect x="280" y="150" width="200" height="40" rx="6" class="mem"/>
+    <text x="380" y="174" class="mid small">SceneData::grid (GridData)</text>
+    <line x1="380" y1="150" x2="380" y2="118" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="500" y="174" class="small">written per view by makeGridData, in doubles</text>
+  </svg>
+  <figcaption>The grid writes its own motion, premultiplied like the blend run's, so TAA keeps it steady; under MSAA its depth is tested per sample, so object edges over the grid stay smooth.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>This page</th><th>RASM</th></tr>
+  <tr><td>One triangle, a ray per pixel</td><td><code>Renderer::drawGrid</code> (<code>src/renderer/gpuScene.cpp</code>) draws three vertices with <code>shaders/passes/grid.slang</code>, first in the <code>Transparent</code> pass, after the opaque draws and the sky. Not in a debug view, and not in depth-only views.</td></tr>
+  <tr><td>Depth tested, not written</td><td>The pipeline has <code>BlendMode::PREMULTIPLIED_ALPHA</code>, depth test on, depth write off; the fragment writes the hit's depth. Its motion is the hit's, from <code>previousViewProjection</code>.</td></tr>
+  <tr><td>Lines in pixels</td><td><code>lineWidth</code> and <code>majorLineWidth</code>; the axes are <code>majorLineWidth</code> + 0.5 pixels, in <code>xAxisColor</code> and <code>zAxisColor</code> (alpha 0 hides one).</td></tr>
+  <tr><td>Levels</td><td><var>F</var> = 32 pixels (<code class="lang-text">FADE_PIXELS</code> in the shader); <code>subdivisions</code> from 2 to 1000, so at least three levels fit in 32 bits.</td></tr>
+  <tr><td>Whole cells and a rest</td><td><code>makeGridData</code> (<code>src/renderer/grid.cpp</code>) writes <code>residueX</code>, <code>residueZ</code>, <code>fractionX</code>, <code>fractionZ</code> and the camera's <code>height</code> above the plane from doubles, every frame, in each view's render space (<a href="large-world-precision.html">Large worlds</a>). <code>period</code> is the largest power of <code>subdivisions</code> in 32 bits.</td></tr>
+  <tr><td>Fades and edges</td><td>Grazing angle always; <code>fadeDistance</code> in perspective views; <code>extent</code> in world units along the plane's X and Z.</td></tr>
+</table>
+</div>
+
+<div class="stats">
+  <div><b>0.22 ms</b><span>four grids, 27_cad_views</span><small>four views at 1920 × 1080, three with 4× MSAA, RTX 3060, Release</small></div>
+  <div><b>0 pixels</b><span>differ 6 000 km out</span><small>27_cad_views --far against the origin, frame 70</small></div>
+  <div><b>0 bytes</b><span>per frame on the heap</span><small>the grid is a SceneData row</small></div>
+</div>
+
+<h3>Code map</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The API</td><td><code>Grid</code> in <code>include/rasm/grid.h</code>; <code>Renderer::setCameraGrid</code>, <code>Renderer::getCameraGrid</code>; <code>rasm_set_camera_grid</code> in C</td></tr>
+  <tr><td>Per-view data</td><td><code>checkGrid</code> and <code>makeGridData</code> in <code>src/renderer/grid.cpp</code>; <code>gfx::GridData</code> in <code>src/renderer/uberMaterialTypes.h</code> and <code>shaders/lib/core.slang</code></td></tr>
+  <tr><td>The draw</td><td><code>prepareSceneView</code> fills <code>SceneData::grid</code> (also while the scene's meshes still load); <code>drawGrid</code> in the <code>Transparent</code> pass</td></tr>
+  <tr><td>The shader</td><td><code>shaders/passes/grid.slang</code>: <code>getLineCoverage</code>, <code>getLevelUv</code>, <code>getAxisCoverage</code></td></tr>
+  <tr><td>Example</td><td><code>examples/27_cad_views/main.cpp</code>: four views, each with a grid in its own plane</td></tr>
+  <tr><td>Tests</td><td><code>tests/gridTests.cpp</code> (the residues against a direct computation, far and near); image tests <code>grid</code>, <code>grid_ortho</code>, <code>grid_msaa4</code>, <code>grid_taa</code>, <code>far_grid</code>, and a bounded grid in <code>ortho</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Rules to keep</strong>
+  <p>Every value that depends on where the camera is on the plane comes from <code>makeGridData</code> in doubles. Keep <code>GridData</code> in step on both sides (<a href="struct-layout.html">struct layout</a>). The grid reads only <code>SceneData</code>: no draw, no culling, no pick.</p>
+</div>
+
+<h3>Not yet</h3>
+<ul>
+  <li>An axis out of the plane (a vertical Y axis over an XZ grid): draw it as a <a href="vector-rendering.html">vector line</a> a few pixels wide.</li>
+  <li>The grid is not pickable; the ray-plane test of section 2 on the CPU gives its point under the mouse.</li>
+</ul>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Ben Golus, "The Best Darn Grid Shader (Yet)", 2023: line coverage with derivatives and the moiré fade.</li>
+  <li><a href="projection-depth.html">Projection and reversed-Z depth</a>, <a href="large-world-precision.html">Large worlds</a>, <a href="transparency.html">Transparency</a>, <a href="camera-controllers.html#pan-zoom">pan and zoom</a>.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

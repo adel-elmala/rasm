@@ -52,6 +52,10 @@ namespace rasm
         virtual void                setTextInput(const Window& window, bool on) { (void)window; (void)on; }
         virtual const char*         getClipboardText() { return nullptr; }
         virtual void                setClipboardText(const char* text) { (void)text; }
+        // A camera drag's grab: the pointer hides and stays, and moves come as dx and dy only, so a drag goes on past
+        // the window's edge. Off puts the pointer back where the grab began. An application's own window does the same
+        // itself and sends the motion in InputEvent::dx and dy.
+        virtual void                setMouseGrab(const Window& window, bool on) { (void)window; (void)on; }
     };
 
     std::unique_ptr<Platform>       createSdlPlatform();

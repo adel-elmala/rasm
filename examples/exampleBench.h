@@ -22,6 +22,7 @@ struct ExampleBench
     std::vector<std::string>        names;              // the passes, in the order of their first frame
     std::map<std::string, double>   sums;
     double                          gpuMs               = 0.0;
+    double                          cpuMs               = 0.0;
     double                          triangles           = 0.0;
     double                          draws               = 0.0;
     double                          meshlets            = 0.0;
@@ -78,6 +79,7 @@ inline void addBenchFrame(ExampleBench& bench, const rasm::FrameStats& stats)
         bench.sums[name] += stats.gpuTimers[i].milliseconds;
     }
     bench.gpuMs             += stats.gpuFrameMs;
+    bench.cpuMs             += stats.cpuFrameMs;
     bench.triangles         += static_cast<double>(stats.trianglesVisible);
     bench.draws             += stats.drawsVisible;
     bench.meshlets          += stats.meshletsVisible;
@@ -114,6 +116,7 @@ inline void printBench(const ExampleBench& bench, const rasm::EngineConfig& conf
     for (const std::string& name : bench.names)
         std::printf("  %-22s %8.3f ms\n", name.c_str(), bench.sums.at(name) / n);
     std::printf("  %-22s %8.3f ms\n", "GPU frame", bench.gpuMs / n);
+    std::printf("  %-22s %8.3f ms\n", "CPU frame", bench.cpuMs / n);
     std::printf("  %-22s %8.3f ms (of it meshlets %.3f ms)\n", "culling", culling / n, meshletCulling / n);
     std::printf("  %-22s %8.2f M\n", "triangles drawn", bench.triangles / n / 1e6);
     std::printf("  %-22s %8.0f\n", "draws", bench.draws / n);

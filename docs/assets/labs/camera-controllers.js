@@ -181,3 +181,152 @@ RasmLab.register("orbit-mix", function (lab) {
         else note.set("For a small turn the two paths are almost the same. The error grows with the angle.", "ok");
     });
 });
+
+// An orthographic view of a few shapes on a plane (left) and the plane from above with the view's box (right). The
+// wheel scales the box by 0.9 a step; at the pointer, the camera also moves by the pointer's offset times (1 - f), so
+// the shape under the pointer stays under it.
+RasmLab.register("ortho-zoom", function (lab) {
+    const svg = lab.svg(760, 320, "Left: what an orthographic view shows, with the pointer. Right: the plane from above, the view's box before the zoom (dashed) and after (solid), and the point that was under the pointer.");
+    const steps = lab.slider({ label: "Wheel steps (forward zooms in)", min: -8, max: 12, step: 1, value: 6, format: function (v) { return String(v); } });
+    const atPointer = lab.toggle({ label: "Zoom at the pointer", value: true });
+    const zoomOut = lab.readout("box size, times");
+    const movedOut = lab.readout("the point under the pointer moved");
+    const note = lab.note();
+
+    const SCREEN = { x: 20, y: 20, w: 440, h: 280 };
+    const MAP = { x: 490, y: 20, w: 250, h: 280 };
+    const HALF = 10;            // the box's half width before the zoom, in world units
+    const SHAPES = [
+        { x: -6, y: 3, r: 1.2 }, { x: 4.5, y: 2.5, r: 0.8 }, { x: 2, y: -3.5, r: 1.5 },
+        { x: -3, y: -2, r: 0.6 }, { x: 7, y: -4, r: 1.0 }, { x: 0.5, y: 0.8, r: 0.5 },
+    ];
+
+    lab.el(svg, "rect", { x: SCREEN.x, y: SCREEN.y, width: SCREEN.w, height: SCREEN.h, rx: 4, class: "zone" });
+    lab.el(svg, "rect", { x: MAP.x, y: MAP.y, width: MAP.w, height: MAP.h, rx: 4, class: "paper" });
+    lab.el(svg, "text", { x: SCREEN.x + SCREEN.w / 2, y: 316, class: "mid small", text: "the view after the zoom" });
+    lab.el(svg, "text", { x: MAP.x + MAP.w / 2, y: 316, class: "mid small", text: "the plane from above" });
+    lab.el(lab.el(svg, "clipPath", { id: "ortho-zoom-screen" }), "rect", { x: SCREEN.x, y: SCREEN.y, width: SCREEN.w, height: SCREEN.h });
+    const screenShapes = lab.el(svg, "g", { "clip-path": "url(#ortho-zoom-screen)" });
+    const mapGroup = lab.el(svg, "g", {});
+    const pointer = lab.handle(svg, { x: 339, y: 105, label: "The pointer", minX: SCREEN.x + 8, maxX: SCREEN.x + SCREEN.w - 8, minY: SCREEN.y + 8, maxY: SCREEN.y + SCREEN.h - 8 });
+
+    // World to the map panel: 26 world units across its width.
+    function mapX(x) { return MAP.x + MAP.w / 2 + x * MAP.w / 26; }
+    function mapY(y) { return MAP.y + MAP.h / 2 - y * MAP.w / 26; }
+
+    lab.draw(function () {
+        const aspect = SCREEN.h / SCREEN.w;
+        const f = Math.pow(0.9, steps.value);
+        // The point under the pointer before the zoom: the camera at 0, 0 and the box HALF wide.
+        const before = { x: (pointer.x - SCREEN.x - SCREEN.w / 2) / (SCREEN.w / 2) * HALF, y: -(pointer.y - SCREEN.y - SCREEN.h / 2) / (SCREEN.h / 2) * HALF * aspect };
+        const camera = atPointer.value ? { x: before.x * (1 - f), y: before.y * (1 - f) } : { x: 0, y: 0 };
+        const half = HALF * f;
+        function screenX(x) { return SCREEN.x + SCREEN.w / 2 + (x - camera.x) / half * SCREEN.w / 2; }
+        function screenY(y) { return SCREEN.y + SCREEN.h / 2 - (y - camera.y) / (half * aspect) * SCREEN.h / 2; }
+
+        lab.clear(screenShapes);
+        SHAPES.forEach(function (s) {
+            const x = screenX(s.x);
+            const y = screenY(s.y);
+            const r = s.r / half * SCREEN.w / 2;
+            if (x + r < SCREEN.x || x - r > SCREEN.x + SCREEN.w || y + r < SCREEN.y || y - r > SCREEN.y + SCREEN.h) return;
+            lab.el(screenShapes, "circle", { cx: x, cy: y, r: Math.min(r, 400), class: "cpu o-50" });
+        });
+        const ax = screenX(before.x);
+        const ay = screenY(before.y);
+        if (ax > SCREEN.x && ax < SCREEN.x + SCREEN.w && ay > SCREEN.y && ay < SCREEN.y + SCREEN.h)
+            lab.el(screenShapes, "circle", { cx: ax, cy: ay, r: 5, class: "solid" });
+
+        lab.clear(mapGroup);
+        SHAPES.forEach(function (s) { lab.el(mapGroup, "circle", { cx: mapX(s.x), cy: mapY(s.y), r: s.r * MAP.w / 26, class: "cpu o-50" }); });
+        lab.el(mapGroup, "rect", { x: mapX(-HALF), y: mapY(HALF * aspect), width: mapX(HALF) - mapX(-HALF), height: mapY(-HALF * aspect) - mapY(HALF * aspect), class: "ghost dashed" });
+        lab.el(mapGroup, "rect", { x: mapX(camera.x - half), y: mapY(camera.y + half * aspect), width: mapX(half) - mapX(-half), height: mapY(-half * aspect) - mapY(half * aspect), class: "arrow" });
+        lab.el(mapGroup, "circle", { cx: mapX(camera.x), cy: mapY(camera.y), r: 3, class: "cpu" });
+        lab.el(mapGroup, "circle", { cx: mapX(before.x), cy: mapY(before.y), r: 4, class: "hot" });
+
+        const moved = Math.hypot(ax - pointer.x, ay - pointer.y);
+        zoomOut.set(f.toFixed(3));
+        movedOut.set(`${moved.toFixed(1)} px`, moved < 0.5 ? "ok" : "bad");
+        if (moved < 0.5)
+            note.set("The camera moved by the pointer's offset times (1 − f): the point under the pointer is where it was.", "ok");
+        else
+            note.set("Zoomed at the centre: the box shrank around the camera, and the point that was under the pointer slid toward the edge.", "bad");
+    });
+});
+
+// How far one small horizontal step of a drag turns the view, as the pointer moves from the view's centre past its
+// edge: Shoemake's sphere clamped to the rim, Holroyd's sphere and hyperbola, and a turntable that reads the motion only.
+RasmLab.register("orbit-edge", function (lab) {
+    const svg = lab.svg(760, 300, "A plot of the turn per drag step against the pointer's x, from the centre past the view's edge, for a clamped sphere, Holroyd's smooth ball and a turntable.");
+    const height = lab.slider({ label: "The drag's height y", min: 0, max: 0.9, step: 0.01, value: 0.2, format: function (v) { return v.toFixed(2); } });
+    const rimOut = lab.readout("clamped sphere at x = 1.5");
+    const smoothOut = lab.readout("smooth ball at x = 1.5");
+    const note = lab.note();
+    const STEP = 0.02;
+    const X0 = 70;
+    const X1 = 730;
+    const Y0 = 250;
+    const Y1 = 30;
+    const MAX_X = 2.5;
+    const MAX_ANGLE = 2.2;  // degrees per step on the plot's top
+
+    function shoemake(x, y) {
+        const d2 = x * x + y * y;
+        if (d2 <= 1) return [x, y, Math.sqrt(1 - d2)];
+        const d = Math.sqrt(d2);
+        return [x / d, y / d, 0];
+    }
+    function holroyd(x, y) {
+        const d2 = x * x + y * y;
+        const z = d2 <= 0.5 ? Math.sqrt(1 - d2) : 0.5 / Math.sqrt(d2);
+        const n = Math.hypot(x, y, z);
+        return [x / n, y / n, z / n];
+    }
+    function angle(map, x, y) {
+        const a = map(x, y);
+        const b = map(x + STEP, y);
+        const dot = Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]);
+        return Math.acos(dot) * 180 / Math.PI;
+    }
+    function px(x) { return X0 + (X1 - X0) * x / MAX_X; }
+    function py(a) { return Y0 + (Y1 - Y0) * Math.min(a, MAX_ANGLE) / MAX_ANGLE; }
+
+    lab.el(svg, "rect", { x: px(1), y: Y1, width: px(MAX_X) - px(1), height: Y0 - Y1, class: "zone" });
+    lab.el(svg, "line", { x1: X0, y1: Y0, x2: X1, y2: Y0, class: "arrow" });
+    lab.el(svg, "line", { x1: X0, y1: Y0, x2: X0, y2: Y1, class: "arrow" });
+    lab.el(svg, "text", { x: px(1) + 8, y: Y1 + 16, class: "small", text: "past the view's edge" });
+    lab.el(svg, "text", { x: (X0 + X1) / 2, y: 290, class: "mid small", text: "the pointer's x (NDC: 0 the centre, 1 the edge of the view's smaller side)" });
+    lab.el(svg, "text", { x: X0 - 8, y: Y1 + 4, class: "end small", text: `${MAX_ANGLE}°` });
+    lab.el(svg, "text", { x: X0 - 8, y: Y0 + 4, class: "end small", text: "0°" });
+    const turntable = lab.el(svg, "path", { class: "arrow cpu thick" });
+    const rim = lab.el(svg, "path", { class: "arrow bad thick" });
+    const smooth = lab.el(svg, "path", { class: "arrow ok thick" });
+    lab.el(svg, "text", { x: X1, y: 110, class: "end small t-cpu", text: "turntable: the motion only" });
+    lab.el(svg, "text", { x: X1, y: 128, class: "end small t-ok", text: "smooth ball (Holroyd)" });
+    lab.el(svg, "text", { x: X1, y: 146, class: "end small t-bad", text: "sphere clamped to its rim (Shoemake)" });
+
+    lab.draw(function () {
+        const y = height.value;
+        const k = STEP * 90;   // the turntable: 90 degrees per unit
+        let a = "";
+        let b = "";
+        let c = "";
+        for (let i = 0; i <= 120; i++) {
+            const x = MAX_X * i / 120;
+            a += `${i === 0 ? "M" : "L"}${px(x).toFixed(1)},${py(angle(shoemake, x, y)).toFixed(1)} `;
+            b += `${i === 0 ? "M" : "L"}${px(x).toFixed(1)},${py(angle(holroyd, x, y)).toFixed(1)} `;
+            c += `${i === 0 ? "M" : "L"}${px(x).toFixed(1)},${py(k).toFixed(1)} `;
+        }
+        lab.set(rim, { d: a });
+        lab.set(smooth, { d: b });
+        lab.set(turntable, { d: c });
+        const rimAt = angle(shoemake, 1.5, y);
+        const smoothAt = angle(holroyd, 1.5, y);
+        rimOut.set(`${rimAt.toFixed(2)}° a step`, rimAt < 0.05 ? "bad" : "");
+        smoothOut.set(`${smoothAt.toFixed(2)}° a step`, "ok");
+        if (y < 0.05)
+            note.set("On the clamped sphere every point past the rim is the same point: the turn stops dead at the edge. The smooth ball slows down but keeps turning; the turntable does not care where the pointer is.", "bad");
+        else
+            note.set("Past the rim the clamped sphere only slides along its edge, a roll around the view's centre, not the turn the drag asked for. The smooth ball keeps turning the same way.", "bad");
+    });
+});

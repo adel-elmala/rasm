@@ -18,8 +18,8 @@
  * streamer hands out each tile once, and the program gives it its mesh and entity then; the quarters draw the same
  * square as the root, so the picture does not change, only who draws it.
  *
- * Three views draw each frame: a top-down map into a view texture (a render target), which a board in the scene shows;
- * the main camera into the window; and the map again into a corner of the window. The main camera has a trackball
+ * Three views draw each frame: a top-down map with a reference grid (1.8) into a view texture (a render target), which
+ * a board in the scene shows; the main camera into the window; and the map again into a corner of the window. The main camera has a trackball
  * controller, which a script drives with synthetic mouse events (rasm_add_input_event), the way an application with its
  * own event loop feeds RASM; with --fixed-step, which fixes the easing's time step, frame N is the same on every run. At frame 20 it picks the main view's centre (1.7) and prints what is there, a
  * couple of frames later; a headless run whose pick hit nothing exits with 1. At the end it prints the frame and pool stats.
@@ -474,6 +474,18 @@ int main(int argc, char **argv)
         map = rasm_create_camera(renderer, &projection, &above);
     }
     rasm_add_camera_to_scene(renderer, scene, map);
+    {
+        /* The map's reference grid (1.8), just over the ground: orange half-metre cells, every second line major. */
+        rasm_grid grid;
+        rasm_grid_init(&grid, sizeof(grid));
+        grid.enabled = RASM_TRUE;
+        grid.origin.y = 0.01;
+        grid.cell_size = 0.5;
+        grid.subdivisions = 2;
+        grid.minor_color = (rasm_vec4){1.0f, 0.45f, 0.05f, 0.5f};
+        grid.major_color = (rasm_vec4){1.0f, 0.45f, 0.05f, 0.9f};
+        rasm_set_camera_grid(renderer, map, &grid);
+    }
     rasm_render_target_desc_init(&mapDesc, sizeof(mapDesc));
     mapDesc.name = "map";
     mapDesc.width = MAP_SIZE;

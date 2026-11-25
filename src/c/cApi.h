@@ -224,6 +224,9 @@ namespace rasm::c
     constexpr size_t        PICK_DESC_SIZE_1_7              = offsetof(rasm_pick_desc, skip) + sizeof(uint32_t);
     constexpr size_t        PICK_HIT_SIZE_1_7               = offsetof(rasm_pick_hit, distance) + sizeof(double);
 
+    constexpr size_t        CAMERA_BUTTONS_SIZE_1_8         = offsetof(rasm_camera_buttons, shift_left) + sizeof(rasm_camera_drag);
+    constexpr size_t        GRID_SIZE_1_8                   = offsetof(rasm_grid, fade_distance) + sizeof(float);
+
 }
 
 // Each entry point is a function try block that ends with one of these, so no exception crosses the C boundary.

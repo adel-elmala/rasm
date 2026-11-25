@@ -81,6 +81,35 @@ namespace rasm::gfx
         float       split;          // a cascade's: the view depth where it ends
     };
 
+    // The camera's reference grid in the view's render space (src/renderer/grid.cpp, shaders/passes/grid.slang). The
+    // view origin's place on the plane is split into whole cells, kept modulo period, and the rest, so every level's
+    // line positions stay exact however far the origin is from the grid's.
+    struct GridData
+    {
+        glm::vec3        axisX;                     // the plane's X axis in the world, which render space shares
+        float            height;                    // the view origin's height above the plane, along normal
+        glm::vec3        axisZ;
+        float            cellSize;                  // the finest level's cells
+        glm::vec3        normal;
+        float            subdivisions;
+        uint32_t         residueX;                  // floor(the origin's X on the plane / cellSize) modulo period
+        uint32_t         residueZ;
+        float            fractionX;                 // the rest, in cells: 0 to 1
+        float            fractionZ;
+        glm::vec2        originCells;               // the origin's X and Z on the plane in cells, rounded: the axes and the extent
+        glm::vec2        extent;                    // half sizes in cells; 0: endless
+        glm::vec4        minorColor;
+        glm::vec4        majorColor;
+        glm::vec4        xAxisColor;                // the line along axisX, alpha 0 without axes
+        glm::vec4        zAxisColor;
+        float            lineWidth;                 // pixels
+        float            majorLineWidth;
+        float            fadeDistance;              // 0: no fade
+        uint32_t         levelCount;                // the levels above the finest; 0: no grid
+        uint32_t         period;                    // subdivisions^levelCount
+        uint32_t         zero;                      // keeps the size a multiple of 8
+    };
+
 
     struct DrawInfo
     {
@@ -434,6 +463,7 @@ namespace rasm::gfx
         uint32_t         zero;                      // always 0: the shaders' render-space sums keep their order (renderSpace.slang)
         glm::vec4        environmentOrientation;    // quaternion (x, y, z, w): SceneEnvironment::orientation
         uint64_t         labelsPtr;                 // a shaded view's label slots' alpha (placeViewLabels); 0: every label shown
+        GridData         grid;                      // the camera's grid, levelCount 0 without one
     };
 
     struct PushConstants
@@ -584,7 +614,13 @@ namespace rasm::gfx
     static_assert(offsetof(GeometryData, lods) == 24, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, environmentOrientation) == 2032, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, labelsPtr) == 2048, "SceneData must match the shader's scalar layout");
-    static_assert(sizeof(SceneData) == 2056, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, grid) == 2056, "SceneData must match the shader's scalar layout");
+    static_assert(sizeof(SceneData) == 2224, "SceneData must match the shader's scalar layout");
+    static_assert(sizeof(GridData) == 168, "GridData must match the shader's scalar layout");
+    static_assert(offsetof(GridData, residueX) == 48, "GridData must match the shader's scalar layout");
+    static_assert(offsetof(GridData, minorColor) == 80, "GridData must match the shader's scalar layout");
+    static_assert(offsetof(GridData, lineWidth) == 144, "GridData must match the shader's scalar layout");
+    static_assert(offsetof(GridData, zero) == 164, "GridData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, meshletDataPtr) == 2008, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, originLow) == 2016, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, previousSkinnedVertsPtr) == 1816, "SceneData must match the shader's scalar layout");

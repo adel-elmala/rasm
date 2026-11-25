@@ -375,6 +375,7 @@ namespace rasm
                         events.push_back({.type = InputEventType::MOUSE_BUTTON,
                                           .window = target->handle,
                                           .down = event.button.down,
+                                          .modifiers = toModifiers(SDL_GetModState()),
                                           .button = button,
                                           .x = event.button.x,
                                           .y = event.button.y});
@@ -386,7 +387,7 @@ namespace rasm
                         break;
                     }
                     case SDL_EVENT_MOUSE_MOTION:
-                        events.push_back({.type = InputEventType::MOUSE_MOVE, .window = target->handle, .x = event.motion.x, .y = event.motion.y});
+                        events.push_back({.type = InputEventType::MOUSE_MOVE, .window = target->handle, .x = event.motion.x, .y = event.motion.y, .dx = event.motion.xrel, .dy = event.motion.yrel});
                         break;
                     case SDL_EVENT_MOUSE_WHEEL:
                         events.push_back({.type = InputEventType::MOUSE_WHEEL, .window = target->handle, .x = event.wheel.x, .y = event.wheel.y});
@@ -489,6 +490,21 @@ namespace rasm
                 SDL_SetClipboardText(text);
             }
 
+            // SDL's relative mouse mode, Blender's continuous grab: the cursor hides, and motion goes on past the
+            // screen's edge. On release the cursor comes back where the drag began.
+            void setMouseGrab(const Window &window, bool on) override
+            {
+                SDL_Window *sdlWindow = toSdl(window);
+                if (sdlWindow == nullptr || SDL_GetWindowRelativeMouseMode(sdlWindow) == on)
+                    return;
+                if (on)
+                    SDL_GetGlobalMouseState(&grabX, &grabY);
+                SDL_SetWindowRelativeMouseMode(sdlWindow, on);
+                // Not after the user switched to another window (the drag ended with the focus): the pointer is theirs.
+                if (!on && (SDL_GetWindowFlags(sdlWindow) & SDL_WINDOW_INPUT_FOCUS) != 0)
+                    SDL_WarpMouseGlobal(grabX, grabY);
+            }
+
         private:
             static SDL_Window *toSdl(const Window &window)
             {
@@ -532,6 +548,8 @@ namespace rasm
             SDL_Cursor *cursors[SDL_CURSOR_COUNT] = {};
             char *clipboard = nullptr;
             uint32_t openWindows = 0;
+            float grabX = 0.0f; // where the pointer was on the screen when the grab began
+            float grabY = 0.0f;
         };
     }
 

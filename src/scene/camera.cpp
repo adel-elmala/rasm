@@ -1,5 +1,6 @@
 #include "rasm/camera.h"
 #include "rasm/renderer.h"
+#include "renderer/grid.h"
 #include "renderer/viewGraph.h"
 
 #include "spdlog/spdlog.h"
@@ -247,6 +248,31 @@ namespace rasm
         return registry.cameras[camera.index].bloomStrength;
     }
 
+    Grid Renderer::getCameraGrid(CameraHandle camera)
+    {
+        if (!isLive(camera))
+        {
+            spdlog::error("Invalid camera handle.");
+            return Grid{};
+        }
+
+        return registry.cameras[camera.index].grid;
+    }
+
+    bool Renderer::setCameraGrid(CameraHandle camera, const Grid &grid)
+    {
+        if (!isLive(camera))
+        {
+            spdlog::error("Invalid camera handle.");
+            return false;
+        }
+        if (!checkGrid(grid))
+            return false;
+
+        registry.cameras[camera.index].grid = grid;
+        return true;
+    }
+
     CameraController Renderer::getCameraController(CameraHandle camera)
     {
         if (!isLive(camera))
@@ -338,7 +364,8 @@ namespace rasm
             return;
         }
 
-        updateCameraRig(registry.cameras[camera.index].rig, input);
+        Camera &value = registry.cameras[camera.index];
+        updateCameraRig(value.rig, value.projection, input);
     }
 
 }

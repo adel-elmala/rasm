@@ -13,6 +13,49 @@ using namespace rasm;
 
 namespace
 {
+    static_assert(RASM_ORBIT_STYLE_TURNTABLE == static_cast<uint32_t>(CameraController::OrbitStyle::TURNTABLE));
+    static_assert(RASM_ORBIT_STYLE_ARCBALL == static_cast<uint32_t>(CameraController::OrbitStyle::ARCBALL));
+    static_assert(RASM_CAMERA_DRAG_NONE == static_cast<uint32_t>(CameraDrag::NONE));
+    static_assert(RASM_CAMERA_DRAG_ORBIT == static_cast<uint32_t>(CameraDrag::ORBIT));
+    static_assert(RASM_CAMERA_DRAG_PAN == static_cast<uint32_t>(CameraDrag::PAN));
+    static_assert(RASM_CAMERA_WHEEL_ZOOM == CAMERA_WHEEL_ZOOM);
+    static_assert(RASM_MIN_TRACK_BALL_RADIUS == MIN_TRACK_BALL_RADIUS);
+}
+
+namespace
+{
+    rasm_camera_buttons toC(const CameraButtons &buttons)
+    {
+        return {.size = sizeof(rasm_camera_buttons),
+                .left = static_cast<rasm_camera_drag>(buttons.left),
+                .right = static_cast<rasm_camera_drag>(buttons.right),
+                .middle = static_cast<rasm_camera_drag>(buttons.middle),
+                .back = static_cast<rasm_camera_drag>(buttons.back),
+                .forward = static_cast<rasm_camera_drag>(buttons.forward),
+                .shift_left = static_cast<rasm_camera_drag>(buttons.shiftLeft)};
+    }
+
+    // The caller's buttons over the defaults, each a known drag.
+    bool readButtons(const rasm_camera_buttons *buttons, CameraButtons &converted, const char *function)
+    {
+        rasm_camera_buttons values = toC(CameraButtons{});
+        if (!c::checkPointer(buttons, function, "buttons") || !c::readSized(buttons, c::CAMERA_BUTTONS_SIZE_1_8, &values, sizeof(values), function, "buttons"))
+            return false;
+        const rasm_camera_drag drags[6] = {values.left, values.right, values.middle, values.back, values.forward, values.shift_left};
+        for (const rasm_camera_drag drag : drags)
+        {
+            if (!c::checkEnum(drag, RASM_CAMERA_DRAG_PAN + 1, function, "buttons"))
+                return false;
+        }
+        converted = {.left = static_cast<CameraDrag>(values.left),
+                     .right = static_cast<CameraDrag>(values.right),
+                     .middle = static_cast<CameraDrag>(values.middle),
+                     .back = static_cast<CameraDrag>(values.back),
+                     .forward = static_cast<CameraDrag>(values.forward),
+                     .shiftLeft = static_cast<CameraDrag>(values.shift_left)};
+        return true;
+    }
+
     // The window an id names: 0 is the main window, as in C++. A removed one is an empty Window: false, with an error.
     bool getWindowOf(Renderer &renderer, rasm_window window, const Window *&state, const char *function)
     {
@@ -25,6 +68,67 @@ namespace
 }
 
 // NOLINTBEGIN(readability-identifier-naming): the parameters keep their names from rasm_c.h
+rasm_result RASM_CALL rasm_camera_buttons_init(rasm_camera_buttons *buttons, uint32_t size)
+try
+{
+    const rasm_camera_buttons defaults = toC(CameraButtons{});
+    return c::initSized(buttons, size, c::CAMERA_BUTTONS_SIZE_1_8, &defaults, sizeof(defaults), __func__, "buttons");
+}
+RASM_C_CATCH_RESULT
+
+rasm_result RASM_CALL rasm_set_camera_buttons(rasm_renderer *renderer, const rasm_camera_buttons *buttons)
+try
+{
+    Renderer *r = c::getRenderer(renderer, __func__);
+    CameraButtons converted;
+    if (r == nullptr || !readButtons(buttons, converted, __func__))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    r->setCameraButtons(converted);
+    return RASM_OK;
+}
+RASM_C_CATCH_RESULT
+
+rasm_result RASM_CALL rasm_camera_input_state_set_buttons(rasm_camera_input_state *state, const rasm_camera_buttons *buttons)
+try
+{
+    CameraButtons converted;
+    if (!c::checkPointer(state, __func__, "state") || !readButtons(buttons, converted, __func__))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    state->state.buttons = converted;
+    return RASM_OK;
+}
+RASM_C_CATCH_RESULT
+
+rasm_result RASM_CALL rasm_set_mouse_grab(rasm_renderer *renderer, rasm_window window, rasm_bool on)
+try
+{
+    Renderer *r = c::getRenderer(renderer, __func__);
+    const Window *state = nullptr;
+    if (r == nullptr || !getWindowOf(*r, window, state, __func__))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    const c::CallErrors errors;
+    r->setMouseGrab(on != 0, c::toCpp(window));
+    return errors.result();
+}
+RASM_C_CATCH_RESULT
+
+rasm_result RASM_CALL rasm_camera_rig_update_projection(rasm_camera_rig *rig, rasm_camera_projection *projection, const rasm_camera_input *input)
+try
+{
+    rasm_camera_input values = c::toC(CameraInput{});
+    rasm_camera_projection lens = c::toC(CameraProjection{.type = CameraProjection::Type::PERSPECTIVE, .perspective = {}});
+    if (!c::checkPointer(rig, __func__, "rig") || !c::checkPointer(projection, __func__, "projection") ||
+        !c::readSized(projection, c::CAMERA_PROJECTION_SIZE_1_0, &lens, sizeof(lens), __func__, "projection") ||
+        !c::checkEnum(lens.type, RASM_PROJECTION_TYPE_ORTHOGRAPHIC + 1, __func__, "projection->type") ||
+        !c::readSized(input, c::CAMERA_INPUT_SIZE_1_1, &values, sizeof(values), __func__, "input"))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    CameraProjection converted = c::toCpp(lens);
+    updateCameraRig(rig->rig, converted, c::toCpp(values));
+    const rasm_camera_projection result = c::toC(converted);
+    return c::writeSized(projection, c::CAMERA_PROJECTION_SIZE_1_0, &result, sizeof(result), __func__, "projection") ? RASM_OK : RASM_ERROR_INVALID_ARGUMENT;
+}
+RASM_C_CATCH_RESULT
+
 rasm_result RASM_CALL rasm_window_desc_init(rasm_window_desc *desc, uint32_t size)
 try
 {

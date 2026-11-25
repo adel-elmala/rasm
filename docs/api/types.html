@@ -764,6 +764,8 @@ if (rasm::readPng("golden.png", golden) &amp;&amp; golden.width == image.width)
     float           x               = 0.0f;
     float           y               = 0.0f;
     uint32_t        codepoint       = 0;
+    float           dx              = 0.0f;
+    float           dy              = 0.0f;
 };</pre>
   <div class="body">
     <p>One input event. Only the fields its <code>type</code> names are read:</p>
@@ -771,8 +773,8 @@ if (rasm::readPng("golden.png", golden) &amp;&amp; golden.width == image.width)
     <table>
       <tr><th><code>type</code></th><th>Fields</th><th>Goes to</th></tr>
       <tr><td><code>KEY</code></td><td><code>key</code>, <code>physicalKey</code>, <code>down</code>, <code>repeat</code>, <code>modifiers</code></td><td>ImGui and F1–F3 by <code>key</code> (ImGui by <code>physicalKey</code> when <code>key</code> is <code>NONE</code>); the camera's W/A/S/D by <code>physicalKey</code></td></tr>
-      <tr><td><code>MOUSE_BUTTON</code></td><td><code>button</code>, <code>down</code>, <code>x</code>, <code>y</code></td><td>ImGui; any button starts the camera's drag</td></tr>
-      <tr><td><code>MOUSE_MOVE</code></td><td><code>x</code>, <code>y</code></td><td>ImGui; the camera while a drag runs</td></tr>
+      <tr><td><code>MOUSE_BUTTON</code></td><td><code>button</code>, <code>down</code>, <code>x</code>, <code>y</code></td><td>ImGui; the camera's drag its <a href="camera.html#CameraButtons"><code>CameraButtons</code></a> map gives the button</td></tr>
+      <tr><td><code>MOUSE_MOVE</code></td><td><code>x</code>, <code>y</code>, <code>dx</code>, <code>dy</code></td><td>ImGui by <code>x</code>, <code>y</code>; the camera's drag by <code>dx</code>, <code>dy</code></td></tr>
       <tr><td><code>MOUSE_WHEEL</code></td><td><code>x</code>, <code>y</code>: steps, <code>y</code> &gt; 0 away from the user, <code>x</code> &gt; 0 to the right</td><td>ImGui; the camera's zoom</td></tr>
       <tr><td><code>MOUSE_LEAVE</code></td><td>none</td><td>ImGui: no window is hovered</td></tr>
       <tr><td><code>TEXT</code></td><td><code>codepoint</code>: one Unicode character</td><td>ImGui's text fields</td></tr>
@@ -786,6 +788,7 @@ if (rasm::readPng("golden.png", golden) &amp;&amp; golden.width == image.width)
       <dt>key</dt><dd>The key's meaning in the current keyboard layout: the key that types Z on an AZERTY keyboard is <code>Key::Z</code>.</dd>
       <dt>physicalKey</dt><dd>Where the key is, named after the US layout: the same key is <code>Key::W</code>, so the camera's W/A/S/D keep their places. <code>Key::NONE</code>: the same as <code>key</code>, for an application that knows only one of the two.</dd>
       <dt>x, y</dt><dd>Mouse positions in window points from the top-left corner, the units of <code>EngineConfig::windowWidth</code>.</dd>
+      <dt>dx, dy</dt><dd>A move's motion since the last move, in window points. During a mouse grab (<a href="camera.html#setMouseGrab"><code>setMouseGrab</code></a>) the pointer stands still and only these move. Both 0: the camera's drag moves by the change of <code>x</code> and <code>y</code>, so a script needs only positions.</dd>
     </dl>
     <pre><code>engine.addInputEvent({.type = rasm::InputEventType::KEY, .key = rasm::Key::Z, .physicalKey = rasm::Key::W, .down = true});
 engine.addInputEvent({.type = rasm::InputEventType::MOUSE_BUTTON, .down = true, .button = rasm::MouseButton::LEFT, .x = 400.0f, .y = 300.0f});

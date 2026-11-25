@@ -106,6 +106,7 @@ namespace rasm
         bool                            ready                                                               = false;
         bool                            culled                                                              = false;
         bool                            sky                                                                 = false;    // this frame's SceneData names a sky to draw
+        bool                            grid                                                                = false;    // and a grid (its camera's)
         bool                            drawMask                                                            = false;    // this frame's pipelines for the MASK runs, or the depth-only MASK and BLEND runs, exist
         bool                            drawBlend                                                           = false;    // a shaded view's Transparent pass has a run and a pipeline
         bool                            sortBlend                                                           = false;    // the cull pass sorts the blend run
@@ -153,6 +154,7 @@ namespace rasm
         PipelineHandle                  maskPipeline                                                        = {};       // alpha-to-coverage with more than one sample
         PipelineHandle                  blendPipeline                                                       = {};
         PipelineHandle                  skyPipeline                                                         = {};
+        PipelineHandle                  gridPipeline                                                        = {};
         PipelineHandle                  meshPipeline                                                        = {};       // the opaque and MASK runs' meshlets, with mesh shaders
         PipelineHandle                  meshMaskPipeline                                                    = {};
         DebugPipelines                  debug;

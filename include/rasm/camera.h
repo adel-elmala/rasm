@@ -2,6 +2,7 @@
 #pragma once
 
 #include "rasm/cameraController.h"
+#include "rasm/grid.h"
 #include "rasm/transform.h"
 
 namespace rasm
@@ -44,6 +45,7 @@ namespace rasm
         float               exposure        = 1.0f;
         float               bloomStrength   = 0.04f;    // the share of bloom in the tone-mapped image (addBloomPasses)
         uint32_t            historyResets   = 0;        // resetCameraHistory counts up; a TAA pass that sees it change starts over
+        Grid                grid            = {};       // drawn in every shaded view of this camera (Renderer::setCameraGrid)
     };
 
 }

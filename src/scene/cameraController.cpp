@@ -1,4 +1,7 @@
 #include "rasm/cameraController.h"
+#include "rasm/camera.h"
+
+#include "glm/gtc/constants.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -8,26 +11,17 @@ namespace rasm
 {
     namespace
     {
-        glm::vec3 projectOnSphere(const glm::vec2 &ndcPoint)
-        {
-            float x = ndcPoint.x;
-            float y = ndcPoint.y;
-            float z = 0.0f;
+        // The wheel never takes a trackball's radius, or an orthographic box's smaller half side, past this.
+        constexpr float MAX_ZOOM_SIZE = 1e9f;
 
-            float lengthSquared = x * x + y * y;
-            if (lengthSquared <= 1.0f)
-            {
-                // Point is inside the sphere
-                z = std::sqrt(1.0f - lengthSquared);
-            }
-            else
-            {
-                // Point is outside the sphere, project onto the sphere
-                float length = std::sqrt(lengthSquared);
-                x /= length;
-                y /= length;
-            }
-            return glm::vec3(x, y, z);
+        // A drag point on Holroyd's virtual trackball: the sphere of radius 1 near the center, and outside it the
+        // hyperbola z = 1 / (2 d) that meets the sphere smoothly at d = 1 / sqrt(2). Unlike a point clamped to the
+        // sphere's rim, it moves on as the pointer moves on, so a drag past the edge goes on turning the same way.
+        glm::vec3 projectOnTrackBall(const glm::vec2 &ndcPoint)
+        {
+            const float lengthSquared = glm::dot(ndcPoint, ndcPoint);
+            const float z = lengthSquared <= 0.5f ? std::sqrt(1.0f - lengthSquared) : 0.5f / std::sqrt(lengthSquared);
+            return glm::normalize(glm::vec3(ndcPoint, z));
         }
 
         // A zero up, or +Y, is the world's up: the controller then turns exactly as it did before up existed.
@@ -59,9 +53,9 @@ namespace rasm
             auto &transform = rig.targetTransform;
 
             // Look: yaw around the controller's up, pitch around the camera's local right axis.
-            // Rebuilding the rotation from yaw/pitch keeps the horizon level.
-            const float deltaX = input.mouseEnd.x - input.mouseStart.x;
-            const float deltaY = input.mouseEnd.y - input.mouseStart.y;
+            // Rebuilding the rotation from yaw/pitch keeps the horizon level. Either drag looks.
+            const float deltaX = input.mouseEnd.x - input.mouseStart.x + input.panEnd.x - input.panStart.x;
+            const float deltaY = input.mouseEnd.y - input.mouseStart.y + input.panEnd.y - input.panStart.y;
 
             const float maxPitch = glm::radians(89.0f);
             if (hasOwnUp(freeFly.up))
@@ -106,41 +100,103 @@ namespace rasm
             }
         }
 
-        void updateTrackBall(CameraRig &rig, const CameraInput &input)
+        // World units per NDC unit of the input (rasm/cameraInput.h divides both axes by the area's smaller side) at the
+        // trackball's center: what a pan moves.
+        float getWorldPerNdc(const CameraRig &rig, const CameraProjection *projection)
+        {
+            const float radius = rig.controller.trackBall.radius;
+            if (projection == nullptr)
+                return radius * std::tan(glm::radians(22.5f));
+            if (projection->type == CameraProjection::Type::ORTHOGRAPHIC)
+            {
+                const CameraProjection::Orthographic &box = projection->orthographic;
+                return 0.5f * std::min(std::abs(box.right - box.left), std::abs(box.top - box.bottom));
+            }
+            const CameraProjection::Perspective &lens = projection->perspective;
+            return radius * std::tan(0.5f * glm::radians(lens.fovY)) * std::min(1.0f, lens.aspect);
+        }
+
+        // The box shrinks by the zoom around the view's axis, and the camera moves by the pointer's offset from the axis
+        // times (1 - zoom), so the point under the pointer stays where it is. Its smaller half side stays between
+        // MIN_TRACK_BALL_RADIUS and MAX_ZOOM_SIZE, so it never collapses to 0 or grows to infinity.
+        void zoomOrthographic(CameraRig &rig, CameraProjection::Orthographic &box, const CameraInput &input, float zoom)
+        {
+            const float perNdc = 0.5f * std::min(std::abs(box.right - box.left), std::abs(box.top - box.bottom));
+            if (!(perNdc > 0.0f) || std::isinf(perNdc))
+                return;
+            zoom = glm::clamp(zoom, std::min(1.0f, MIN_TRACK_BALL_RADIUS / perNdc), std::max(1.0f, MAX_ZOOM_SIZE / perNdc));
+            const glm::vec2 offset(0.5f * (box.left + box.right) + input.pointer.x * perNdc, 0.5f * (box.bottom + box.top) + input.pointer.y * perNdc);
+            const glm::quat &rotation = rig.targetTransform.rotation;
+            rig.controller.trackBall.center += glm::dvec3((rotation * glm::vec3(1.0f, 0.0f, 0.0f)) * offset.x + (rotation * glm::vec3(0.0f, 1.0f, 0.0f)) * offset.y) * static_cast<double>(1.0f - zoom);
+            box.left *= zoom;
+            box.right *= zoom;
+            box.bottom *= zoom;
+            box.top *= zoom;
+        }
+
+        void updateTrackBall(CameraRig &rig, CameraProjection *projection, const CameraInput &input)
         {
             auto &trackBall = rig.controller.trackBall;
             auto &transform = rig.targetTransform;
 
-            // No drag delta means there is nothing to orbit.
-            if (input.mouseStart == input.mouseEnd && input.wheelDelta == 0.0f)
+            const glm::dvec3 centerBefore = trackBall.center;
+            const bool orbit = input.mouseStart != input.mouseEnd;
+            const bool pan = input.panStart != input.panEnd;
+            if (!orbit && !pan && input.wheelDelta == 0.0f)
             {
                 return;
             }
 
-            auto p0 = projectOnSphere(input.mouseStart);
-            auto p1 = projectOnSphere(input.mouseEnd);
-
-            // The sphere points are in camera space, so the axis is a camera-local axis.
-            auto axis = glm::cross(p0, p1);
-            auto angle = std::acos(glm::clamp(glm::dot(p0, p1), -1.0f, 1.0f));
-
-            angle *= trackBall.orbitSensitivity;
-
-            if (glm::dot(axis, axis) > 1e-12f)
+            if (orbit && trackBall.style == CameraController::OrbitStyle::ARCBALL)
             {
-                axis = glm::normalize(axis);
+                // A drag that went on past the view's edge (a grab adds motion without end) turns as it would at the
+                // edge: the step moves back until it starts at most one unit from the center.
+                const float startLength = glm::length(input.mouseStart);
+                const glm::vec2 shift = startLength > 1.0f ? input.mouseStart * (1.0f - 1.0f / startLength) : glm::vec2(0.0f);
+                const glm::vec3 p0 = projectOnTrackBall(input.mouseStart - shift);
+                const glm::vec3 p1 = projectOnTrackBall(input.mouseEnd - shift);
 
-                // Compose on the right to rotate in the camera's local frame.
-                // The inverse rotation (-angle) makes the scene follow the cursor, as in a grab-style trackball.
-                transform.rotation = glm::normalize(transform.rotation * glm::angleAxis(-angle, axis));
+                // The points are in camera space, so the axis is a camera-local axis.
+                glm::vec3 axis = glm::cross(p0, p1);
+                const float angle = std::acos(glm::clamp(glm::dot(p0, p1), -1.0f, 1.0f)) * trackBall.orbitSensitivity;
+                if (glm::dot(axis, axis) > 1e-12f)
+                {
+                    axis = glm::normalize(axis);
+                    // Compose on the right to rotate in the camera's local frame. The inverse rotation (-angle) makes
+                    // the scene follow the cursor, as in a grab-style trackball.
+                    transform.rotation = glm::normalize(transform.rotation * glm::angleAxis(-angle, axis));
+                }
+            }
+            else if (orbit)
+            {
+                // The drag's motion only, never where it is: the same drag turns the same at the center and at the
+                // edge. Right turns the scene right (the camera left around up), up tilts the scene up.
+                const glm::vec2 delta = (input.mouseEnd - input.mouseStart) * (glm::half_pi<float>() * trackBall.orbitSensitivity);
+                const glm::vec3 up = glm::dot(trackBall.up, trackBall.up) > 1e-12f ? trackBall.up : glm::vec3(0.0f, 1.0f, 0.0f);
+                float pitch = 0.0f;
+                // No turn, no new rotation: a plan view (orbitSensitivity 0) keeps looking straight down.
+                if (delta != glm::vec2(0.0f))
+                    transform.rotation = turnAroundUp(transform.rotation, up, -delta.x, delta.y, pitch);
             }
 
-            // Apply zoom based on the scroll wheel delta.
+            // A grab: the scene follows the pointer, so the center moves the other way.
+            if (pan)
+            {
+                const glm::vec2 delta = (input.panEnd - input.panStart) * getWorldPerNdc(rig, projection);
+                trackBall.center -= glm::dvec3((transform.rotation * glm::vec3(1.0f, 0.0f, 0.0f)) * delta.x + (transform.rotation * glm::vec3(0.0f, 1.0f, 0.0f)) * delta.y);
+            }
+
             if (input.wheelDelta != 0.0f)
             {
-                auto radius = trackBall.radius - input.wheelDelta;
-                trackBall.radius = glm::max(radius, 0.0f);
+                const float zoom = std::pow(CAMERA_WHEEL_ZOOM, input.wheelDelta);
+                if (projection != nullptr && projection->type == CameraProjection::Type::ORTHOGRAPHIC)
+                    zoomOrthographic(rig, projection->orthographic, input, zoom);
+                else
+                    trackBall.radius = glm::clamp(trackBall.radius * zoom, MIN_TRACK_BALL_RADIUS, MAX_ZOOM_SIZE);
             }
+            // A pan and an orthographic zoom move the center at once: the rendered pose moves with it, so the easing
+            // does not see a change of distance to ease back.
+            rig.transform.position += trackBall.center - centerBefore;
 
             transform.position = trackBall.center + glm::dvec3(trackBall.radius * (transform.rotation * glm::vec3(0.0f, 0.0f, 1.0f)));
         }
@@ -187,6 +243,22 @@ namespace rasm
                 current.position = glm::mix(current.position, target.position, static_cast<double>(t));
             }
         }
+
+        void update(CameraRig &rig, CameraProjection *projection, const CameraInput &input)
+        {
+            switch (rig.controller.type)
+            {
+            case CameraController::Type::FREE_FLY:
+                updateFreeFly(rig, input);
+                break;
+            case CameraController::Type::TRACK_BALL:
+                updateTrackBall(rig, projection, input);
+                break;
+            case CameraController::Type::NONE:
+                break;
+            }
+            ease(rig, input.deltaTime);
+        }
     }
 
     CameraRig createCameraRig(const CameraController &controller, const Transform &transform)
@@ -212,17 +284,11 @@ namespace rasm
 
     void updateCameraRig(CameraRig &rig, const CameraInput &input)
     {
-        switch (rig.controller.type)
-        {
-        case CameraController::Type::FREE_FLY:
-            updateFreeFly(rig, input);
-            break;
-        case CameraController::Type::TRACK_BALL:
-            updateTrackBall(rig, input);
-            break;
-        case CameraController::Type::NONE:
-            break;
-        }
-        ease(rig, input.deltaTime);
+        update(rig, nullptr, input);
+    }
+
+    void updateCameraRig(CameraRig &rig, CameraProjection &projection, const CameraInput &input)
+    {
+        update(rig, &projection, input);
     }
 }

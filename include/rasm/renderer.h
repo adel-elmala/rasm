@@ -200,6 +200,7 @@ namespace rasm
         CameraController            getCameraController(CameraHandle camera);
         float                       getCameraExposure(CameraHandle camera);
         float                       getCameraBloomStrength(CameraHandle camera);
+        Grid                        getCameraGrid(CameraHandle camera);
         glm::mat4                   getProjectionMatrix(CameraHandle camera);
         // The camera's projection fitted to another aspect ratio. The camera itself does not change.
         glm::mat4                   getProjectionMatrix(CameraHandle camera, float aspect);
@@ -213,6 +214,9 @@ namespace rasm
         void                        setCameraExposure(CameraHandle camera, float exposure);
         // The share of bloom in the tone-mapped image, 0 to 1: at 0 the bloom passes dispatch nothing.
         void                        setCameraBloomStrength(CameraHandle camera, float strength);
+        // A reference grid in every shaded view of the camera, over its opaque scene (rasm/grid.h); Grid{} turns it off.
+        // Returns false, and keeps the grid it had, for an invalid camera or grid.
+        bool                        setCameraGrid(CameraHandle camera, const Grid& grid);
         // The camera's next frame starts TAA over, without the frames before: call it on a camera cut.
         void                        resetCameraHistory(CameraHandle camera);
         // Polls unless pollEvents ran, then moves the camera with its controller unless it is NONE or invalid. Returns
@@ -341,6 +345,13 @@ namespace rasm
         // Valid until the next frame's pollEvents.
         const InputEvent*           getInputEvents(uint32_t& count) const;
         CameraInput                 getCameraInput() const;
+        // Which drag each mouse button starts for the main window's camera input (CameraButtons' defaults: left orbits,
+        // right, middle and shift + left pan).
+        void                        setCameraButtons(const CameraButtons& buttons);
+        // A camera drag's grab of the mouse: the SDL platform hides the pointer and sends motion only (InputEvent::dx,
+        // dy), so a drag goes on past the window's edge, and puts the pointer back on release. The engine's own camera
+        // input grabs during its drags; an application with its own CameraInputState calls it with dragActive.
+        void                        setMouseGrab(bool on, WindowHandle window = {});
         UiInputCapture              getUiInputCapture() const;
         float                       getDeltaTime() const;
         // The main window's size in points and in pixels, for NATIVE and HEADLESS; the SDL platform reads its own. A
@@ -436,6 +447,7 @@ namespace rasm
         std::vector<InputEvent>                                     pendingInputEvents                      = {}; // added since the last pollEvents; keeps its capacity
         CameraInput                                                 cameraInput                             = {}; // the main window's, from the last pollEvents
         bool                                                        inputPolled                             = false; // pollEvents ran since the last beginFrame
+        bool                                                        engineMouseGrab                         = false; // beginFrame grabbed the mouse for the engine's camera drag
         DescriptorSetLayoutHandle                                   bindlessDescriptorSetLayout             = {};
         DescriptorSetHandle                                         bindlessDescriptorSet                   = {};
         MaterialHandle                                              defaultMaterial                         = {}; // used for invalid material handles
@@ -468,6 +480,7 @@ namespace rasm
         void                        recordEnvironmentBakes();
         void                        finishEnvironmentBakes();
         void                        drawSky(uint32_t view);
+        void                        drawGrid(uint32_t view);
         PipelineHandle              getToneMapPipeline(Format format, DebugView shown);
         RenderTargetHandle          addTaaPass(RenderGraph& graph, const RenderTargetHandle& source, CameraHandle camera, RenderTargetHandle history, std::shared_ptr<TaaState> state);
         bool                        bloomPipelinesReady() const;
