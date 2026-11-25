@@ -43,8 +43,8 @@ namespace rasm
         uint32_t                    width           = 0;                // cells + 3
     };
 
-    // The tile's entity transform: its box from minHeight to maxHeight (lowered by the curvature at its corners), which
-    // the shared grid's unit box fills, so culling sees the real bounds.
+    // The tile's entity transform: its box from minHeight (lowered by the skirt and by the curvature at its corners) to
+    // maxHeight, which the shared grid's unit box fills, so culling sees the real bounds, skirts included.
     Transform                       getTerrainTransform(const TerrainTileDesc& tile);
     // The height in metres in the tile's frame, before the curvature, at (u, v) from 0 to 1 across the tile: the rule the
     // shader draws (each cell two triangles, split from (0, 1) to (1, 0); a corner is heightOffset + heightScale *

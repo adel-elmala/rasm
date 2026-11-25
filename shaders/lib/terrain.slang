@@ -36,6 +36,14 @@ float3 getMatrixColumn(float4x4 m, int column)
 // match there.
 TerrainVertex getTerrainVertex(Sampler2D gTextures[], TerrainData terrain, float4x4 world, VertexFull vert)
 {
+    // Not a grid of getTerrainMesh (its vertices name no cells): the mesh as it is.
+    if (vert.uv[2].x < 1.0)
+    {
+        TerrainVertex unchanged;
+        unchanged.position  = vert.pos;
+        unchanged.normal    = vert.normal;
+        return unchanged;
+    }
     float size      = length(getMatrixColumn(world, 0));
     float boxHeight = length(getMatrixColumn(world, 1));
     float cells     = vert.uv[2].x;
@@ -53,8 +61,8 @@ TerrainVertex getTerrainVertex(Sampler2D gTextures[], TerrainData terrain, float
         slopeX              = (loadTerrainHeight(heights, terrain, sample + int2(1, 0)) - loadTerrainHeight(heights, terrain, sample - int2(1, 0))) / (2.0 * cell);
         slopeZ              = (loadTerrainHeight(heights, terrain, sample + int2(0, 1)) - loadTerrainHeight(heights, terrain, sample - int2(0, 1))) / (2.0 * cell);
     }
-    // The box's floor: the lowest height, lowered by the curvature at the corners (getTerrainTransform).
-    float boxFloor = terrain.minHeight;
+    // The box's floor: the lowest height, lowered by the skirt and by the curvature at the corners (getTerrainTransform).
+    float boxFloor = terrain.minHeight - terrain.skirt;
     if (terrain.sphereRadius > 0.0)
     {
         height  -= (x * x + z * z) / (2.0 * terrain.sphereRadius);

@@ -97,7 +97,7 @@ namespace rasm
     {
         const TerrainMaterial &terrain = tile.terrain;
         const double corner = 0.5 * tile.size;
-        const double low = static_cast<double>(terrain.minHeight) - getCurvatureDrop(corner, corner, terrain.sphereRadius);
+        const double low = static_cast<double>(terrain.minHeight) - static_cast<double>(terrain.skirt) - getCurvatureDrop(corner, corner, terrain.sphereRadius);
         const double height = std::max(static_cast<double>(terrain.maxHeight) - low, MIN_BOX_HEIGHT);
         const glm::dquat orientation(tile.orientation);
         return {.position = tile.center + orientation * glm::dvec3(0.0, low, 0.0),

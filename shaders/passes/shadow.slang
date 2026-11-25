@@ -72,9 +72,13 @@ struct MaskOutput
 MaskOutput getMaskOutput(InstanceData *instance, int vertexOffset, uint vertexID)
 {
     VertexFull vert         = getVertex(pc.scene, instance, vertexOffset, vertexID);
+    float4x4 world          = getWorldMatrix(pc.scene, instance);
+    MaterialData *model     = pc.scene->materialsPtr + instance->materialIndex;
+    if (model->materialId == MaterialId.TERRAIN)
+        vert.pos            = getTerrainVertex(gTextures, model->terrain, world, vert).position;
 
     MaskOutput output       = {};
-    output.clipPosition     = mul(pc.scene->projection, mul(pc.scene->view, mul(getWorldMatrix(pc.scene, instance), float4(vert.pos, 1.0))));
+    output.clipPosition     = mul(pc.scene->projection, mul(pc.scene->view, mul(world, float4(vert.pos, 1.0))));
     output.objectPosition   = vert.pos;
     output.vertexAlpha      = getVertexColor(pc.scene, instance->geometryIndex, vertexID).a;
     output.uv0              = vert.uv[0];

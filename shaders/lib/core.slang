@@ -125,8 +125,6 @@ struct Material
     EmissiveMaterial            emissive;           // emissiveFactor holds KHR_materials_emissive_strength too
 };
 
-// The texture transforms come after the rest, so a shader copies Material without them and reads them only for a
-// material whose flags have MATERIAL_TEXTURE_TRANSFORM.
 // A TERRAIN material's heights (lib/terrain.slang); zero for the others. Must match rasm::gfx::TerrainData.
 struct TerrainData
 {
@@ -139,6 +137,8 @@ struct TerrainData
     float               sphereRadius;       // 0: flat
 };
 
+// The texture transforms come after the rest, so a shader copies Material without them and reads them only for a
+// material whose flags have MATERIAL_TEXTURE_TRANSFORM.
 struct MaterialData
 {
     Material            material;

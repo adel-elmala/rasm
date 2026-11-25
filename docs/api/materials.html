@@ -208,7 +208,7 @@ rasm::MaterialHandle brick = engine.createMaterial(rasm::MaterialType::PBR, text
 };</pre>
   <div class="body">
     <dl>
-      <dt>heights</dt><dd>An <code>R16_UNORM</code> or <code>R32_SFLOAT</code> texture of (cells + 3)² samples: the grid's points and a border of one sample from the neighbours, so normals match across edges. A material that uses it waits for it like for any texture; <code>destroyTexture</code> takes it away (the tile is then flat).</dd>
+      <dt>heights</dt><dd>An <code>R16_UNORM</code> or <code>R32_SFLOAT</code> texture (another format is dropped with an error) of (cells + 3)² samples, cells being those of the entity's grid: the grid's points and a border of one sample from the neighbours, so normals match across edges. A material that uses it waits for it like for any texture; <code>destroyTexture</code> takes it away (the tile is then flat).</dd>
       <dt>heightScale, heightOffset</dt><dd>Metres = <code>heightOffset</code> + <code>heightScale</code> × sample, where an <code>R16_UNORM</code> sample is its integer (0 to 65535) and an <code>R32_SFLOAT</code> one its value. With a power-of-two scale and an offset that is a multiple of it, neighbour tiles get bit-equal edges.</dd>
       <dt>minHeight, maxHeight</dt><dd>The lowest and highest heights in metres: the tile's box (<a href="scene.html#getTerrainTransform"><code>getTerrainTransform</code></a>). The shader uses <code>minHeight</code> too, so change it together with the entity's transform.</dd>
       <dt>skirt</dt><dd>Metres the skirt hangs below the tile's edges, to hide cracks next to tiles of other levels. At least the coarser tile's geometric error.</dd>

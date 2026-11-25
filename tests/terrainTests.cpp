@@ -147,7 +147,7 @@ TEST_CASE("neighbouring terrain tiles have bit-equal heights on their shared edg
     }
 }
 
-TEST_CASE("a terrain tile's transform holds its surface, and getTerrainPosition is the drawn point")
+TEST_CASE("a terrain tile's transform holds its surface and skirt, and getTerrainPosition is the drawn point")
 {
     const TileSamples samples = makeTile(1000.0, -2000.0, 512.0);
     const rasm::TerrainTileDesc tile{.center = glm::dvec3(4.0e6, 3.0e6, 3.0e6),
@@ -157,11 +157,12 @@ TEST_CASE("a terrain tile's transform holds its surface, and getTerrainPosition 
                                                  .heightOffset = samples.terrain.heightOffset,
                                                  .minHeight = samples.terrain.minHeight,
                                                  .maxHeight = samples.terrain.maxHeight,
+                                                 .skirt = 7.0f,
                                                  .sphereRadius = 6.371e6}};
     const rasm::Transform transform = rasm::getTerrainTransform(tile);
     const glm::dmat4 world = transform.toMatrix();
     const double corner = 0.5 * tile.size;
-    const double floor = tile.terrain.minHeight - (2.0 * corner * corner) / (2.0 * tile.terrain.sphereRadius);
+    const double floor = tile.terrain.minHeight - tile.terrain.skirt - (2.0 * corner * corner) / (2.0 * tile.terrain.sphereRadius);
     CHECK(transform.scale.x == doctest::Approx(tile.size));
     CHECK(transform.scale.y == doctest::Approx(tile.terrain.maxHeight - floor));
     for (double v = 0.0; v <= 1.0; v += 0.125)
@@ -174,8 +175,8 @@ TEST_CASE("a terrain tile's transform holds its surface, and getTerrainPosition 
             const double height = rasm::sampleTerrainHeight(heightsOf(samples), tile.terrain, u, v) - (x * x + z * z) / (2.0 * tile.terrain.sphereRadius);
             const glm::dvec3 drawn = glm::dvec3(world * glm::dvec4(u - 0.5, (height - floor) / transform.scale.y, v - 0.5, 1.0));
             CHECK(glm::length(drawn - rasm::getTerrainPosition(tile, heightsOf(samples), u, v)) < 1e-3);
-            // Inside the box.
-            CHECK((height - floor) / transform.scale.y >= -1e-6);
+            // Inside the box, the skirt under it too.
+            CHECK((height - tile.terrain.skirt - floor) / transform.scale.y >= -1e-6);
             CHECK((height - floor) / transform.scale.y <= 1.0 + 1e-6);
         }
     }

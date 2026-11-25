@@ -594,7 +594,7 @@ constexpr uint32_t MAX_MORPH_TARGETS = 256;</pre>
 <div class="api" id="createTerrainTile">
   <pre class="sig">TerrainTile createTerrainTile(const TerrainTileDesc&amp; desc);</pre>
   <div class="body">
-    <p>Makes a <code>TERRAIN</code> material from the desc (its <code>terrain</code>, the imagery as base color with <code>imageryRect</code> as its texture transform, metallic 0, the roughness) and an entity on <a href="#getTerrainMesh"><code>getTerrainMesh</code></a> with <a href="#getTerrainTransform"><code>getTerrainTransform</code></a>. The heights' width decides the cells: width − 3. The entity is in no scene yet. Both handles are invalid, with an error, when the heights are not a live <code>R16_UNORM</code> or <code>R32_SFLOAT</code> square texture of 4 to <code>MAX_TERRAIN_CELLS</code> + 3 samples a side, the size is not above 0, <code>maxHeight</code> is below <code>minHeight</code>, or a pool is full. An imagery texture without a bindless slot gets one that clamps.</p>
+    <p>Makes a <code>TERRAIN</code> material from the desc (its <code>terrain</code>, the imagery as base color with <code>imageryRect</code> as its texture transform, metallic 0, the roughness) and an entity on <a href="#getTerrainMesh"><code>getTerrainMesh</code></a> with <a href="#getTerrainTransform"><code>getTerrainTransform</code></a>. The heights' width decides the cells: width − 3. The entity is in no scene yet. Both handles are invalid, with an error, when the heights are not a live <code>R16_UNORM</code> or <code>R32_SFLOAT</code> square texture of 4 to <code>MAX_TERRAIN_CELLS</code> + 3 samples a side, the size is not above 0, <code>maxHeight</code> is below <code>minHeight</code>, or a pool is full. An imagery texture without a bindless slot gets one that clamps. A texture keeps the sampler of its first slot, so an image another material used first (with repeat) bleeds its opposite edge into the tile's border: give tiles images of their own.</p>
     <p>The entity draws once its textures are loaded. List the entity, the material and both textures in a tile's content, never the grid. To change the heights' range later, update the material's <code>terrain</code> (<a href="materials.html#updateMaterial"><code>updateMaterial</code></a>) and the entity's transform together.</p>
     <pre><code>// examples/24_map_tiles: a tile's heights (35 x 35 steps of 1/16 m) and image came from the server.
 const rasm::TerrainTile terrain = engine.createTerrainTile({.center = tileOrigin(node.level, node.x, node.y),
@@ -650,7 +650,7 @@ const rasm::TerrainTile terrain = engine.createTerrainTile({.center = tileOrigin
 
 <div class="api" id="getTerrainTransform">
   <pre class="sig">Transform getTerrainTransform(const TerrainTileDesc&amp; tile);</pre>
-  <div class="body"><p>The entity transform of a tile: the grid's unit box stretched to the tile's box, from <code>minHeight</code> (lowered by the curvature at the corners, d² / 2R) to <code>maxHeight</code>, at least 1 mm high. So culling sees the lifted terrain's real bounds. A free function, safe on any thread.</p></div>
+  <div class="body"><p>The entity transform of a tile: the grid's unit box stretched to the tile's box, from <code>minHeight</code> (lowered by the skirt, and by the curvature at the corners, d² / 2R) to <code>maxHeight</code>, at least 1 mm high. So culling sees the lifted terrain's real bounds. A free function, safe on any thread.</p></div>
 </div>
 
 <div class="api" id="TerrainHeights">
