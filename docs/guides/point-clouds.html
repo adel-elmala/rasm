@@ -236,8 +236,8 @@
 </figure>
 
 <div class="stats">
-  <div><b>10.7×</b><span>faster per point, 1 pixel</span><small>0.087 ns against 0.93 ns by triangles, all of 33.5 M points a frame</small></div>
-  <div><b>4.1×</b><span>faster per point, 2 pixels</span><small>0.29 ns against 1.18 ns by triangles</small></div>
+  <div><b>10.6×</b><span>faster per point, 1 pixel</span><small>0.081 ns against 0.86 ns by triangles, all of 33.5 M points a frame</small></div>
+  <div><b>4.1×</b><span>faster per point, 2 pixels</span><small>0.28 ns against 1.14 ns by triangles</small></div>
   <div><b>8 B</b><span>a pixel, per view</span><small>16.6 MB at 1920 × 1080, cleared only in the rect</small></div>
 </div>
 
@@ -445,7 +445,7 @@
 <div class="stats">
   <div><b>8 B</b><span>a point, 12 with colors</span><small>+ 48 B a chunk; 2 B a point on the CPU for picks</small></div>
   <div><b>3.6 M</b><span>points a frame from 50 M</span><small>28_point_cloud --points 50000000, two views at 1920 × 1080</small></div>
-  <div><b>0.087 ns</b><span>per small point, by compute</span><small>RTX 3060, Release: 33.5 M points of 1 pixel in 3.25 ms; 0.93 ns by triangles</small></div>
+  <div><b>0.081 ns</b><span>per small point, by compute</span><small>RTX 3060, Release: 33.5 M points of 1 pixel in 3.31 ms; 0.86 ns by triangles</small></div>
 </div>
 
 <h3>Code map</h3>
