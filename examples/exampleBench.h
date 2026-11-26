@@ -4,6 +4,7 @@
 #include "rasm/rasm.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <string>
@@ -17,6 +18,7 @@ constexpr uint32_t BENCH_WARMUP_FRAMES = 120;
 struct ExampleBench
 {
     bool                            on                  = false;
+    uint32_t                        warmup              = BENCH_WARMUP_FRAMES;
     uint32_t                        frame               = 0;
     uint32_t                        measured            = 0;
     std::vector<std::string>        names;              // the passes, in the order of their first frame
@@ -38,6 +40,17 @@ inline bool hasBenchFlag(int argc, char** argv)
             return true;
     }
     return false;
+}
+
+// --bench-warmup N: measure from frame N instead, for long runs that compare steady states.
+inline uint32_t getBenchWarmup(int argc, char** argv)
+{
+    for (int i = 1; i + 1 < argc; ++i)
+    {
+        if (std::strcmp(argv[i], "--bench-warmup") == 0)
+            return static_cast<uint32_t>(std::strtoul(argv[i + 1], nullptr, 10));
+    }
+    return BENCH_WARMUP_FRAMES;
 }
 
 // --meshlets off|vp|mesh|auto: EngineConfig::meshletPath.
@@ -65,7 +78,7 @@ inline void applyMeshletFlag(int argc, char** argv, rasm::EngineConfig& config)
 // Every frame: frames past the warm-up add their stats. Several passes of one name (a view's two culling phases) add up.
 inline void addBenchFrame(ExampleBench& bench, const rasm::FrameStats& stats)
 {
-    if (!bench.on || bench.frame++ < BENCH_WARMUP_FRAMES)
+    if (!bench.on || bench.frame++ < bench.warmup)
         return;
     ++bench.measured;
     for (uint32_t i = 0; i < stats.gpuTimerCount; ++i)
@@ -85,6 +98,12 @@ inline void addBenchFrame(ExampleBench& bench, const rasm::FrameStats& stats)
     bench.meshlets          += stats.meshletsVisible;
     bench.meshletsCulled    += stats.meshletsCulled;
     bench.meshletDrawsWhole += stats.meshletDrawsWhole;
+}
+
+// Whether the frame addBenchFrame just took was measured.
+inline bool isBenchMeasured(const ExampleBench& bench)
+{
+    return bench.on && bench.frame > bench.warmup;
 }
 
 // The path that ran: MESH_SHADERS draws by vertex pulling where the GPU has no mesh shaders, AUTO by them or not at all.

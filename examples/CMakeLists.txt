@@ -26,6 +26,7 @@ rasm_add_example(26_picking)
 rasm_add_example(27_cad_views)
 rasm_add_example(28_point_cloud)
 rasm_add_example(29_point_streaming)
+rasm_add_example(30_glyphs)
 # The renderer alone: no window, no SDL, no loaders. It links rasm::renderer only, so the build checks that the renderer
 # needs neither the SDL platform nor the file loaders.
 rasm_add_example(21_renderer rasm::renderer)

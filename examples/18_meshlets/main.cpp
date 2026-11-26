@@ -261,7 +261,7 @@ int main(int argc, char **argv)
         if (std::strcmp(argv[i], "--async-compute") == 0)
             config.asyncCompute = true;
     }
-    ExampleBench bench{.on = hasBenchFlag(argc, argv)};
+    ExampleBench bench{.on = hasBenchFlag(argc, argv), .warmup = getBenchWarmup(argc, argv)};
     if (bench.on)
     {
         config.enableValidation = false;
