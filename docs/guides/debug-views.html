@@ -347,7 +347,7 @@
       <text x="22" y="124" class="small t-ok">the CPU picks one per draw run</text>
     </svg>
     <h4>A variant</h4>
-    <p>One file, compiled twice. The debug one is made the first time a view is chosen.</p>
+    <p>One file, compiled twice. The debug one is made the first time a view is chosen; until it is ready, the view draws shaded.</p>
   </div>
 </div>
 
@@ -395,7 +395,7 @@
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Variant</td><td>the scene shader with a define</td><td><code>rasm.slang</code>'s <code>fragMain</code> with <code>RASM_DEBUG_VIEW</code>, for each alpha mode (MASK with <code>RASM_ALPHA_MASK</code> discards instead of alpha-to-coverage). <code>getDebugColor</code> in <code>shaders/lib/debugViews.slang</code> writes the value. The view is <code>SceneData::debugView</code>, the spare word that keeps <code>animatedTransformsPtr</code> 8-byte aligned, so <code>SceneData</code> keeps its size.</td></tr>
-  <tr><td>Pipelines</td><td>made when a view is first chosen</td><td><code>ShadedPipelines::debug</code> (no blending) and <code>ShadedPipelines::overdraw</code> (<code>BlendMode::ADDITIVE</code>), per sample count and motion target, made in <code>prepareSceneView</code> like the MASK and BLEND ones. <code>drawSceneView</code> and <code>drawTransparent</code> pick them per draw run from <code>SceneView::debugView</code>, the view this frame draws.</td></tr>
+  <tr><td>Pipelines</td><td>made when a view is first chosen</td><td><code>ShadedPipelines::debug</code> (no blending) and <code>ShadedPipelines::overdraw</code> (<code>BlendMode::ADDITIVE</code>), per sample count and motion target, made in <code>prepareSceneView</code> like the MASK and BLEND ones. Their shaders are not warmed at startup: <code>setDebugView</code> queues them for the shader workers, and the view draws shaded until every pipeline it needs is ready, so no draw run is missing meanwhile (<a href="shader-warmup.html#asks-first">Shader warm-up</a>). With a warm cache that is the same frame. <code>drawSceneView</code> and <code>drawTransparent</code> pick them per draw run from <code>SceneView::debugView</code>, the view this frame draws.</td></tr>
   <tr><td>Overdraw</td><td>add 1 with the depth test on</td><td>Both draw passes and Transparent add; the opaque runs write depth, the blend run does not. Fragments write zero motion, so TAA's motion target is left as it was.</td></tr>
   <tr><td>LOD</td><td>the level whose range the draw uses</td><td><code>getDrawLod</code>: the LOD of <code>GeometryData::lods</code> whose index range holds the draw's <code>firstIndex</code> (a whole LOD's, or one <a href="meshlets.html">meshlet</a>'s), in the vertex shader.</td></tr>
   <tr><td>Meshlets</td><td>a color per piece</td><td><code>DebugView::MESHLETS</code>: <code>getMeshletKey</code> hashes the first index of what is drawn (a meshlet's or a whole draw's) and the instance into a color, so with a meshlet path each <a href="meshlets.html">meshlet</a> a draw is split into has its own color, the same on the vertex-pulling and the mesh-shader path, and a mesh drawn whole has one.</td></tr>

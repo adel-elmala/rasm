@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Job Systems · RASM</title>
 <meta name="description" content="How an engine runs many small tasks on a few threads: a worker pool and a job queue, splitting work into jobs, waiting without blocking a worker (continuations), a memory budget that holds jobs back (backpressure), order, cancel and shutdown, and results that do not depend on the schedule. The last part shows how RASM loads assets with it.">
-<meta name="rasm-sources" content="src/core/workerPool.h src/core/workerPool.cpp src/assets/loadJobs.h src/assets/mesh.cpp src/assets/texture.cpp src/assets/environment.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/material.cpp src/renderer/renderer.cpp include/rasm/renderer.h include/rasm/types.h src/renderer/engineUi.cpp examples/17_streaming/main.cpp examples/10_ktx2_textures/main.cpp tests/workerPoolTests.cpp tools/load_bench.py src/assets/assetLoader.cpp src/assets/assetLoaderImpl.h src/assets/meshLoad.cpp src/assets/textureLoad.cpp src/assets/environmentLoad.cpp">
+<meta name="rasm-sources" content="src/core/workerPool.h src/core/workerPool.cpp src/core/threadPriority.cpp include/rasm/threadPriority.h src/assets/loadJobs.h src/assets/mesh.cpp src/assets/texture.cpp src/assets/environment.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/material.cpp src/renderer/renderer.cpp include/rasm/renderer.h include/rasm/types.h src/renderer/engineUi.cpp examples/17_streaming/main.cpp examples/10_ktx2_textures/main.cpp tests/workerPoolTests.cpp tools/load_bench.py src/assets/assetLoader.cpp src/assets/assetLoaderImpl.h src/assets/meshLoad.cpp src/assets/textureLoad.cpp src/assets/environmentLoad.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -422,7 +422,35 @@
   </div>
 </div>
 
-<h2 id="cancel"><span class="n">7</span>Cancel and shut down</h2>
+<h2 id="priority"><span class="n">7</span>Workers below the main thread</h2>
+<p>The main thread wakes a worker when it queues a job. On Windows a thread that wakes gets a short boost above its priority. If the worker runs at the main thread's priority, the boost puts it above, and it can take the main thread's own core: the main thread then waits inside <code class="lang-text">notify_all</code> for the whole job.</p>
+<div class="split">
+  <div class="bad">
+    <h4>Worker at the main thread's priority</h4>
+    <svg viewBox="0 0 320 130" role="img" aria-label="The main thread wakes a worker; the worker takes the main thread's core for its whole job, and the main thread's frame waits.">
+      <text x="10" y="36" class="small">core 1</text>
+      <rect x="54" y="22" width="40" height="22" rx="3" class="cpu"/><text x="74" y="37" class="mid small">main</text>
+      <rect x="94" y="22" width="150" height="22" rx="3" class="shader"/><text x="169" y="37" class="mid small">worker's job</text>
+      <rect x="244" y="22" width="60" height="22" rx="3" class="cpu"/><text x="274" y="37" class="mid small">main</text>
+      <text x="10" y="80" class="small">core 2</text>
+      <rect x="54" y="66" width="250" height="22" rx="3" class="zone"/><text x="179" y="81" class="mid small t-faint">idle</text>
+      <text x="169" y="114" class="mid small t-bad">the frame waits 2 to 4 ms in notify_all</text>
+    </svg>
+  </div>
+  <div class="good">
+    <h4>Worker one level below</h4>
+    <svg viewBox="0 0 320 130" role="img" aria-label="The main thread wakes a worker below its priority; the worker runs on a free core and the main thread goes on.">
+      <text x="10" y="36" class="small">core 1</text>
+      <rect x="54" y="22" width="250" height="22" rx="3" class="cpu"/><text x="179" y="37" class="mid small">main goes on</text>
+      <text x="10" y="80" class="small">core 2</text>
+      <rect x="94" y="66" width="150" height="22" rx="3" class="shader"/><text x="169" y="81" class="mid small">worker's job</text>
+      <text x="169" y="114" class="mid small t-ok">a free core runs it at full speed</text>
+    </svg>
+  </div>
+</div>
+<p>A lower priority does not slow a worker on a free core: it only loses a core that a higher thread wants. Linux has the same idea in a thread's nice value, macOS in a relative priority inside a QoS class.</p>
+
+<h2 id="cancel"><span class="n">8</span>Cancel and shut down</h2>
 
 <p>A map viewer scrolls: tiles it asked for a second ago are off screen now. Their jobs should not run, or at least their results should not be used. Each task gets a small shared <b>ticket</b>: a "cancelled" flag, and a state that says who owns the result.</p>
 
@@ -489,7 +517,7 @@
   <p>If a job keeps a pointer to the engine and the engine is destroyed first, the job writes freed memory. Give a job its own data, shared with the main thread by reference count, and join the workers before anything they read goes.</p>
 </div>
 
-<h2 id="same-result"><span class="n">8</span>The same result in any order</h2>
+<h2 id="same-result"><span class="n">9</span>The same result in any order</h2>
 
 <p>The workers finish in a different order on every run, and on every machine. The result must not change: the tests compare images to the pixel. The rule: <b>each job writes only its own output</b>, made from its own input.</p>
 
@@ -525,7 +553,7 @@
   <p>The log: two jobs that print at the same time print in any order. Timings, of course. Neither changes a pixel.</p>
 </div>
 
-<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
+<h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
 
 <p>The engine owns one <code>WorkerPool</code>. Every <code>loadMesh</code>, <code>loadTexture</code> and <code>loadEnvironment</code> is a load job on it; a glTF import splits into a child job per image and per sub-mesh's LODs. The main thread picks up done loads in <code>finishLoads</code> (<a href="asset-streaming.html#in-rasm">streaming assets</a>).</p>
 
@@ -573,6 +601,7 @@
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Workers</td><td>hardware threads minus the busy ones</td><td><code>EngineConfig::loadThreads</code>; 0 (the default) takes <code>std::thread::hardware_concurrency</code> minus one, for the main thread, at least 1. A game with threads of its own sets fewer. The pool starts first in the <code>Engine</code> constructor.</td></tr>
+  <tr><td>Priority</td><td>workers below the main thread</td><td>Each <code>WorkerPool</code> thread calls <code>lowerThreadPriority</code> when it starts. The same pool class runs the shader workers of the <code>ShaderCompiler</code>, named <samp>RASM shaders N</samp> (<a href="shader-warmup.html">Shader warm-up</a>).</td></tr>
   <tr><td>Queue</td><td>FIFO, children first, priority</td><td>Two FIFO queues of <code>std::function</code> jobs under one mutex: <code>pushChild</code>, and <code>push</code> (<code>pushNext</code> puts a started load's next step at the front); children are taken first. No priority yet: it would be a sort key of the load queue.</td></tr>
   <tr><td>Split</td><td>a child job per part</td><td><code>spawnMeshChildJobs</code> pushes a <code>runImageWork</code> job per image (decode once, mips per kind of slot, or a KTX2 transcode per format) and a <code>buildMeshLods</code> job per sub-mesh.</td></tr>
   <tr><td>Waiting</td><td>continuation, help, fibers</td><td>Continuation: <code>MeshLoadJob::remaining</code>, and the last child runs <code>completeMeshLoad</code>. The main thread's <code>waitForLoads</code> finishes what is ready, then sleeps in <code>waitForCompletion</code> until another load ends.</td></tr>

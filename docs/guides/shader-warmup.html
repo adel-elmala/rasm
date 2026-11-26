@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shader warm-up · RASM</title>
+<meta name="description" content="Compile every shader a frame can need before a frame asks for it: the finite set of variants, a queue for worker threads in the order of need, what a frame does when it asks first, one compiler session per thread and its memory, one parse per source, and how RASM does it.">
+<meta name="rasm-sources" content="src/renderer/pipelineWarmup.h src/renderer/pipelineWarmup.cpp src/renderer/shaderCompiler.h src/renderer/shaderCompiler.cpp src/renderer/renderer.cpp src/renderer/gpuScene.cpp src/renderer/picking.cpp src/core/workerPool.h src/core/workerPool.cpp include/rasm/types.h include/rasm/threadPriority.h src/core/threadPriority.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/shader-warmup.js"></script>
+</head>
+<body data-root="../" data-page="guides/shader-warmup.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Foundations</p>
+<h1>Shader warm-up</h1>
+<p class="lead">A pipeline needs compiled shaders, and a shader compiler can take 100 ms for one. If the first frame that needs a pipeline also compiles it, that frame takes 100 ms: a hitch the user sees. This page shows how to compile every shader a frame can need on worker threads, before a frame asks for it, and what to do when a frame asks first. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>A shader compiled <b>in the frame that first needs it</b> stalls that frame for the whole compile. A cache on disk helps only the next run.</li>
+    <li>The set of shaders an engine can need is <b>finite</b>: its passes, times their variants (alpha modes, kinds of target). List it, and queue it for <b>worker threads</b> at startup, <b>in the order the frames will ask</b>.</li>
+    <li>A frame that asks first: <b>ready</b>, it draws; <b>being compiled</b>, it waits for that one shader; <b>still queued</b>, it takes it off the queue and compiles it itself. An optional draw (a debug view) can skip frames instead.</li>
+    <li>A compiler that is not thread-safe needs <b>one session per thread</b>. Each costs memory, so free them when the queue is empty.</li>
+    <li>Several entry points of one source share one <b>parse</b>: compile them together on one thread.</li>
+  </ul>
+</div>
+
+<h2 id="hitch"><span class="n">1</span>A frame that compiles</h2>
+<p>Frames take 1 ms. Then a new kind of object arrives, its pipeline is made in that frame, and the compile takes 95 ms.</p>
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="Frame times over a run. Most frames are 1 ms tall. Three frames are tall: the first frame, the first see-through draw and the first animated model, each with a compile inside.">
+    <rect x="60" y="20" width="680" height="140" class="zone"/>
+    <line x1="60" y1="140" x2="740" y2="140" class="arrow"/>
+    <text x="52" y="144" class="end small">0</text>
+    <line x1="60" y1="117" x2="740" y2="117" class="grid"/>
+    <text x="52" y="121" class="end small">16 ms</text>
+    <path d="M70,139V138M80,139V138M90,139V138M100,139V138M110,139V138M120,139V138M140,139V138M150,139V138M160,139V138M170,139V138M180,139V138M190,139V138M200,139V138M220,139V138M240,139V138M260,139V138M280,139V138M300,139V138M320,139V138M340,139V138M360,139V138M380,139V138M400,139V138M420,139V138M440,139V138M460,139V138M480,139V138M500,139V138M540,139V138M560,139V138M580,139V138M600,139V138M620,139V138M640,139V138M660,139V138M680,139V138M700,139V138M720,139V138" class="arrow gpu"/>
+    <rect x="64" y="30" width="10" height="110" class="bad"/>
+    <text x="80" y="40" class="small t-bad">first frame: 6 compiles</text>
+    <rect x="206" y="82" width="10" height="58" class="bad"/>
+    <text x="222" y="92" class="small t-bad">first see-through draw: 70 ms</text>
+    <rect x="516" y="68" width="10" height="72" class="bad"/>
+    <text x="532" y="78" class="small t-bad">first animated model: 95 ms</text>
+    <text x="400" y="182" class="mid small">time →</text>
+  </svg>
+  <figcaption>The cost comes at first use, which can be minutes into a run. The disk cache removes it on the next run only.</figcaption>
+</figure>
+
+<h2 id="finite"><span class="n">2</span>The set is finite</h2>
+<p>An engine does not compile arbitrary shaders. It compiles its own passes, each in a few variants. Count them, and the list fits in a table.</p>
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A row of passes: culling, opaque, sky, tone map, each a box.">
+      <rect x="10" y="44" width="50" height="40" rx="4" class="shader"/><text x="35" y="68" class="mid small">cull</text>
+      <rect x="66" y="44" width="50" height="40" rx="4" class="shader"/><text x="91" y="68" class="mid small">opaque</text>
+      <rect x="122" y="44" width="50" height="40" rx="4" class="shader"/><text x="147" y="68" class="mid small">sky</text>
+      <rect x="178" y="44" width="50" height="40" rx="4" class="shader"/><text x="203" y="68" class="mid small">tone</text>
+    </svg>
+    <h4>Passes</h4>
+    <p>Each pass has one shader, or one per stage: compute, or vertex and fragment.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="One shader in three variants: opaque, cut-out and see-through.">
+      <rect x="20" y="40" width="60" height="50" rx="4" class="solid"/><text x="50" y="108" class="mid small">opaque</text>
+      <rect x="90" y="40" width="60" height="50" rx="4" class="solid o-50"/><path d="M100,50h20v20h-20z" class="paper"/><text x="120" y="108" class="mid small">cut-out</text>
+      <rect x="160" y="40" width="60" height="50" rx="4" class="solid o-25"/><text x="190" y="108" class="mid small">see-through</text>
+    </svg>
+    <h4>Variants by material</h4>
+    <p>A <code class="lang-text">#define</code> per alpha mode: a few copies of the same source.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Three kinds of target: one sample, several samples, and one with a second motion image.">
+      <rect x="16" y="40" width="56" height="44" class="mem"/><text x="44" y="104" class="mid small">1 sample</text>
+      <rect x="92" y="40" width="56" height="44" class="mem"/><rect x="98" y="46" width="56" height="44" class="mem o-50"/><text x="122" y="104" class="mid small">MSAA</text>
+      <rect x="170" y="40" width="56" height="44" class="mem"/><text x="198" y="66" class="mid small">+ motion</text><text x="198" y="104" class="mid small">TAA</text>
+    </svg>
+    <h4>Variants by target</h4>
+    <p>Each kind of target the scene draws into needs its own output code: one shader per kind.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A debug view and a pick: rare variants.">
+      <rect x="30" y="36" width="70" height="56" rx="4" class="zone"/><text x="65" y="68" class="mid small t-faint">debug</text>
+      <rect x="140" y="36" width="70" height="56" rx="4" class="zone"/><text x="175" y="68" class="mid small t-faint">pick</text>
+    </svg>
+    <h4>Rare variants</h4>
+    <p>Debug views, picking: known, but a run may never need them. Queue them last, or only when asked.</p>
+  </div>
+</div>
+<div class="callout"><strong>Formats do not count.</strong> A pipeline depends on the target's formats, but its shader code does not. Warm the shaders; the pipeline objects themselves are then quick to make from the driver's cache.</div>
+
+<h2 id="queue"><span class="n">3</span>A queue for worker threads</h2>
+<p>At startup the program puts the whole list in a queue, in the order the frames will ask: first what the first frame draws, then what a scene adds later, rare variants last. Worker threads take shaders from the front. The main thread starts its frames at once.</p>
+<ol class="flow">
+  <li class="cpu">startup: list every shader, in the order of need</li>
+  <li class="shader">workers take the front of the queue and compile</li>
+  <li class="mem">each result goes to memory and to the disk cache</li>
+  <li class="cpu">a frame makes its pipeline from the result: no compile</li>
+</ol>
+<figure class="lab" data-lab="warmup-queue" data-title="Warm up the shaders">
+  <figcaption>Set the workers to 0 to see compiles at first use. Then add workers, and reverse the queue to see why its order matters. Purple bars are compiles, amber ones a worker making its compiler session; red marks are frames that waited.</figcaption>
+</figure>
+
+<h2 id="asks-first"><span class="n">4</span>When a frame asks first</h2>
+<p>A frame can ask for a shader before a worker is done with it, often in the first second. What it does depends on the shader's state, and on whether the draw may wait.</p>
+<div class="vgrid two">
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The shader is ready in memory; the frame draws at once.">
+      <rect x="20" y="50" width="80" height="30" rx="4" class="shader"/><text x="60" y="70" class="mid small">ready</text>
+      <line x1="104" y1="65" x2="150" y2="65" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <rect x="156" y="52" width="64" height="26" rx="4" class="cpu"/><text x="188" y="69" class="mid small">draw</text>
+    </svg>
+    <h4>Ready</h4>
+    <p>The frame takes the code from memory and makes the pipeline: well under a millisecond.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A worker compiles the shader; the frame waits for that one shader only.">
+      <rect x="20" y="30" width="140" height="22" rx="4" class="shader"/><text x="90" y="45" class="mid small">worker: compiling</text>
+      <rect x="20" y="76" width="100" height="22" rx="4" class="bad o-50"/><text x="70" y="91" class="mid small">frame waits</text>
+      <rect x="164" y="76" width="56" height="22" rx="4" class="cpu"/><text x="192" y="91" class="mid small">draw</text>
+    </svg>
+    <h4>Being compiled</h4>
+    <p>The frame waits for that one shader. The others go on in parallel, so the wait is at most one compile.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The shader is still in the queue; the main thread takes it out and compiles it itself.">
+      <rect x="20" y="30" width="30" height="22" class="shader o-50"/><rect x="54" y="30" width="30" height="22" class="shader o-50"/><rect x="88" y="30" width="30" height="22" class="hot"/>
+      <path d="M103,54 C103,74 80,74 80,86" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <rect x="20" y="88" width="120" height="22" rx="4" class="shader"/><text x="80" y="103" class="mid small">main compiles it</text>
+    </svg>
+    <h4>Still queued</h4>
+    <p>The main thread takes it off the queue and compiles it, so no worker compiles it a second time.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A debug view not ready: the frame draws the normal image instead and asks again next frame.">
+      <rect x="20" y="36" width="80" height="56" rx="4" class="solid"/><text x="60" y="68" class="mid small">shaded</text>
+      <line x1="104" y1="64" x2="136" y2="64" class="arrow dashed" marker-end="url(#ah)"/>
+      <rect x="140" y="36" width="80" height="56" rx="4" class="zone"/><text x="180" y="68" class="mid small">debug</text>
+    </svg>
+    <h4>Optional: skip a frame</h4>
+    <p>A debug view or an overlay keeps its old picture until its shaders are ready. A scene draw never does: an object would be missing.</p>
+  </div>
+</div>
+<div class="callout rule"><strong>Never drop a scene draw.</strong> A missing object for one frame is a visible pop. A frame that cannot draw an object without a shader waits for it.</div>
+
+<h2 id="sessions"><span class="n">5</span>One compiler session per thread</h2>
+<p>Many shader compilers keep their state in a session that only one thread may use at a time. Workers cannot share it. Each worker makes its own, the first time it compiles. A session holds the compiler's built-in modules, which are large.</p>
+<figure class="diagram">
+  <svg viewBox="0 0 760 170" role="img" aria-label="Four worker threads, each with its own compiler session of about 100 MB. The sessions live while the queue has work, then go.">
+    <text x="20" y="24" class="title">While the queue has work</text>
+    <rect x="20" y="36" width="160" height="60" rx="6" class="cpu"/><text x="100" y="58" class="mid small">worker 1</text>
+    <rect x="34" y="66" width="132" height="22" rx="4" class="mem"/><text x="100" y="81" class="mid small">session ~100 MB</text>
+    <rect x="200" y="36" width="160" height="60" rx="6" class="cpu"/><text x="280" y="58" class="mid small">worker 2</text>
+    <rect x="214" y="66" width="132" height="22" rx="4" class="mem"/><text x="280" y="81" class="mid small">session ~100 MB</text>
+    <rect x="380" y="36" width="160" height="60" rx="6" class="cpu"/><text x="460" y="58" class="mid small">worker 3</text>
+    <rect x="394" y="66" width="132" height="22" rx="4" class="mem"/><text x="460" y="81" class="mid small">session ~100 MB</text>
+    <rect x="560" y="36" width="160" height="60" rx="6" class="cpu"/><text x="640" y="58" class="mid small">worker 4</text>
+    <rect x="574" y="66" width="132" height="22" rx="4" class="mem"/><text x="640" y="81" class="mid small">session ~100 MB</text>
+    <text x="20" y="128" class="title">Queue empty</text>
+    <rect x="20" y="136" width="700" height="22" rx="4" class="zone"/><text x="370" y="151" class="mid small">sessions freed: the workers keep only their threads</text>
+  </svg>
+  <figcaption>More workers finish sooner and cost more memory for that time. A warm cache needs no compile, so it makes no session at all.</figcaption>
+</figure>
+
+<h2 id="one-parse"><span class="n">6</span>One parse per source</h2>
+<p>Most of a compile is reading the source: parse it and check its types. The vertex and fragment stages of one pipeline, or the entry points of one compute file, share that source. Compiled apart, each stage parses it again.</p>
+<div class="split">
+  <div class="bad">
+    <h4>Each entry point alone</h4>
+    <svg viewBox="0 0 320 120" role="img" aria-label="Two compiles of one source: each parses it, then makes its code.">
+      <rect x="14" y="20" width="150" height="26" rx="4" class="shader o-50"/><text x="89" y="37" class="mid small">parse + check</text>
+      <rect x="168" y="20" width="70" height="26" rx="4" class="shader"/><text x="203" y="37" class="mid small">vertex</text>
+      <rect x="14" y="66" width="150" height="26" rx="4" class="shader o-50"/><text x="89" y="83" class="mid small">parse + check</text>
+      <rect x="168" y="66" width="70" height="26" rx="4" class="shader"/><text x="203" y="83" class="mid small">fragment</text>
+    </svg>
+  </div>
+  <div class="good">
+    <h4>Grouped by source</h4>
+    <svg viewBox="0 0 320 120" role="img" aria-label="One parse of the source, then the code of each entry point.">
+      <rect x="14" y="40" width="150" height="26" rx="4" class="shader o-50"/><text x="89" y="57" class="mid small">parse + check</text>
+      <rect x="168" y="40" width="70" height="26" rx="4" class="shader"/><text x="203" y="57" class="mid small">vertex</text>
+      <rect x="242" y="40" width="70" height="26" rx="4" class="shader"/><text x="277" y="57" class="mid small">fragment</text>
+    </svg>
+  </div>
+</div>
+<p>So a worker that takes a shader also takes the other queued shaders of the same source and compiles them in its session one after the other. The code it makes is the same as from a lone compile.</p>
+
+<h2 id="pitfalls"><span class="n">7</span>Pitfalls</h2>
+<dl class="pitfalls">
+  <div><dt>A warmed shader is compiled again at first use</dt><dd>The warm-up asked for it under another key: other <code class="lang-text">#define</code> lines, another order, another name. Build the source in one function that both sides call.</dd></div>
+  <div><dt>The first frames still wait</dt><dd>The queue is not in the order of need, or a new kind of target appears. Put what the first frame draws first, and move a new target's shaders to the front when it appears.</dd></div>
+  <div><dt>Memory jumps at the first start after an update</dt><dd>One compiler session per worker. Fewer workers cap it; free the sessions once the queue is empty.</dd></div>
+  <div><dt>The main thread stalls while waking workers</dt><dd>A woken worker at the main thread's priority can take its core (<a href="job-system.html#priority">Job systems</a>). Run the workers one level below.</dd></div>
+  <div><dt>Closing the program during the warm-up hangs or crashes</dt><dd>Drop the queued compiles, let the running ones end, join the threads, then free the sessions they used.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">8</span>In RASM</h2>
+<p>The <code>ShaderCompiler</code> has a pool of shader workers (<code>WorkerPool</code>, named <samp>RASM shaders</samp>). At startup <code>Renderer::warmPipelines</code> queues every shader a frame can need; the pipelines are still made where a pass first needs them, and find their code ready.</p>
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="At startup warmPipelines queues the shaders for the shader workers. createSceneView queues a new kind of target's shaders first. A pass calls compileFromString, which takes the code from memory, waits for a running compile, or takes a queued one off the queue and compiles it on the main thread.">
+    <rect x="20" y="20" width="200" height="56" rx="6" class="cpu"/><text x="120" y="42" class="mid small">Renderer constructor</text><text x="120" y="62" class="mid small mono">warmPipelines()</text>
+    <rect x="20" y="96" width="200" height="56" rx="6" class="cpu"/><text x="120" y="118" class="mid small">a view on a new kind of target</text><text x="120" y="138" class="mid small mono">warmScenePipelines(first)</text>
+    <rect x="280" y="40" width="200" height="90" rx="6" class="zone"/><text x="380" y="60" class="mid small title">queue</text>
+    <rect x="296" y="72" width="24" height="18" class="shader"/><rect x="324" y="72" width="24" height="18" class="shader"/><rect x="352" y="72" width="24" height="18" class="shader"/><rect x="380" y="72" width="24" height="18" class="shader o-50"/><rect x="408" y="72" width="24" height="18" class="shader o-50"/><rect x="436" y="72" width="24" height="18" class="shader o-25"/>
+    <text x="380" y="112" class="mid small">front: needed first</text>
+    <line x1="220" y1="48" x2="276" y2="70" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="220" y1="124" x2="276" y2="96" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="540" y="20" width="200" height="110" rx="6" class="shader o-25"/><text x="640" y="40" class="mid small title">RASM shaders workers</text>
+    <text x="640" y="62" class="mid small">a Slang session each,</text><text x="640" y="78" class="mid small">made on a cache miss</text><text x="640" y="100" class="mid small">disk cache → memory</text>
+    <line x1="480" y1="85" x2="536" y2="85" class="arrow shader" marker-end="url(#ah-shader)"/>
+    <rect x="280" y="180" width="460" height="56" rx="6" class="cpu"/><text x="510" y="200" class="mid small">a pass: <tspan class="mono">createScenePipeline</tspan> → <tspan class="mono">compileFromString</tspan></text><text x="510" y="222" class="mid small">ready: take it · running: wait for it · queued: compile it here</text>
+    <line x1="640" y1="130" x2="640" y2="176" class="arrow shader" marker-end="url(#ah-shader)"/>
+  </svg>
+  <figcaption>Nothing new happens inside a frame on a warm run: every shader comes from the disk cache, read on a worker.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>This page</th><th>RASM</th></tr>
+  <tr><td>The list of shaders</td><td><code>warmPipelines</code> and <code>warmScenePipelines</code> in <samp>src/renderer/pipelineWarmup.cpp</samp>: the computes, the shaded variants of the configured anti-aliasing, shadows, tone map, environment bake, blend sort, animation, labels, bloom, points; last the debug display, Inspect and the picks. A view on a new kind of target (TAA, MSAA) queues its variants first, from <code>createSceneView</code>.</td></tr>
+  <tr><td>Same key on both sides</td><td><code>getShaderVariant</code> builds a variant's source for the warm-up and for <code>createScenePipeline</code>, <code>createMeshScenePipeline</code> and the picks. A shader compiled on the main thread is logged: <samp>'name' compiled on the main thread</samp>.</td></tr>
+  <tr><td>When a frame asks first</td><td><code>ShaderCompiler::compileFromString</code>: ready, waited for, or taken off the queue and compiled on the main thread. With <code>wait</code> false it returns <code>pending</code>: the debug views' pipelines do, and the view draws shaded until all of them are ready. <code>setDebugView</code> queues their shaders first (<code>warmDebugPipelines</code>). <code>Renderer::waitForLoads</code> also waits for the queue (<code>waitForPrefetches</code>).</td></tr>
+  <tr><td>Session per thread</td><td><code>SlangContext</code>: a Slang global session and session per worker (slang.h: a global session is not thread-safe), made on the first cache miss, freed once no prefetch is open. The main thread has its own.</td></tr>
+  <tr><td>One parse per source</td><td>A context keeps each module it loaded, named by the source's hash; <code>runPrefetch</code> takes the queued shaders of the same source with the one it takes. The SPIR-V is byte for byte the same.</td></tr>
+  <tr><td>Worker count</td><td><code>RendererConfig::shaderThreads</code> (and <code>EngineConfig</code>, <code class="lang-text">shader_threads</code> in the C API): 0 takes half the hardware threads, at most 8.</td></tr>
+  <tr><td>Thread priority</td><td><code>WorkerPool</code> threads call <code>lowerThreadPriority</code> (<a href="job-system.html#priority">Job systems</a>).</td></tr>
+</table>
+</div>
+
+<p>What the warm-up costs and saves, on the first start after a shader change (<samp>24_map_tiles --no-cache</samp>, Release, RTX 3060, 24 hardware threads; the memory falls back once the queue is empty, after about 1 s):</p>
+<div class="table-wrap">
+<table>
+  <tr><th>Shader threads</th><th>First frame</th><th>Longest later frame</th><th>Peak working set</th></tr>
+  <tr><td>none (before the warm-up: compiled at first use)</td><td>759 ms</td><td>451 ms, and more at each first use</td><td>510 MB</td></tr>
+  <tr><td>2</td><td>323 ms</td><td>380 ms</td><td>808 MB</td></tr>
+  <tr><td>4</td><td>302 ms</td><td>226 ms</td><td>1004 MB</td></tr>
+  <tr><td>8 (the default here)</td><td>280 ms</td><td>84 ms</td><td>1381 MB</td></tr>
+</table>
+</div>
+<p>A warm run makes no session: same frames and startup as without the warm-up, and about 10 MB more memory.</p>
+
+<div class="callout rule"><strong>Rules to keep.</strong> A new pipeline gets its shaders in <code>warmPipelines</code> or <code>warmScenePipelines</code>, with the name, entry points and <code class="lang-text">#define</code> lines its pass uses. A pipeline whose draw is optional may pass <code class="lang-text">pending</code> and draw without it; a scene draw waits. Only the shader workers and <code>compileFromString</code>'s thread use a <code>SlangContext</code>, never two at once. Pipelines, the pipeline cache and the descriptor layouts stay on the main thread.</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li><a href="shader-caching.html">Shader and pipeline caches</a>: the disk cache the workers read and write.</li>
+  <li><a href="job-system.html">Job systems and worker pools</a>: the pool and its thread priority.</li>
+  <li><a href="uber-shaders.html">Uber-shaders</a>: where the variants come from.</li>
+  <li><a href="debug-views.html">Debug views</a>: the view that draws shaded until its shaders are ready.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>
