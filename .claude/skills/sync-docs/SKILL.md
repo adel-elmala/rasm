@@ -46,7 +46,8 @@ Read the diff of each changed source (`git diff <stamp> <target> -- <file>`) and
 - A new concept, algorithm or technique in the change (one a contributor would need explained to follow the
   code) gets its own concept guide, written in the same change without asking. Only a small variation of a topic a
   guide already covers extends that guide instead. Add the page to `SECTIONS` in `docs/assets/site.js` (the only
-  list of pages), link it from `docs/index.html`, and link to it from the API entries and guides that mention it.
+  list of pages), add a row to the "Find a guide by topic" table in `docs/guides/index.html` (a new API page: a card and
+  a row in the API part of `docs/index.html`), and link to it from the API entries and guides that mention it.
 - Keep `docs/architecture.md` in step through `finish-task`; this skill owns the HTML pages only.
 
 ### House style (keep every page consistent)

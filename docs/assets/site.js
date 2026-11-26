@@ -10,6 +10,26 @@ const SECTIONS = [
         ],
     },
     {
+        title: "API reference",
+        pages: [
+            { path: "api/index.html",                 title: "Getting started" },
+            { path: "api/engine.html",                title: "Engine and Renderer" },
+            { path: "api/scene.html",                 title: "Scenes, entities, meshes, lights" },
+            { path: "api/materials.html",             title: "Materials and textures" },
+            { path: "api/camera.html",                title: "Cameras and input" },
+            { path: "api/render-graph.html",          title: "Render graph and custom passes" },
+            { path: "api/low-level.html",             title: "RenderContext and resources" },
+            { path: "api/types.html",                 title: "Types, handles and limits" },
+            { path: "api/c-api.html",                 title: "C API" },
+        ],
+    },
+    {
+        title: "Guides",
+        pages: [
+            { path: "guides/index.html",              title: "Guide index" },
+        ],
+    },
+    {
         title: "Engine tour",
         guide: true,
         blurb: "How RASM fits together. Read these three first.",
@@ -124,20 +144,6 @@ const SECTIONS = [
         ],
     },
     {
-        title: "API reference",
-        pages: [
-            { path: "api/index.html",                 title: "Getting started" },
-            { path: "api/engine.html",                title: "Engine and Renderer" },
-            { path: "api/scene.html",                 title: "Scenes, entities, meshes, lights" },
-            { path: "api/materials.html",             title: "Materials and textures" },
-            { path: "api/camera.html",                title: "Cameras and input" },
-            { path: "api/render-graph.html",          title: "Render graph and custom passes" },
-            { path: "api/low-level.html",             title: "RenderContext and resources" },
-            { path: "api/types.html",                 title: "Types, handles and limits" },
-            { path: "api/c-api.html",                 title: "C API" },
-        ],
-    },
-    {
         title: "Project docs (Markdown)",
         pages: [
             { path: "architecture.md",                title: "architecture.md" },
@@ -167,11 +173,20 @@ const SECTIONS = [
     const savedTheme = storageGet("rasm-docs-theme");
     if (savedTheme) document.documentElement.dataset.theme = savedTheme;
 
+    // favicon: one place for every page
+    for (const [size, rel] of [["32", "icon"], ["180", "apple-touch-icon"]]) {
+        const link = document.createElement("link");
+        link.rel = rel;
+        link.sizes = `${size}x${size}`;
+        link.href = `${root}assets/logo/icon-${size}.png`;
+        document.head.appendChild(link);
+    }
+
     // ---------------------------------------------------------------- sidebar
     const nav = document.getElementById("sidebar");
     const flat = [];
     if (nav) {
-        let html = `<a class="brand" href="${root}index.html">RASM <small>docs</small></a>` +
+        let html = `<a class="brand" href="${root}index.html"><img src="${root}assets/logo/icon-180.png" alt="">RASM <small>docs</small></a>` +
                    `<div class="search"><input type="search" id="nav-filter" placeholder="Find a page" aria-label="Find a page" autocomplete="off"><kbd>/</kbd></div>` +
                    `<p class="no-match">No page matches.</p>`;
         for (const section of SECTIONS) {

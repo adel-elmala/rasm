@@ -183,15 +183,12 @@ a:hover { text-decoration: underline; }
     letter-spacing: 0.05em;
 }
 #sidebar .brand:hover { text-decoration: none; }
-#sidebar .brand::before {
-    content: "";
+#sidebar .brand img {
     align-self: center;
-    width: 14px;
-    height: 14px;
-    border-radius: 4px;
-    background: var(--accent);
-    transform: rotate(45deg);
-    margin-right: 4px;
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    margin-right: 2px;
 }
 #sidebar .brand small { color: var(--fg-faint); font-weight: 400; font-size: 13px; letter-spacing: 0; }
 
