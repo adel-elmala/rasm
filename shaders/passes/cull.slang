@@ -43,7 +43,7 @@ static const uint   CULL_MESHLETS       = 1u << 15;     // in chunks, not as a w
 static const uint   CULL_WHOLE          = 1u << 14;     // over the run's budget: one CHUNK_WHOLE chunk (writeMain)
 static const uint   CULL_DRAWN_EARLY    = 1u << 13;     // late phase: the early one drew the whole draw
 static const uint   CULL_EARLY_MESHLETS = 1u << 12;     // late phase: the early one drew its meshlets that passed their last test
-static const uint   CULL_RASTER         = 1u << 11;     // a point cloud chunk sent to the compute path (lib/points.slang): no slot
+static const uint   CULL_RASTER         = 1u << 11;     // a point cloud chunk sent to the compute path (lib/points.slang), or a glyph chunk kept (lib/glyphs.slang): no slot
 // A LOD with fewer meshlets is drawn whole: the draw's own test already culled it, and its few meshlets would cost
 // more to test than they save (measured in 05_city and 18_meshlets, RTX 3060).
 static const uint   MESHLET_MIN_DRAW    = 8;
@@ -152,7 +152,22 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
             scene->visibilityPtr[draw.firstInstance] = seen ? 1 : 0;
             candidate       = seen;
         }
+        bool glyphs     = false;
         if (candidate && points)
+            glyphs      = (scene->materialsPtr + scene->instancesPtr[draw.firstInstance].materialIndex)->materialId == MaterialId.GLYPHS;
+        if (glyphs)
+        {
+            // A glyph chunk takes no slot: its glyphs are culled one by one into the view's glyph list (passes/glyphCull.slang),
+            // which the last draw pass draws. The late phase sees it drawn; a chunk the buffer has no room for is not drawn.
+            InstanceData *instance = scene->instancesPtr + draw.firstInstance;
+            counted         = earlyFlags == 0;
+            uint lodCount   = instance->meshletVisibility >= 0 ? clamp(scene->geometryPtr[uint(instance->meshletVisibility)].lodCount, 1, MAX_MESH_LODS) : 0;
+            bool kept       = counted && scene->glyphCullPtr != nullptr && lodCount > 0 && appendGlyphChunk(scene, draw.firstInstance, draw.indexCount, lodCount);
+            packed          = kept ? CULL_RASTER : CULLED;
+            counted         = kept;
+            lod             = 0;
+        }
+        else if (candidate && points)
         {
             // A chunk keeps a prefix of its points: the count goes above CULL_LOD_SHIFT, less one, in place of a LOD
             // (16 bits, up to MAX_POINT_CHUNK_POINTS).

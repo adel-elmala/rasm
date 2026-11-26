@@ -49,6 +49,7 @@ namespace rasm
 
     private:
         bool                    allocatePoints(const ObjRaw& raw, MeshGeometry& geometry);
+        bool                    allocateGlyphs(const ObjRaw& raw, MeshGeometry& geometry);
         bool                    writePoints(RenderContext& ctx, const ObjRaw& raw, const MeshGeometry& geometry);
         BufferHandle            vertices                = {};
         BufferHandle            indices                 = {};

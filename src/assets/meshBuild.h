@@ -15,6 +15,7 @@ namespace rasm
         ObjRaw                      raw;
         std::vector<MeshLabel>      labels;
         std::vector<uint16_t>       pointOrder;
+        MeshHandle                  glyphShape;
     };
 
 }

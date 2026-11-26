@@ -2,6 +2,7 @@
 #include "assets/meshBuild.h"
 
 #include "mapbox/earcut.hpp"
+#include "spdlog/spdlog.h"
 
 #include <algorithm>
 #include <array>
@@ -14,6 +15,8 @@ namespace rasm
 {
     namespace
     {
+        constexpr uint32_t WHITE = 0xFFFFFFFFu;
+
         // uv[2] of a vertex: its kind and how its distance to the edge is measured. Must match shaders/lib/vector.slang.
         enum class Kind : uint32_t
         {
@@ -32,11 +35,14 @@ namespace rasm
             FILL = 3,
         };
 
-        // A feature's point in the world, with the ground's up there.
+        // A feature's point in the world, with the ground's up there, and its value: a color or a scalar's bits, which
+        // its vertices carry in the mesh's colors when the feature has values (valued) or the mesh already has colors.
         struct GroundPoint
         {
             glm::dvec3 position;
             glm::dvec3 up;
+            uint32_t value = WHITE;
+            bool valued = false;
         };
 
         using Ring2 = std::vector<std::array<double, 2>>;
@@ -76,6 +82,8 @@ namespace rasm
                                          .normal = glm::vec3(point.up),
                                          .uv = {glm::vec2(offset), extra, glm::vec2(static_cast<float>(kind), static_cast<float>(metric))},
                                          .tangent = glm::vec4(glm::vec3(along), std::bit_cast<float>(featureId))});
+            if (point.valued || !geometry.colors.empty())
+                geometry.colors.push_back(point.value);
         }
 
         void pushTriangle(VectorGeometry &geometry, uint32_t a, uint32_t b, uint32_t c)
@@ -157,20 +165,40 @@ namespace rasm
             std::sort(cuts.begin(), cuts.end());
         }
 
-        // A line's points on the ground: as given, or draped and cut on the tile's grid. Repeated points go.
-        void placeLine(const VectorPlacement &placement, const glm::dvec3 *points, uint32_t count, std::vector<GroundPoint> &placed)
+        // A point's value between two others: scalars linear, colors per channel.
+        uint32_t mixValue(uint32_t a, uint32_t b, double t, bool scalars)
+        {
+            if (scalars)
+                return std::bit_cast<uint32_t>(static_cast<float>(std::bit_cast<float>(a) * (1.0 - t) + std::bit_cast<float>(b) * t));
+            uint32_t mixed = 0;
+            for (uint32_t shift = 0; shift < 32; shift += 8)
+            {
+                const double channel = static_cast<double>((a >> shift) & 0xFF) * (1.0 - t) + static_cast<double>((b >> shift) & 0xFF) * t;
+                mixed |= static_cast<uint32_t>(std::lround(std::clamp(channel, 0.0, 255.0))) << shift;
+            }
+            return mixed;
+        }
+
+        // A line's points on the ground: as given, or draped and cut on the tile's grid, each cut point's value between
+        // its segment's ends. Repeated points go.
+        void placeLine(const VectorPlacement &placement, const glm::dvec3 *points, const uint32_t *colors, const float *scalars, uint32_t count, std::vector<GroundPoint> &placed)
         {
             placed.clear();
             const glm::dvec3 up = normalizeOr(glm::dvec3(placement.up), glm::dvec3(0.0, 1.0, 0.0));
-            auto add = [&](const GroundPoint &point)
+            const bool valued = colors != nullptr || scalars != nullptr;
+            auto valueOf = [&](uint32_t i)
+            { return colors != nullptr ? colors[i] : (scalars != nullptr ? std::bit_cast<uint32_t>(scalars[i]) : WHITE); };
+            auto add = [&](GroundPoint point, uint32_t value)
             {
+                point.value = value;
+                point.valued = valued;
                 if (placed.empty() || glm::length(point.position - placed.back().position) > 1e-9)
                     placed.push_back(point);
             };
             if (!isDraped(placement))
             {
                 for (uint32_t i = 0; i < count; ++i)
-                    add({.position = points[i], .up = up});
+                    add({.position = points[i], .up = up}, valueOf(i));
                 return;
             }
             std::vector<double> cuts;
@@ -182,9 +210,9 @@ namespace rasm
                     const glm::dvec2 previous = toGrid(placement, points[i - 1]);
                     cutOnGrid(previous, grid, cuts);
                     for (double t : cuts)
-                        add(liftOnGrid(placement, glm::mix(previous, grid, t)));
+                        add(liftOnGrid(placement, glm::mix(previous, grid, t)), mixValue(valueOf(i - 1), valueOf(i), t, scalars != nullptr));
                 }
-                add(liftOnGrid(placement, grid));
+                add(liftOnGrid(placement, grid), valueOf(i));
             }
         }
 
@@ -511,9 +539,17 @@ namespace rasm
         }
     }
 
+    // With values, the mesh gets colors: white for the vertices it held before, whose features have none.
     void addVectorLines(VectorGeometry &geometry, const glm::dvec3 &origin, const glm::dvec3 *points, const uint32_t *lineSizes, uint32_t lineCount, const LineShape &shape, const VectorPlacement &placement,
-                        const uint32_t *featureIds)
+                        const uint32_t *featureIds, const uint32_t *colors, const float *scalars)
     {
+        if (colors != nullptr && scalars != nullptr)
+        {
+            spdlog::error("addVectorLines: give colors or scalars, not both; the lines get the colors.");
+            scalars = nullptr;
+        }
+        if ((colors != nullptr || scalars != nullptr) && geometry.colors.size() < geometry.vertices.size())
+            geometry.colors.resize(geometry.vertices.size(), WHITE);
         std::vector<GroundPoint> line;
         size_t first = 0;
         for (uint32_t i = 0; i < lineCount; ++i)
@@ -525,7 +561,7 @@ namespace rasm
                 first += lineSizes[i];
                 continue;
             }
-            placeLine(placement, points + first, lineSizes[i], line);
+            placeLine(placement, points + first, colors != nullptr ? colors + first : nullptr, scalars != nullptr ? scalars + first : nullptr, lineSizes[i], line);
             first += lineSizes[i];
             if (line.size() >= 2)
                 pushLine(geometry, origin, line, shape, featureId);
@@ -678,7 +714,9 @@ namespace rasm
     MeshBuild buildVectorMesh(VectorGeometry geometry)
     {
         std::vector<MeshLabel> labels = std::move(geometry.labels);
-        MeshBuild build = buildMesh(std::move(geometry.vertices), std::move(geometry.indices), {}, {.lods = false, .meshlets = false});
+        if (!geometry.colors.empty() && geometry.colors.size() < geometry.vertices.size())
+            geometry.colors.resize(geometry.vertices.size(), WHITE);
+        MeshBuild build = buildMesh(std::move(geometry.vertices), std::move(geometry.indices), std::move(geometry.colors), {.lods = false, .meshlets = false});
         if (build.isValid())
             build.data->labels = std::move(labels);
         return build;

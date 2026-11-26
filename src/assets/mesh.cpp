@@ -115,6 +115,12 @@ namespace rasm
 
         mesh.labels = std::move(data->labels);
         mesh.pointOrder = std::move(data->pointOrder);
+        // A glyph chunk's entities are drawn once its shape is ready too (syncGpuScene); destroying the shape stops them.
+        mesh.glyphShape = isLive(data->glyphShape) ? data->glyphShape : MeshHandle{};
+        if (raw.glyphCount > 0 && !mesh.glyphShape.isValid())
+            spdlog::error("createMesh: the glyph chunk's shape {{{}, {}}} is not a live mesh; its glyphs are not drawn.", data->glyphShape.index, data->glyphShape.generation);
+        if (mesh.glyphShape.isValid())
+            ++registry.meshes[mesh.glyphShape.index].glyphChunks;
         const HandleSlot slot = registry.meshHandles.allocate();
         const MeshHandle handle{slot.index, slot.generation};
         registry.meshes.resize(registry.meshHandles.size());
@@ -167,6 +173,26 @@ namespace rasm
             entity.mesh = {};
             --meshRef.users;
         }
+
+        // The glyph chunks drawn with it as their shape stop drawing: their shape's rows go with it.
+        if (meshRef.glyphChunks > 0)
+        {
+            for (size_t m = 0; m < registry.meshes.size(); ++m)
+            {
+                Mesh &chunk = registry.meshes[m];
+                if (!(chunk.glyphShape == mesh))
+                    continue;
+                chunk.glyphShape = {};
+                for (size_t i = 1; i < registry.entities.size(); ++i)
+                {
+                    const Entity &entity = registry.entities[i];
+                    if (entity.mesh.index == m && isLive(entity.handle) && isLive(entity.mesh))
+                        releaseEntityRows(entity.handle);
+                }
+            }
+        }
+        if (isLive(meshRef.glyphShape))
+            --registry.meshes[meshRef.glyphShape.index].glyphChunks;
 
         std::vector<MeshGeometry> geometries;
         for (const SubMesh &subMesh : meshRef.subMeshes)

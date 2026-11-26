@@ -25,7 +25,7 @@ namespace rasm::gfx
     constexpr uint32_t      MATERIAL_NORMAL_XY          = 1u << 2;  // the normal map has x and y only (BC5, EAC RG11): z is rebuilt
 
     // Selects how the uber shader's fragMain shades a model. Must match shaders/lib/core.slang.
-    enum class MaterialId : uint32_t { PBR, UNLIT, TERRAIN, VECTOR, POINTS };
+    enum class MaterialId : uint32_t { PBR, UNLIT, TERRAIN, VECTOR, POINTS, GLYPHS };
 
     // PointData::flags. Must match shaders/lib/points.slang.
     constexpr uint32_t      POINT_METRES                = 1u << 0;  // size in metres, else pixels
@@ -49,6 +49,20 @@ namespace rasm::gfx
     constexpr uint32_t      POINT_BATCH_POINTS          = 1024;     // points of a batch: a group of the raster dispatch
     constexpr uint32_t      POINT_BATCHES_PER_CHUNK     = 64;       // MAX_POINT_CHUNK_POINTS / POINT_BATCH_POINTS
     constexpr uint32_t      POINT_MAX_BATCHES           = 65535;    // a view's batches a frame: the raster dispatch's groups (maxComputeWorkGroupCount)
+
+    // A glyph chunk in the point pool (rasm/glyphs.h), in 8 B units: a GlyphChunkHeader, then per glyph its position
+    // (a float3) and its value (RGBA8 or a float scalar), then with GLYPH_CHUNK_ORIENTED a quaternion of four snorm16 per
+    // glyph, then with GLYPH_CHUNK_SCALED three half floats and a spare one per glyph. Must match shaders/lib/glyphs.slang.
+    constexpr uint32_t      GLYPH_CHUNK_COLORS          = 1u << 0;
+    constexpr uint32_t      GLYPH_CHUNK_SCALARS         = 1u << 1;
+    constexpr uint32_t      GLYPH_CHUNK_ORIENTED        = 1u << 2;
+    constexpr uint32_t      GLYPH_CHUNK_SCALED          = 1u << 3;
+    constexpr uint32_t      GLYPH_CHUNK_HEADER_UNITS    = 4;
+    // The glyph cull (shaders/passes/glyphCull.slang). Must match shaders/lib/glyphs.slang.
+    constexpr uint32_t      GLYPH_BATCH_GLYPHS          = 256;      // glyphs of a batch: a group of its dispatches
+    constexpr uint32_t      GLYPH_BATCHES_PER_CHUNK     = 256;      // MAX_GLYPH_CHUNK_GLYPHS / GLYPH_BATCH_GLYPHS
+    constexpr uint32_t      GLYPH_MAX_BATCHES           = 65535;    // a view's batches a frame: the dispatches' groups
+    constexpr uint32_t      GLYPH_MAX_CHUNKS            = 65536;    // a visible glyph keeps its chunk's slot in 16 bits
 
     // VectorData::flags. Must match shaders/lib/vector.slang.
     constexpr uint32_t      VECTOR_METRES               = 1u << 0;  // width and dashes in metres, else pixels
@@ -297,6 +311,39 @@ namespace rasm::gfx
         uint32_t        skinnedMotion;              // 1: SceneData::previousSkinnedVertsPtr holds the frame before's
     };
 
+    struct GlyphChunkHeader
+    {
+        uint32_t            glyphCount;
+        uint32_t            flags;                                  // GLYPH_CHUNK_*
+        float               maxScale;                               // the largest scale of a glyph along any axis
+        uint32_t            padding;
+        glm::vec3           boundsCenter;                           // the sphere around the glyphs' positions
+        float               boundsRadius;
+    };
+
+    // A view's glyph buffer starts with it: the glyph cull's group count, indirect (a group a batch), the chunks it
+    // kept and the glyph draw's command count, which drawIndexedIndirectCount reads.
+    struct GlyphCullHeader
+    {
+        uint32_t            groups;
+        uint32_t            groupsY;
+        uint32_t            groupsZ;
+        uint32_t            chunkCount;
+        uint32_t            commandCount;
+        uint32_t            padding[3];
+    };
+
+    // A glyph chunk the view's cull kept: its instance row, its first batch (its glyphs' slots and list entries start at
+    // firstBatch * GLYPH_BATCH_GLYPHS), its first draw command (one per LOD of its shape) and its visible glyphs per LOD.
+    struct GlyphChunkSlot
+    {
+        uint32_t            row;
+        uint32_t            firstBatch;
+        uint32_t            firstCommand;
+        uint32_t            lodCount;
+        uint32_t            counts[MAX_MESH_LODS];
+    };
+
     // Must match rasm::SkinVertex.
     struct SkinVertex
     {
@@ -543,6 +590,14 @@ namespace rasm::gfx
         uint64_t         pointPixelsPtr;            // a 64-bit word per pixel: depth << 32 | instance row << 16 | point
         uint32_t         pointBatchCapacity;        // batches the buffer holds
         uint32_t         pointRasterPadding;        // keeps the size a multiple of 8
+        uint64_t         glyphCullPtr;              // GlyphCullHeader of the view's glyph buffer; 0: no glyph is drawn
+        uint64_t         glyphChunksPtr;            // GlyphChunkSlot per glyph chunk the cull kept
+        uint64_t         glyphBatchesPtr;           // per batch: chunk slot << 8 | its batch in the chunk
+        uint64_t         glyphCommandsPtr;          // DrawInfo per kept chunk and LOD of its shape: the glyph draw's commands
+        uint64_t         glyphSlotsPtr;             // per glyph of a kept chunk: its place among its chunk's visible glyphs of its LOD | lod << 24, or GLYPH_CULLED
+        uint64_t         glyphListPtr;              // the visible glyphs, chunk slot << 16 | glyph, each chunk's by LOD
+        uint32_t         glyphChunkCapacity;
+        uint32_t         glyphBatchCapacity;
     };
 
     struct PushConstants
@@ -718,7 +773,15 @@ namespace rasm::gfx
     static_assert(offsetof(SceneData, pointRasterPtr) == 2280, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, pointPixelsPtr) == 2296, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, pointBatchCapacity) == 2304, "SceneData must match the shader's scalar layout");
-    static_assert(sizeof(SceneData) == 2312, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, glyphCullPtr) == 2312, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, glyphListPtr) == 2352, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, glyphBatchCapacity) == 2364, "SceneData must match the shader's scalar layout");
+    static_assert(sizeof(SceneData) == 2368, "SceneData must match the shader's scalar layout");
+    static_assert(sizeof(GlyphChunkHeader) == GLYPH_CHUNK_HEADER_UNITS * 8, "GlyphChunkHeader must match shaders/lib/glyphs.slang");
+    static_assert(sizeof(GlyphCullHeader) == 32, "GlyphCullHeader must match shaders/lib/core.slang");
+    static_assert(offsetof(GlyphCullHeader, commandCount) == 16, "GlyphCullHeader must match shaders/lib/core.slang");
+    static_assert(sizeof(GlyphChunkSlot) == 48, "GlyphChunkSlot must match shaders/lib/core.slang");
+    static_assert(GLYPH_BATCHES_PER_CHUNK * GLYPH_BATCH_GLYPHS == 65536, "a glyph chunk's glyphs (MAX_GLYPH_CHUNK_GLYPHS) must fill its batches");
     static_assert(sizeof(PointRasterHeader) == 48, "PointRasterHeader must match shaders/lib/core.slang");
     static_assert(offsetof(PointRasterHeader, clearGroups) == 12, "PointRasterHeader must match shaders/lib/core.slang");
     static_assert(POINT_BATCHES_PER_CHUNK * POINT_BATCH_POINTS == 65536, "a chunk's points must fill its batches");

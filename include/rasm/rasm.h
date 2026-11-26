@@ -20,6 +20,7 @@
 #include "rasm/picking.h"
 #include "rasm/pointCloud.h"
 #include "rasm/pointCloudOctree.h"
+#include "rasm/glyphs.h"
 #include "rasm/readback.h"
 #include "rasm/renderSpace.h"
 #include "rasm/terrain.h"

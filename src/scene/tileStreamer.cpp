@@ -122,8 +122,9 @@ namespace rasm
                 for (const SubMesh &subMesh : mesh.subMeshes)
                 {
                     const MeshGeometry &geometry = subMesh.geometry;
-                    // A point chunk's indices are the range every chunk shares; its points are its own.
-                    const uint64_t indices = geometry.pointCount > 0 ? 0 : static_cast<uint64_t>(geometry.indexCount) + geometry.lodIndexCount;
+                    // A point chunk's indices are the range every chunk shares, a glyph chunk has none; their units in
+                    // the point pool are their own.
+                    const uint64_t indices = geometry.pointCount > 0 || geometry.glyphCount > 0 ? 0 : static_cast<uint64_t>(geometry.indexCount) + geometry.lodIndexCount;
                     unit(cost, TileUnit::BYTES) += static_cast<uint64_t>(geometry.pointUnits) * 2 * sizeof(uint32_t);
                     unit(cost, TileUnit::POINTS) += geometry.pointUnits;
                     unit(cost, TileUnit::BYTES) += geometry.vertexCount * sizeof(Vertex) + geometry.colorCount * sizeof(uint32_t) + geometry.skinCount * sizeof(SkinVertex) +

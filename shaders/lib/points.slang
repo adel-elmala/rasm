@@ -161,11 +161,9 @@ float getSphereDepth(float4x4 p, float centre, float radius, float distance2)
 static const float  POINT_NO_COLORMAP       = -1.0;
 static const float  POINT_OUT_OF_RANGE      = -2.0;
 
-float getPointColormapPosition(PointData style, PointChunk chunk, uint scalarStep)
+// A scalar's place in the colormap of a POINTS, GLYPHS or VECTOR material's PointData: 0 to 1, or POINT_OUT_OF_RANGE.
+float getColormapPosition(PointData style, float value)
 {
-    if ((style.flags & POINT_SCALAR) == 0 || (chunk.flags & POINT_CHUNK_SCALARS) == 0 || style.colormap == INVALID_TEXTURE_INDEX)
-        return POINT_NO_COLORMAP;
-    float value     = chunk.scalarMin + float(scalarStep) * chunk.scalarStep;
     if ((style.flags & POINT_LOG) != 0)
         value       = value > 0.0 ? log(value) : -1e30;
     float span      = style.rangeMax - style.rangeMin;
@@ -173,6 +171,13 @@ float getPointColormapPosition(PointData style, PointChunk chunk, uint scalarSte
     if ((style.flags & POINT_CLAMP) == 0 && !(t >= 0.0 && t <= 1.0))
         return POINT_OUT_OF_RANGE;
     return saturate(t);
+}
+
+float getPointColormapPosition(PointData style, PointChunk chunk, uint scalarStep)
+{
+    if ((style.flags & POINT_SCALAR) == 0 || (chunk.flags & POINT_CHUNK_SCALARS) == 0 || style.colormap == INVALID_TEXTURE_INDEX)
+        return POINT_NO_COLORMAP;
+    return getColormapPosition(style, chunk.scalarMin + float(scalarStep) * chunk.scalarStep);
 }
 
 // The colormap texel of position t (getPointColormapPosition): its 256 entries' centres.

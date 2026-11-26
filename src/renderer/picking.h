@@ -107,6 +107,9 @@ namespace rasm
         uint32_t                    height                  = 0;
         BufferHandle                cull;
         uint32_t                    cullCapacity            = 0;    // draws
+        BufferHandle                glyphCull;
+        uint32_t                    glyphChunkCapacity      = 0;
+        uint32_t                    glyphBatchCapacity      = 0;
         BufferHandle                readback;
         uint64_t                    readbackSize            = 0;
         uint32_t                    usedWidth               = 0;    // the copied corner of the last frame that recorded picks
@@ -121,6 +124,7 @@ namespace rasm
         PickSlot                    slots[MAX_FRAMES_IN_FLIGHT];
         PipelineHandle              pipelines[3]            = {};   // opaque, MASK, BLEND
         PipelineHandle              pointPipeline           = {};   // the point run's (passes/points.slang)
+        PipelineHandle              glyphPipeline           = {};
         InstanceOwners              owners;
         std::vector<uint32_t>       texels;                         // scratch: a slot's copied ids then positions
         std::vector<PickSample>     samples;                        // scratch

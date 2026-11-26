@@ -72,6 +72,7 @@ namespace rasm
         uint32_t            firstPoint       = 0;        // a point cloud chunk's place in the point pool, in 8 B units
         uint32_t            pointUnits       = 0;
         uint32_t            pointCount       = 0;        // 0: not a point cloud chunk
+        uint32_t            glyphCount       = 0;
         uint32_t            geometryIndex    = 0;
         bool                allocated        = false;    // it holds ranges of the geometry pool, freed with the mesh
         glm::vec3           boundsCenter     = glm::vec3(0.0f);
@@ -107,6 +108,8 @@ namespace rasm
         std::vector<TextureHandle>  ownedTextures;
         std::vector<MeshLabel>      labels;             // its labels, each a slot of every entity drawn with it
         std::vector<uint16_t>       pointOrder;         // a point cloud chunk's: each drawn point's index in its PointCloudChunkDesc
+        MeshHandle                  glyphShape;
+        uint32_t                    glyphChunks = 0;
         uint32_t                    users       = 0;    // entities that use it
     };
 

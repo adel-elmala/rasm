@@ -12,12 +12,14 @@ static const uint   PICK_SKIP_VECTORS   = 1 << 3;
 static const uint   PICK_SKIP_LABELS    = 1 << 4;
 static const uint   PICK_SKIP_OVERLAYS  = 1 << 5;
 static const uint   PICK_SKIP_POINTS    = 1 << 6;
+static const uint   PICK_SKIP_GLYPHS    = 1 << 7;
 static const uint   PICK_HIT_FEATURE    = 1 << 0;
 static const uint   PICK_HIT_LABEL      = 1 << 1;
 static const uint   PICK_HIT_OVERLAY    = 1 << 2;
 static const uint   PICK_HIT_TERRAIN    = 1 << 3;
 static const uint   PICK_HIT_BACK_FACE  = 1 << 4;
 static const uint   PICK_HIT_POINT      = 1 << 5;
+static const uint   PICK_HIT_GLYPH      = 1 << 6;
 
 // A pick's draws carry its PICK_SKIP_* mask in the low byte of the push constant's argument, and its minAlpha in 1/255
 // steps above it (picking.cpp).

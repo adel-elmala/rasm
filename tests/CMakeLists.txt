@@ -50,6 +50,7 @@ add_executable(rasm_tests
             "pointCloudTests.cpp"
             "pointCloudOctreeTests.cpp"
             "pointCloudLoadTests.cpp"
+            "glyphsTests.cpp"
             "tileResidencyTests.cpp"
             "transformTests.cpp"
             "uiTests.cpp"
