@@ -157,6 +157,7 @@ def declare(lib):
         "rasm_get_light_position_d": (c_int32, [c_void_p, Handle, POINTER(DVec3)]),
         "rasm_set_light_position_d": (c_int32, [c_void_p, Handle, POINTER(DVec3)]),
         "rasm_to_render_position": (Vec3, [DVec3, DVec3]),
+        "rasm_get_glyph_orientation": (Vec4, [Vec3]),
     }
     for name, (restype, argtypes) in signatures.items():
         function = getattr(lib, name)
@@ -281,6 +282,9 @@ def main():
               "rasm_get_light's position + position_d is the double", lib)
         render = lib.rasm_to_render_position(lamp_at, eye_far.position)
         check((render.x, render.y, render.z) == (1.0, 0.0, -1.0), f"rasm_to_render_position, got {render.x} {render.y} {render.z}", lib)
+        # A struct passed and returned by value: +Y turned to +X is a quarter turn about -Z.
+        turn = lib.rasm_get_glyph_orientation(Vec3(1.0, 0.0, 0.0))
+        check(abs(turn.z + 0.70710678) < 1e-6 and abs(turn.w - 0.70710678) < 1e-6, f"rasm_get_glyph_orientation, got {turn.x} {turn.y} {turn.z} {turn.w}", lib)
 
         # Every element has the size of the first: the library steps through the array by it.
         views = (View * 2)()

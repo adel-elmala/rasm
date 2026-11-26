@@ -148,6 +148,7 @@ namespace rasm::c
         static_assert(RASM_MATERIAL_TYPE_TERRAIN == asNumber(MaterialType::TERRAIN));
         static_assert(RASM_MATERIAL_TYPE_VECTOR == asNumber(MaterialType::VECTOR));
         static_assert(RASM_MATERIAL_TYPE_POINTS == asNumber(MaterialType::POINTS));
+        static_assert(RASM_MATERIAL_TYPE_GLYPHS == asNumber(MaterialType::GLYPHS));
         static_assert(RASM_POINT_SHAPE_SQUARE == asNumber(PointShape::SQUARE));
         static_assert(RASM_POINT_SHAPE_ROUND == asNumber(PointShape::ROUND));
         static_assert(RASM_POINT_SHAPE_SPHERE == asNumber(PointShape::SPHERE));
@@ -778,6 +779,10 @@ namespace rasm::c
         result.vector = toCpp(material.vector);
         result.vector.font = toCpp(material.font);
         result.points = toCpp(material.points);
+        result.glyphs = {.colorMode = static_cast<PointColorMode>(material.glyphs.color_mode), .colormap = toCpp(material.glyphs.colormap), .range = toCpp(material.glyphs.range)};
+        result.vector.colorMode = static_cast<PointColorMode>(material.vector_colors.color_mode);
+        result.vector.colormap = toCpp(material.vector_colors.colormap);
+        result.vector.range = toCpp(material.vector_colors.range);
         return result;
     }
 
@@ -800,6 +805,8 @@ namespace rasm::c
         result.vector = toC(material.vector);
         result.font = toC(material.vector.font);
         result.points = toC(material.points);
+        result.glyphs = {.color_mode = asNumber(material.glyphs.colorMode), .colormap = toC(material.glyphs.colormap), .range = toC(material.glyphs.range)};
+        result.vector_colors = {.color_mode = asNumber(material.vector.colorMode), .colormap = toC(material.vector.colormap), .range = toC(material.vector.range)};
         return result;
     }
 
@@ -839,10 +846,20 @@ namespace rasm::c
                 .shape = static_cast<PointShape>(points.shape),
                 .colorMode = static_cast<PointColorMode>(points.color_mode),
                 .colormap = toCpp(points.colormap),
-                .range = {.min = points.range.min, .max = points.range.max, .log = points.range.log != 0, .clamp = points.range.clamp != 0},
+                .range = toCpp(points.range),
                 .density = points.density,
                 .sizeMode = static_cast<PointSizeMode>(points.size_mode),
                 .maxSize = points.max_size};
+    }
+
+    ScalarRange toCpp(const rasm_scalar_range &range)
+    {
+        return {.min = range.min, .max = range.max, .log = range.log != 0, .clamp = range.clamp != 0};
+    }
+
+    rasm_scalar_range toC(const ScalarRange &range)
+    {
+        return {.min = range.min, .max = range.max, .log = range.log ? RASM_TRUE : RASM_FALSE, .clamp = range.clamp ? RASM_TRUE : RASM_FALSE};
     }
 
     rasm_point_material toC(const PointMaterial &points)
@@ -853,7 +870,7 @@ namespace rasm::c
                 .shape = asNumber(points.shape),
                 .color_mode = asNumber(points.colorMode),
                 .colormap = toC(points.colormap),
-                .range = {.min = points.range.min, .max = points.range.max, .log = points.range.log ? RASM_TRUE : RASM_FALSE, .clamp = points.range.clamp ? RASM_TRUE : RASM_FALSE},
+                .range = toC(points.range),
                 .density = points.density,
                 .size_mode = asNumber(points.sizeMode),
                 .max_size = points.maxSize};
@@ -861,7 +878,9 @@ namespace rasm::c
 
     bool checkMaterialDesc(const rasm_material_desc &desc, const char *function)
     {
-        return checkEnum(desc.type, RASM_MATERIAL_TYPE_POINTS + 1, function, "desc->type") &&
+        return checkEnum(desc.type, RASM_MATERIAL_TYPE_GLYPHS + 1, function, "desc->type") &&
+               checkEnum(desc.glyphs.color_mode, RASM_POINT_COLOR_MODE_SCALAR + 1, function, "desc->glyphs.color_mode") &&
+               checkEnum(desc.vector_colors.color_mode, RASM_POINT_COLOR_MODE_SCALAR + 1, function, "desc->vector_colors.color_mode") &&
                checkEnum(desc.points.size_unit, RASM_VECTOR_UNIT_METRES + 1, function, "desc->points.size_unit") &&
                checkEnum(desc.points.shape, RASM_POINT_SHAPE_SPHERE + 1, function, "desc->points.shape") &&
                checkEnum(desc.points.color_mode, RASM_POINT_COLOR_MODE_SCALAR + 1, function, "desc->points.color_mode") &&
@@ -1161,7 +1180,9 @@ namespace rasm::c
                                    .meshlet_draws_whole = stats.meshletDrawsWhole,
                                    .lights_global = stats.lightsGlobal,
                                    .lights_visible = stats.lightsVisible,
-                                   .lights_dropped = stats.lightsDropped};
+                                   .lights_dropped = stats.lightsDropped,
+                                   .glyphs = stats.glyphs,
+                                   .glyphs_visible = stats.glyphsVisible};
         std::copy(std::begin(stats.drawsPerLod), std::end(stats.drawsPerLod), std::begin(result.draws_per_lod));
         return result;
     }

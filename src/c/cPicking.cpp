@@ -22,6 +22,8 @@ namespace
     static_assert(RASM_PICK_SKIP_POINTS == PICK_SKIP_POINTS);
     static_assert(RASM_PICK_SKIP_ALL == PICK_SKIP_ALL);
     static_assert(RASM_PICK_HIT_POINT == PICK_HIT_POINT);
+    static_assert(RASM_PICK_SKIP_GLYPHS == PICK_SKIP_GLYPHS);
+    static_assert(RASM_PICK_HIT_GLYPH == PICK_HIT_GLYPH);
     static_assert(RASM_PICK_HIT_FEATURE == PICK_HIT_FEATURE);
     static_assert(RASM_PICK_HIT_LABEL == PICK_HIT_LABEL);
     static_assert(RASM_PICK_HIT_OVERLAY == PICK_HIT_OVERLAY);
