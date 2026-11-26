@@ -230,7 +230,7 @@ Known issues and design notes are tracked in [`docs/code_review.md`](docs/code_r
 
 ## Contributing
 
-Contributions are welcome. Before you open a pull request:
+Contributions are welcome, and so are test reports from Linux, AMD and Intel GPUs. Read [`CONTRIBUTING.md`](CONTRIBUTING.md) for how to help, and follow the [Code of Conduct](CODE_OF_CONDUCT.md). Questions go to [GitHub Discussions](https://github.com/adel-elmala/rasm/discussions). Before you open a pull request:
 
 1. Read [`docs/coding_style.md`](docs/coding_style.md) and the code rules in [`CLAUDE.md`](CLAUDE.md), and check [`docs/code_review.md`](docs/code_review.md) for known issues.
 2. Keep the build warning-free, and run `clang-format` on the files you change.
@@ -238,6 +238,8 @@ Contributions are welcome. Before you open a pull request:
 4. Update the documentation pages that describe the code you changed.
 
 CI builds and tests every pull request on Windows and macOS. On Windows it also renders a set of scenes on a software GPU and compares them with reference images.
+
+**Support RASM:** if RASM is useful to you, you can sponsor its development through [GitHub Sponsors](https://github.com/sponsors/adel-elmala).
 
 ## Acknowledgements
 
