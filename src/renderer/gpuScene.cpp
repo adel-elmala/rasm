@@ -831,7 +831,7 @@ namespace rasm
             uint8_t &storedPoints = gpuScene->instancePoints[state.firstInstance + i];
             BlendMethod &storedBlendMethod = gpuScene->instanceBlendMethods[state.firstInstance + i];
             const BlendMethod blendMethod = getBlendMethod(material, ctx.hasIndependentBlend());
-            if (blendMethod != material.blendMethod && material.alphaMode == AlphaMode::BLEND && !ctx.hasIndependentBlend() && !gpuScene->blendMethodLogged)
+            if (!ctx.hasIndependentBlend() && getBlendMethod(material, true) != BlendMethod::SORTED && !gpuScene->blendMethodLogged)
             {
                 spdlog::warn("This GPU has no independentBlend feature: weighted and additive materials are drawn sorted.");
                 gpuScene->blendMethodLogged = true;

@@ -171,8 +171,9 @@ namespace rasm
             updated.alphaMode = AlphaMode::BLEND;
             updated.doubleSided = true;
         }
-        // The type decides whether a point cloud or glyph chunk is drawn by the point run.
-        const bool runChanged = materialRef.doubleSided != updated.doubleSided || materialRef.alphaMode != updated.alphaMode || materialRef.type != updated.type;
+        // The type decides whether a point cloud or glyph chunk is drawn by the point run, the blend method which BLEND run.
+        const bool runChanged = materialRef.doubleSided != updated.doubleSided || materialRef.alphaMode != updated.alphaMode || materialRef.type != updated.type ||
+                                materialRef.blendMethod != updated.blendMethod;
         materialRef = updated;
         materialRef.handle = material;
         materialRef.terrain.heights = heights;

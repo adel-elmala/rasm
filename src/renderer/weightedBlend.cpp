@@ -135,14 +135,22 @@ namespace rasm
         sceneData.weightedAccum = INVALID_TEXTURE_INDEX;
         sceneData.weightedCoverage = INVALID_TEXTURE_INDEX;
         sceneData.weightedSamples = 1;
+        // A depth-only view names its additive run only so that culling leaves it out: it casts no shadow.
         if (view.depthOnly)
+        {
+            sceneData.additiveRun = view.additiveRun;
             return;
+        }
         // Culling keeps them for the late phase, like the blend run, or for the only one.
         const bool late = view.late || view.hizLevelCount == 0;
         sceneData.weightedRun = late ? view.weightedRun : gfx::MAX_DRAW_RUNS;
         sceneData.additiveRun = late ? view.additiveRun : gfx::MAX_DRAW_RUNS;
         if (view.debugView != DebugView::NONE)
+        {
+            if (view.weightedRange[frame].isValid())
+                ctx.fillBuffer(view.weightedRange[frame], EMPTY_RANGE, sizeof(EMPTY_RANGE));
             return;
+        }
 
         // The strings, the path and the target's desc are made only while something is missing: a steady frame makes no
         // heap allocation (P27).
@@ -159,8 +167,14 @@ namespace rasm
 
         const bool weightedRun = view.weightedRun < gfx::MAX_DRAW_RUNS;
         const bool weightedGlyphs = view.drawGlyphs && drawList.weightedGlyphChunks > 0;
+        // A frame that measures nothing still empties its slot's words, so the next weighted frame of the slot reads only
+        // what its own cull wrote.
         if (!weightedRun && !weightedGlyphs)
+        {
+            if (view.weightedRange[frame].isValid())
+                ctx.fillBuffer(view.weightedRange[frame], EMPTY_RANGE, sizeof(EMPTY_RANGE));
             return;
+        }
         // With motion (TAA) the coverage shares a target with the motion sums, as its alpha: two targets, not three.
         const bool motion = sceneTarget.colorCount > 1;
         const Format colorFormats[MAX_COLOR_ATTACHMENTS] = {WEIGHTED_ACCUM_FORMAT, motion ? WEIGHTED_MOTION_FORMAT : WEIGHTED_COVERAGE_FORMAT};

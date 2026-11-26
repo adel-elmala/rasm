@@ -151,8 +151,8 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
         DrawInfo draw   = scene->allDrawsPtr[drawIndex];
         Sphere sphere   = getWorldSphere(scene, draw);
         uint vector     = getVectorFlags(scene, draw);
-        // Vector features and point cloud chunks cast no shadow.
-        bool inFrustum  = isInFrustum(scene, sphere) && !((vector != 0 || points) && (scene->viewFlags & VIEW_DEPTH_ONLY) != 0);
+        // Vector features, point cloud chunks and additive draws cast no shadow.
+        bool inFrustum  = isInFrustum(scene, sphere) && !((vector != 0 || points || group.run == scene->additiveRun) && (scene->viewFlags & VIEW_DEPTH_ONLY) != 0);
         bool candidate  = false;
         uint earlyFlags = 0;                            // late phase: what the early phase drew of it
         if (scene->hizLevelCount == 0)
