@@ -33,7 +33,7 @@ MAIN = "main"
 CODE_DIRS = ("src", "include", "shaders", "examples", "tests", "cmake", "tools")
 CODE_EXT = (".h", ".hpp", ".cpp", ".slang", ".txt", ".cmake", ".in", ".bat", ".json")
 # Changes to these never make a page stale on their own, unless a page lists them in rasm-sources.
-IGNORED = ("docs/", ".claude/", ".github/", "assets/", "ports/", "README.md", "CLAUDE.md", "LICENSE", ".gitignore", ".clang-format")
+IGNORED = ("docs/", ".claude/", ".github/", "assets/", "ports/", "README.md", "CLAUDE.md", "CONTRIBUTING.md", "CODE_OF_CONDUCT.md", "SECURITY.md", "CHANGELOG.md", "LICENSE", ".gitignore", ".clang-format")
 
 
 def git(*args):
