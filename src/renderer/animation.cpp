@@ -319,7 +319,7 @@ namespace rasm
             spdlog::error("Failed to create the morph weight table of RendererConfig::maxMorphWeights = {} rows (4 B each, one copy per frame slot).", config.maxMorphWeights);
             return false;
         }
-        animation.pool = ctx.createBuffer({.name = "Animation Pool", .usage = BufferUsage::STORAGE, .size = std::max<uint64_t>(config.animationPoolBytes, 16)});
+        animation.pool = ctx.createBuffer({.name = "Animation Pool", .usage = BufferUsage::STORAGE, .size = std::max<uint64_t>(config.animationPoolBytes, 16), .staged = true});
         animation.pose = ctx.createBuffer({.name = "Animation Pose Buffer", .usage = BufferUsage::STORAGE, .size = FIRST_POSE_CAPACITY * POSE_BYTES_PER_NODE});
         animation.poseCapacity = FIRST_POSE_CAPACITY;
         animation.transformCapacity = FIRST_TRANSFORM_CAPACITY;

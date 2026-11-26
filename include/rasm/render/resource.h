@@ -105,6 +105,7 @@ namespace rasm
         uint64_t                    size                            = 0;
         bool                        hostVisible                     = false;
         bool                        hostReadable                    = false;    // host-visible, in cached memory, for RenderContext::readBuffer
+        bool                        staged                          = false;    // filled once and big: never mapped on a discrete GPU, filled through the staging ring (P35)
 
         bool                        operator==(const BufferDesc&) const = default;
     };

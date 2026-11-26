@@ -83,15 +83,15 @@ namespace rasm
         meshletDataRanges.reset(ctx.hasMeshShaders() ? config.geometryPoolMeshletData : 0);
         pointRanges.reset(config.geometryPoolPoints);
         subMeshRows.reset(config.geometryPoolSubMeshes);
-        vertices = ctx.createBuffer({.name = "Geometry Vertex Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(config.geometryPoolVertices) * sizeof(Vertex)});
-        indices = ctx.createBuffer({.name = "Geometry Index Pool", .usage = BufferUsage::INDEX, .size = static_cast<uint64_t>(config.geometryPoolIndices) * sizeof(uint32_t)});
-        colors = ctx.createBuffer({.name = "Geometry Color Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(config.geometryPoolColors) * sizeof(uint32_t)});
-        skins = ctx.createBuffer({.name = "Geometry Skin Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(config.geometryPoolSkins) * sizeof(SkinVertex)});
-        morphs = ctx.createBuffer({.name = "Geometry Morph Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(config.geometryPoolMorphs) * sizeof(MorphDelta)});
-        meshlets = ctx.createBuffer({.name = "Geometry Meshlet Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(config.geometryPoolMeshlets) * sizeof(gfx::GeometryMeshlet)});
+        vertices = ctx.createBuffer({.name = "Geometry Vertex Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(config.geometryPoolVertices) * sizeof(Vertex), .staged = true});
+        indices = ctx.createBuffer({.name = "Geometry Index Pool", .usage = BufferUsage::INDEX, .size = static_cast<uint64_t>(config.geometryPoolIndices) * sizeof(uint32_t), .staged = true});
+        colors = ctx.createBuffer({.name = "Geometry Color Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(config.geometryPoolColors) * sizeof(uint32_t), .staged = true});
+        skins = ctx.createBuffer({.name = "Geometry Skin Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(config.geometryPoolSkins) * sizeof(SkinVertex), .staged = true});
+        morphs = ctx.createBuffer({.name = "Geometry Morph Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(config.geometryPoolMorphs) * sizeof(MorphDelta), .staged = true});
+        meshlets = ctx.createBuffer({.name = "Geometry Meshlet Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(config.geometryPoolMeshlets) * sizeof(gfx::GeometryMeshlet), .staged = true});
         if (meshletDataRanges.capacity() > 0)
         {
-            meshletData = ctx.createBuffer({.name = "Geometry Meshlet Data Pool", .usage = BufferUsage::STORAGE, .size = meshletDataRanges.capacity() * sizeof(uint32_t)});
+            meshletData = ctx.createBuffer({.name = "Geometry Meshlet Data Pool", .usage = BufferUsage::STORAGE, .size = meshletDataRanges.capacity() * sizeof(uint32_t), .staged = true});
             if (!meshletData.isValid())
             {
                 spdlog::error("Failed to create the meshlet data pool.");
@@ -388,7 +388,7 @@ namespace rasm
         // The point pool is made with the first chunk, so a renderer that draws no point cloud has none.
         if (!points.isValid())
         {
-            points = ctx.createBuffer({.name = "Geometry Point Pool", .usage = BufferUsage::STORAGE, .size = pointRanges.capacity() * 2 * sizeof(uint32_t)});
+            points = ctx.createBuffer({.name = "Geometry Point Pool", .usage = BufferUsage::STORAGE, .size = pointRanges.capacity() * 2 * sizeof(uint32_t), .staged = true});
             if (!points.isValid())
             {
                 spdlog::error("Failed to create the point pool of {} MiB (RendererConfig::geometryPoolPoints).", pointRanges.capacity() * 2 * sizeof(uint32_t) >> 20);

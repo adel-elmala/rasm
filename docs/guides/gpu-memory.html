@@ -787,7 +787,7 @@
 <p>RASM uses VMA for all memory. A buffer is one of three kinds, set by two flags in <code>BufferDesc</code>. <code>RenderContext::fillBuffer</code> then picks path A or B of section 3 by itself: a mapped buffer gets a <var>memcpy</var>, any other buffer goes through the staging ring in <code>UploadManager</code>.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 390" role="img" aria-label="hostReadable asks VMA for random host access and gets cached host memory, mapped. hostVisible asks for sequential write and gets host-visible memory, mapped. The default asks for sequential write with transfer allowed instead: memory that is both device-local and host-visible when there is some, mapped, or else device-local only, filled through the staging ring. A buffer of 16 MiB or more with neither flag, on a discrete GPU, asks for no host access: device-local only, not mapped, filled through the staging ring.">
+  <svg viewBox="0 0 760 390" role="img" aria-label="hostReadable asks VMA for random host access and gets cached host memory, mapped. hostVisible asks for sequential write and gets host-visible memory, mapped. The default asks for sequential write with transfer allowed instead: memory that is both device-local and host-visible when there is some, mapped, or else device-local only, filled through the staging ring. A staged buffer (staged = true, neither other flag) on a discrete GPU asks for no host access: device-local only, not mapped, filled through the staging ring.">
     <text x="120" y="20" class="mid title">BufferDesc</text>
     <text x="370" y="20" class="mid title">VMA flags</text>
     <text x="630" y="20" class="mid title">Memory you get</text>
@@ -819,7 +819,7 @@
     <rect x="20" y="174" width="200" height="126" rx="6" class="box"/>
     <text x="120" y="232" class="mid">neither flag</text>
     <text x="120" y="252" class="mid small">the default</text>
-    <text x="120" y="270" class="mid small">(under 16 MiB, or no discrete GPU)</text>
+    <text x="120" y="270" class="mid small">(or staged, without a discrete GPU)</text>
     <line x1="220" y1="237" x2="248" y2="237" class="arrow" marker-end="url(#ah)"/>
     <rect x="250" y="174" width="240" height="126" rx="6" class="box"/>
     <text x="370" y="214" class="mid mono small">HOST_ACCESS_SEQUENTIAL_WRITE</text>
@@ -835,8 +835,8 @@
     <text x="630" y="287" class="mid small">not mapped → staging ring</text>
 
     <rect x="20" y="314" width="200" height="56" rx="6" class="box"/>
-    <text x="120" y="337" class="mid">neither flag, 16 MiB or more</text>
-    <text x="120" y="357" class="mid small">on a discrete GPU</text>
+    <text x="120" y="337" class="mid mono">staged = true</text>
+    <text x="120" y="357" class="mid small">filled once, on a discrete GPU</text>
     <line x1="220" y1="342" x2="248" y2="342" class="arrow" marker-end="url(#ah)"/>
     <rect x="250" y="314" width="240" height="56" rx="6" class="box"/>
     <text x="370" y="337" class="mid small">no host access</text>
@@ -846,7 +846,7 @@
     <text x="630" y="337" class="mid">device-local only</text>
     <text x="630" y="357" class="mid small">not mapped → staging ring</text>
   </svg>
-  <figcaption>The last row keeps big buffers out of host-visible memory, whose clear held back the first frame (<a href="#cleared">section 2</a>, P35): the geometry pools, about 280 MiB. <code>Buffer::mapped</code> says which case you got: it is true when VMA returned a mapped pointer. <code>hostReadable</code> replaces the other flags, so it wins over <code>hostVisible</code>.</figcaption>
+  <figcaption>The last row keeps big buffers out of host-visible memory, whose clear held back the first frame (<a href="#cleared">section 2</a>, P35): the geometry pools (about 280 MiB) and the animation pool are staged. <code>Buffer::mapped</code> says which case you got: it is true when VMA returned a mapped pointer. <code>hostReadable</code> replaces the other flags, so it wins over <code>hostVisible</code>.</figcaption>
 </figure>
 
 <figure class="diagram">
@@ -876,7 +876,7 @@
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Picking memory types</td><td>ask for flags, never hard-code types</td><td>VMA with <code>VMA_MEMORY_USAGE_AUTO</code> and host-access flags (<code>VulkanDevice::createBuffer</code>). The allocator is made with the memory-budget and device-address flags.</td></tr>
-  <tr><td>New memory is cleared</td><td>big buffers the CPU does not map in device-local-only memory, made at startup</td><td>On a discrete GPU a buffer of <code>UNMAPPED_BUFFER_BYTES</code> = 16 MiB or more with neither flag asks for no host access. Before (P35), the geometry pools were in resizable-BAR memory: about 280 MiB made the first frame's fence wait up to 50 ms on an RTX 3060, and now about 1 ms. The pools, the scene tables and the staging rings are made when the renderer starts. Smaller buffers still come out of host-visible VMA blocks where all of video memory is host-visible.</td></tr>
+  <tr><td>New memory is cleared</td><td>big buffers the CPU does not map in device-local-only memory, made at startup</td><td>The pools the CPU fills once are <code>BufferDesc::staged</code>: the geometry pools and the animation pool. On a discrete GPU they ask for no host access. Before (P35) they were in resizable-BAR memory: about 280 MiB made the first frame's fence wait up to 50 ms on an RTX 3060, and now about 1 ms. They are made when the renderer starts, except the point pool, which comes with the first point cloud. Other buffers stay mappable where all of video memory is host-visible, so the scene tables are written at once each frame; they come out of host-visible VMA blocks, and a new block is cleared too.</td></tr>
   <tr><td>Sub-allocation</td><td>a few blocks, many buffers</td><td>VMA does it for buffers and sampled textures, which ask for no host access. Attachments and storage textures each get a dedicated allocation (<code>VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT</code>), except transient render targets: the render graph places them in shared heaps, and two that are never used at the same time share bytes (<a href="memory-aliasing.html">Transient memory and aliasing</a>).</td></tr>
   <tr><td>Staging ring</td><td>one buffer, <var>head</var>/<var>tail</var>, a fence per batch</td><td>The same, in <code>UploadManager</code>: <code>RING_SIZE</code> = 64 MiB, chunks of at most <code>MAX_CHUNK_SIZE</code> = 16 MiB, counters that never wrap, one timeline fence. The stepper in section 4 is RASM's real behaviour. A ring is a <code>BufferUsage::TRANSFER</code> buffer: system memory, or video memory where all of it is host-visible (resizable BAR), never a small BAR heap (P10). With a transfer queue a second ring serves the loads.</td></tr>
   <tr><td>Batches</td><td>one per frame, before the frame</td><td>Two command buffers take turns (<code>batches</code>). <code>RenderContext::submit</code> calls <code>flush</code> before every submit. <code>flush</code> also runs when the ring is full, and when a write overlaps bytes the batch already writes to the same buffer.</td></tr>

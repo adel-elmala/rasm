@@ -418,7 +418,7 @@ bool endCommandBuffer(const CommandBufferHandle&amp; commandBuffer);</pre>
 
     <rect x="210" y="74" width="160" height="54" rx="6" class="box"/>
     <text x="290" y="96" class="mid title">Mapped memory?</text>
-    <text x="290" y="115" class="mid small">hostVisible, ReBAR</text>
+    <text x="290" y="115" class="mid small">hostVisible, ReBAR, not staged</text>
 
     <path d="M370,90 L398,48" class="arrow cpu" marker-end="url(#ah-cpu)"/>
     <text x="352" y="66" class="small">yes</text>
@@ -448,6 +448,7 @@ bool endCommandBuffer(const CommandBufferHandle&amp; commandBuffer);</pre>
 <table>
   <tr><th><code>BufferDesc</code> flags</th><th>Memory</th><th><code>fillBuffer</code></th><th><code>readBuffer</code></th></tr>
   <tr><td>none (default)</td><td>device-local; mapped too when the GPU has ReBAR or shared memory</td><td>staging ring, or at once when mapped</td><td>refused</td></tr>
+  <tr><td><code>staged</code></td><td>device-local only on a discrete GPU; as the default elsewhere</td><td>staging ring (at once when mapped)</td><td>refused</td></tr>
   <tr><td><code>hostVisible</code></td><td>CPU-writable, mapped</td><td>at once</td><td>refused</td></tr>
   <tr><td><code>hostReadable</code></td><td>CPU-cached, mapped</td><td>at once</td><td>yes</td></tr>
 </table>
@@ -476,6 +477,7 @@ bool endCommandBuffer(const CommandBufferHandle&amp; commandBuffer);</pre>
     uint64_t    size         = 0;
     bool        hostVisible  = false;
     bool        hostReadable = false;
+    bool        staged       = false;
 
     bool operator==(const BufferDesc&amp;) const = default;
 };</pre>
@@ -486,6 +488,7 @@ bool endCommandBuffer(const CommandBufferHandle&amp; commandBuffer);</pre>
       <dt>size</dt><dd>Bytes, greater than 0.</dd>
       <dt>hostVisible</dt><dd>Put it in memory the CPU writes directly. For data you change often from the CPU, with one buffer per frame slot.</dd>
       <dt>hostReadable</dt><dd>Put it in cached memory the CPU reads, for <code>readBuffer</code>.</dd>
+      <dt>staged</dt><dd>A big buffer the CPU fills once, like a geometry pool. On a discrete GPU it is never mapped: it is in device-local-only memory and <code>fillBuffer</code> goes through the staging ring. New video memory is cleared before the next submit runs, much more slowly when it is host-visible (<a href="../guides/gpu-memory.html#cleared">GPU memory</a>, P35). Ignored with <code>hostVisible</code> or <code>hostReadable</code>.</dd>
     </dl>
   </div>
 </div>

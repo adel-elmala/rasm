@@ -23,9 +23,6 @@ namespace rasm::rhi
                                                                           .viewFormatCount = 2,
                                                                           .pViewFormats = ENCODED_VIEW_FORMATS};
 
-        // From this size a buffer the CPU does not read is not mapped on a discrete GPU (P35).
-        constexpr VkDeviceSize UNMAPPED_BUFFER_BYTES = 16ull << 20;
-
 #if defined(_WIN32)
         constexpr const char *LOADER_NAME = "vulkan-1.dll";
 #elif defined(__APPLE__)
@@ -746,7 +743,8 @@ namespace rasm::rhi
         }
 
         // P1: buffers that aren't hostVisible prefer device-local memory, and are mapped only when that memory is
-        // also host-visible (ReBAR, integrated GPUs). Otherwise pMappedData stays null and they are filled by staging.
+        // also host-visible (ReBAR, integrated GPUs) and the buffer is not staged. Otherwise pMappedData stays null and
+        // they are filled by staging.
         VmaAllocationCreateInfo allocCI = {};
         allocCI.usage = VMA_MEMORY_USAGE_AUTO;
         allocCI.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
@@ -756,8 +754,8 @@ namespace rasm::rhi
             allocCI.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
         // New video memory is cleared before the device's next submit runs: about 0.19 ms a MiB when it is host-visible
         // (resizable BAR) and 0.024 ms a MiB when it is not (RTX 3060, Windows). Mapped, the geometry pools held back
-        // the first frame by up to 50 ms (P35), so a large buffer is filled through the staging ring instead.
-        else if (!desc.hostVisible && physicalDevice.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU && desc.size >= UNMAPPED_BUFFER_BYTES)
+        // the first frame by up to 50 ms (P35), so a staged buffer asks for device-local-only memory.
+        else if (desc.staged && !desc.hostVisible && physicalDevice.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
             allocCI.flags = 0;
         else if (!desc.hostVisible)
             allocCI.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT;
