@@ -192,6 +192,8 @@ Next steps, in order:
 
 ### Low severity
 
+**B37 — A pick of a point whose chunk is gone keeps `PICK_HIT_FEATURE`.** In `readPicks`, the point branch clears `PICK_HIT_FEATURE` when the mesh's `pointOrder` cannot map the index (the chunk's mesh destroyed while the pick was in flight), but the next line, `hit.flags = group.nearest.flags` ([picking.cpp:699](../src/renderer/picking.cpp#L699)), writes the flags again: the hit says it has a feature, and the feature is 0, so an application selects the chunk's point 0. Fix direction: assign `group.nearest.flags` first, then mask it. *Confirmed* by reading, from the glyph work's review.
+
 **B11** — *Fixed 2026-10-31:* `submit` builds one wait stage per wait semaphore. The original finding follows. `VulkanContext::submit` passes one `waitStages` entry while `waitSemaphoreCount = waitSemaphores.size()` ([vulkanContext.cpp:1120-1138](../src/rhi/vulkan/vulkanContext.cpp#L1120-L1138)). Waiting on more than one semaphore reads past the array. The bug is latent today, because callers pass 0 or 1 semaphores.
 
 **B12** — *Fixed 2026-10-31:* the SPIR-V options are now a static array. The original finding follows. `ShaderCompiler::getTargetDesc` allocates `new slang::CompilerOptionEntry[1]` and never frees it ([shaderCompiler.cpp:456-458](../src/renderer/shaderCompiler.cpp#L456-L458)).

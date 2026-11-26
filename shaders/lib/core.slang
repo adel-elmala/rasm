@@ -569,13 +569,16 @@ float4 getVertexColor(SceneData *scene, uint geometryIndex, uint vertexIndex)
 }
 
 // A data line's vertex (a VECTOR material with a colormap): its scalar, from the color stream's word, as (value, 0, 0, -1)
-// for the fragment stage to map (rasm.slang, getVectorColor); white for a mesh without colors.
+// for the fragment stage to map (rasm.slang, getVectorColor); white for a mesh without colors and a vertex without a value.
 float4 getVertexScalar(SceneData *scene, uint geometryIndex, uint vertexIndex)
 {
     int colorOffset = scene->geometryPtr[geometryIndex].colorOffset;
     if (colorOffset < 0)
         return float4(1.0);
-    return float4(asfloat(scene->colorsPtr[uint(colorOffset) + vertexIndex]), 0.0, 0.0, -1.0);
+    // A feature without values in the same mesh (a label, a polygon, a line added without them) holds white: it keeps
+    // the material's color.
+    uint word = scene->colorsPtr[uint(colorOffset) + vertexIndex];
+    return word == 0xFFFFFFFF ? float4(1.0) : float4(asfloat(word), 0.0, 0.0, -1.0);
 }
 
 #if !defined(RASM_OWN_PUSH_CONSTANTS)

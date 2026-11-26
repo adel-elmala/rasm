@@ -1165,6 +1165,10 @@ namespace
         }
         rasm::VectorGeometry geometry;
         rasm::addVectorLines(geometry, glm::dvec3(0.0), points.data(), sizes.data(), static_cast<uint32_t>(sizes.size()), {}, {}, nullptr, nullptr, lineSpeeds.data());
+        // A line without values in the same mesh keeps the material's color (white), not the colormap's.
+        const glm::dvec3 plain[2] = {{-2.8, 1.55, -0.2}, {-0.8, 1.55, -0.2}};
+        const uint32_t plainSize = 2;
+        rasm::addVectorLines(geometry, glm::dvec3(0.0), plain, &plainSize, 1);
         const rasm::MaterialHandle lineStyle = engine.createMaterial(rasm::MaterialType::VECTOR);
         values = engine.getMaterial(lineStyle);
         values.vector.width = 3.0f;

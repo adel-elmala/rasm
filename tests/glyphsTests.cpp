@@ -119,6 +119,10 @@ TEST_CASE("buildGlyphChunk refuses a chunk it cannot draw")
     CHECK_FALSE(rasm::buildGlyphChunk({.shape = SHAPE, .positions = notFinite, .count = 2}).isValid());
     const glm::quat zero[2] = {glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::quat(0.0f, 0.0f, 0.0f, 0.0f)};
     CHECK_FALSE(rasm::buildGlyphChunk({.shape = SHAPE, .positions = positions, .orientations = zero, .count = 2}).isValid());
+    const glm::vec3 mirrored[2] = {{1.0f, 1.0f, 1.0f}, {-1.0f, 1.0f, 1.0f}};
+    CHECK_FALSE(rasm::buildGlyphChunk({.shape = SHAPE, .positions = positions, .scales = mirrored, .count = 2}).isValid());
+    const glm::vec3 flat[2] = {{1.0f, 1.0f, 1.0f}, {1.0f, 0.0f, 1.0f}};
+    CHECK_FALSE(rasm::buildGlyphChunk({.shape = SHAPE, .positions = positions, .scales = flat, .count = 2}).isValid());
     const glm::vec3 huge[2] = {{1.0f, 1.0f, 1.0f}, {1e5f, 1.0f, 1.0f}};
     CHECK_FALSE(rasm::buildGlyphChunk({.shape = SHAPE, .positions = positions, .scales = huge, .count = 2}).isValid());
     std::vector<glm::vec3> many(rasm::MAX_GLYPH_CHUNK_GLYPHS + 1, glm::vec3(0.0f));

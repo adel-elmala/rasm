@@ -777,7 +777,7 @@ namespace rasm::gfx
     static_assert(offsetof(SceneData, glyphListPtr) == 2352, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, glyphBatchCapacity) == 2364, "SceneData must match the shader's scalar layout");
     static_assert(sizeof(SceneData) == 2368, "SceneData must match the shader's scalar layout");
-    static_assert(sizeof(GlyphChunkHeader) == GLYPH_CHUNK_HEADER_UNITS * 8, "GlyphChunkHeader must match shaders/lib/glyphs.slang");
+    static_assert(sizeof(GlyphChunkHeader) == sizeof(uint64_t) * GLYPH_CHUNK_HEADER_UNITS, "GlyphChunkHeader must match shaders/lib/glyphs.slang");
     static_assert(sizeof(GlyphCullHeader) == 32, "GlyphCullHeader must match shaders/lib/core.slang");
     static_assert(offsetof(GlyphCullHeader, commandCount) == 16, "GlyphCullHeader must match shaders/lib/core.slang");
     static_assert(sizeof(GlyphChunkSlot) == 48, "GlyphChunkSlot must match shaders/lib/core.slang");

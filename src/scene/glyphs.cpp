@@ -215,10 +215,10 @@ namespace rasm
             const bool finite = isFinite(desc.positions[i]) && (desc.scalars == nullptr || std::isfinite(desc.scalars[i])) &&
                                 (desc.orientations == nullptr || (std::isfinite(desc.orientations[i].x) && std::isfinite(desc.orientations[i].y) && std::isfinite(desc.orientations[i].z) &&
                                                                   std::isfinite(desc.orientations[i].w) && glm::length(desc.orientations[i]) > 1e-6f)) &&
-                                (desc.scales == nullptr || isFinite(desc.scales[i]));
+                                (desc.scales == nullptr || (isFinite(desc.scales[i]) && desc.scales[i].x > 0.0f && desc.scales[i].y > 0.0f && desc.scales[i].z > 0.0f));
             if (!finite)
             {
-                spdlog::error("buildGlyphChunk: glyph {} is not finite (or its orientation is zero).", i);
+                spdlog::error("buildGlyphChunk: glyph {} is not finite, or its orientation is zero or a scale not above 0.", i);
                 return {};
             }
             if (desc.scales != nullptr)

@@ -164,9 +164,10 @@ namespace rasm
             meshPaths.resize(renderer->registry.meshHandles.size());
             meshPaths[handle.index] = path;
         }
-        // A retry keeps the count of the entities that already use the mesh.
+        // A retry keeps the count of the entities that already use the mesh, and of the glyph chunks drawn with it.
         const uint32_t users = renderer->registry.meshes[handle.index].users;
-        renderer->registry.meshes[handle.index] = Mesh{.users = users};
+        const uint32_t glyphChunks = renderer->registry.meshes[handle.index].glyphChunks;
+        renderer->registry.meshes[handle.index] = Mesh{.glyphChunks = glyphChunks, .users = users};
 
         // The workers read and decode the file and build the LODs and meshlets; the renderer's beginFrame uploads the result
         // (finishLoads). Until the file is parsed, its size stands for what it will hold.
