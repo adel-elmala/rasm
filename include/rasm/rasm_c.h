@@ -24,7 +24,7 @@
 
 // NOLINTBEGIN(readability-identifier-naming): C names, snake_case with the rasm_ prefix, as C APIs and their bindings expect
 #define RASM_C_API_VERSION_MAJOR    1
-#define RASM_C_API_VERSION_MINOR    12
+#define RASM_C_API_VERSION_MINOR    13
 #define RASM_C_API_VERSION          (((uint32_t)RASM_C_API_VERSION_MAJOR << 16) | (uint32_t)RASM_C_API_VERSION_MINOR)
 
 #if defined(_WIN32)
@@ -317,6 +317,7 @@ typedef struct rasm_renderer_config
     uint32_t                        max_bindless_textures;                     /* 1.3: sampled textures at once, 16384 by default, lowered to the device's limit */
     uint32_t                        geometry_pool_points;                      /* 1.10: point cloud chunks, 8 B units: a point takes 1 (1.5 with colors) */
     rasm_bool                       compute_points;                            /* 1.11: small points by the compute rasterizer (up to 6 pixels at a chunk's centre and 8 at its nearest point; 4 in an orthographic view, 2 under MSAA), where the GPU has 64-bit buffer atomics (RASM_TRUE by default) */
+    uint32_t                        shader_threads;                            /* 1.13: threads that compile shaders in the background; 0 (the default): half the hardware threads, at most 8. A cold shader cache costs about 100 MB a thread for about 1 s */
 } rasm_renderer_config;
 
 typedef struct rasm_asset_loader_config

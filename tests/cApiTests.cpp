@@ -862,6 +862,7 @@ TEST_CASE("the 1.11 config field starts from the C++ default, and the compute po
     rasm_renderer_config config;
     REQUIRE(rasm_renderer_config_init(&config, sizeof(config)) == RASM_OK);
     CHECK(config.compute_points == (rasm::RendererConfig{}.computePoints ? RASM_TRUE : RASM_FALSE));
+    CHECK(config.shader_threads == rasm::RendererConfig{}.shaderThreads);
     CHECK(rasm_set_compute_points(nullptr, RASM_FALSE) == RASM_ERROR_INVALID_ARGUMENT);
     CHECK(contains(rasm_get_last_error(), "renderer is NULL"));
     CHECK(rasm_get_compute_points(nullptr) == RASM_FALSE);

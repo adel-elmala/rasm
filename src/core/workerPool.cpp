@@ -1,4 +1,5 @@
 #include "core/workerPool.h"
+#include "rasm/threadPriority.h"
 
 #include "tracy/Tracy.hpp"
 
@@ -151,6 +152,7 @@ namespace rasm
     {
         const std::string threadName = name + " " + std::to_string(index);
         tracy::SetThreadName(threadName.c_str());
+        lowerThreadPriority();
 
         for (;;)
         {

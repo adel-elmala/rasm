@@ -18,6 +18,12 @@ namespace rasm
         if (view == debugView)
             return;
         debugView = view;
+        // Its shaders go to the shader workers now, for every kind of scene target warmed so far (warmScenePipelines'
+        // bits: 1 and 2 without a motion target, 4 and 8 with one).
+        if (view != DebugView::NONE && (warmedSceneVariants & 3u) != 0)
+            warmDebugPipelines(false);
+        if (view != DebugView::NONE && (warmedSceneVariants & 12u) != 0)
+            warmDebugPipelines(true);
         for (Camera &camera : registry.cameras)
             ++camera.historyResets;
     }

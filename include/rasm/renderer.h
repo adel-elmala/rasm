@@ -474,13 +474,19 @@ namespace rasm
         std::unique_ptr<Inspector>                                  inspector                               = {};
         std::unique_ptr<Readbacks>                                  readbacks                               = {};
         std::unique_ptr<Picks>                                      picks                                   = {};
+        uint32_t                                                    warmedSceneVariants                     = 0;
+        uint32_t                                                    warmedDebugVariants                     = 0;
 
     private:
         static constexpr Format     DEPTH_FORMAT    = Format::D32_SFLOAT;
 
-        PipelineHandle              createGraphicsPipeline(const std::string& name, const std::string& shaderSource, const Format* colorFormats, Format depthFormat, const char* vertexEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite, uint32_t samples = 1, bool alphaToCoverage = false, bool depthTest = true);
-        PipelineHandle              createMeshScenePipeline(const std::string& name, const std::string& shaderFile, const std::string& defines, const RenderTargetHandle& renderTarget, const char* meshEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite, bool alphaToCoverage = false);
-        PipelineHandle              createScenePipeline(const std::string& name, const std::string& shaderFile, const std::string& defines, const RenderTargetHandle& renderTarget, const char* vertexEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite, bool alphaToCoverage = false, bool depthTest = true);
+        PipelineHandle              createGraphicsPipeline(const std::string& name, const std::string& shaderSource, const Format* colorFormats, Format depthFormat, const char* vertexEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite, uint32_t samples = 1, bool alphaToCoverage = false, bool depthTest = true, bool* pending = nullptr);
+        PipelineHandle              createMeshScenePipeline(const std::string& name, const std::string& shaderFile, const std::string& defines, const RenderTargetHandle& renderTarget, const char* meshEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite, bool alphaToCoverage = false, bool* pending = nullptr);
+        PipelineHandle              createScenePipeline(const std::string& name, const std::string& shaderFile, const std::string& defines, const RenderTargetHandle& renderTarget, const char* vertexEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite, bool alphaToCoverage = false, bool depthTest = true, bool* pending = nullptr);
+        void                        warmPipelines();
+        void                        warmScenePipelines(bool motion, bool multisampled, bool first);
+        void                        warmDebugPipelines(bool motion);
+        bool                        hasMeshShaderPipelines() const;
         EnvironmentHandle           createEnvironment(const std::string& name);
         bool                        setEnvironmentImage(EnvironmentHandle environment, const std::string& name, const EnvironmentRaw& raw);
         void                        textureLoaded(TextureHandle texture);

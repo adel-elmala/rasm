@@ -3,11 +3,13 @@
 
 #include "doctest/doctest.h"
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 namespace
@@ -178,4 +180,106 @@ TEST_CASE("without a cache folder every start compiles and writes nothing")
     CHECK(Run(folders, SOURCE, "mainA", "").compiled());
     CHECK(Run(folders, SOURCE, "mainA", "").compiled());
     CHECK_FALSE(fs::exists(folders.root / "cache"));
+}
+
+namespace
+{
+    std::vector<uint8_t> compileAlone(const ShaderFolders &folders, const std::string &source, const char *entryPoint)
+    {
+        rasm::ShaderCompiler compiler;
+        REQUIRE(compiler.initialize(Target::SPIRV, folders.shaderDir(), ""));
+        return compiler.compileFromString(source, "test.comp.slang", entryPoint).code;
+    }
+
+    // Asks without waiting until the workers have it; false after 30 s.
+    bool pollUntilReady(rasm::ShaderCompiler &compiler, const std::string &source, const char *entryPoint, std::vector<uint8_t> &code)
+    {
+        for (uint32_t i = 0; i < 3000; ++i)
+        {
+            rasm::ShaderCompiler::CompiledShader shader = compiler.compileFromString(source, "test.comp.slang", entryPoint, false);
+            if (!shader.pending)
+            {
+                code = shader.code;
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        return false;
+    }
+
+    bool waitForNoSessions(const rasm::ShaderCompiler &compiler)
+    {
+        for (uint32_t i = 0; i < 3000 && compiler.getStats().workerSessions > 0; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        return compiler.getStats().workerSessions == 0;
+    }
+}
+
+TEST_CASE("prefetched shaders compile once, on the workers or the caller, to the code a lone compile makes")
+{
+    ShaderFolders folders;
+    const std::vector<uint8_t> a = compileAlone(folders, SOURCE, "mainA");
+    const std::vector<uint8_t> b = compileAlone(folders, SOURCE, "mainB");
+    REQUIRE_FALSE(a.empty());
+
+    rasm::ShaderCompiler compiler;
+    REQUIRE(compiler.initialize(Target::SPIRV, folders.shaderDir(), folders.cacheDir(), 2));
+    const rasm::ShaderCompiler::Request requests[] = {{.source = SOURCE, .outputPath = "test.comp.slang", .entryPoint = "mainA"},
+                                                      {.source = SOURCE, .outputPath = "test.comp.slang", .entryPoint = "mainB"},
+                                                      {.source = SOURCE, .outputPath = "test.comp.slang", .entryPoint = "mainA"}};
+    compiler.prefetch(requests, 3, false);
+    compiler.prefetch(requests, 2, true);
+    // Waited for while a worker has it, compiled here while none has started it: either way once.
+    CHECK(compiler.compileFromString(SOURCE, "test.comp.slang", "mainB").code == b);
+    CHECK(compiler.compileFromString(SOURCE, "test.comp.slang", "mainA").code == a);
+    CHECK(compiler.compileFromString(SOURCE, "test.comp.slang", "mainA").code == a);
+    CHECK(compiler.getStats().compiles == 2);
+    CHECK(compiler.getStats().cacheHits == 0);
+    CHECK(folders.entries() == 2);
+    // The struct layouts come with a prefetched shader too.
+    CHECK(compiler.findStructLayout("Item") != nullptr);
+}
+
+TEST_CASE("without wait a shader no worker has finished is pending, and the sessions go once the queue is empty")
+{
+    ShaderFolders folders;
+    const std::vector<uint8_t> a = compileAlone(folders, SOURCE, "mainA");
+    const std::vector<uint8_t> b = compileAlone(folders, SOURCE, "mainB");
+
+    rasm::ShaderCompiler compiler;
+    REQUIRE(compiler.initialize(Target::SPIRV, folders.shaderDir(), "", 1));
+    CHECK(compiler.compileFromString(SOURCE, "test.comp.slang", "mainA", false).pending);
+    std::vector<uint8_t> code;
+    REQUIRE(pollUntilReady(compiler, SOURCE, "mainA", code));
+    CHECK(code == a);
+    CHECK(waitForNoSessions(compiler));
+
+    // A shader asked for later makes a session again, which goes again.
+    REQUIRE(pollUntilReady(compiler, SOURCE, "mainB", code));
+    CHECK(code == b);
+    CHECK(waitForNoSessions(compiler));
+    CHECK(compiler.getStats().compiles == 2);
+    CHECK(compiler.getStats().mainCompiles == 0);
+}
+
+TEST_CASE("a compiler shut down while its workers compile ends cleanly")
+{
+    ShaderFolders folders;
+    std::vector<rasm::ShaderCompiler::Request> requests;
+    requests.reserve(16);
+    for (uint32_t i = 0; i < 16; ++i)
+        requests.push_back({.source = "#define SCALE " + std::to_string(i + 3) + "\n#line 1\n" + SOURCE, .outputPath = "test.comp.slang", .entryPoint = "mainA"});
+    {
+        rasm::ShaderCompiler compiler;
+        REQUIRE(compiler.initialize(Target::SPIRV, folders.shaderDir(), folders.cacheDir(), 4));
+        compiler.prefetch(requests.data(), static_cast<uint32_t>(requests.size()), false);
+        compiler.shutdown();
+        // What no worker started is compiled by the caller after the shutdown.
+        CHECK_FALSE(compiler.compileFromString(requests.back().source, "test.comp.slang", "mainA").code.empty());
+    }
+    {
+        rasm::ShaderCompiler compiler;
+        REQUIRE(compiler.initialize(Target::SPIRV, folders.shaderDir(), folders.cacheDir(), 4));
+        compiler.prefetch(requests.data(), static_cast<uint32_t>(requests.size()), false);
+    }
 }

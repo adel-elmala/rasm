@@ -21,16 +21,6 @@
 #include <thread>
 #include <vector>
 
-#if defined(_WIN32)
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-#endif
-
 // Point cloud streaming: a LiDAR tile in Earth-centred coordinates (ECEF), larger than the GPU memory it may take,
 // flown through. At its first start the example writes a synthetic scan (rolling ground, roads, buildings and trees, 1 km
 // across, near Paris) as a LAS file into its own folder; AssetLoader::loadPointCloud reads it in doubles, and
@@ -363,14 +353,13 @@ namespace
         return count;
     }
 
-    // The builders run below the main thread. On Windows a thread woken at the main thread's priority takes the core of
-    // the thread that woke it (its wake boost puts it above): the main thread then waited in notify_all for a whole
-    // build, 2 to 4 ms, many times a flight. Below it, a woken builder takes a free core instead.
+    // The builders run below the main thread, like RASM's own workers (lowerThreadPriority). On Windows a thread woken at
+    // the main thread's priority takes the core of the thread that woke it (its wake boost puts it above): the main
+    // thread then waited in notify_all for a whole build, 2 to 4 ms, many times a flight. Below it, a woken builder
+    // takes a free core instead.
     void runBuilder(Builders &builders)
     {
-#if defined(_WIN32)
-        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
-#endif
+        rasm::lowerThreadPriority();
         for (;;)
         {
             BuildJob job;

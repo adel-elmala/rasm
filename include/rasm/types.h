@@ -237,6 +237,7 @@ namespace rasm
         Backend      preferredBackend        = Backend::VULKAN;
         std::string  shaderDir               = {};
         std::string  cacheDir                = "cache";  // compiled shaders and the pipeline cache, beside the executable (an absolute path as is); "": no disk caches
+        uint32_t     shaderThreads           = 0;        // shaders compiled in the background; 0: half the hardware threads, at most 8. A cold cache costs about 100 MB a thread for about 1 s
         uint32_t     geometryPoolVertices    = 1u << 21; // 64 B each: 128 MiB
         uint32_t     geometryPoolColors      = 1u << 20; // 4 B each: 4 MiB
         uint32_t     geometryPoolSkins       = 1u << 20; // a skinned vertex's joints and weights, 16 B each: 16 MiB
@@ -287,6 +288,7 @@ namespace rasm
         std::string  assetRoot               = {};
         std::string  shaderDir               = {};
         std::string  cacheDir                = "cache";  // compiled shaders and the pipeline cache, beside the executable (an absolute path as is); "": no disk caches
+        uint32_t     shaderThreads           = 0;        // shaders compiled in the background; 0: half the hardware threads, at most 8. A cold cache costs about 100 MB a thread for about 1 s
         uint32_t     geometryPoolVertices    = 1u << 21; // 64 B each: 128 MiB
         uint32_t     geometryPoolColors      = 1u << 20; // 4 B each: 4 MiB
         uint32_t     geometryPoolSkins       = 1u << 20; // a skinned vertex's joints and weights, 16 B each: 16 MiB
@@ -338,6 +340,7 @@ namespace rasm
             .preferredBackend        = config.preferredBackend,
             .shaderDir               = config.shaderDir,
             .cacheDir                = config.cacheDir,
+            .shaderThreads           = config.shaderThreads,
             .geometryPoolVertices    = config.geometryPoolVertices,
             .geometryPoolColors      = config.geometryPoolColors,
             .geometryPoolSkins       = config.geometryPoolSkins,
@@ -389,6 +392,7 @@ namespace rasm
             .assetRoot               = loader.assetRoot,
             .shaderDir               = config.shaderDir,
             .cacheDir                = config.cacheDir,
+            .shaderThreads           = config.shaderThreads,
             .geometryPoolVertices    = config.geometryPoolVertices,
             .geometryPoolColors      = config.geometryPoolColors,
             .geometryPoolSkins       = config.geometryPoolSkins,

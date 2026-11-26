@@ -11,6 +11,7 @@
 #include "renderer/inspector.h"
 #include "renderer/lightClusters.h"
 #include "renderer/picking.h"
+#include "renderer/pipelineWarmup.h"
 #include "renderer/readback.h"
 #include "renderer/animation.h"
 #include "renderer/viewGraph.h"
@@ -33,6 +34,8 @@ namespace rasm
 {
     namespace
     {
+        constexpr uint32_t MAX_SHADER_THREADS = 8;
+
         ShaderCompiler::Target getShaderCompilerTarget(rasm::Backend backend)
         {
             switch (backend)
@@ -144,7 +147,10 @@ namespace rasm
         }
 
         auto shaderTarget = getShaderCompilerTarget(config.preferredBackend);
-        if (!shaderCompiler->initialize(shaderTarget, this->config.shaderDir, this->config.cacheDir))
+        // Half the hardware threads, at most MAX_SHADER_THREADS, by default: each takes a Slang global session of about
+        // 100 MB while a cold cache's compiles run, about 1 s at startup.
+        const uint32_t shaderThreads = this->config.shaderThreads > 0 ? this->config.shaderThreads : std::clamp(std::thread::hardware_concurrency() / 2, 1u, MAX_SHADER_THREADS);
+        if (!shaderCompiler->initialize(shaderTarget, this->config.shaderDir, this->config.cacheDir, shaderThreads))
         {
             spdlog::error("Failed to initialize shader compiler.");
             return;
@@ -153,6 +159,8 @@ namespace rasm
         if (!geometryPool->create(ctx, this->config) || !createGpuScene() || !createGpuLights() || !createGpuAnimation())
             return;
         createFrameStats();
+        // Queued before the first pipelines below are made, so the shader workers start on them during startup.
+        warmPipelines();
 
         // The render context made the set; the pipelines and passes name it often.
         bindlessDescriptorSetLayout = ctx.getBindlessDescriptorSetLayout();
@@ -477,11 +485,13 @@ namespace rasm
         windowOf(window).contentScale = scale;
     }
 
-    // The attached loader waits; a renderer without one has nothing to wait for.
+    // The attached loader waits; a renderer without one has nothing to wait for. Then the shader workers finish what
+    // they were given, so the next frames make every pipeline they need without waiting (P31).
     void Renderer::waitForLoads()
     {
         if (loads)
             loads->waitForLoads();
+        shaderCompiler->waitForPrefetches();
     }
 
     LoadStats Renderer::getLoadStats() const
@@ -581,10 +591,11 @@ namespace rasm
     }
 
     // A pipeline of the scene passes, from a file in the shader folder, for targets with this one's formats and sample
-    // count. defines are preprocessor lines put before the source, for the variants of one shader; #line keeps the
-    // diagnostics' line numbers those of the file.
+    // count. defines are preprocessor lines put before the source, for the variants of one shader (getShaderVariant).
+    // With pending, a shader no shader worker has finished leaves the pipeline for a later frame: *pending is set.
     PipelineHandle Renderer::createScenePipeline(const std::string &name, const std::string &shaderFile, const std::string &defines, const RenderTargetHandle &renderTarget,
-                                                 const char *vertexEntryPoint, const char *fragmentEntryPoint, BlendMode blendMode, bool depthWrite, bool alphaToCoverage, bool depthTest)
+                                                 const char *vertexEntryPoint, const char *fragmentEntryPoint, BlendMode blendMode, bool depthWrite, bool alphaToCoverage, bool depthTest,
+                                                 bool *pending)
     {
         const auto &rt = ctx.getRenderTarget(renderTarget);
         if (rt.depthFormat == Format::UNKNOWN)
@@ -592,18 +603,22 @@ namespace rasm
             spdlog::error("Pipeline '{}' needs a valid render target.", name);
             return {};
         }
-        const std::string file = readFile(pathFromUtf8(config.shaderDir) / shaderFile);
-        const std::string source = defines.empty() ? file : defines + "#line 1\n" + file;
-        return createGraphicsPipeline(name, source, rt.colorFormats, rt.depthFormat, vertexEntryPoint, fragmentEntryPoint, blendMode, depthWrite, rt.samples, alphaToCoverage, depthTest);
+        const std::string source = getShaderVariant(defines, readFile(pathFromUtf8(config.shaderDir) / shaderFile));
+        return createGraphicsPipeline(name, source, rt.colorFormats, rt.depthFormat, vertexEntryPoint, fragmentEntryPoint, blendMode, depthWrite, rt.samples, alphaToCoverage, depthTest, pending);
     }
 
     PipelineHandle Renderer::createGraphicsPipeline(const std::string &name, const std::string &shaderSource, const Format *colorFormats, Format depthFormat, const char *vertEntryPoint,
-                                                    const char *fragEntryPoint, BlendMode blendMode, bool depthWrite, uint32_t samples, bool alphaToCoverage, bool depthTest)
+                                                    const char *fragEntryPoint, BlendMode blendMode, bool depthWrite, uint32_t samples, bool alphaToCoverage, bool depthTest, bool *pending)
     {
         ZoneScoped;
 
-        auto vertShader = shaderCompiler->compileFromString(shaderSource, name + ".vert.slang", vertEntryPoint);
-        auto fragShader = shaderCompiler->compileFromString(shaderSource, name + ".frag.slang", fragEntryPoint);
+        auto vertShader = shaderCompiler->compileFromString(shaderSource, name + ".vert.slang", vertEntryPoint, pending == nullptr);
+        auto fragShader = shaderCompiler->compileFromString(shaderSource, name + ".frag.slang", fragEntryPoint, pending == nullptr);
+        if (vertShader.pending || fragShader.pending)
+        {
+            *pending = true;
+            return {};
+        }
 
         if (vertShader.code.empty() || fragShader.code.empty())
         {
@@ -629,7 +644,7 @@ namespace rasm
     // A mesh pipeline of the scene passes: the file's taskMain (lib/meshletTask.slang), its mesh and fragment entry points,
     // for targets with this one's formats and sample count.
     PipelineHandle Renderer::createMeshScenePipeline(const std::string &name, const std::string &shaderFile, const std::string &defines, const RenderTargetHandle &renderTarget,
-                                                     const char *meshEntryPoint, const char *fragmentEntryPoint, BlendMode blendMode, bool depthWrite, bool alphaToCoverage)
+                                                     const char *meshEntryPoint, const char *fragmentEntryPoint, BlendMode blendMode, bool depthWrite, bool alphaToCoverage, bool *pending)
     {
         ZoneScoped;
 
@@ -639,11 +654,15 @@ namespace rasm
             spdlog::error("Pipeline '{}' needs a valid render target.", name);
             return {};
         }
-        const std::string file = readFile(pathFromUtf8(config.shaderDir) / shaderFile);
-        const std::string source = defines.empty() ? file : defines + "#line 1\n" + file;
-        auto taskShader = shaderCompiler->compileFromString(source, name + ".task.slang", "taskMain");
-        auto meshShader = shaderCompiler->compileFromString(source, name + ".mesh.slang", meshEntryPoint);
-        auto fragShader = shaderCompiler->compileFromString(source, name + ".frag.slang", fragmentEntryPoint);
+        const std::string source = getShaderVariant(defines, readFile(pathFromUtf8(config.shaderDir) / shaderFile));
+        auto taskShader = shaderCompiler->compileFromString(source, name + ".task.slang", "taskMain", pending == nullptr);
+        auto meshShader = shaderCompiler->compileFromString(source, name + ".mesh.slang", meshEntryPoint, pending == nullptr);
+        auto fragShader = shaderCompiler->compileFromString(source, name + ".frag.slang", fragmentEntryPoint, pending == nullptr);
+        if (taskShader.pending || meshShader.pending || fragShader.pending)
+        {
+            *pending = true;
+            return {};
+        }
         if (taskShader.code.empty() || meshShader.code.empty() || fragShader.code.empty())
         {
             spdlog::error("Failed to compile the shaders of mesh pipeline '{}'.", name);

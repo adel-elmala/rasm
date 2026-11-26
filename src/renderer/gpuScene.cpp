@@ -1389,6 +1389,12 @@ namespace rasm
             spdlog::error("All {} scene views (MAX_SCENE_VIEWS) are held by render graphs (each view, shadow cascade and cube face takes one); this view is not drawn.", MAX_SCENE_VIEWS);
             return UINT32_MAX;
         }
+        // A view on a new kind of target draws this frame, so its shaders go to the shader workers first.
+        if (!depthOnly)
+        {
+            const RenderTarget &target = ctx.getRenderTarget(renderTarget);
+            warmScenePipelines(target.colorCount == 2, target.samples > 1, true);
+        }
 
         SceneView view = {.scene = scene, .camera = camera, .renderTarget = renderTarget, .face = face, .shadowCount = shadowCount, .depthOnly = depthOnly, .graphs = 1};
         std::copy(viewShadows, viewShadows + MAX_VIEW_SHADOWS, view.shadows);
@@ -1577,7 +1583,8 @@ namespace rasm
             return;
         }
 
-        // A shader error retries every frame, so a shader fixed on disk is picked up while the application runs.
+        // A shader error retries every frame, so a shader fixed on disk is picked up while the application runs. The
+        // shaders of these pipelines are warmed at startup (warmScenePipelines) under the same names and defines.
         ShadedPipelines &shaded = getShadedPipelines(*gpuScene, ctx, view);
         if (!view.depthOnly && !shaded.pipeline.isValid())
         {
@@ -1647,33 +1654,42 @@ namespace rasm
             // Only made while a pipeline is missing: a string this long allocates, and this runs every frame (P27).
             const bool missing = !debug.pipeline.isValid() || (hasMask && !debug.maskPipeline.isValid()) || (hasBlend && !debug.blendPipeline.isValid());
             const std::string defines = missing ? getMotionDefine(ctx, view) + std::string("#define RASM_DEBUG_VIEW 1\n") : std::string();
+            // A debug view's shaders are not warmed at startup: the first time it is chosen they compile on the shader
+            // workers, and the view draws shaded until they are all ready, so no run of it is left out meanwhile.
+            bool pending = false;
             if (!debug.pipeline.isValid())
-                debug.pipeline = createScenePipeline("rasmDebug", "passes/rasm.slang", defines, view.renderTarget, "vertMain", "fragMain", blendMode, true);
+                debug.pipeline = createScenePipeline("rasmDebug", "passes/rasm.slang", defines, view.renderTarget, "vertMain", "fragMain", blendMode, true, false, true, &pending);
             if (hasMask && !debug.maskPipeline.isValid())
             {
-                debug.maskPipeline = createScenePipeline("rasmDebugMask", "passes/rasm.slang", defines + "#define RASM_ALPHA_MASK 1\n", view.renderTarget, "vertMain", "fragMain", blendMode, true);
-                if (!debug.maskPipeline.isValid())
+                bool maskPending = false;
+                debug.maskPipeline = createScenePipeline("rasmDebugMask", "passes/rasm.slang", defines + "#define RASM_ALPHA_MASK 1\n", view.renderTarget, "vertMain", "fragMain", blendMode, true, false, true, &maskPending);
+                if (!debug.maskPipeline.isValid() && !maskPending)
                     spdlog::error("Failed to create the debug view's MASK pipeline; the view is drawn without its cut-out materials.");
+                pending = pending || maskPending;
             }
             if (hasBlend && !debug.blendPipeline.isValid())
             {
-                debug.blendPipeline = createScenePipeline("rasmDebugBlend", "passes/rasm.slang", defines + "#define RASM_ALPHA_BLEND 1\n", view.renderTarget, "vertMain", "fragMain", blendMode, false);
-                if (!debug.blendPipeline.isValid())
+                bool blendPending = false;
+                debug.blendPipeline = createScenePipeline("rasmDebugBlend", "passes/rasm.slang", defines + "#define RASM_ALPHA_BLEND 1\n", view.renderTarget, "vertMain", "fragMain", blendMode, false, false, true, &blendPending);
+                if (!debug.blendPipeline.isValid() && !blendPending)
                     spdlog::error("Failed to create the debug view's BLEND pipeline; the view is drawn without its see-through materials.");
+                pending = pending || blendPending;
             }
             if (debugView == DebugView::CULLING && !shaded.ghostPipeline.isValid())
             {
-                shaded.ghostPipeline = createScenePipeline("debugGhosts", "passes/debugGhosts.slang", getMotionDefine(ctx, view), view.renderTarget, "vertMain", "fragMain", BlendMode::ADDITIVE, false, false, false);
-                if (!shaded.ghostPipeline.isValid())
+                bool ghostPending = false;
+                shaded.ghostPipeline = createScenePipeline("debugGhosts", "passes/debugGhosts.slang", getMotionDefine(ctx, view), view.renderTarget, "vertMain", "fragMain", BlendMode::ADDITIVE, false, false, false, &ghostPending);
+                if (!shaded.ghostPipeline.isValid() && !ghostPending)
                     spdlog::error("Failed to create the culling view's ghost pipeline; the view is drawn without its ghosts.");
+                pending = pending || ghostPending;
             }
             // Without its pipeline the view draws its shading, which the debug display then shows as it is.
-            if (debug.pipeline.isValid())
+            if (debug.pipeline.isValid() && !pending)
             {
                 view.debugView = debugView;
                 view.drawMask = debug.maskPipeline.isValid();
             }
-            else
+            else if (!pending)
                 spdlog::error("Failed to create the debug view pipeline; the scene is drawn shaded.");
         }
         // Without the culling pipelines the scene is still drawn, only unculled, so a culling shader error does not blank it.
@@ -2467,11 +2483,15 @@ namespace rasm
             const std::string defines = getMotionDefine(ctx, view) + std::string(debugVariant ? "#define RASM_DEBUG_VIEW 1\n" : "");
             const bool coverage = multisampled && !debugVariant;
             const std::string maskDefines = defines + (coverage ? "#define RASM_ALPHA_MASK 1\n#define RASM_ALPHA_TO_COVERAGE 1\n" : "#define RASM_ALPHA_MASK 1\n");
+            // A debug view's are not warmed: until its shader workers have them, its meshlets take the other path.
+            bool pending = false;
             if (opaque && !opaquePipeline.isValid())
-                opaquePipeline = createMeshScenePipeline(debugVariant ? "rasmDebugMesh" : "rasmMesh", "passes/rasm.slang", defines, view.renderTarget, "meshMain", "fragMain", blendMode, true);
+                opaquePipeline = createMeshScenePipeline(debugVariant ? "rasmDebugMesh" : "rasmMesh", "passes/rasm.slang", defines, view.renderTarget, "meshMain", "fragMain", blendMode, true, false,
+                                                         debugVariant ? &pending : nullptr);
             if (mask && !maskPipeline.isValid())
-                maskPipeline = createMeshScenePipeline(debugVariant ? "rasmDebugMeshMask" : "rasmMeshMask", "passes/rasm.slang", maskDefines, view.renderTarget, "meshMain", "fragMain", blendMode, true, coverage);
-            if ((opaque && !opaquePipeline.isValid()) || (mask && !maskPipeline.isValid()))
+                maskPipeline = createMeshScenePipeline(debugVariant ? "rasmDebugMeshMask" : "rasmMeshMask", "passes/rasm.slang", maskDefines, view.renderTarget, "meshMain", "fragMain", blendMode, true,
+                                                       coverage, debugVariant ? &pending : nullptr);
+            if (!pending && ((opaque && !opaquePipeline.isValid()) || (mask && !maskPipeline.isValid())))
                 spdlog::error("Failed to create the mesh shader pipelines; meshlets are drawn by vertex pulling, or whole with MeshletPath::AUTO.");
         }
         return (!opaque || opaquePipeline.isValid()) && (!mask || maskPipeline.isValid());
