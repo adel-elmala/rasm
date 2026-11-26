@@ -2485,13 +2485,14 @@ namespace rasm
             const std::string maskDefines = defines + (coverage ? "#define RASM_ALPHA_MASK 1\n#define RASM_ALPHA_TO_COVERAGE 1\n" : "#define RASM_ALPHA_MASK 1\n");
             // A debug view's are not warmed: until its shader workers have them, its meshlets take the other path.
             bool pending = false;
+            bool maskPending = false;
             if (opaque && !opaquePipeline.isValid())
                 opaquePipeline = createMeshScenePipeline(debugVariant ? "rasmDebugMesh" : "rasmMesh", "passes/rasm.slang", defines, view.renderTarget, "meshMain", "fragMain", blendMode, true, false,
                                                          debugVariant ? &pending : nullptr);
             if (mask && !maskPipeline.isValid())
                 maskPipeline = createMeshScenePipeline(debugVariant ? "rasmDebugMeshMask" : "rasmMeshMask", "passes/rasm.slang", maskDefines, view.renderTarget, "meshMain", "fragMain", blendMode, true,
-                                                       coverage, debugVariant ? &pending : nullptr);
-            if (!pending && ((opaque && !opaquePipeline.isValid()) || (mask && !maskPipeline.isValid())))
+                                                       coverage, debugVariant ? &maskPending : nullptr);
+            if ((opaque && !opaquePipeline.isValid() && !pending) || (mask && !maskPipeline.isValid() && !maskPending))
                 spdlog::error("Failed to create the mesh shader pipelines; meshlets are drawn by vertex pulling, or whole with MeshletPath::AUTO.");
         }
         return (!opaque || opaquePipeline.isValid()) && (!mask || maskPipeline.isValid());

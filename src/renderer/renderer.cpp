@@ -149,7 +149,9 @@ namespace rasm
         auto shaderTarget = getShaderCompilerTarget(config.preferredBackend);
         // Half the hardware threads, at most MAX_SHADER_THREADS, by default: each takes a Slang global session of about
         // 100 MB while a cold cache's compiles run, about 1 s at startup.
-        const uint32_t shaderThreads = this->config.shaderThreads > 0 ? this->config.shaderThreads : std::clamp(std::thread::hardware_concurrency() / 2, 1u, MAX_SHADER_THREADS);
+        // An application's own count is kept to the hardware threads.
+        const uint32_t hardwareThreads = std::max(1u, std::thread::hardware_concurrency());
+        const uint32_t shaderThreads = this->config.shaderThreads > 0 ? std::min(this->config.shaderThreads, hardwareThreads) : std::clamp(hardwareThreads / 2, 1u, MAX_SHADER_THREADS);
         if (!shaderCompiler->initialize(shaderTarget, this->config.shaderDir, this->config.cacheDir, shaderThreads))
         {
             spdlog::error("Failed to initialize shader compiler.");

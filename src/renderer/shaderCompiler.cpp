@@ -941,11 +941,18 @@ namespace rasm
     {
         ZoneScoped;
 
-        const SlangResult result = createGlobalSession(context.globalSession.writeRef());
-        if (SLANG_FAILED(result))
+        // A context whose compile failed keeps its global session and takes a new session: the old one keeps the
+        // files it read, so a fix on disk, of a lib/ file too, would not be seen.
+        context.modules.clear();
+        context.session = nullptr;
+        if (!context.globalSession)
         {
-            spdlog::error("Failed to create Slang global session. Error code: {}", result);
-            return false;
+            const SlangResult result = createGlobalSession(context.globalSession.writeRef());
+            if (SLANG_FAILED(result))
+            {
+                spdlog::error("Failed to create Slang global session. Error code: {}", result);
+                return false;
+            }
         }
 
         std::vector<slang::CompilerOptionEntry> targetOptions;
@@ -1007,12 +1014,18 @@ namespace rasm
                                       CachedShader &shader, bool onWorker)
     {
         const auto start = std::chrono::steady_clock::now();
+        // A context whose new session could not be made after a failure tries again.
+        if (!context.session && !createSlangContext(context))
+            return false;
         // A rejected cache entry may have filled some of shader before it failed.
         shader = {};
         CompiledShader compiled;
         bool cacheable = true;
         if (!compileWithSlang(context, sourceCode, outputPath, entryPointName, compiled, shader.pushConstants, shader.layouts, cacheable))
+        {
+            createSlangContext(context);
             return false;
+        }
         const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
         shader.code = std::move(compiled.code);
         if (!cacheFolder.empty() && cacheable)
@@ -1023,8 +1036,10 @@ namespace rasm
             ++stats.compiles;
             stats.mainCompiles += onWorker ? 0 : 1;
         }
+        // A warm-up that missed a pipeline's shader shows here (and in shutdown's count); an application's own
+        // pipelines and the overlay's and the UI's are compiled here on purpose.
         if (!onWorker)
-            spdlog::info("'{}' compiled on the main thread in {:.0f} ms: no worker had it.", outputPath, seconds * 1000.0);
+            spdlog::debug("'{}' compiled on the main thread in {:.0f} ms.", outputPath, seconds * 1000.0);
         return true;
     }
 
@@ -1069,8 +1084,17 @@ namespace rasm
             return useShader(shader, outputPath);
         }
 
-        // An entry is never erased, so the reference outlives the unlocks.
+        // An entry is never erased, so the reference outlives the unlocks. A failed one is queued again, first, so a
+        // shader fixed on disk is picked up while the application runs; with wait, this thread then compiles it.
         Prefetch &entry = found->second;
+        if (entry.state == PrefetchState::FAILED)
+        {
+            entry.state = PrefetchState::QUEUED;
+            ++openPrefetches;
+            queue.push_front(found->first);
+            workers->push({.run = [this]()
+                           { runPrefetch(); }});
+        }
         if (!wait && (entry.state == PrefetchState::QUEUED || entry.state == PrefetchState::RUNNING))
         {
             if (entry.state == PrefetchState::QUEUED)
@@ -1131,7 +1155,7 @@ namespace rasm
                     ++added;
                     names.push_back(found->first);
                 }
-                else if (first && found->second.state == PrefetchState::QUEUED)
+                else if (first && found->second.state == PrefetchState::QUEUED && std::find(names.begin(), names.end(), found->first) == names.end())
                 {
                     removeFromQueue(queue, found->first);
                     names.push_back(found->first);
@@ -1167,7 +1191,10 @@ namespace rasm
             Prefetch &front = prefetches.at(queue.front());
             queue.pop_front();
             if (front.state == PrefetchState::QUEUED)
+            {
+                front.state = PrefetchState::RUNNING;
                 group.push_back(&front);
+            }
         }
         if (group.empty())
             return;
@@ -1175,10 +1202,11 @@ namespace rasm
         {
             Prefetch &other = prefetches.at(name);
             if (other.state == PrefetchState::QUEUED && other.sourceKey == group[0]->sourceKey)
+            {
+                other.state = PrefetchState::RUNNING;
                 group.push_back(&other);
+            }
         }
-        for (Prefetch *entry : group)
-            entry->state = PrefetchState::RUNNING;
         lock.unlock();
 
         // A context is made only for a miss, so a run whose cache has every shader makes none.
@@ -1227,7 +1255,8 @@ namespace rasm
     void ShaderCompiler::endPrefetch(std::unique_lock<std::mutex> &lock, Prefetch &entry, bool compiled, bool onWorker)
     {
         entry.state = compiled ? PrefetchState::DONE : PrefetchState::FAILED;
-        entry.request.source = std::string();
+        if (compiled)
+            entry.request.source = std::string();
         --openPrefetches;
         std::vector<std::unique_ptr<SlangContext>> freed;
         const bool release = openPrefetches == 0 && !idleContexts.empty();
@@ -1277,11 +1306,10 @@ namespace rasm
             loaded->second.module = context.session->loadModuleFromSourceString(moduleName.c_str(), loaded->second.path.c_str(), sourceCode.c_str(), diagnosticsBlob.writeRef());
             diagnoseIfNeeded(diagnosticsBlob);
         }
-        // A source that failed fails again without a second try in this context.
         slang::IModule *slangModule = loaded->second.module;
-        const std::string &modulePath = loaded->second.path;
         if (!slangModule)
             return false;
+        const std::string &modulePath = loaded->second.path;
 
         // The key holds the files of lib/ only, so a module that read any other file is not cached.
         for (SlangInt32 i = 0; i < slangModule->getDependencyFileCount(); ++i)

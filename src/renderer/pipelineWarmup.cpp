@@ -178,7 +178,7 @@ namespace rasm
 
     // A debug view's shaders, for scene targets with a motion target or without: queued first when a debug view is
     // chosen (setDebugView), for each kind of target warmed so far, and with a new kind while one is on. Until they are
-    // ready the views draw shaded; waitForLoads waits for them.
+    // ready the views draw shaded; Renderer::waitForLoads waits for them (AssetLoader::waitForLoads does not).
     void Renderer::warmDebugPipelines(bool motion)
     {
         ZoneScoped;

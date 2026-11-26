@@ -283,3 +283,18 @@ TEST_CASE("a compiler shut down while its workers compile ends cleanly")
         compiler.prefetch(requests.data(), static_cast<uint32_t>(requests.size()), false);
     }
 }
+
+TEST_CASE("a prefetched shader that failed is compiled again, so a fix of an included file is picked up")
+{
+    ShaderFolders folders;
+    const fs::path extra = folders.root / "shaders" / "lib" / "extra.slang";
+    ShaderFolders::write(extra, "uint extra(uint x) { return x +; }\n");
+    const std::string source = std::string("#include \"extra.slang\"\n#line 1\n") + SOURCE;
+    rasm::ShaderCompiler compiler;
+    REQUIRE(compiler.initialize(Target::SPIRV, folders.shaderDir(), "", 1));
+    const rasm::ShaderCompiler::Request request = {.source = source, .outputPath = "test.comp.slang", .entryPoint = "mainA"};
+    compiler.prefetch(&request, 1, false);
+    CHECK(compiler.compileFromString(source, "test.comp.slang", "mainA").code.empty());
+    ShaderFolders::write(extra, "uint extra(uint x) { return x + 1; }\n");
+    CHECK_FALSE(compiler.compileFromString(source, "test.comp.slang", "mainA").code.empty());
+}
