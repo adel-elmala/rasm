@@ -1,13 +1,9 @@
 <div align="center">
 
-```
-██████╗  █████╗ ███████╗███╗   ███╗
-██╔══██╗██╔══██╗██╔════╝████╗ ████║
-██████╔╝███████║███████╗██╔████╔██║
-██╔══██╗██╔══██║╚════██║██║╚██╔╝██║
-██║  ██║██║  ██║███████║██║ ╚═╝ ██║
-╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝     ╚═╝
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo/logo-dark.png">
+  <img src="docs/assets/logo/logo-light.png" width="382" alt="RASM">
+</picture>
 
 **A GPU-driven rendering engine for games, maps and visualization.**
 
