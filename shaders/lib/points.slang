@@ -26,8 +26,10 @@ static const uint   POINT_CHUNK_HEADER_UNITS = 6;
 static const uint   POINT_INDICES           = 3;        // a triangle a point
 static const float  POINT_STEP_SCALE        = 1.0 / 65535.0;
 // The compute rasterizer (passes/pointRaster.slang). Must match rasm::gfx::POINT_* in uberMaterialTypes.h.
-static const float  POINT_RASTER_MAX_SIZE   = 8.0;      // a chunk whose points are this many pixels across or less goes to it (POINT_PIXELS_MAX_SIZE under MSAA)
-static const float  POINT_RASTER_MIN_DENSITY = 0.125;    // and that draws this many points of 2 pixels per pixel of its rect on screen
+static const float  POINT_RASTER_MAX_SIZE   = 6.0;      // a chunk whose points are this many pixels across or less at its centre goes to it
+static const float  POINT_RASTER_MAX_NEAR   = 8.0;      // and at its point nearest the camera (isRasterChunk has the other views' limits)
+static const float  POINT_RASTER_MAX_ORTHO  = 4.0;      // the same in an orthographic view
+static const float  POINT_RASTER_MIN_DENSITY = 0.125;   // and that draws this many points of 2 pixels per pixel of its rect on screen
 static const uint   POINT_BATCH_POINTS      = 1024;     // a group of the raster dispatch
 static const uint   POINT_RASTER_MAX_ROWS   = 1 << 16;  // a pixel's word keeps the instance row in 16 bits
 static const uint   POINT_CLEAR_GROUP_SIZE  = 256;
@@ -242,27 +244,33 @@ uint selectPointPrefix(SceneData *scene, PointData style, uint total, float3 cen
 }
 
 // The split between the two paths, per chunk. The compute path costs a little per point and, once any chunk takes it,
-// a clear and a resolve per pixel of the rect its chunks cover; the triangles cost more per point and nothing per pixel:
-// ten times at 1 pixel, four at 2 to 4, three at 6 and 8, the same at 12, and less past it, where a thread writing a
-// point's pixels one after another is slower than the rasterizer (RTX 3060, a view of one sample, points covering
-// their ground 4 to 8 times). So a chunk takes it when its points are POINT_RASTER_MAX_SIZE pixels or less, two thirds
-// of that break-even, in every shape, as the compute path cuts each shape to the same pixels as the triangles
-// (getPointShape). Under MSAA, where the triangles' edges cover samples by their distance, only the points that cover
-// whole pixels on both paths take it, up to POINT_PIXELS_MAX_SIZE. The size is measured at the chunk's sphere's point
-// nearest the camera, its largest, in this view's own projection (not the LOD camera's, which a frozen view keeps).
-// The chunk must also draw POINT_RASTER_MIN_DENSITY points per pixel of its rect on screen, a point of d pixels
-// counting as (d / 2)^2 of 2 pixels, which cover as many pixels and save as much more over a triangle. A chunk the
-// camera is inside of, or one partly behind it, goes to the triangles. rect is the pixels its points can reach: its
-// box's corners on screen, and a point's reach past them, a whole diameter (a SPHERE point's front moves its centre).
+// a clear and a resolve per pixel of the rect its chunks cover; the triangles cost more per point and nothing per pixel.
+// A thread writes its point's pixels one after another, so the compute path's cost grows with the point's area faster
+// than the rasterizer's, and at the LOD's density a frame of points of one size costs the same on both paths at about
+// 7 pixels in a perspective view and 5 in an orthographic one (RTX 3060, a view of one sample). So a chunk takes it in a
+// perspective view when its points are POINT_RASTER_MAX_SIZE pixels or less at its sphere's centre and
+// POINT_RASTER_MAX_NEAR at its point nearest the camera, its largest; in an orthographic view, where all of them have
+// one size, POINT_RASTER_MAX_ORTHO; under MSAA, where the triangles' edges cover samples by their distance, only the
+// points that cover whole pixels on both paths, up to POINT_PIXELS_MAX_SIZE. Every shape takes it: the compute path cuts
+// each to the triangles' pixels (getPointShape). The sizes are in this view's own projection (not the LOD camera's,
+// which a frozen view keeps). The chunk must also draw POINT_RASTER_MIN_DENSITY points per pixel of its rect on
+// screen, a point of d pixels at its centre counting as (d / 2)^2 of 2 pixels, which cover as many pixels and save as
+// much more over a triangle. A chunk the camera is inside of, or one partly behind it, goes to the triangles. rect is
+// the pixels its points can reach: its box's corners on screen, and a point's reach past them, a whole largest
+// diameter (a SPHERE point's front moves its centre).
 bool isRasterChunk(SceneData *scene, PointData style, float spacing, float3 center, float radius, uint count, out uint4 rect)
 {
     rect                = uint4(0);
     float4x4 viewProjection = mul(scene->projection, scene->view);
-    float w             = mul(viewProjection, float4(center, 1.0)).w;
-    if (scene->projection[3][3] == 0.0)
-        w              -= radius;
-    float diameter      = w > 0.0 ? getPointDiameter(scene, style, spacing, 0.0, w) : 0.0;
-    if (w <= 0.0 || diameter > (scene->depthSamples > 1 ? POINT_PIXELS_MAX_SIZE : POINT_RASTER_MAX_SIZE))
+    bool orthographic   = scene->projection[3][3] != 0.0;
+    float middle        = mul(viewProjection, float4(center, 1.0)).w;
+    float w             = orthographic ? middle : middle - radius;
+    if (w <= 0.0)
+        return false;
+    float diameter      = getPointDiameter(scene, style, spacing, 0.0, w);
+    float typical       = getPointDiameter(scene, style, spacing, 0.0, middle);
+    if (scene->depthSamples > 1 ? diameter > POINT_PIXELS_MAX_SIZE
+                                : (orthographic ? diameter > POINT_RASTER_MAX_ORTHO : typical > POINT_RASTER_MAX_SIZE || diameter > POINT_RASTER_MAX_NEAR))
         return false;
     float2 size         = float2(scene->viewportWidth, scene->viewportHeight);
     float2 low          = size;
@@ -282,7 +290,7 @@ bool isRasterChunk(SceneData *scene, PointData style, float spacing, float3 cent
     high                = clamp(ceil(high) + reach, 0.0, size - 1.0);
     rect                = uint4(uint2(low), uint2(high));
     float2 extent       = high - low + 1.0;
-    return float(count) * max(0.25 * diameter * diameter, 1.0) >= POINT_RASTER_MIN_DENSITY * extent.x * extent.y;
+    return float(count) * max(0.25 * typical * typical, 1.0) >= POINT_RASTER_MIN_DENSITY * extent.x * extent.y;
 }
 
 // Adds a chunk's first count points to the view's batches, POINT_BATCH_POINTS a batch, marked POINT_BATCH_THINNED when
