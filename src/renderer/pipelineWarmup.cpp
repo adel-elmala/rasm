@@ -171,6 +171,12 @@ namespace rasm
         if (ctx.hasBufferInt64Atomics())
             addGraphics(requests, "pointResolve", getShaderVariant(motionDefine, readFile(folder / "passes/pointRaster.slang")), "resolveVert", "resolveFrag");
         addGraphics(requests, "glyphs", getShaderVariant(motionDefine + "#define RASM_GLYPHS 1\n", rasm), "vertMain", "fragMain");
+        // Weighted and additive see-through materials (weightedBlend.cpp); the composite's variant follows the samples.
+        addGraphics(requests, "rasmWeighted", getShaderVariant(motionDefine + WEIGHTED_DEFINES, rasm), "vertMain", "fragMain");
+        addGraphics(requests, "rasmWeightedGlyphs", getShaderVariant(motionDefine + WEIGHTED_DEFINES + "#define RASM_GLYPHS 1\n", rasm), "vertMain", "fragMain");
+        addGraphics(requests, "weightedComposite", getShaderVariant(motionDefine + getCompositeDefines(multisampled ? 2 : 1, ctx.hasSampleRateShading()), readFile(folder / "passes/weightedComposite.slang")),
+                    "vertMain", "fragMain");
+        addGraphics(requests, "rasmAdditive", getShaderVariant(motionDefine + WEIGHTED_ADDITIVE_DEFINES, rasm), "vertMain", "fragMain");
         if (meshShaders)
             addMesh(requests, "rasmMeshMask", getShaderVariant(maskDefines, rasm), "meshMain", "fragMain");
         if (motion)

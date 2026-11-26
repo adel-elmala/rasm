@@ -15,8 +15,9 @@
 
 namespace rasm
 {
-    // The header, a GlyphChunkSlot per chunk, a word per batch, a draw command per chunk and LOD, then a word per glyph
-    // of the batches twice: the cull's slots, then the list the draw reads.
+    // The header, a GlyphChunkSlot per chunk, a word per batch, a draw command per chunk and LOD twice (the chunks with
+    // an opaque material, then the weighted ones: lib/glyphs.slang), then a word per glyph of the batches twice: the
+    // cull's slots, then the list the draw reads.
     GlyphCullLayout getGlyphCullLayout(uint32_t chunkCapacity, uint32_t batchCapacity)
     {
         const uint64_t glyphs = static_cast<uint64_t>(batchCapacity) * gfx::GLYPH_BATCH_GLYPHS;
@@ -25,7 +26,8 @@ namespace rasm
         layout.chunks = sizeof(gfx::GlyphCullHeader);
         layout.batches = layout.chunks + static_cast<uint64_t>(chunkCapacity) * sizeof(gfx::GlyphChunkSlot);
         layout.commands = layout.batches + static_cast<uint64_t>(batchCapacity) * sizeof(uint32_t);
-        layout.slots = layout.commands + static_cast<uint64_t>(layout.commandCapacity) * sizeof(gfx::DrawInfo);
+        layout.weightedCommands = layout.commands + static_cast<uint64_t>(layout.commandCapacity) * sizeof(gfx::DrawInfo);
+        layout.slots = layout.weightedCommands + static_cast<uint64_t>(layout.commandCapacity) * sizeof(gfx::DrawInfo);
         layout.list = layout.slots + glyphs * sizeof(uint32_t);
         layout.size = layout.list + glyphs * sizeof(uint32_t);
         return layout;
@@ -152,11 +154,17 @@ namespace rasm
         CullMode cullMode = gpuScene->drawLists[view.scene.index].glyphCullMode;
         if (view.mirrored && cullMode != CullMode::NONE)
             cullMode = CullMode::FRONT;
-        drawGlyphs(getSceneDataAddress(ctx, *gpuScene, frame, viewIndex), view.glyphCull[frame], 0, layout.commands, layout.commandCapacity, getShadedPipelines(*gpuScene, ctx, view).glyphPipeline,
-                   cullMode, 0);
+        const uint64_t sceneAddress = getSceneDataAddress(ctx, *gpuScene, frame, viewIndex);
+        const PipelineHandle pipeline = getShadedPipelines(*gpuScene, ctx, view).glyphPipeline;
+        drawGlyphs(sceneAddress, view.glyphCull[frame], 0, layout.commands, layout.commandCapacity, false, pipeline, cullMode, 0);
+        // A debug view draws the see-through (weighted) glyphs shaded here too, as it draws the others (D52).
+        if (view.debugView != DebugView::NONE && gpuScene->drawLists[view.scene.index].weightedGlyphChunks > 0)
+            drawGlyphs(sceneAddress, view.glyphCull[frame], 0, layout.weightedCommands, layout.commandCapacity, true, pipeline, cullMode, 0);
     }
 
-    void Renderer::drawGlyphs(uint64_t sceneAddress, BufferHandle buffer, uint64_t headerOffset, uint64_t commandsOffset, uint32_t commandCapacity, PipelineHandle pipeline, CullMode cullMode, uint32_t argument)
+    // The opaque chunks' commands, or the weighted chunks' (weighted), with the count the cull left in the header.
+    void Renderer::drawGlyphs(uint64_t sceneAddress, BufferHandle buffer, uint64_t headerOffset, uint64_t commandsOffset, uint32_t commandCapacity, bool weighted, PipelineHandle pipeline, CullMode cullMode,
+                              uint32_t argument)
     {
         const auto commandBuffer = frameResources[frameCount].commandBuffer;
         const uint32_t timer = beginGpuTimer(commandBuffer, "Glyphs");
@@ -166,7 +174,8 @@ namespace rasm
         ctx.pushConstants(commandBuffer, pipeline, &pushConstants, sizeof(pushConstants), 0);
         ctx.bindIndexBuffer(commandBuffer, geometryPool->indexBuffer(), 0, Format::U32_UINT);
         ctx.setCullMode(commandBuffer, cullMode);
-        ctx.drawIndexedIndirectCount(commandBuffer, buffer, headerOffset + commandsOffset, buffer, headerOffset + offsetof(gfx::GlyphCullHeader, commandCount), commandCapacity, sizeof(gfx::DrawInfo));
+        const uint64_t countOffset = weighted ? offsetof(gfx::GlyphCullHeader, weightedCommandCount) : offsetof(gfx::GlyphCullHeader, commandCount);
+        ctx.drawIndexedIndirectCount(commandBuffer, buffer, headerOffset + commandsOffset, buffer, headerOffset + countOffset, commandCapacity, sizeof(gfx::DrawInfo));
         ctx.setCullMode(commandBuffer, CullMode::NONE);
         endGpuTimer(commandBuffer, timer);
     }

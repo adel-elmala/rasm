@@ -589,6 +589,12 @@ namespace rasm::rhi
         // mobile GPUs) every point is drawn by triangles.
         bufferInt64Atomics = physicalDevice.enable_extension_features_if_present(VkPhysicalDeviceVulkan12Features{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, .shaderBufferInt64Atomics = VK_TRUE});
         spdlog::info("64-bit buffer atomics: {}.", bufferInt64Atomics ? "yes" : "no");
+        // Weighted blended transparency blends its targets differently (independentBlend), and its composite runs once
+        // per sample of a multisampled target (sampleRateShading). Without the first, those materials are sorted; without
+        // the second, the composite takes each pixel's mean.
+        independentBlend = physicalDevice.enable_features_if_present(VkPhysicalDeviceFeatures{.independentBlend = VK_TRUE});
+        sampleRateShading = physicalDevice.enable_features_if_present(VkPhysicalDeviceFeatures{.sampleRateShading = VK_TRUE});
+        spdlog::info("Independent blend: {}; sample rate shading: {}.", independentBlend ? "yes" : "no", sampleRateShading ? "yes" : "no");
         if (meshShaders)
             pushConstantStages |= MESH_SHADER_STAGES;
 
@@ -1076,22 +1082,32 @@ namespace rasm::rhi
         };
 
         // Premultiplied alpha: the shader already multiplied its color by alpha, so the source counts once and the
-        // target keeps (1 - alpha) of its own, for color and alpha alike. Additive keeps all of the target's.
+        // target keeps (1 - alpha) of its own, for color and alpha alike. Additive keeps all of the target's. WEIGHTED
+        // adds every color but color 1, which blends premultiplied (a coverage); WEIGHTED_MOTION premultiplies only color
+        // 1's alpha and adds its color channels (motion sums beside the coverage); ADDITIVE_COLOR adds color 0 only. They
+        // differ per attachment, which needs the independentBlend feature (hasIndependentBlend).
         const bool blend = desc.blendMode != BlendMode::NONE;
-        const VkBlendFactor destination = desc.blendMode == BlendMode::ADDITIVE ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-        VkPipelineColorBlendAttachmentState colorBlendAttachment = {
-            .blendEnable = blend ? VK_TRUE : VK_FALSE,
-            .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
-            .dstColorBlendFactor = destination,
-            .colorBlendOp = VK_BLEND_OP_ADD,
-            .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-            .dstAlphaBlendFactor = blend ? destination : VK_BLEND_FACTOR_ZERO,
-            .alphaBlendOp = VK_BLEND_OP_ADD,
-            .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
-        };
-
         VkPipelineColorBlendAttachmentState colorBlendAttachments[MAX_COLOR_ATTACHMENTS];
-        std::fill(std::begin(colorBlendAttachments), std::end(colorBlendAttachments), colorBlendAttachment);
+        for (uint32_t i = 0; i < MAX_COLOR_ATTACHMENTS; ++i)
+        {
+            bool additive = desc.blendMode == BlendMode::ADDITIVE;
+            if (desc.blendMode == BlendMode::WEIGHTED || desc.blendMode == BlendMode::WEIGHTED_MOTION)
+                additive = i != 1;
+            if (desc.blendMode == BlendMode::ADDITIVE_COLOR)
+                additive = i == 0;
+            const bool additiveColor = additive || (desc.blendMode == BlendMode::WEIGHTED_MOTION && i == 1);
+            const VkBlendFactor destination = additive ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            colorBlendAttachments[i] = {
+                .blendEnable = blend ? VK_TRUE : VK_FALSE,
+                .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
+                .dstColorBlendFactor = additiveColor ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+                .colorBlendOp = VK_BLEND_OP_ADD,
+                .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+                .dstAlphaBlendFactor = blend ? destination : VK_BLEND_FACTOR_ZERO,
+                .alphaBlendOp = VK_BLEND_OP_ADD,
+                .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+            };
+        }
 
         VkPipelineColorBlendStateCreateInfo colorBlendInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
@@ -1522,6 +1538,16 @@ namespace rasm::rhi
     bool VulkanDevice::hasMeshShaders() const
     {
         return meshShaders;
+    }
+
+    bool VulkanDevice::hasIndependentBlend() const
+    {
+        return independentBlend;
+    }
+
+    bool VulkanDevice::hasSampleRateShading() const
+    {
+        return sampleRateShading;
     }
 
     bool VulkanDevice::hasBufferInt64Atomics() const

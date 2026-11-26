@@ -15,7 +15,7 @@ namespace rasm::gfx
 
     // A draw list has a run per alpha mode and cull mode, one run of point cloud chunks and one blend run, neither
     // culled by face. Must match shaders/lib/core.slang.
-    constexpr uint32_t      MAX_DRAW_RUNS       = 8;
+    constexpr uint32_t      MAX_DRAW_RUNS       = 10;
     // The texture slots with a KHR_texture_transform each. Must match shaders/lib/core.slang.
     constexpr uint32_t      TEXTURE_TRANSFORMS  = 5;
     enum class TextureTransformSlot : uint32_t { BASE_COLOR, METALLIC_ROUGHNESS, NORMAL, OCCLUSION, EMISSIVE };
@@ -23,6 +23,8 @@ namespace rasm::gfx
     constexpr uint32_t      MATERIAL_DOUBLE_SIDED       = 1u << 0;
     constexpr uint32_t      MATERIAL_TEXTURE_TRANSFORM  = 1u << 1;  // a texture has a KHR_texture_transform that is not the identity
     constexpr uint32_t      MATERIAL_NORMAL_XY          = 1u << 2;  // the normal map has x and y only (BC5, EAC RG11): z is rebuilt
+    constexpr uint32_t      MATERIAL_WEIGHTED           = 1u << 3;  // BLEND, drawn by weighted blended transparency (BlendMethod::WEIGHTED, every GLYPHS material)
+    constexpr uint32_t      MATERIAL_ADDITIVE           = 1u << 4;  // BLEND, its light added (BlendMethod::ADDITIVE)
 
     // Selects how the uber shader's fragMain shades a model. Must match shaders/lib/core.slang.
     enum class MaterialId : uint32_t { PBR, UNLIT, TERRAIN, VECTOR, POINTS, GLYPHS };
@@ -330,7 +332,8 @@ namespace rasm::gfx
         uint32_t            groupsZ;
         uint32_t            chunkCount;
         uint32_t            commandCount;
-        uint32_t            padding[3];
+        uint32_t            weightedCommandCount;   // the commands of the chunks with a BLEND material, after the others' capacity
+        uint32_t            padding[2];
     };
 
     // A glyph chunk the view's cull kept: its instance row, its first batch (its glyphs' slots and list entries start at
@@ -598,6 +601,14 @@ namespace rasm::gfx
         uint64_t         glyphListPtr;              // the visible glyphs, chunk slot << 16 | glyph, each chunk's by LOD
         uint32_t         glyphChunkCapacity;
         uint32_t         glyphBatchCapacity;
+        uint32_t         weightedRun;               // the run of BlendMethod::WEIGHTED draws, MAX_DRAW_RUNS without one (or in a depth-only view)
+        uint32_t         additiveRun;               // the run of BlendMethod::ADDITIVE draws, MAX_DRAW_RUNS without one
+        uint64_t         weightedRangePtr;          // two words the cull writes: the nearest and farthest view depth of the weighted draws (getDepthBits); 0: none
+        glm::vec2        weightedDepths;            // the view depths the weights span (near, far); far <= near: this frame's words at weightedRangePtr
+        uint32_t         weightedAccum;             // bindless: the weighted sums (color times weight, alpha times weight)
+        uint32_t         weightedCoverage;          // bindless: the coverage, 1 - the product of (1 - alpha), in r; with motion in a, after the motion sums
+        uint32_t         weightedSamples;           // samples per pixel of the two
+        uint32_t         weightedPadding;           // keeps the size a multiple of 8
     };
 
     struct PushConstants
@@ -757,26 +768,30 @@ namespace rasm::gfx
     static_assert(offsetof(GeometryData, boundsRadius) == 16, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, lodCount) == 20, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, lods) == 24, "GeometryData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, environmentOrientation) == 2056, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, labelsPtr) == 2072, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, grid) == 2080, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, environmentOrientation) == 2088, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, labelsPtr) == 2104, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, grid) == 2112, "SceneData must match the shader's scalar layout");
     static_assert(sizeof(GridData) == 168, "GridData must match the shader's scalar layout");
     static_assert(offsetof(GridData, residueX) == 48, "GridData must match the shader's scalar layout");
     static_assert(offsetof(GridData, minorColor) == 80, "GridData must match the shader's scalar layout");
     static_assert(offsetof(GridData, lineWidth) == 144, "GridData must match the shader's scalar layout");
     static_assert(offsetof(GridData, zero) == 164, "GridData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, labelProbesPtr) == 2248, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, labelSlotCount) == 2268, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, pointRun) == 428, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, padding) == 2028, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, pointsPtr) == 2272, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, pointRasterPtr) == 2280, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, pointPixelsPtr) == 2296, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, pointBatchCapacity) == 2304, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, glyphCullPtr) == 2312, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, glyphListPtr) == 2352, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, glyphBatchCapacity) == 2364, "SceneData must match the shader's scalar layout");
-    static_assert(sizeof(SceneData) == 2368, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, labelProbesPtr) == 2280, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, labelSlotCount) == 2300, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, pointRun) == 436, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, padding) == 2060, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, pointsPtr) == 2304, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, pointRasterPtr) == 2312, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, pointPixelsPtr) == 2328, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, pointBatchCapacity) == 2336, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, glyphCullPtr) == 2344, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, glyphListPtr) == 2384, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, glyphBatchCapacity) == 2396, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, weightedRun) == 2400, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, weightedRangePtr) == 2408, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, weightedDepths) == 2416, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, weightedSamples) == 2432, "SceneData must match the shader's scalar layout");
+    static_assert(sizeof(SceneData) == 2440, "SceneData must match the shader's scalar layout");
     static_assert(sizeof(GlyphChunkHeader) == sizeof(uint64_t) * GLYPH_CHUNK_HEADER_UNITS, "GlyphChunkHeader must match shaders/lib/glyphs.slang");
     static_assert(sizeof(GlyphCullHeader) == 32, "GlyphCullHeader must match shaders/lib/core.slang");
     static_assert(offsetof(GlyphCullHeader, commandCount) == 16, "GlyphCullHeader must match shaders/lib/core.slang");
@@ -785,16 +800,16 @@ namespace rasm::gfx
     static_assert(sizeof(PointRasterHeader) == 48, "PointRasterHeader must match shaders/lib/core.slang");
     static_assert(offsetof(PointRasterHeader, clearGroups) == 12, "PointRasterHeader must match shaders/lib/core.slang");
     static_assert(POINT_BATCHES_PER_CHUNK * POINT_BATCH_POINTS == 65536, "a chunk's points must fill its batches");
-    static_assert(offsetof(SceneData, meshletDataPtr) == 2032, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, originLow) == 2040, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, previousSkinnedVertsPtr) == 1824, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, animatedTransformsPtr) == 1808, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, meshletsPtr) == 1832, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, meshletVisibilityPtr) == 1896, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, cullViewPoint) == 1904, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, runChunkFirst) == 1920, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, runMeshletBudget) == 1984, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, coneRuns) == 2020, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, meshletDataPtr) == 2064, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, originLow) == 2072, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, previousSkinnedVertsPtr) == 1832, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, animatedTransformsPtr) == 1816, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, meshletsPtr) == 1840, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, meshletVisibilityPtr) == 1904, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, cullViewPoint) == 1912, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, runChunkFirst) == 1928, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, runMeshletBudget) == 2008, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, coneRuns) == 2052, "SceneData must match the shader's scalar layout");
     static_assert(sizeof(InstanceData) == 160, "InstanceData must match the shader's scalar layout");
     static_assert(offsetof(InstanceData, previousWorld) == 104, "InstanceData must match the shader's scalar layout");
     static_assert(offsetof(InstanceData, animationRow) == 152, "InstanceData must match the shader's scalar layout");
@@ -825,8 +840,8 @@ namespace rasm::gfx
     static_assert(offsetof(AnimationFrame, joints) == 48, "AnimationFrame must match the shader's scalar layout");
     static_assert(offsetof(AnimationFrame, clock) == 32, "AnimationFrame must match the shader's scalar layout");
     static_assert(sizeof(AnimatePushConstants) == PUSH_CONSTANTS_SIZE, "AnimatePushConstants must fill the push-constant range");
-    static_assert(offsetof(SceneData, previousViewProjection) == 1728, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, textureLodBias) == 1800, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, previousViewProjection) == 1736, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, textureLodBias) == 1808, "SceneData must match the shader's scalar layout");
     static_assert(sizeof(SceneData) % 8 == 0, "views' SceneData sit one after another, so their pointers must stay 8-byte aligned");
     static_assert(offsetof(SceneData, shadowedLightCount) == 140, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, vertsPtr) == 144, "SceneData must match the shader's scalar layout");
@@ -849,23 +864,23 @@ namespace rasm::gfx
     static_assert(offsetof(SceneData, drawCount) == 384, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, runCount) == 388, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, runFirst) == 392, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, blendRun) == 424, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, hizLevelCount) == 436, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, depthTexture) == 440, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, viewportWidth) == 444, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, viewportHeight) == 448, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, lodErrorPixels) == 452, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, forcedLod) == 456, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, shadowMaps) == 460, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, lodPixelsPerUnit) == 1612, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, lodDepthPlane) == 1616, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, environmentSpecular) == 1632, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, brdfLut) == 1648, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, shadowedLights) == 1664, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, globalLightCount) == 1712, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, localLightCount) == 1716, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, nearZ) == 1720, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, environmentRotation) == 1656, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, blendRun) == 432, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, hizLevelCount) == 444, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, depthTexture) == 448, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, viewportWidth) == 452, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, viewportHeight) == 456, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, lodErrorPixels) == 460, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, forcedLod) == 464, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, shadowMaps) == 468, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, lodPixelsPerUnit) == 1620, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, lodDepthPlane) == 1624, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, environmentSpecular) == 1640, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, brdfLut) == 1656, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, shadowedLights) == 1672, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, globalLightCount) == 1720, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, localLightCount) == 1724, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, nearZ) == 1728, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, environmentRotation) == 1664, "SceneData must match the shader's scalar layout");
     static_assert(sizeof(PushConstants) == PUSH_CONSTANTS_SIZE, "PushConstants must fill the pipelines' push-constant range");
     static_assert(sizeof(ToneMapPushConstants) == PUSH_CONSTANTS_SIZE, "ToneMapPushConstants must fill the push-constant range");
     static_assert(offsetof(ToneMapPushConstants, bloomStrength) == 12, "ToneMapPushConstants must match the shader's scalar layout");

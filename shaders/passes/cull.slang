@@ -4,6 +4,7 @@
 #include "lodSelection.slang"
 #include "meshletCulling.slang"
 #include "occlusionCulling.slang"
+#include "weightedBlend.slang"
 
 // Culling packs each run's visible draws at the start of its range of drawInfoPtr, in list order, so the draw
 // order is the same every frame. It takes two dispatches over groups of 64 draws that each lie inside one run.
@@ -20,7 +21,10 @@
 //   pass, and keeps the visible draws the early pass did not draw.
 // A view with hizLevelCount == 0 only runs CULL_EARLY, as frustum culling.
 // The blend run (SceneData::blendRun) is drawn by the Transparent pass after both draw passes, so the early phase
-// keeps none of its draws and the late phase keeps all that pass, sorted afterwards by passes/sort.slang.
+// keeps none of its draws and the late phase keeps all that pass, sorted afterwards by passes/sort.slang. So do the
+// weighted and the additive run (weightedRun, additiveRun), drawn after the view's last draws, in any order; the weighted
+// draws the phase keeps, and its weighted glyph chunks, also give the view depths their weights span (weightedRangePtr,
+// lib/weightedBlend.slang).
 //
 // Meshlets. In a run of SceneData::meshletRuns, a visible draw whose LOD has meshlets is not drawn whole: writeMain
 // writes it as chunks of up to 64 meshlets, in list order, each run's from runChunkFirst. Two more dispatches then
@@ -55,6 +59,20 @@ static const uint   STATS_LOD0_TRIANGLES = 3;
 static const uint   STATS_LOD_DRAWS     = 5;
 static const uint   STATS_LOD_TRIANGLES = STATS_MESHLETS + 3;    // low, high: the visible draws' triangles at their LOD, before meshlet culling
 
+// The view depths a draw's bounding sphere spans; with perspective not nearer than the near plane.
+float2 getSphereDepths(SceneData *scene, Sphere sphere)
+{
+    float depth         = -mul(scene->view, float4(sphere.center, 1.0)).z;
+    float nearest       = depth - sphere.radius;
+    float farthest      = depth + sphere.radius;
+    if (!isOrthographic(scene))
+    {
+        nearest         = max(nearest, scene->nearZ);
+        farthest        = max(farthest, nearest);
+    }
+    return float2(nearest, farthest);
+}
+
 struct CullGroup
 {
     uint            run;
@@ -71,6 +89,8 @@ groupshared uint    visibleLodTriangles[CULL_GROUP_SIZE];    // at the picked LO
 groupshared uint    visibleLods[CULL_GROUP_SIZE];          // MAX_MESH_LODS for a culled draw
 groupshared uint    groupChunks[CULL_GROUP_SIZE];          // a draw's chunks, 0 when it is not drawn by meshlets
 groupshared uint    groupMeshlets[CULL_GROUP_SIZE];        // a draw's meshlets, at its LOD
+groupshared uint    groupNearest;                          // the group's kept weighted draws' view depths (getDepthBits)
+groupshared uint    groupFarthest;
 groupshared uint    partialSums[CULL_GROUP_SIZE];
 groupshared uint    partialChunks[CULL_GROUP_SIZE];
 groupshared uint    partialMeshlets[CULL_GROUP_SIZE];
@@ -124,6 +144,8 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
     uint chunks         = 0;
     uint meshlets       = 0;
     bool points         = group.run == scene->pointRun;
+    uint nearestBits    = 0xFFFFFFFF;                   // a kept weighted draw's view depths (getDepthBits)
+    uint farthestBits   = 0;
     if (drawIndex < group.endDraw)
     {
         DrawInfo draw   = scene->allDrawsPtr[drawIndex];
@@ -139,8 +161,9 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
         }
         else if (pc.argument == CULL_EARLY)
         {
-            // The blend run is drawn once, after both draw passes, so only the late phase keeps its draws.
-            candidate   = inFrustum && scene->visibilityPtr[draw.firstInstance] != 0 && group.run != scene->blendRun;
+            // The blend runs are drawn once, after both draw passes, so only the late phase keeps their draws.
+            bool late   = group.run == scene->blendRun || group.run == scene->weightedRun || group.run == scene->additiveRun;
+            candidate   = inFrustum && scene->visibilityPtr[draw.firstInstance] != 0 && !late;
         }
         else
         {
@@ -162,10 +185,17 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
             InstanceData *instance = scene->instancesPtr + draw.firstInstance;
             counted         = earlyFlags == 0;
             uint lodCount   = instance->meshletVisibility >= 0 ? clamp(scene->geometryPtr[uint(instance->meshletVisibility)].lodCount, 1, MAX_MESH_LODS) : 0;
-            bool kept       = counted && scene->glyphCullPtr != nullptr && lodCount > 0 && appendGlyphChunk(scene, draw.firstInstance, draw.indexCount, lodCount);
+            bool blend      = ((scene->materialsPtr + instance->materialIndex)->flags & MATERIAL_WEIGHTED) != 0;
+            bool kept       = counted && scene->glyphCullPtr != nullptr && lodCount > 0 && appendGlyphChunk(scene, draw.firstInstance, draw.indexCount, lodCount, blend);
             packed          = kept ? CULL_RASTER : CULLED;
             counted         = kept;
             lod             = 0;
+            if (kept && blend)
+            {
+                float2 depths   = getSphereDepths(scene, sphere);
+                nearestBits     = getDepthBits(depths.x);
+                farthestBits    = getDepthBits(depths.y);
+            }
         }
         else if (candidate && points)
         {
@@ -212,7 +242,18 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
             }
             lod0Triangles   = counted ? draw.indexCount / 3 : 0;
             lodTriangles    = counted ? geometry->lods[lod].indexCount / 3 : 0;
+            if (visible && group.run == scene->weightedRun)
+            {
+                float2 depths   = getSphereDepths(scene, sphere);
+                nearestBits     = getDepthBits(depths.x);
+                farthestBits    = getDepthBits(depths.y);
+            }
         }
+    }
+    if (threadId.x == 0)
+    {
+        groupNearest    = 0xFFFFFFFF;
+        groupFarthest   = 0;
     }
 
     visibleFlags[threadId.x]            = visible ? 1 : 0;
@@ -277,6 +318,23 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
             addCount64(scene->cullStatsPtr + STATS_TRIANGLES, trianglesLow, trianglesHigh);
             addCount64(scene->cullStatsPtr + STATS_LOD0_TRIANGLES, lod0Low, lod0High);
             addCount64(scene->cullStatsPtr + STATS_LOD_TRIANGLES, lodLow, lodHigh);
+        }
+    }
+
+    // Only a view with weighted draws measures their range, so the others pay no second barrier (a uniform branch): the
+    // group's range in shared memory, then one pair of atomics a group.
+    if (scene->weightedRangePtr != nullptr)
+    {
+        if (nearestBits <= farthestBits)
+        {
+            InterlockedMin(groupNearest, nearestBits);
+            InterlockedMax(groupFarthest, farthestBits);
+        }
+        GroupMemoryBarrierWithGroupSync();
+        if (threadId.x == 0 && groupNearest <= groupFarthest)
+        {
+            InterlockedMin(scene->weightedRangePtr[0], groupNearest);
+            InterlockedMax(scene->weightedRangePtr[1], groupFarthest);
         }
     }
 }

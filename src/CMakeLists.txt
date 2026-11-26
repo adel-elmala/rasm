@@ -95,6 +95,7 @@ target_sources(rasm_renderer PRIVATE
     "renderer/picking.cpp"
     "renderer/pointRaster.cpp"
     "renderer/glyphCull.cpp"
+    "renderer/weightedBlend.cpp"
     "renderer/readback.cpp"
     "renderer/shadowCascades.cpp"
     "renderer/statsOverlay.cpp"

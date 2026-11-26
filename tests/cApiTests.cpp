@@ -1081,6 +1081,19 @@ TEST_CASE("the 1.12 structs start from the C++ defaults, an octree builds on any
     CHECK(rasm_update_material(nullptr, rasm_material{1}, &desc) == RASM_ERROR_INVALID_ARGUMENT);
 }
 
+TEST_CASE("the 1.15 material blend method is the C++ one, past an older desc's size it keeps its value, and a bad one is refused")
+{
+    CHECK(RASM_C_API_VERSION_MINOR >= 15);
+    CHECK(RASM_BLEND_METHOD_SORTED == static_cast<uint32_t>(rasm::BlendMethod::SORTED));
+    CHECK(RASM_BLEND_METHOD_WEIGHTED == static_cast<uint32_t>(rasm::BlendMethod::WEIGHTED));
+    CHECK(RASM_BLEND_METHOD_ADDITIVE == static_cast<uint32_t>(rasm::BlendMethod::ADDITIVE));
+    CHECK(offsetof(rasm_material_desc, blend_method) == offsetof(rasm_material_desc, vector_colors) + sizeof(rasm_scalar_colors));
+    rasm_material_desc desc{};
+    desc.size = sizeof(desc);
+    desc.blend_method = RASM_BLEND_METHOD_ADDITIVE + 1;
+    CHECK(rasm_update_material(nullptr, rasm_material{1}, &desc) == RASM_ERROR_INVALID_ARGUMENT);
+}
+
 TEST_CASE("the 1.14 structs start from the C++ defaults, a glyph chunk builds on any thread, and data lines take values")
 {
     CHECK(RASM_MAX_GLYPH_CHUNK_GLYPHS == rasm::MAX_GLYPH_CHUNK_GLYPHS);

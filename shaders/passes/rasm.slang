@@ -15,6 +15,9 @@
 #if defined(RASM_GLYPHS)
 #include "glyphs.slang"
 #endif
+#if defined(RASM_WEIGHTED)
+#include "weightedBlend.slang"
+#endif
 
 struct VSInput
 {
@@ -297,7 +300,37 @@ float4 toTarget(float4 color, float coverage)
 #endif
 }
 
+#if defined(RASM_WEIGHTED)
+// A weighted pipeline (RASM_WEIGHTED, with RASM_ALPHA_BLEND) draws into the view's weighted target (weightedBlend.cpp):
+// the premultiplied color and the alpha, times the fragment's weight, add up in the first color; the alpha blends over
+// the second, the coverage (BlendMode::WEIGHTED). With motion the second also adds up the motion times alpha and weight
+// in rg, its coverage in a (BlendMode::WEIGHTED_MOTION), so the composite gives the weighted mean motion with two
+// targets, not three. The weight's place is the fragment's view depth in the range.
+struct FragmentOutput
+{
+    float4 accum    : SV_TARGET0;
+    float4 coverage : SV_TARGET1;
+};
+
+FragmentOutput toWeightedOutput(float4 color, float3 position, float2 motion)
+{
+    float weight = getWeight(getWeightedPlace(pc.scene, -mul(pc.scene->view, float4(position, 1.0)).z));
+    FragmentOutput output;
+    output.accum    = color * weight;
 #if defined(RASM_MOTION_VECTORS)
+    output.coverage = float4(motion * color.a * weight, 0.0, color.a);
+#else
+    output.coverage = color.aaaa;
+#endif
+    return output;
+}
+#if defined(RASM_MOTION_VECTORS)
+#define TO_OUTPUT(color) toWeightedOutput(color, input.worldPosition, getMotion(input.currentClip, input.previousClip))
+#else
+#define TO_OUTPUT(color) toWeightedOutput(color, input.worldPosition, float2(0.0))
+#endif
+#define VECTOR_OUTPUT(color) TO_OUTPUT(color)
+#elif defined(RASM_MOTION_VECTORS)
 // A target with motion (RASM_MOTION_VECTORS, a MOTION_FORMAT second color) gets the pixel's screen motion as well. A
 // BLEND pipeline writes zero motion with alpha 0, which its premultiplied blend turns into "keep what is behind": a
 // see-through surface leaves the motion of the surface behind it.
@@ -312,7 +345,12 @@ FragmentOutput toOutput(float4 color, float4 currentClip, float4 previousClip)
 {
     FragmentOutput output;
     output.color = color;
-#if defined(RASM_ALPHA_BLEND)
+#if defined(RASM_ADDITIVE)
+    // An additive pipeline (BlendMode::ADDITIVE_COLOR) adds its light and lays its motion over the motion behind by its
+    // alpha, as a vector feature does: TAA then follows a bright additive layer.
+    output.color = float4(color.rgb, 0.0);
+    output.motion = float4(getMotion(currentClip, previousClip) * color.a, 0.0, color.a);
+#elif defined(RASM_ALPHA_BLEND)
     output.motion = float4(0.0);
 #else
     output.motion = float4(getMotion(currentClip, previousClip), 0.0, 0.0);
@@ -340,6 +378,10 @@ FragmentOutput toVectorOutput(float4 color, float4 currentClip, float4 previousC
     return output;
 }
 #define VECTOR_OUTPUT(color) toVectorOutput(color, input.currentClip, input.previousClip)
+#elif defined(RASM_ADDITIVE)
+// Without motion an additive pipeline adds its light alone.
+#define TO_OUTPUT(color) float4((color).rgb, 0.0)
+#define VECTOR_OUTPUT(color) TO_OUTPUT(color)
 #else
 #define TO_OUTPUT(color) (color)
 #define VECTOR_OUTPUT(color) (color)
@@ -366,7 +408,7 @@ float getCoverage(float alpha, float cutoff)
 // rather than in a function that takes the varyings: such a call reads every varying up front, which costs the opaque
 // draws about 5% (05_city).
 [shader("fragment")]
-#if defined(RASM_MOTION_VECTORS)
+#if defined(RASM_MOTION_VECTORS) || defined(RASM_WEIGHTED)
 FragmentOutput fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace)
 #else
 float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
@@ -504,6 +546,11 @@ PickOutput pickMain(VSOutput input, bool isFrontFace : SV_IsFrontFace)
         alpha = getBaseAlpha(gTextures, model, input.uv0, input.uv1, input.uv2, input.color.a);
     }
     if (alpha < getPickMinAlpha())
+        discard;
+#endif
+#if defined(RASM_GLYPHS)
+    // A see-through glyph (a BLEND material: weighted) is picked where its alpha is at least the pick's minAlpha.
+    if ((model->flags & MATERIAL_WEIGHTED) != 0 && getBaseAlpha(gTextures, model, input.uv0, input.uv1, input.uv2, input.color.a) < getPickMinAlpha())
         discard;
 #endif
     float3 normal = input.worldNormal;

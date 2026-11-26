@@ -24,7 +24,7 @@
 
 // NOLINTBEGIN(readability-identifier-naming): C names, snake_case with the rasm_ prefix, as C APIs and their bindings expect
 #define RASM_C_API_VERSION_MAJOR    1
-#define RASM_C_API_VERSION_MINOR    14
+#define RASM_C_API_VERSION_MINOR    15
 #define RASM_C_API_VERSION          (((uint32_t)RASM_C_API_VERSION_MAJOR << 16) | (uint32_t)RASM_C_API_VERSION_MINOR)
 
 #if defined(_WIN32)
@@ -196,6 +196,18 @@ enum
     RASM_ALPHA_MODE_NONE            = 0,
     RASM_ALPHA_MODE_MASK            = 1,
     RASM_ALPHA_MODE_BLEND           = 2,
+};
+
+/* 1.15: how a BLEND material's draws go over what is behind them. SORTED: back to front, a draw at a time (the default,
+ * for labels, UI and a few layers). WEIGHTED: weighted blended order-independent transparency, for dense see-through
+ * data. ADDITIVE: its light added, in any order (glows, density and X-ray views). A GLYPHS material is always WEIGHTED,
+ * a VECTOR one SORTED. */
+typedef uint32_t                    rasm_blend_method;
+enum
+{
+    RASM_BLEND_METHOD_SORTED        = 0,
+    RASM_BLEND_METHOD_WEIGHTED      = 1,
+    RASM_BLEND_METHOD_ADDITIVE      = 2,
 };
 
 typedef uint32_t                    rasm_light_type;
@@ -488,6 +500,7 @@ typedef struct rasm_material_desc
     rasm_point_material             points;                                    /* 1.10: POINTS only */
     rasm_scalar_colors              glyphs;                                    /* 1.14: GLYPHS only */
     rasm_scalar_colors              vector_colors;                             /* 1.14: VECTOR only: lines with values (rasm_vector_add_data_lines) */
+    rasm_blend_method               blend_method;                              /* 1.15: BLEND only; SORTED by default */
 } rasm_material_desc;
 
 typedef struct rasm_texture_desc

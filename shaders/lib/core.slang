@@ -6,8 +6,8 @@
 
 // Constants
 static const uint   INVALID_TEXTURE_INDEX = 0xFFFFFFFF;
-// A run per alpha mode and cull mode, and one blend run. Must match rasm::gfx::MAX_DRAW_RUNS.
-static const uint   MAX_DRAW_RUNS       = 8;
+// A run per alpha mode and cull mode, the point run, and three blend runs. Must match rasm::gfx::MAX_DRAW_RUNS.
+static const uint   MAX_DRAW_RUNS       = 10;
 
 // Selects how fragMain shades a model. Must match rasm::gfx::MaterialId.
 enum class MaterialId : uint32_t { PBR, UNLIT, TERRAIN, VECTOR, POINTS, GLYPHS };
@@ -27,6 +27,8 @@ static const uint   TRANSFORM_EMISSIVE              = 4;
 static const uint   MATERIAL_DOUBLE_SIDED           = 1 << 0;
 static const uint   MATERIAL_TEXTURE_TRANSFORM      = 1 << 1;   // a texture has a KHR_texture_transform that is not the identity
 static const uint   MATERIAL_NORMAL_XY              = 1 << 2;   // the normal map has x and y only (BC5, EAC RG11): z is rebuilt
+static const uint   MATERIAL_WEIGHTED               = 1 << 3;   // BLEND, drawn by weighted blended transparency (BlendMethod::WEIGHTED, every GLYPHS material)
+static const uint   MATERIAL_ADDITIVE               = 1 << 4;   // BLEND, its light added (BlendMethod::ADDITIVE)
 
 // SceneData::viewFlags. Must match rasm::gfx::VIEW_*.
 static const uint   VIEW_DEPTH_ONLY                 = 1 << 0;   // a shadow map's view: it draws no VECTOR material
@@ -208,7 +210,8 @@ struct GlyphCullHeader
     uint32_t            groupsZ;
     uint32_t            chunkCount;
     uint32_t            commandCount;
-    uint32_t            padding[3];
+    uint32_t            weightedCommandCount;   // the commands of the chunks with a BLEND material, after the others' capacity
+    uint32_t            padding[2];
 };
 
 // A glyph chunk the view's cull kept (lib/glyphs.slang). Must match rasm::gfx::GlyphChunkSlot.
@@ -360,6 +363,14 @@ struct SceneData
     uint32_t*           glyphListPtr;           // the visible glyphs, chunk slot << 16 | glyph, each chunk's by LOD
     uint32_t            glyphChunkCapacity;
     uint32_t            glyphBatchCapacity;
+    uint32_t            weightedRun;            // the run of BlendMethod::WEIGHTED draws, MAX_DRAW_RUNS without one (or in a depth-only view)
+    uint32_t            additiveRun;            // the run of BlendMethod::ADDITIVE draws, MAX_DRAW_RUNS without one
+    uint32_t*           weightedRangePtr;       // two words the cull writes: the nearest and farthest view depth of the weighted draws (getDepthBits); null: none
+    float2              weightedDepths;         // the view depths the weights span (near, far); far <= near: this frame's words at weightedRangePtr
+    uint32_t            weightedAccum;          // bindless: the weighted sums (color times weight, alpha times weight)
+    uint32_t            weightedCoverage;       // bindless: the coverage, 1 - the product of (1 - alpha), in r; with motion in a, after the motion sums
+    uint32_t            weightedSamples;        // samples per pixel of the two
+    uint32_t            weightedPadding;        // keeps the size a multiple of 8
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.

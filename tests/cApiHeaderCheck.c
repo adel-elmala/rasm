@@ -143,7 +143,9 @@ int main(void)
     turned = rasm_get_glyph_orientation(down);
     material.glyphs.color_mode = RASM_POINT_COLOR_MODE_SCALAR;
     material.vector_colors.range.clamp = RASM_TRUE;
-    if (turned.x != 1.0f || (RASM_PICK_SKIP_ALL & RASM_PICK_SKIP_GLYPHS) == 0 || RASM_MATERIAL_TYPE_GLYPHS != 5 || material.glyphs.color_mode != RASM_POINT_COLOR_MODE_SCALAR)
+    material.blend_method = RASM_BLEND_METHOD_WEIGHTED;
+    if (turned.x != 1.0f || (RASM_PICK_SKIP_ALL & RASM_PICK_SKIP_GLYPHS) == 0 || RASM_MATERIAL_TYPE_GLYPHS != 5 || material.glyphs.color_mode != RASM_POINT_COLOR_MODE_SCALAR ||
+        material.blend_method != RASM_BLEND_METHOD_WEIGHTED || RASM_BLEND_METHOD_ADDITIVE != 2)
         return 28;
     if (rasm_vector_geometry_create(&geometry) != RASM_OK || rasm_vector_add_data_lines(geometry, line[0], line, &lineSize, 1, NULL, NULL, NULL, NULL, speeds) != RASM_OK)
         return 29;

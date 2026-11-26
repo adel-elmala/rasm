@@ -297,12 +297,29 @@ namespace rasm
             return POINT_RUN_NONE;
         }
 
-        // The draw runs come in this order: OPAQUE then MASK, each by cull mode, then the point run, then the one BLEND run.
-        uint32_t getRunKey(AlphaMode alphaMode, CullMode cullMode, bool points)
+        // The draw runs come in this order: OPAQUE then MASK, each by cull mode, then the point run, then the BLEND runs:
+        // the weighted one, the additive one and the sorted one, last.
+        uint32_t getRunKey(AlphaMode alphaMode, CullMode cullMode, bool points, BlendMethod blendMethod)
         {
             if (points)
                 return static_cast<uint32_t>(AlphaMode::BLEND) * gfx::MAX_DRAW_RUNS - 1;
+            if (alphaMode == AlphaMode::BLEND)
+                return static_cast<uint32_t>(AlphaMode::BLEND) * gfx::MAX_DRAW_RUNS + (blendMethod == BlendMethod::WEIGHTED ? 0u : (blendMethod == BlendMethod::ADDITIVE ? 1u : 2u));
             return static_cast<uint32_t>(alphaMode) * gfx::MAX_DRAW_RUNS + static_cast<uint32_t>(cullMode);
+        }
+
+        // How a material's BLEND draws are drawn. A GLYPHS material's glyphs cannot be sorted, so they are weighted, and a
+        // VECTOR material's layers keep their drawOrder, so they are sorted. Weighted and additive draws blend their
+        // targets differently (independentBlend): without it they are sorted.
+        BlendMethod getBlendMethod(const Material &material, bool independentBlend)
+        {
+            if (material.alphaMode != AlphaMode::BLEND || material.type == MaterialType::VECTOR || material.type == MaterialType::POINTS || !independentBlend)
+                return BlendMethod::SORTED;
+            if (material.type == MaterialType::GLYPHS)
+                return BlendMethod::WEIGHTED;
+            if (material.blendMethod == BlendMethod::WEIGHTED || material.blendMethod == BlendMethod::ADDITIVE)
+                return material.blendMethod;
+            return BlendMethod::SORTED;
         }
 
         // A scalar range as the point shader reads it: logarithms of its ends for a log range, whose ends must be above 0.
@@ -372,6 +389,11 @@ namespace rasm
                                   .alphaMode = mat.alphaMode,
                                   .alphaCutoff = mat.alphaCutoff,
                                   .flags = mat.doubleSided ? gfx::MATERIAL_DOUBLE_SIDED : 0u};
+            const BlendMethod blendMethod = getBlendMethod(mat, engine.getRenderContext().hasIndependentBlend());
+            if (blendMethod == BlendMethod::WEIGHTED)
+                row.flags |= gfx::MATERIAL_WEIGHTED;
+            if (blendMethod == BlendMethod::ADDITIVE)
+                row.flags |= gfx::MATERIAL_ADDITIVE;
             const PbrSlot transformSlots[gfx::TEXTURE_TRANSFORMS] = {PbrSlot::ALBEDO, PbrSlot::METALLIC, PbrSlot::NORMAL, PbrSlot::OCCLUSION, PbrSlot::EMISSIVE};
             for (uint32_t i = 0; i < gfx::TEXTURE_TRANSFORMS; ++i)
             {
@@ -450,7 +472,7 @@ namespace rasm
     }
 
     static_assert(MAX_SCENES <= 16, "EntityDrawState::scenes has one bit per scene");
-    static_assert(2 * (static_cast<uint32_t>(CullMode::BACK) + 1) + 2 == gfx::MAX_DRAW_RUNS, "a draw list has a run per cull mode for OPAQUE and MASK, a point run and a BLEND run");
+    static_assert(2 * (static_cast<uint32_t>(CullMode::BACK) + 1) + 4 == gfx::MAX_DRAW_RUNS, "a draw list has a run per cull mode for OPAQUE and MASK, a point run and three BLEND runs");
     static_assert(static_cast<uint32_t>(gfx::TextureTransformSlot::EMISSIVE) + 1 == gfx::TEXTURE_TRANSFORMS, "every texture transform slot has a row");
     static_assert(static_cast<uint32_t>(BlendSortStep::WRITE) + 1 == BLEND_SORT_STEPS, "every sort step has a pipeline");
 
@@ -513,6 +535,7 @@ namespace rasm
         gpuScene->instanceRows.reset(config.maxInstances);
         gpuScene->instanceCullModes.assign(config.maxInstances, CullMode::NONE);
         gpuScene->instanceAlphaModes.assign(config.maxInstances, AlphaMode::NONE);
+        gpuScene->instanceBlendMethods.assign(config.maxInstances, BlendMethod::SORTED);
         gpuScene->instancePoints.assign(config.maxInstances, 0);
         // A word of meshlet visibility bits per instance row on average: 32 meshlets. Each view with occlusion culling
         // has this many words (createSceneView); a row that finds none left has no bits, and is only culled less.
@@ -638,6 +661,7 @@ namespace rasm
                     {
                         gpuScene->instanceCullModes[firstRow + r] = CullMode::NONE;
                         gpuScene->instanceAlphaModes[firstRow + r] = AlphaMode::NONE;
+                        gpuScene->instanceBlendMethods[firstRow + r] = BlendMethod::SORTED;
                         gpuScene->instancePoints[firstRow + r] = 0;
                         // The bits of the LOD with the most meshlets, so every LOD's fit.
                         gpuScene->instanceMeshlets[firstRow + r] = mesh.subMeshes[r].geometry.maxLodMeshlets;
@@ -805,10 +829,18 @@ namespace rasm
             const auto points = getPointRunKind(subMesh.geometry, material.type, cullMode);
             const CullMode wantedCullMode = points != POINT_RUN_NONE ? CullMode::NONE : cullMode;
             uint8_t &storedPoints = gpuScene->instancePoints[state.firstInstance + i];
-            changed = changed || storedCullMode != wantedCullMode || storedAlphaMode != material.alphaMode || storedPoints != points;
+            BlendMethod &storedBlendMethod = gpuScene->instanceBlendMethods[state.firstInstance + i];
+            const BlendMethod blendMethod = getBlendMethod(material, ctx.hasIndependentBlend());
+            if (blendMethod != material.blendMethod && material.alphaMode == AlphaMode::BLEND && !ctx.hasIndependentBlend() && !gpuScene->blendMethodLogged)
+            {
+                spdlog::warn("This GPU has no independentBlend feature: weighted and additive materials are drawn sorted.");
+                gpuScene->blendMethodLogged = true;
+            }
+            changed = changed || storedCullMode != wantedCullMode || storedAlphaMode != material.alphaMode || storedPoints != points || storedBlendMethod != blendMethod;
             storedCullMode = wantedCullMode;
             storedAlphaMode = material.alphaMode;
             storedPoints = points;
+            storedBlendMethod = blendMethod;
         }
 
         // An entity that waits for textures is in no draw list yet.
@@ -942,6 +974,7 @@ namespace rasm
         drawList.glyphChunks = 0;
         drawList.glyphBatches = 0;
         drawList.glyphCullMode = CullMode::BACK;
+        drawList.weightedGlyphChunks = 0;
 
         compactSceneEntities(scene);
         for (auto entity : registry.scenes[scene.index].entities)
@@ -969,6 +1002,8 @@ namespace rasm
                     drawList.glyphBatches += (geometry.glyphCount + gfx::GLYPH_BATCH_GLYPHS - 1) / gfx::GLYPH_BATCH_GLYPHS;
                     if (kind == POINT_RUN_GLYPHS_TWO_SIDED)
                         drawList.glyphCullMode = CullMode::NONE;
+                    if (gpuScene->instanceBlendMethods[state.firstInstance + i] == BlendMethod::WEIGHTED)
+                        ++drawList.weightedGlyphChunks;
                 }
                 // Indices are local to their sub-mesh; vertexOffset moves them to its place in the geometry pool. A glyph
                 // chunk's draw has no instance: only its glyphs are drawn, so a view drawn unculled draws nothing of it.
@@ -986,16 +1021,19 @@ namespace rasm
         const auto &cullModes = gpuScene->instanceCullModes;
         const auto &alphaModes = gpuScene->instanceAlphaModes;
         const auto &points = gpuScene->instancePoints;
+        const auto &blendMethods = gpuScene->instanceBlendMethods;
         std::stable_sort(drawList.draws.begin(), drawList.draws.end(), [&](const gfx::DrawInfo &a, const gfx::DrawInfo &b)
-                         { return getRunKey(alphaModes[a.firstInstance], cullModes[a.firstInstance], points[a.firstInstance] != 0) <
-                                  getRunKey(alphaModes[b.firstInstance], cullModes[b.firstInstance], points[b.firstInstance] != 0); });
+                         { return getRunKey(alphaModes[a.firstInstance], cullModes[a.firstInstance], points[a.firstInstance] != 0, blendMethods[a.firstInstance]) <
+                                  getRunKey(alphaModes[b.firstInstance], cullModes[b.firstInstance], points[b.firstInstance] != 0, blendMethods[b.firstInstance]); });
         for (uint32_t i = 0; i < drawList.draws.size(); ++i)
         {
             const bool pointDraw = points[drawList.draws[i].firstInstance] != 0;
             const AlphaMode alphaMode = pointDraw ? AlphaMode::NONE : alphaModes[drawList.draws[i].firstInstance];
             const CullMode cullMode = cullModes[drawList.draws[i].firstInstance];
-            if (drawList.runs.empty() || drawList.runs.back().alphaMode != alphaMode || drawList.runs.back().cullMode != cullMode || drawList.runs.back().points != pointDraw)
-                drawList.runs.push_back({.alphaMode = alphaMode, .cullMode = cullMode, .points = pointDraw, .first = i, .count = 0});
+            const BlendMethod blendMethod = pointDraw ? BlendMethod::SORTED : blendMethods[drawList.draws[i].firstInstance];
+            const DrawRun *last = drawList.runs.empty() ? nullptr : &drawList.runs.back();
+            if (last == nullptr || last->alphaMode != alphaMode || last->cullMode != cullMode || last->points != pointDraw || last->blendMethod != blendMethod)
+                drawList.runs.push_back({.alphaMode = alphaMode, .cullMode = cullMode, .points = pointDraw, .blendMethod = blendMethod, .first = i, .count = 0});
             DrawRun &run = drawList.runs.back();
             ++run.count;
             // What the run's draws could take as meshlets, at most: prepareSceneView sizes the meshlet draws by it.
@@ -1344,12 +1382,15 @@ namespace rasm
                     drawViewGlyphs(view);
                     drawPointResolve(view);
                     drawSky(view);
+                    drawWeighted(view);
                 }
             });
         // See-through draws go over everything the draw passes and the sky left, so a shaded view ends with them. The
         // pass is there even while the scene has no blend run, since the graph is fixed and the scene is not. The
         // culling view's ghosts come last, and read the visibility the late pass left. Before it, the labels' anchors
-        // are tested against the depth the draw passes left, so each label shows or hides whole.
+        // are tested against the depth the draw passes left, so each label shows or hides whole. The weighted draws went
+        // into the view's weighted target at the end of its last draw pass (drawWeighted); after the grid, their composite
+        // and the additive draws go under the sorted ones, so labels and other ordered layers stay on top.
         auto addTransparentPass = [&]()
         {
             if (depthOnly)
@@ -1380,6 +1421,8 @@ namespace rasm
                 [this, view](RenderContext &)
                 {
                     drawGrid(view);
+                    drawWeightedComposite(view);
+                    drawAdditive(view);
                     drawTransparent(view);
                     drawCullingGhosts(view);
                 });
@@ -1432,6 +1475,7 @@ namespace rasm
                 drawViewGlyphs(view);
                 drawPointResolve(view);
                 drawSky(view);
+                drawWeighted(view);
             });
         addTransparentPass();
         return true;
@@ -1616,7 +1660,10 @@ namespace rasm
             destroyViewBuffer(ctx, view.labelProbes[i]);
             destroyViewBuffer(ctx, view.pointRaster[i]);
             destroyViewBuffer(ctx, view.glyphCull[i]);
+            destroyViewBuffer(ctx, view.weightedRange[i]);
         }
+        if (view.weightedTarget.isValid())
+            destroyRenderTarget(view.weightedTarget);
         destroyViewBuffer(ctx, view.labelFades);
         destroyViewBuffer(ctx, view.visibility);
         destroyViewBuffer(ctx, view.meshletVisibility);
@@ -1640,6 +1687,11 @@ namespace rasm
         view.drawBlend = false;
         view.sortBlend = false;
         view.blendRun = gfx::MAX_DRAW_RUNS;
+        view.weightedRun = gfx::MAX_DRAW_RUNS;
+        view.additiveRun = gfx::MAX_DRAW_RUNS;
+        view.drawWeighted = false;
+        view.drawWeightedGlyphs = false;
+        view.drawAdditive = false;
         view.groupCount = 0;
         view.hizLevelCount = 0;
         view.late = false;
@@ -1828,9 +1880,18 @@ namespace rasm
         meshletDraws = meshletDraws && (view.meshShaders || (gpuScene->meshletCountPipeline.isValid() && gpuScene->meshletWritePipeline.isValid()));
 
         // A shaded view draws its blend run last, back to front: the run is sorted on the GPU once culling has packed it.
-        for (uint32_t i = 0; !view.depthOnly && i < drawList.runs.size(); ++i)
+        // Its weighted and additive runs are drawn in any order (weightedBlend.cpp); a depth-only view draws the weighted
+        // one like the others, and leaves out the additive one, whose light casts no shadow.
+        for (uint32_t i = 0; i < drawList.runs.size(); ++i)
         {
-            if (drawList.runs[i].alphaMode == AlphaMode::BLEND)
+            if (drawList.runs[i].alphaMode != AlphaMode::BLEND)
+                continue;
+            const BlendMethod method = drawList.runs[i].blendMethod;
+            if (method == BlendMethod::ADDITIVE)
+                view.additiveRun = i;
+            else if (!view.depthOnly && method == BlendMethod::WEIGHTED)
+                view.weightedRun = i;
+            else if (!view.depthOnly && method == BlendMethod::SORTED)
                 view.blendRun = i;
         }
         const PipelineHandle &blendPipeline = view.debugView != DebugView::NONE ? getDebugPipelines(shaded, view.debugView).blendPipeline : shaded.blendPipeline;
@@ -2174,6 +2235,7 @@ namespace rasm
             placeViewLabels(viewIndex, cameraProjection, worldCameraView, width, height, sceneData);
         preparePointRaster(viewIndex, sceneData);
         prepareGlyphCull(viewIndex, sceneData);
+        prepareWeightedBlend(viewIndex, sceneData);
         ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), viewIndex * sizeof(gfx::SceneData));
         view.sceneData = sceneData;
         view.projection = cameraProjection;
@@ -2496,7 +2558,8 @@ namespace rasm
         for (uint32_t i = 0; i < drawList.runs.size(); ++i)
         {
             const DrawRun &run = drawList.runs[i];
-            if (i == view.blendRun || (run.alphaMode != AlphaMode::NONE && !view.drawMask) || (run.points && (view.depthOnly || !shaded.pointPipeline.isValid())))
+            if (i == view.blendRun || i == view.weightedRun || i == view.additiveRun || (run.alphaMode != AlphaMode::NONE && !view.drawMask) ||
+                (run.points && (view.depthOnly || !shaded.pointPipeline.isValid())))
                 continue;
             PipelineHandle pipeline = view.depthOnly ? gpuScene->depthPipeline : shaded.pipeline;
             if (run.alphaMode != AlphaMode::NONE)
@@ -2601,28 +2664,41 @@ namespace rasm
     }
 
     // The blend run, after the view's draws and its sky: depth tested against them, but not written, so each see-through
-    // surface blends over what is behind it, in the order the sort left (back to front; unsorted without culling).
+    // surface blends over what is behind it, in the order the sort left (back to front; unsorted without culling). A
+    // debug view shows the weighted and additive runs the same way, unsorted, before it: a mean of normals or LODs
+    // would mean nothing.
     void Renderer::drawTransparent(uint32_t viewIndex)
     {
         const SceneView &view = gpuScene->views[viewIndex];
-        if (!view.ready || !view.drawBlend)
+        if (!view.ready)
             return;
-
-        const auto frame = static_cast<uint32_t>(frameCount);
-        const DrawRun &run = gpuScene->drawLists[view.scene.index].runs[view.blendRun];
-        const auto commandBuffer = frameResources[frame].commandBuffer;
-        // The late pass culls the blend run, or the only one when there is none.
-        const gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, frame, viewIndex), .firstDraw = run.first, .argument = view.late ? CULL_LATE : CULL_EARLY};
         const ShadedPipelines &shaded = getShadedPipelines(*gpuScene, ctx, view);
-        const PipelineHandle blendPipeline = view.debugView != DebugView::NONE ? getDebugPipelines(shaded, view.debugView).blendPipeline : shaded.blendPipeline;
-        ctx.bindPipeline(commandBuffer, blendPipeline);
-        ctx.bindDescriptorSet(commandBuffer, blendPipeline, bindlessDescriptorSet, 0);
+        const bool debug = view.debugView != DebugView::NONE;
+        const PipelineHandle blendPipeline = debug ? getDebugPipelines(shaded, view.debugView).blendPipeline : shaded.blendPipeline;
+        const uint32_t runs[3] = {debug ? view.weightedRun : gfx::MAX_DRAW_RUNS, debug ? view.additiveRun : gfx::MAX_DRAW_RUNS, view.drawBlend ? view.blendRun : gfx::MAX_DRAW_RUNS};
+        for (uint32_t run : runs)
+        {
+            if (run < gfx::MAX_DRAW_RUNS && blendPipeline.isValid())
+                drawBlendRun(viewIndex, run, blendPipeline);
+        }
+    }
+
+    // One of a shaded view's BLEND runs, culled by the late pass (or the only one), depth tested and not written.
+    void Renderer::drawBlendRun(uint32_t viewIndex, uint32_t runIndex, PipelineHandle pipeline)
+    {
+        const SceneView &view = gpuScene->views[viewIndex];
+        const auto frame = static_cast<uint32_t>(frameCount);
+        const DrawRun &run = gpuScene->drawLists[view.scene.index].runs[runIndex];
+        const auto commandBuffer = frameResources[frame].commandBuffer;
+        const gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, frame, viewIndex), .firstDraw = run.first, .argument = view.late ? CULL_LATE : CULL_EARLY};
+        ctx.bindPipeline(commandBuffer, pipeline);
+        ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet, 0);
         ctx.bindIndexBuffer(commandBuffer, geometryPool->indexBuffer(), 0, Format::U32_UINT);
         ctx.setCullMode(commandBuffer, CullMode::NONE);
-        ctx.pushConstants(commandBuffer, blendPipeline, &pushConstants, sizeof(pushConstants), 0);
+        ctx.pushConstants(commandBuffer, pipeline, &pushConstants, sizeof(pushConstants), 0);
         if (view.culled)
             ctx.drawIndexedIndirectCount(commandBuffer, view.visibleDraws[frame], run.first * sizeof(gfx::DrawInfo), view.visibleDraws[frame],
-                                         getVisibleDrawLayout(view, frame).drawCounts + view.blendRun * sizeof(uint32_t), run.count, sizeof(gfx::DrawInfo));
+                                         getVisibleDrawLayout(view, frame).drawCounts + runIndex * sizeof(uint32_t), run.count, sizeof(gfx::DrawInfo));
         else
             ctx.drawIndexedIndirect(commandBuffer, gpuScene->drawLists[view.scene.index].buffers[frame], run.first * sizeof(gfx::DrawInfo), run.count, sizeof(gfx::DrawInfo));
     }

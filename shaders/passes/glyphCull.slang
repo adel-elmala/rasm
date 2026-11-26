@@ -69,6 +69,7 @@ void resetMain()
     header->groupsZ     = 1;
     header->chunkCount  = 0;
     header->commandCount = 0;
+    header->weightedCommandCount = 0;
 }
 
 [shader("compute")]

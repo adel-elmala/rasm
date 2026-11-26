@@ -2335,6 +2335,16 @@ namespace rasm
         return impl->device->hasBufferInt64Atomics();
     }
 
+    bool RenderContext::hasIndependentBlend() const
+    {
+        return impl->device->hasIndependentBlend();
+    }
+
+    bool RenderContext::hasSampleRateShading() const
+    {
+        return impl->device->hasSampleRateShading();
+    }
+
     // For commands that were recorded but will not run, a failed submit included: the textures go back to
     // the states they had before them, which is still what the GPU has.
     void RenderContext::discardRecording()

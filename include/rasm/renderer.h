@@ -560,8 +560,13 @@ namespace rasm
         void                        recordGlyphReset(uint64_t sceneAddress);
         void                        recordGlyphCull(uint64_t sceneAddress, BufferHandle buffer, uint64_t headerOffset);
         void                        drawViewGlyphs(uint32_t view);
-        void                        drawGlyphs(uint64_t sceneAddress, BufferHandle buffer, uint64_t headerOffset, uint64_t commandsOffset, uint32_t commandCapacity, PipelineHandle pipeline, CullMode cullMode, uint32_t argument);
+        void                        drawGlyphs(uint64_t sceneAddress, BufferHandle buffer, uint64_t headerOffset, uint64_t commandsOffset, uint32_t commandCapacity, bool weighted, PipelineHandle pipeline, CullMode cullMode, uint32_t argument);
         void                        drawTransparent(uint32_t view);
+        void                        drawBlendRun(uint32_t view, uint32_t run, PipelineHandle pipeline);
+        void                        prepareWeightedBlend(uint32_t view, gfx::SceneData& sceneData);
+        void                        drawWeighted(uint32_t view);
+        void                        drawWeightedComposite(uint32_t view);
+        void                        drawAdditive(uint32_t view);
         void                        drawCullingGhosts(uint32_t view);
         void                        drawFrozenFrustums(CameraHandle camera);
         DebugView                   getDrawnDebugView(CameraHandle camera) const;
