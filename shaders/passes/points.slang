@@ -20,7 +20,7 @@ struct PointVertex
     float4 clipPosition                 : SV_POSITION;
     float2 corner                       : TEXCOORD0;    // -1 to 1 across the point's square, to 3 at the triangle's corners
     nointerpolation float4 color        : COLOR;
-    nointerpolation float3 sphere       : TEXCOORD1;    // the sphere's centre depth and radius in view units, and the shape: 0 square, 1 round, 2 sphere, 3 a square of whole pixels
+    nointerpolation float3 sphere       : TEXCOORD1;    // the sphere's centre depth and radius in view units, and the shape (getPointShape)
 #if defined(RASM_MOTION_VECTORS)
     nointerpolation float4 currentClip  : TEXCOORD2;    // the point's centre, without jitter
     nointerpolation float4 previousClip : TEXCOORD3;
@@ -68,13 +68,13 @@ PointVertex vertMain(uint vertexID : SV_VertexID)
     // pixel past the square, so that no sample of those pixels lies outside it. That costs about a fifth more for these
     // points (twice the triangle's area), so a view drawn by triangles only keeps the triangle, which leaves out the
     // samples of a pixel's edge beyond the square's left, bottom and diagonal sides.
-    if (shape == 3.0 && scene->pointRasterPtr != nullptr)
+    if (shape == POINT_SHAPE_PIXELS && scene->pointRasterPtr != nullptr)
         corner             *= 1.0 + 1.0 / diameter;
 #endif
 
     PointVertex output;
     output.sphere           = float3(-viewPosition.z, radius, shape);
-    if (shape == 2.0)
+    if (shape == POINT_SHAPE_SPHERE)
         clip                = mul(scene->projection, viewPosition + float4(0.0, 0.0, radius, 0.0));
     clip.xy                += corner * diameter / float2(scene->viewportWidth, scene->viewportHeight) * clip.w;
     output.clipPosition     = clip;
@@ -113,11 +113,11 @@ float getPointDepth(SceneData *scene, PointVertex input, float distance2)
 
 float getPointCoverage(PointVertex input, float distance2)
 {
-    bool square     = input.sphere.z == 0.0 || input.sphere.z == 3.0;
+    bool square     = input.sphere.z == POINT_SHAPE_SQUARE || input.sphere.z == POINT_SHAPE_PIXELS;
     float distance  = square ? max(abs(input.corner.x), abs(input.corner.y)) : sqrt(distance2);
 #if defined(RASM_ALPHA_TO_COVERAGE)
     float soft      = saturate((1.0 - distance) / max(fwidth(distance), 1e-4) + 0.5);
-    return input.sphere.z == 3.0 ? (distance <= 1.0 ? 1.0 : 0.0) : soft;
+    return input.sphere.z == POINT_SHAPE_PIXELS ? (distance <= 1.0 ? 1.0 : 0.0) : soft;
 #else
     return distance <= 1.0 ? 1.0 : 0.0;
 #endif

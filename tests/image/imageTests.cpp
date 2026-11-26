@@ -1028,7 +1028,7 @@ namespace
         return addSunsetLight(engine, assets, content, 0.6f, glm::vec3(0.5f, -0.7f, -0.4f), 2.0f);
     }
 
-    // Points of 3 to 6 pixels, which the compute path cuts to the triangles' shapes: a wavy sheet of round points of 5
+    // Points of 3 to 5 pixels, which the compute path cuts to the triangles' shapes: a wavy sheet of round points of 5
     // pixels colored by height, a ball of SPHERE points of 4 (their depth per pixel) cutting into it, and a ring of
     // squares of 3.
     bool buildPointsLarge(rasm::Engine &engine, const Assets &assets, Content &content)
@@ -1063,12 +1063,12 @@ namespace
                   createPointMaterial(engine, {.color = glm::vec4(0.95f, 0.45f, 0.15f, 1.0f), .size = 4.0f, .shape = rasm::PointShape::SPHERE}), rasm::Transform{glm::vec3(0.6f, 0.2f, -1.2f)});
 
         std::vector<glm::vec3> ring;
-        for (uint32_t i = 0; i < 600; ++i)
+        for (uint32_t i = 0; i < 4000; ++i)
         {
-            const float a = static_cast<float>(i) / 600.0f * 6.2831853f;
+            const float a = static_cast<float>(i) / 4000.0f * 6.2831853f;
             ring.emplace_back(1.1f * std::cos(a), 0.15f * std::sin(5.0f * a), 1.1f * std::sin(a));
         }
-        addEntity(engine, content, "ring", engine.createMesh(rasm::buildPointCloudChunk({.positions = ring.data(), .count = 600})),
+        addEntity(engine, content, "ring", engine.createMesh(rasm::buildPointCloudChunk({.positions = ring.data(), .count = 4000})),
                   createPointMaterial(engine, {.color = glm::vec4(0.9f, 0.9f, 0.95f, 1.0f), .size = 3.0f, .shape = rasm::PointShape::SQUARE}), rasm::Transform{glm::vec3(-1.4f, 0.5f, -1.0f)});
 
         content.eye = glm::vec3(0.0f, 2.2f, 4.2f);

@@ -221,26 +221,30 @@ RasmLab.register("compute-raster", function (lab) {
         return shape.value === "round" && d >= 3;
     }
     // Whether the pixel (x, y)'s centre is in the point's shape, edges included, around its centre snapped to 1/256.
-    function covers(p, d, x, y) {
+    // The triangle's rasterizer leaves out a centre on its bottom side, which is the square's (the top-left rule).
+    function covers(p, d, x, y, triangle) {
         const cx = Math.round(p.x * 256) / 256;
         const cy = Math.round(p.y * 256) / 256;
         const dx = (x + 0.5 - cx) / (d / 2);
         const dy = (y + 0.5 - cy) / (d / 2);
+        if (triangle && dy >= 1)
+            return false;
         return isRound(d) ? dx * dx + dy * dy <= 1 : Math.abs(dx) <= 1 && Math.abs(dy) <= 1;
     }
     // The pixels the compute path writes for a point of diameter d (rasterPoint): x from ceil(c - d/2 - 0.5) to
-    // floor(c + d/2 - 0.5), at most ceil(d) of them, and of those a round point's centres in its disc.
+    // floor(c + d/2 - 0.5), at most ceil(d) + 1 columns and ceil(d) rows (a centre on the bottom side is left out, as
+    // by the triangle), and of those a round point's centres in its disc.
     function pixelsOf(p, d) {
         const cx = Math.round(p.x * 256) / 256;
         const cy = Math.round(p.y * 256) / 256;
         const list = [];
         const x0 = Math.ceil(cx - d / 2 - 0.5);
         const y0 = Math.ceil(cy - d / 2 - 0.5);
-        const x1 = Math.min(Math.floor(cx + d / 2 - 0.5), x0 + Math.ceil(d) - 1);
+        const x1 = Math.min(Math.floor(cx + d / 2 - 0.5), x0 + Math.ceil(d));
         const y1 = Math.min(Math.floor(cy + d / 2 - 0.5), y0 + Math.ceil(d) - 1);
         for (let y = y0; y <= y1; ++y)
             for (let x = x0; x <= x1; ++x)
-                if (x >= 0 && y >= 0 && x < COLS && y < ROWS && covers(p, d, x, y))
+                if (x >= 0 && y >= 0 && x < COLS && y < ROWS && covers(p, d, x, y, false))
                     list.push([x, y]);
         return list;
     }
@@ -252,7 +256,7 @@ RasmLab.register("compute-raster", function (lab) {
             for (let c = 0; c < COLS * ROWS; ++c) {
                 const x = c % COLS;
                 const y = Math.floor(c / COLS);
-                if (!covers(points[i], d, x, y))
+                if (!covers(points[i], d, x, y, true))
                     continue;
                 const w = winner[y * COLS + x];
                 if (w < 0 || points[i].depth >= points[w].depth)

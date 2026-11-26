@@ -268,7 +268,7 @@ namespace rasm
         bool         bloom                   = false;    // Renderer::render adds the bloom passes (Camera::bloomStrength)
         bool         ui                      = false;    // Dear ImGui (CMake RASM_IMGUI): the RASM window on F1 and Renderer::setUiCallback
         AntiAliasing antiAliasing            = AntiAliasing::NONE; // Renderer::render's scene target: MSAA draws it with several samples per pixel
-        bool         computePoints           = true;     // Renderer::setComputePoints: points of up to 6 pixels (4 in an orthographic view, 2 under MSAA) by the compute rasterizer, where the GPU has 64-bit buffer atomics; false: by triangles
+        bool         computePoints           = true;     // Renderer::setComputePoints: small points by the compute rasterizer (up to 6 pixels at a chunk's centre and 8 at its nearest point; 4 in an orthographic view, 2 under MSAA), where the GPU has 64-bit buffer atomics; false: by triangles
     };
 
     // What an Engine is made with: the RendererConfig and AssetLoaderConfig fields, flat (designated initializers), and
@@ -320,7 +320,7 @@ namespace rasm
         bool         bloom                   = false;    // Renderer::render adds the bloom passes (Camera::bloomStrength)
         bool         ui                      = false;    // Dear ImGui (CMake RASM_IMGUI): the RASM window on F1 and Renderer::setUiCallback
         AntiAliasing antiAliasing            = AntiAliasing::NONE; // Renderer::render's scene target: MSAA draws it with several samples per pixel
-        bool         computePoints           = true;     // Renderer::setComputePoints: points of up to 6 pixels (4 in an orthographic view, 2 under MSAA) by the compute rasterizer, where the GPU has 64-bit buffer atomics; false: by triangles
+        bool         computePoints           = true;     // Renderer::setComputePoints: small points by the compute rasterizer (up to 6 pixels at a chunk's centre and 8 at its nearest point; 4 in an orthographic view, 2 under MSAA), where the GPU has 64-bit buffer atomics; false: by triangles
         bool         operator==(const EngineConfig&) const = default;
     };
 
