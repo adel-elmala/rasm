@@ -29,7 +29,7 @@
 //   --sorted        the meshes sorted (BlendMethod::SORTED) instead of weighted: compare the slices from behind
 //   --additive      the slices add their light (BlendMethod::ADDITIVE): a density, X-ray view
 //   --no-glyphs     no arrows
-//   --glyphs N      about N arrows (8 000 by default)
+//   --glyphs N      arrows on a grid of about N cells (1 728 by default: 12 a side), kept where the field is
 //   --scale S       the whole scene S times larger (1 by default): the weights do not change with the scale
 //   --still         no scripted orbit
 //   --behind        the left view starts behind the scene, where sorted slices blend in the wrong order
@@ -48,6 +48,7 @@ namespace
     constexpr uint32_t ISO_CELLS = 48;  // the marching grid's cells along each axis
     constexpr uint32_t SLICES = 48;
     constexpr uint32_t SLICE_CELLS = 64;
+    constexpr double ARROW_MIN_FIELD = 0.12; // the arrows' cells where the field is at least this
     constexpr uint32_t PICK_FRAME = 24;
     constexpr uint32_t CHECK_DEADLINE = 60;
     constexpr uint32_t PICKS = 3;
@@ -75,7 +76,7 @@ namespace
         bool sorted = false;
         bool additive = false;
         bool glyphs = true;
-        uint32_t glyphCount = 8000;
+        uint32_t glyphCount = 1728;
         double scale = 1.0;
         bool still = false;
         bool swapAa = false;
@@ -364,7 +365,8 @@ namespace
         return options;
     }
 
-    // Arrows on a grid over the iso-surfaces' box, down the gradient (toward the blobs), sized and colored by its length.
+    // Arrows on a grid over the iso-surfaces' box where the field is, down the gradient (toward the blobs), sized and
+    // colored by its length.
     rasm::MeshBuild buildArrows(rasm::MeshHandle shape, uint32_t count, double size, float &maxSlope)
     {
         const auto n = static_cast<uint32_t>(std::max(2.0, std::cbrt(static_cast<double>(count))));
@@ -386,6 +388,9 @@ namespace
                         jitter[axis] = static_cast<double>(hash >> 8) / 16777216.0 - 0.5;
                     }
                     const glm::dvec3 p = (glm::dvec3(x, y, z) + 0.5 + jitter) / static_cast<double>(n) * 2.0 - 1.0;
+                    // Only where the field is, near the shells: arrows in the empty corners read as a haze.
+                    if (field(p) < ARROW_MIN_FIELD)
+                        continue;
                     const glm::dvec3 g = gradient(p);
                     const auto slope = static_cast<float>(glm::length(g));
                     maxSlope = std::max(maxSlope, slope);
@@ -395,7 +400,7 @@ namespace
                 }
         const float cell = static_cast<float>(size / n);
         for (float slope : slopes)
-            scales.push_back(glm::vec3(cell * (0.35f + 0.9f * slope / std::max(maxSlope, 1e-6f))));
+            scales.push_back(glm::vec3(cell * (0.5f + 1.0f * slope / std::max(maxSlope, 1e-6f))));
         return rasm::buildGlyphChunk(
             {.shape = shape, .positions = positions.data(), .orientations = orientations.data(), .scales = scales.data(), .scalars = slopes.data(), .count = static_cast<uint32_t>(positions.size())});
     }
@@ -447,7 +452,8 @@ int main(int argc, char **argv)
     // The iso-surfaces, outer to inner, at the left; the slices in the middle; the assembly at the right.
     const glm::dvec3 isoCenter(-FIELD_SIZE * 1.2, 0.5 * FIELD_SIZE + 1.0, 0.0);
     const glm::dvec3 sliceCenter(0.0, 0.5 * FIELD_SIZE + 1.0, 0.0);
-    const glm::dvec3 cadCenter(FIELD_SIZE * 1.2, 0.5 * FIELD_SIZE + 1.0, 0.0);
+    // Far enough from the slices that the right view, 24 m wide around the assembly, shows none of them.
+    const glm::dvec3 cadCenter(FIELD_SIZE * 1.6, 0.5 * FIELD_SIZE + 1.0, 0.0);
     const double levels[3] = {0.22, 0.45, 0.72};
     const Style isoStyles[3] = {{{0.25f, 0.55f, 0.95f, 0.18f}, 0.3f, false}, {{0.2f, 0.9f, 0.55f, 0.3f}, 0.35f, false}, {{0.98f, 0.55f, 0.15f, 0.5f}, 0.4f, false}};
     uint32_t isoTriangles = 0;
@@ -475,7 +481,7 @@ int main(int argc, char **argv)
 
     // The ground and a solid core inside the iso-surfaces, which the see-through draws are depth tested against.
     const rasm::MaterialHandle ground = makeMaterial(engine, {{0.12f, 0.13f, 0.15f, 1.0f}, 0.8f, false}, method);
-    place("ground", cube, ground, glm::dvec3(0.0, -0.5, 0.0), glm::vec3(72.0f, 1.0f, 30.0f));
+    place("ground", cube, ground, glm::dvec3(3.0, -0.5, 0.0), glm::vec3(84.0f, 1.0f, 30.0f));
     place("core", ball, steel, isoCenter + glm::dvec3(BLOBS[0].center) * (0.5 * FIELD_SIZE), glm::vec3(1.6f));
 
     float maxSlope = 0.0f;
@@ -504,14 +510,14 @@ int main(int argc, char **argv)
     const rasm::LightHandle sun = engine.createLight(rasm::LightType::DIRECTIONAL, glm::vec3(1.0f, 0.95f, 0.9f), glm::dvec3(0.0), glm::normalize(glm::vec3(-0.4f, -0.8f, -0.5f)), 3.0f, 0.0f);
     engine.addLightToScene(scene, sun);
 
-    std::printf("oit: 3 iso-surfaces (%u triangles), %u slices of %u x %u cells in one mesh, a see-through assembly, %s arrows; meshes %s%s\n", isoTriangles, SLICES, SLICE_CELLS, SLICE_CELLS,
+    std::printf("oit: 3 iso-surfaces (%u triangles), %u slices of %u x %u cells in one mesh, a see-through assembly, %s arrow cells; meshes %s%s\n", isoTriangles, SLICES, SLICE_CELLS, SLICE_CELLS,
                 options.glyphs ? std::to_string(options.glyphCount).c_str() : "no", options.sorted ? "sorted" : "weighted", options.additive ? ", slices additive" : "");
 
     const float aspect = 0.5f * static_cast<float>(config.windowWidth) / static_cast<float>(config.windowHeight);
-    const glm::dvec3 center = origin + glm::dvec3(0.0, 0.5 * FIELD_SIZE, 0.0) * s;
+    const glm::dvec3 center = origin + glm::dvec3(3.0, 0.5 * FIELD_SIZE, 0.0) * s;
     ViewCamera views[VIEW_COUNT] = {
         createViewCamera(engine, scene, {.type = rasm::CameraProjection::Type::PERSPECTIVE, .perspective{.fovY = 50.0f, .aspect = aspect, .nearZ = static_cast<float>(0.1 * s)}}, center,
-                         glm::normalize(glm::dvec3(-0.3, -0.38, options.behind ? 0.87 : -0.87)), 64.0 * s, 1.0f),
+                         glm::normalize(glm::dvec3(-0.3, -0.38, options.behind ? 0.87 : -0.87)), 76.0 * s, 1.0f),
         createViewCamera(engine, scene, orthographic(static_cast<float>(12.0 * s), aspect, static_cast<float>(400.0 * s)), origin + cadCenter * s, glm::dvec3(0.0, 0.0, -1.0), 100.0 * s, 0.0f),
     };
     views[FRONT].input.buttons.left = rasm::CameraDrag::PAN;

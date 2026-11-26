@@ -354,11 +354,11 @@ engine.updateMaterial(handle, material);</code></pre>
 <p id="cost">Measured in <code>examples/31_oit</code> without its arrows (Release, RTX 3060, 1920 × 1080, a perspective TAA view and an orthographic 4× MSAA view, the last 1500 of 3000 frames). The same surfaces, weighted against sorted:</p>
 
 <div class="stats">
-  <div><b>0.99 ms</b><span>the <code>Weighted</code> draws of both views</span><small>sorted: 0.65 ms of draws + 0.04 ms of sort</small></div>
+  <div><b>0.59 ms</b><span>the <code>Weighted</code> draws of both views</span><small>sorted: about 0.48 ms of draws + 0.04 ms of sort</small></div>
   <div><b>0.09 ms</b><span>the composite, per sample under MSAA</span><small>0.06 ms with each pixel's mean</small></div>
-  <div><b>1.86 ms</b><span>GPU frame, weighted</span><small>sorted: 1.48 ms</small></div>
-  <div><b>0.63 ms</b><span>weighted draws with both views at one sample</span><small>sorted: 0.53 ms of draws</small></div>
-  <div><b>2.1×</b><span>weighted over sorted in a 4× MSAA perspective view</span><small>2.13 against 0.99 ms: each sample blends into two targets</small></div>
+  <div><b>1.45 ms</b><span>GPU frame, weighted</span><small>sorted: 1.28 ms</small></div>
+  <div><b>0.63 ms</b><span>weighted draws with both views at one sample, the camera nearer</span><small>sorted: 0.53 ms of draws</small></div>
+  <div><b>2.1×</b><span>weighted over sorted in a 4× MSAA perspective view</span><small>2.13 against 0.99 ms, the camera nearer: each sample blends into two targets</small></div>
   <div><b>≤ 1/255</b><span>the weighted layer's change a frame while a far draw flies in and out</span><small><samp>--range-test</samp>; up to 6/255 in one frame with the raw range</small></div>
 </div>
 
