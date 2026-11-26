@@ -24,7 +24,7 @@
 
 // NOLINTBEGIN(readability-identifier-naming): C names, snake_case with the rasm_ prefix, as C APIs and their bindings expect
 #define RASM_C_API_VERSION_MAJOR    1
-#define RASM_C_API_VERSION_MINOR    13
+#define RASM_C_API_VERSION_MINOR    14
 #define RASM_C_API_VERSION          (((uint32_t)RASM_C_API_VERSION_MAJOR << 16) | (uint32_t)RASM_C_API_VERSION_MINOR)
 
 #if defined(_WIN32)
@@ -164,6 +164,7 @@ enum
     RASM_MATERIAL_TYPE_TERRAIN      = 2,        /* 1.4: a terrain tile (rasm_create_terrain_tile) */
     RASM_MATERIAL_TYPE_VECTOR       = 3,        /* 1.5: lines, polygons and points (rasm_vector_*), styled by the desc's vector */
     RASM_MATERIAL_TYPE_POINTS       = 4,        /* 1.10: point cloud chunks (rasm_build_point_cloud_chunk), styled by the desc's points */
+    RASM_MATERIAL_TYPE_GLYPHS       = 5,        /* 1.14: glyph chunks (rasm_build_glyph_chunk), shaded as PBR, colored by the desc's glyphs */
 };
 
 typedef uint32_t                    rasm_pbr_slot;
@@ -461,6 +462,15 @@ typedef struct rasm_point_material
     float                           max_size;                                  /* 1.12: ADAPTIVE: the largest diameter in pixels; 8 by default */
 } rasm_point_material;
 
+/* 1.14: how a GLYPHS material colors its glyphs, and a VECTOR material its data lines: by their own colors, or by their
+ * scalars through a colormap (rasm_create_colormap) and a range. */
+typedef struct rasm_scalar_colors
+{
+    rasm_point_color_mode           color_mode;                                /* COLOR by default */
+    rasm_texture                    colormap;
+    rasm_scalar_range               range;                                     /* 0 to 1, clamped, by default */
+} rasm_scalar_colors;
+
 typedef struct rasm_material_desc
 {
     uint32_t                        size;
@@ -476,6 +486,8 @@ typedef struct rasm_material_desc
     rasm_vector_material            vector;                                    /* 1.5: VECTOR only; textures[ALBEDO] is the points' icon atlas */
     rasm_font                       font;                                      /* 1.6: VECTOR labels' glyphs; vector.width is the text's size, outline its halo */
     rasm_point_material             points;                                    /* 1.10: POINTS only */
+    rasm_scalar_colors              glyphs;                                    /* 1.14: GLYPHS only */
+    rasm_scalar_colors              vector_colors;                             /* 1.14: VECTOR only: lines with values (rasm_vector_add_data_lines) */
 } rasm_material_desc;
 
 typedef struct rasm_texture_desc
@@ -870,6 +882,8 @@ typedef struct rasm_frame_stats
     uint32_t                        lights_global;
     uint32_t                        lights_visible;
     uint32_t                        lights_dropped;
+    uint32_t                        glyphs;                                    /* 1.14: glyphs of the glyph chunks culling kept, in every view */
+    uint32_t                        glyphs_visible;                            /* 1.14: of them, drawn */
 } rasm_frame_stats;
 
 typedef struct rasm_pool_stats
@@ -1107,7 +1121,8 @@ enum
     RASM_PICK_SKIP_LABELS           = 1u << 4,
     RASM_PICK_SKIP_OVERLAYS         = 1u << 5,  /* overlay features, labels too */
     RASM_PICK_SKIP_POINTS           = 1u << 6,  /* 1.10: point cloud chunks */
-    RASM_PICK_SKIP_ALL              = (1u << 7) - 1,
+    RASM_PICK_SKIP_GLYPHS           = 1u << 7,  /* 1.14: glyph chunks */
+    RASM_PICK_SKIP_ALL              = (1u << 8) - 1,
 };
 
 enum
@@ -1118,6 +1133,7 @@ enum
     RASM_PICK_HIT_TERRAIN           = 1u << 3,
     RASM_PICK_HIT_BACK_FACE         = 1u << 4,  /* the back of a double-sided surface; the normal faces the camera */
     RASM_PICK_HIT_POINT             = 1u << 5,  /* 1.10: a point of a point cloud chunk: feature is its index */
+    RASM_PICK_HIT_GLYPH             = 1u << 6,  /* 1.14: a glyph of a glyph chunk: feature is its index */
 };
 
 typedef struct rasm_pick_desc
@@ -1184,6 +1200,32 @@ typedef struct rasm_grid
     rasm_vec4                       z_axis_color;
     float                           fade_distance;                             /* perspective; 0: no fade */
 } rasm_grid;
+
+/* 1.14: a chunk of glyphs, up to RASM_MAX_GLYPH_CHUNK_GLYPHS: the first sub-mesh of shape (and its LODs) drawn once per
+ * glyph, moved to its position (an offset from the entity's origin), turned by its orientation (a unit quaternion;
+ * NULL: none) and stretched by its scale along the shape's axes (above 0, kept as half floats; NULL: 1). colors (RGBA8,
+ * sRGB-encoded) or scalars may be given, not both. */
+#define RASM_MAX_GLYPH_CHUNK_GLYPHS 65536u      /* 1.14 */
+
+typedef struct rasm_glyph_chunk_desc
+{
+    uint32_t                        size;
+    rasm_mesh                       shape;
+    const rasm_vec3*                positions;
+    const rasm_quat*                orientations;
+    const rasm_vec3*                scales;
+    const uint32_t*                 colors;
+    const float*                    scalars;
+    uint32_t                        count;
+} rasm_glyph_chunk_desc;
+
+typedef uint32_t                    rasm_glyph_shape;
+enum
+{
+    RASM_GLYPH_SHAPE_ARROW          = 0,        /* 1.14: from the origin to +Y 1 */
+    RASM_GLYPH_SHAPE_SPHERE         = 1,        /* diameter 1 */
+    RASM_GLYPH_SHAPE_CUBE           = 2,        /* side 1 */
+};
 
 /* 1.10: a chunk of a point cloud, up to RASM_MAX_POINT_CHUNK_POINTS points; positions are offsets from the entity's
  * origin, colors (RGBA8, sRGB-encoded) and scalars may be NULL. */
@@ -1602,6 +1644,20 @@ RASM_C_API rasm_result      RASM_CALL rasm_point_cloud_load_options_init(rasm_po
 RASM_C_API rasm_result      RASM_CALL rasm_asset_loader_load_point_cloud(rasm_asset_loader* loader, const char* path, const rasm_point_cloud_load_options* options, rasm_point_cloud** cloud);
 RASM_C_API rasm_result      RASM_CALL rasm_get_point_cloud_info(const rasm_point_cloud* cloud, rasm_point_cloud_info* info);
 RASM_C_API void             RASM_CALL rasm_point_cloud_destroy(rasm_point_cloud* cloud);
+
+/* Added in 1.14: instanced glyphs and data lines. rasm_build_glyph_chunk checks and builds a chunk's data on any thread
+ * (16 B a glyph, 8 B more with orientations and 8 B more with scales); rasm_create_mesh_from_build uploads it. Draw it
+ * with a RASM_MATERIAL_TYPE_GLYPHS material on an entity placed in doubles: each frame a compute pass culls every glyph
+ * of the chunks in view (frustum, Hi-Z), picks the LOD of the shape by its size on screen, and one indirect draw draws
+ * the visible ones. A pick's feature is the glyph's index in desc's arrays (RASM_PICK_HIT_GLYPH). rasm_build_glyph_shape
+ * builds an arrow, a sphere or a cube with LODs (segments: 3 to 64 around); rasm_get_glyph_orientation turns +Y to a
+ * direction. rasm_vector_add_data_lines adds lines with a color or a scalar per point, which a VECTOR material whose
+ * vector_colors take SCALAR maps through its colormap. */
+RASM_C_API rasm_result      RASM_CALL rasm_glyph_chunk_desc_init(rasm_glyph_chunk_desc* desc, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_build_glyph_chunk(const rasm_glyph_chunk_desc* desc, rasm_mesh_build** build);
+RASM_C_API rasm_result      RASM_CALL rasm_build_glyph_shape(rasm_glyph_shape shape, uint32_t segments, rasm_mesh_build** build);
+RASM_C_API rasm_quat        RASM_CALL rasm_get_glyph_orientation(rasm_vec3 direction);
+RASM_C_API rasm_result      RASM_CALL rasm_vector_add_data_lines(rasm_vector_geometry* geometry, rasm_dvec3 origin, const rasm_dvec3* points, const uint32_t* line_sizes, uint32_t line_count, const rasm_line_shape* shape, const rasm_vector_placement* placement, const uint32_t* feature_ids, const uint32_t* colors, const float* scalars);
 
 #ifdef __cplusplus
 }

@@ -266,6 +266,8 @@ namespace rasm
                 return gfx::MaterialId::VECTOR;
             case MaterialType::POINTS:
                 return gfx::MaterialId::POINTS;
+            case MaterialType::GLYPHS:
+                return gfx::MaterialId::GLYPHS;
             default:
                 return gfx::MaterialId::PBR;
             }
@@ -282,6 +284,17 @@ namespace rasm
             const float c = std::cos(transform.rotation);
             const float s = std::sin(transform.rotation);
             return {.matrix = glm::vec4(c * transform.scale.x, s * transform.scale.y, -s * transform.scale.x, c * transform.scale.y), .offset = transform.offset};
+        }
+
+        // What a row is in the point run (GpuScene::instancePoints): a point cloud chunk with a POINTS material, or a glyph
+        // chunk with a GLYPHS material, whose shape is culled by back face or not (two-sided, or mirrored).
+        uint8_t getPointRunKind(const MeshGeometry &geometry, MaterialType material, CullMode cullMode)
+        {
+            if (geometry.pointCount > 0 && material == MaterialType::POINTS)
+                return POINT_RUN_POINTS;
+            if (geometry.glyphCount > 0 && material == MaterialType::GLYPHS)
+                return cullMode == CullMode::BACK ? POINT_RUN_GLYPHS : POINT_RUN_GLYPHS_TWO_SIDED;
+            return POINT_RUN_NONE;
         }
 
         // The draw runs come in this order: OPAQUE then MASK, each by cull mode, then the point run, then the one BLEND run.
@@ -304,7 +317,7 @@ namespace rasm
         {
             const bool log = range.log && range.min > 0.0f && range.max > 0.0f;
             if (range.log && !log)
-                spdlog::warn("A POINTS material's range is logarithmic with an end at or below 0 ({} to {}): it is drawn linear.", range.min, range.max);
+                spdlog::warn("A material's scalar range is logarithmic with an end at or below 0 ({} to {}): it is drawn linear.", range.min, range.max);
             points.rangeMin = log ? std::log(range.min) : range.min;
             points.rangeMax = log ? std::log(range.max) : range.max;
             points.flags |= (log ? gfx::POINT_LOG : 0u) | (range.clamp ? gfx::POINT_CLAMP : 0u);
@@ -402,6 +415,23 @@ namespace rasm
                     row.vector.distanceRange = fontRange;
                     row.vector.flags |= gfx::VECTOR_TEXT;
                 }
+                // Data lines: the vertices' scalars through a colormap, which the row's PointData holds as a POINTS
+                // material's does (lib/vector.slang reads it there).
+                if (vector.colorMode == PointColorMode::SCALAR)
+                {
+                    row.points = {.color = glm::vec4(1.0f), .flags = gfx::POINT_SCALAR, .colormap = engine.getBindlessTextureIndex(vector.colormap)};
+                    writeScalarRange(vector.range, row.points);
+                }
+            }
+            // A glyph chunk is shaded as PBR, its base color times each glyph's color or its scalar through the colormap,
+            // which the row's PointData holds (lib/glyphs.slang).
+            if (mat.type == MaterialType::GLYPHS)
+            {
+                const GlyphMaterial &glyphs = mat.glyphs;
+                row.points = {.color = glm::vec4(1.0f),
+                              .flags = glyphs.colorMode == PointColorMode::SCALAR ? gfx::POINT_SCALAR : 0u,
+                              .colormap = engine.getBindlessTextureIndex(glyphs.colormap)};
+                writeScalarRange(glyphs.range, row.points);
             }
             if (mat.type == MaterialType::POINTS)
             {
@@ -540,13 +570,23 @@ namespace rasm
         std::swap(gpuScene->settlingEntities, gpuScene->movedEntities);
         gpuScene->movedEntities.clear();
 
+        // A glyph chunk's shape: a ready mesh whose first sub-mesh has triangles.
+        auto isGlyphShape = [this](MeshHandle shape)
+        {
+            if (!isLive(shape) || registry.meshes[shape.index].state != MeshState::READY || registry.meshes[shape.index].subMeshes.empty())
+                return false;
+            const MeshGeometry &geometry = registry.meshes[shape.index].subMeshes[0].geometry;
+            return geometry.vertexCount > 0 && geometry.indexCount > 0 && geometry.pointCount == 0 && geometry.glyphCount == 0;
+        };
         auto &waitingForMesh = gpuScene->entitiesWaitingForMesh;
         for (size_t i = 0; i < waitingForMesh.size();)
         {
             const EntityHandle entity = waitingForMesh[i];
             const bool alive = isLive(entity);
             const Entity &entityRef = registry.entities[entity.index];
-            if (alive && isLive(entityRef.mesh) && registry.meshes[entityRef.mesh.index].state == MeshState::LOADING)
+            // A glyph chunk also waits for its shape.
+            const MeshHandle shape = alive && isLive(entityRef.mesh) ? registry.meshes[entityRef.mesh.index].glyphShape : MeshHandle{};
+            if (alive && isLive(entityRef.mesh) && (registry.meshes[entityRef.mesh.index].state == MeshState::LOADING || (isLive(shape) && registry.meshes[shape.index].state == MeshState::LOADING)))
             {
                 ++i;
                 continue;
@@ -558,6 +598,10 @@ namespace rasm
             if (hasMesh && (!isLive(entityRef.mesh) || registry.meshes[entityRef.mesh.index].state != MeshState::READY))
             {
                 spdlog::warn("Entity {} is not drawn: its mesh failed to load.", entity.index);
+            }
+            else if (hasMesh && registry.meshes[entityRef.mesh.index].subMeshes[0].geometry.glyphCount > 0 && !isGlyphShape(shape))
+            {
+                spdlog::warn("Entity {} is not drawn: its glyph chunk's shape is not a live mesh with vertices and indices.", entity.index);
             }
             else if (hasMesh)
             {
@@ -573,11 +617,13 @@ namespace rasm
                 {
                     for (const auto &subMesh : mesh.subMeshes)
                     {
-                        if ((subMesh.geometry.vertexCount == 0 && subMesh.geometry.pointCount == 0) || subMesh.geometry.indexCount == 0)
+                        if ((subMesh.geometry.vertexCount == 0 && subMesh.geometry.pointCount == 0 && subMesh.geometry.glyphCount == 0) || subMesh.geometry.indexCount == 0)
                             spdlog::warn("Skipping a mesh of entity {}: it has {} vertices and {} indices, and drawing needs both.",
                                          entity.index, subMesh.geometry.vertexCount, subMesh.geometry.indexCount);
                         if (subMesh.geometry.pointCount > 0 && getSubMeshMaterial(*this, entityRef, subMesh).type != MaterialType::POINTS)
                             spdlog::warn("Entity {} draws a point cloud chunk without a POINTS material: its points are not drawn.", entity.index);
+                        if (subMesh.geometry.glyphCount > 0 && getSubMeshMaterial(*this, entityRef, subMesh).type != MaterialType::GLYPHS)
+                            spdlog::warn("Entity {} draws a glyph chunk without a GLYPHS material: its glyphs are not drawn.", entity.index);
                     }
 
                     // The rows go back when the entity or its mesh is destroyed (releaseEntityRows).
@@ -720,7 +766,14 @@ namespace rasm
                                   .geometryIndex = subMesh.geometry.geometryIndex,
                                   .materialIndex = static_cast<uint32_t>(getSubMeshMaterial(*this, entityRef, subMesh).handle.index),
                                   .animationRow = getAnimationRow(entity, i),
-                                  .meshletVisibility = subMesh.geometry.pointCount > 0 ? state.pointLod : (state.labelCount > 0 ? state.firstLabel : gpuScene->instanceMeshletWords[state.firstInstance + i])};
+                                  .meshletVisibility = gpuScene->instanceMeshletWords[state.firstInstance + i]};
+            // The word meshlets would use: a point chunk's LOD, a glyph chunk's shape row, a vector mesh's first label slot.
+            if (subMesh.geometry.pointCount > 0)
+                row.meshletVisibility = state.pointLod;
+            else if (subMesh.geometry.glyphCount > 0)
+                row.meshletVisibility = isLive(mesh.glyphShape) ? static_cast<int32_t>(registry.meshes[mesh.glyphShape.index].subMeshes[0].geometry.geometryIndex) : -1;
+            else if (state.labelCount > 0)
+                row.meshletVisibility = state.firstLabel;
             writeWorldRows(model, row.world, row.translationLow);
             writePreviousRows(syncedMatrix * glm::dmat4(subMesh.transform), model, row.previousWorld);
             gpuScene->instances.setRow(state.firstInstance + i, &row);
@@ -747,9 +800,10 @@ namespace rasm
             const CullMode cullMode = getCullMode(material, entityRef.transform, subMesh.transform, animationCanMirror(entityRef.mesh, i));
             CullMode &storedCullMode = gpuScene->instanceCullModes[state.firstInstance + i];
             AlphaMode &storedAlphaMode = gpuScene->instanceAlphaModes[state.firstInstance + i];
-            // A point cloud chunk is drawn only with a POINTS material, by the point run, which is not culled by face.
-            const auto points = static_cast<uint8_t>(subMesh.geometry.pointCount > 0 && material.type == MaterialType::POINTS ? 1 : 0);
-            const CullMode wantedCullMode = points != 0 ? CullMode::NONE : cullMode;
+            // A point cloud chunk is drawn only with a POINTS material, by the point run, which is not culled by face. A
+            // glyph chunk with a GLYPHS material is in the point run too, and drawn from the glyph list (glyphCull.cpp).
+            const auto points = getPointRunKind(subMesh.geometry, material.type, cullMode);
+            const CullMode wantedCullMode = points != POINT_RUN_NONE ? CullMode::NONE : cullMode;
             uint8_t &storedPoints = gpuScene->instancePoints[state.firstInstance + i];
             changed = changed || storedCullMode != wantedCullMode || storedAlphaMode != material.alphaMode || storedPoints != points;
             storedCullMode = wantedCullMode;
@@ -885,6 +939,9 @@ namespace rasm
         drawList.runs.clear();
         drawList.labelEntities.clear();
         drawList.triangleCount = 0;
+        drawList.glyphChunks = 0;
+        drawList.glyphBatches = 0;
+        drawList.glyphCullMode = CullMode::BACK;
 
         compactSceneEntities(scene);
         for (auto entity : registry.scenes[scene.index].entities)
@@ -899,16 +956,28 @@ namespace rasm
             for (uint32_t i = 0; i < state.instanceCount; ++i)
             {
                 const MeshGeometry &geometry = mesh.subMeshes[i].geometry;
-                const bool points = gpuScene->instancePoints[state.firstInstance + i] != 0;
+                const uint8_t kind = gpuScene->instancePoints[state.firstInstance + i];
+                const bool points = kind != POINT_RUN_NONE;
                 if ((geometry.vertexCount == 0 && !points) || geometry.indexCount == 0)
                     continue;
-                // Indices are local to their sub-mesh; vertexOffset moves them to its place in the geometry pool.
+                // The glyph cull's batches, and the face culling of the one glyph draw: by back face only when every
+                // chunk's shape is single-sided and not mirrored.
+                const bool glyphs = kind == POINT_RUN_GLYPHS || kind == POINT_RUN_GLYPHS_TWO_SIDED;
+                if (glyphs)
+                {
+                    ++drawList.glyphChunks;
+                    drawList.glyphBatches += (geometry.glyphCount + gfx::GLYPH_BATCH_GLYPHS - 1) / gfx::GLYPH_BATCH_GLYPHS;
+                    if (kind == POINT_RUN_GLYPHS_TWO_SIDED)
+                        drawList.glyphCullMode = CullMode::NONE;
+                }
+                // Indices are local to their sub-mesh; vertexOffset moves them to its place in the geometry pool. A glyph
+                // chunk's draw has no instance: only its glyphs are drawn, so a view drawn unculled draws nothing of it.
                 drawList.draws.push_back({.indexCount = geometry.indexCount,
-                                          .instanceCount = 1,
+                                          .instanceCount = glyphs ? 0u : 1u,
                                           .firstIndex = geometry.firstIndex,
                                           .vertexOffset = static_cast<int32_t>(geometry.firstVertex),
                                           .firstInstance = state.firstInstance + i});
-                drawList.triangleCount += geometry.indexCount / 3;
+                drawList.triangleCount += glyphs ? 0 : geometry.indexCount / 3;
             }
         }
 
@@ -1206,6 +1275,8 @@ namespace rasm
                 builder.write(sceneView.sortBuffers);
             if (sceneView.pointRaster[0].isValid())
                 builder.write(sceneView.pointRaster);
+            if (sceneView.glyphCull[0].isValid())
+                builder.write(sceneView.glyphCull);
         };
         // A shaded view's draws also read where the frame before drew a skinned vertex, for motion.
         auto drawScenePass = [&sceneView, &clusters, &animation, renderTarget, face, sampled, sampledCount](PassBuilder &builder)
@@ -1219,6 +1290,8 @@ namespace rasm
             builder.read(sceneView.visibleDraws);
             if (sceneView.pointRaster[0].isValid())
                 builder.read(sceneView.pointRaster);
+            if (sceneView.glyphCull[0].isValid())
+                builder.read(sceneView.glyphCull);
             if (clusters.buffers[0].isValid())
                 builder.read(clusters.buffers);
             for (uint32_t s = 0; !sceneView.depthOnly && s < sceneView.shadowCount; ++s)
@@ -1268,6 +1341,7 @@ namespace rasm
                 drawSceneView(view, CULL_EARLY);
                 if (!gpuScene->views[view].late)
                 {
+                    drawViewGlyphs(view);
                     drawPointResolve(view);
                     drawSky(view);
                 }
@@ -1355,6 +1429,7 @@ namespace rasm
                 if (!gpuScene->views[view].late)
                     return;
                 drawSceneView(view, CULL_LATE);
+                drawViewGlyphs(view);
                 drawPointResolve(view);
                 drawSky(view);
             });
@@ -1447,6 +1522,20 @@ namespace rasm
                 break;
             }
         }
+        // A shaded view's glyph chunks are culled per glyph into a list its last draw pass draws (glyphCull.cpp): the
+        // buffer starts as the header alone and grows once the scene has glyph chunks. Without it, they are not drawn.
+        for (uint32_t i = 0; !depthOnly && i < MAX_FRAMES_IN_FLIGHT; ++i)
+        {
+            view.glyphCull[i] = ctx.createBuffer({.name = "Glyph Cull Buffer", .usage = BufferUsage::INDIRECT, .size = sizeof(gfx::GlyphCullHeader)});
+            view.glyphCullBytes[i] = sizeof(gfx::GlyphCullHeader);
+            if (!view.glyphCull[i].isValid())
+            {
+                spdlog::error("Failed to create the glyph cull buffers of a scene view; its glyphs are not drawn.");
+                for (uint32_t j = 0; j < MAX_FRAMES_IN_FLIGHT; ++j)
+                    destroyViewBuffer(ctx, view.glyphCull[j]);
+                break;
+            }
+        }
         if (!depthOnly)
         {
             view.labelFades = ctx.createBuffer({.name = "Label Fade Buffer", .usage = BufferUsage::STORAGE, .size = sizeof(float)});
@@ -1459,6 +1548,8 @@ namespace rasm
                     destroyViewBuffer(ctx, view.sortBuffers[j]);
                     destroyViewBuffer(ctx, view.labelBuffers[j]);
                     destroyViewBuffer(ctx, view.labelProbes[j]);
+                    destroyViewBuffer(ctx, view.pointRaster[j]);
+                    destroyViewBuffer(ctx, view.glyphCull[j]);
                 }
                 return UINT32_MAX;
             }
@@ -1524,6 +1615,7 @@ namespace rasm
             destroyViewBuffer(ctx, view.labelBuffers[i]);
             destroyViewBuffer(ctx, view.labelProbes[i]);
             destroyViewBuffer(ctx, view.pointRaster[i]);
+            destroyViewBuffer(ctx, view.glyphCull[i]);
         }
         destroyViewBuffer(ctx, view.labelFades);
         destroyViewBuffer(ctx, view.visibility);
@@ -1555,6 +1647,7 @@ namespace rasm
         view.meshletRuns = 0;
         view.meshShaders = false;
         view.rasterPoints = false;
+        view.drawGlyphs = false;
 
         const auto &drawList = gpuScene->drawLists[view.scene.index];
         const auto frame = static_cast<uint32_t>(frameCount);
@@ -2080,6 +2173,7 @@ namespace rasm
         if (!view.depthOnly && !drawList.labelEntities.empty())
             placeViewLabels(viewIndex, cameraProjection, worldCameraView, width, height, sceneData);
         preparePointRaster(viewIndex, sceneData);
+        prepareGlyphCull(viewIndex, sceneData);
         ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), viewIndex * sizeof(gfx::SceneData));
         view.sceneData = sceneData;
         view.projection = cameraProjection;
@@ -2239,7 +2333,11 @@ namespace rasm
         const auto commandBuffer = frameResources[frameCount].commandBuffer;
         const gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, static_cast<uint32_t>(frameCount), viewIndex), .argument = phase};
         if (phase == CULL_EARLY)
+        {
             recordPointReset(viewIndex);
+            if (view.drawGlyphs)
+                recordGlyphReset(pushConstants.scene);
+        }
         ctx.bindPipeline(commandBuffer, gpuScene->cullCountPipeline);
         ctx.pushConstants(commandBuffer, gpuScene->cullCountPipeline, &pushConstants, sizeof(pushConstants), 0);
         ctx.dispatch(commandBuffer, view.groupCount);
@@ -2251,7 +2349,11 @@ namespace rasm
             recordMeshletCulling(viewIndex, phase);
         // The view's last cull wrote every batch of the frame: the points that take the compute path are written now.
         if (phase == CULL_LATE || !view.late)
+        {
             recordPointRaster(viewIndex);
+            if (view.drawGlyphs)
+                recordGlyphCull(pushConstants.scene, view.glyphCull[frameCount], 0);
+        }
 
         // The phase that keeps the blend run's draws: the late one, or the only one in a frame without a Hi-Z.
         if (view.sortBlend && (phase == CULL_LATE || view.hizLevelCount == 0))

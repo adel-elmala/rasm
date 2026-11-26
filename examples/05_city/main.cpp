@@ -856,7 +856,7 @@ int main(int argc, char **argv)
     applyExampleArgs(args, config);
     // --meshlets off|vp|mesh|auto picks how the trees and the monument are culled; --bench measures it (exampleBench.h).
     applyMeshletFlag(argc, argv, config);
-    ExampleBench bench{.on = hasBenchFlag(argc, argv)};
+    ExampleBench bench{.on = hasBenchFlag(argc, argv), .warmup = getBenchWarmup(argc, argv)};
     if (bench.on)
     {
         config.enableValidation = false;

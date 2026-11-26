@@ -288,7 +288,7 @@ int main(int argc, char **argv)
         .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
         .shaderDir = RASM_EXAMPLE_SHADER_DIR};
     applyExampleArgs(args, config);
-    ExampleBench bench{.on = hasBenchFlag(argc, argv)};
+    ExampleBench bench{.on = hasBenchFlag(argc, argv), .warmup = getBenchWarmup(argc, argv)};
     if (bench.on)
     {
         config.enableValidation = false;

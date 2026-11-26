@@ -622,7 +622,15 @@ namespace rasm
                                      {"pointBatchesPtr", offsetof(gfx::SceneData, pointBatchesPtr)},
                                      {"pointPixelsPtr", offsetof(gfx::SceneData, pointPixelsPtr)},
                                      {"pointBatchCapacity", offsetof(gfx::SceneData, pointBatchCapacity)},
-                                     {"pointRasterPadding", offsetof(gfx::SceneData, pointRasterPadding)}});
+                                     {"pointRasterPadding", offsetof(gfx::SceneData, pointRasterPadding)},
+                                     {"glyphCullPtr", offsetof(gfx::SceneData, glyphCullPtr)},
+                                     {"glyphChunksPtr", offsetof(gfx::SceneData, glyphChunksPtr)},
+                                     {"glyphBatchesPtr", offsetof(gfx::SceneData, glyphBatchesPtr)},
+                                     {"glyphCommandsPtr", offsetof(gfx::SceneData, glyphCommandsPtr)},
+                                     {"glyphSlotsPtr", offsetof(gfx::SceneData, glyphSlotsPtr)},
+                                     {"glyphListPtr", offsetof(gfx::SceneData, glyphListPtr)},
+                                     {"glyphChunkCapacity", offsetof(gfx::SceneData, glyphChunkCapacity)},
+                                     {"glyphBatchCapacity", offsetof(gfx::SceneData, glyphBatchCapacity)}});
 
             valid &= validateStruct(fieldStruct(layouts, scene, "pointRasterPtr"), "PointRasterHeader", sizeof(gfx::PointRasterHeader),
                                     {{"rasterGroups", offsetof(gfx::PointRasterHeader, rasterGroups)},
@@ -636,6 +644,19 @@ namespace rasm
                                      {"rectMaxX", offsetof(gfx::PointRasterHeader, rectMaxX)},
                                      {"rectMaxY", offsetof(gfx::PointRasterHeader, rectMaxY)},
                                      {"padding", offsetof(gfx::PointRasterHeader, padding)}});
+            valid &= validateStruct(fieldStruct(layouts, scene, "glyphCullPtr"), "GlyphCullHeader", sizeof(gfx::GlyphCullHeader),
+                                    {{"groups", offsetof(gfx::GlyphCullHeader, groups)},
+                                     {"groupsY", offsetof(gfx::GlyphCullHeader, groupsY)},
+                                     {"groupsZ", offsetof(gfx::GlyphCullHeader, groupsZ)},
+                                     {"chunkCount", offsetof(gfx::GlyphCullHeader, chunkCount)},
+                                     {"commandCount", offsetof(gfx::GlyphCullHeader, commandCount)},
+                                     {"padding", offsetof(gfx::GlyphCullHeader, padding)}});
+            valid &= validateStruct(fieldStruct(layouts, scene, "glyphChunksPtr"), "GlyphChunkSlot", sizeof(gfx::GlyphChunkSlot),
+                                    {{"row", offsetof(gfx::GlyphChunkSlot, row)},
+                                     {"firstBatch", offsetof(gfx::GlyphChunkSlot, firstBatch)},
+                                     {"firstCommand", offsetof(gfx::GlyphChunkSlot, firstCommand)},
+                                     {"lodCount", offsetof(gfx::GlyphChunkSlot, lodCount)},
+                                     {"counts", offsetof(gfx::GlyphChunkSlot, counts)}});
 
             valid &= validateStruct(fieldStruct(layouts, scene, "meshletsPtr"), "GeometryMeshlet", sizeof(gfx::GeometryMeshlet),
                                     {{"center", offsetof(gfx::GeometryMeshlet, center)},

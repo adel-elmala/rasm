@@ -56,6 +56,7 @@ namespace rasm
         std::vector<Vertex>         vertices;
         std::vector<uint32_t>       indices;
         std::vector<MeshLabel>      labels;                             // addVectorLabels'
+        std::vector<uint32_t>       colors;
     };
 
     // Where a label's text sits around its anchor on screen.
@@ -89,7 +90,7 @@ namespace rasm
     // still follow the material), and a new width takes a rebuild. It is cut at the tile's edges: give each tile the
     // lines within half the width of it, and its neighbour draws the rest.
     void                            addVectorLines(VectorGeometry& geometry, const glm::dvec3& origin, const glm::dvec3* points, const uint32_t* lineSizes, uint32_t lineCount, const LineShape& shape = {},
-                                                   const VectorPlacement& placement = {}, const uint32_t* featureIds = nullptr);
+                                                   const VectorPlacement& placement = {}, const uint32_t* featureIds = nullptr, const uint32_t* colors = nullptr, const float* scalars = nullptr);
     // Polygons with holes: points holds every ring, one after another, ringSizes[r] points for ring r; polygon i has
     // ringCounts[i] rings, its outline first, then its holes. Rings need not be closed nor wound a given way.
     void                            addVectorPolygons(VectorGeometry& geometry, const glm::dvec3& origin, const glm::dvec3* points, const uint32_t* ringSizes, const uint32_t* ringCounts, uint32_t polygonCount,

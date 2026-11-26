@@ -527,7 +527,7 @@
   <figcaption>The sort order is the order of the <code>AlphaMode</code> values, then of the <code>CullMode</code> values. Within a run, draws keep their scene order. <code>drawSceneView</code> sets each run's pipeline and cull mode and issues one indirect draw per run; a shaded view leaves the blend run to its <code>Transparent</code> pass, which draws it sorted back to front (<a href="transparency.html#in-rasm">transparency</a>).</figcaption>
 </figure>
 
-<p>A run is a <code>DrawRun</code> <code>{alphaMode, cullMode, first, count}</code>. There are at most <code>MAX_DRAW_RUNS</code> = 7 runs: three cull modes for each of <code>NONE</code> and <code>MASK</code>, and one <code>BLEND</code> run (a <code>static_assert</code> ties the numbers together). A draw is skipped, with a warning when the entity gets its rows, if its sub-mesh has no vertices or no indices.</p>
+<p>A run is a <code>DrawRun</code> <code>{alphaMode, cullMode, first, count}</code>. There are at most <code>MAX_DRAW_RUNS</code> = 8 runs: three cull modes for each of <code>NONE</code> and <code>MASK</code>, the point run (point cloud chunks, and the glyph chunks the glyph cull draws: <a href="point-clouds.html#in-rasm">point clouds</a>, <a href="instanced-glyphs.html#in-rasm">instanced glyphs</a>) and one <code>BLEND</code> run (a <code>static_assert</code> ties the numbers together). A draw is skipped, with a warning when the entity gets its rows, if its sub-mesh has no vertices or no indices.</p>
 
 <h3>When a draw list is rebuilt</h3>
 
@@ -710,7 +710,7 @@
     <li>Only <code>gpuScene.cpp</code> touches <code>GpuScene</code>. Other files call the <code>Engine</code> methods (<code>queueInstanceRows</code>, <code>writeInstanceRows</code>, <code>writeMaterialRow</code>, <code>addEntityToDrawList</code>, <code>refreshEntitiesAfterMaterialChange</code>).</li>
     <li>An entity joins a draw list only with rows and all textures loaded. Keep that check in both <code>addEntityToDrawList</code> and <code>rebuildDrawList</code>.</li>
     <li><code>EntityDrawState::scenes</code> has one bit per scene, so <code>MAX_SCENES</code> must stay at most 16 (a <code>static_assert</code> checks it).</li>
-    <li>The run order is the order of <code>AlphaMode</code>, then of <code>CullMode</code>, and <code>MAX_DRAW_RUNS</code> must equal 2 × the cull modes + 1. The blend run is last and has cull mode <code>NONE</code>.</li>
+    <li>The run order is the order of <code>AlphaMode</code>, then of <code>CullMode</code>, and <code>MAX_DRAW_RUNS</code> must equal 2 × the cull modes + 2 (the point run and the blend run). The blend run is last and has cull mode <code>NONE</code>.</li>
     <li>Changing <code>InstanceData</code>, <code>MaterialData</code>, <code>GeometryData</code> or <code>DrawInfo</code> is a CPU↔GPU struct change: follow <a href="struct-layout.html#in-rasm">the struct contract</a>.</li>
   </ul>
 </div>

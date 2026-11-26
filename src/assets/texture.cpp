@@ -41,6 +41,16 @@ namespace rasm
                 material.points.colormap = {};
                 used = true;
             }
+            if (material.glyphs.colormap == texture)
+            {
+                material.glyphs.colormap = {};
+                used = true;
+            }
+            if (material.vector.colormap == texture)
+            {
+                material.vector.colormap = {};
+                used = true;
+            }
             if (used)
             {
                 writeMaterialRow(material.handle);

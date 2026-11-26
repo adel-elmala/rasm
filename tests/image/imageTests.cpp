@@ -1083,6 +1083,131 @@ namespace
         return buildPoints(engine, assets, content);
     }
 
+    // The glyph tests' scene: a swirl of 1024 arrows over a ground, sized and colored by their speed through viridis,
+    // some of them behind a wall (Hi-Z culls them); a ring of RGB spheres, a second shape in the same draw; streamlines
+    // colored by their speed through plasma, and one line with RGB points; pick probes on a sphere's front and a line.
+    bool buildGlyphs(rasm::Engine &engine, const Assets &assets, Content &content)
+    {
+        const rasm::MeshHandle arrow = engine.createMesh(rasm::buildGlyphShape(rasm::GlyphShape::ARROW));
+        const rasm::MeshHandle sphere = engine.createMesh(rasm::buildGlyphShape(rasm::GlyphShape::SPHERE));
+        const auto swirl = [](const glm::vec3 &p)
+        { return glm::vec3(-p.z, 0.35f + 0.25f * std::sin(2.0f * p.x), p.x); };
+        std::vector<glm::vec3> positions;
+        std::vector<glm::quat> orientations;
+        std::vector<glm::vec3> scales;
+        std::vector<float> speeds;
+        for (int y = 0; y < 4; ++y)
+        {
+            for (int z = 0; z < 16; ++z)
+            {
+                for (int x = 0; x < 16; ++x)
+                {
+                    const glm::vec3 p(static_cast<float>(x) * 0.36f - 2.7f, static_cast<float>(y) * 0.35f + 0.1f, static_cast<float>(z) * 0.36f - 2.7f);
+                    const glm::vec3 v = swirl(p);
+                    positions.push_back(p);
+                    orientations.push_back(rasm::getGlyphOrientation(v));
+                    speeds.push_back(glm::length(v));
+                    scales.push_back(glm::vec3(0.12f + 0.08f * speeds.back()));
+                }
+            }
+        }
+        const rasm::MaterialHandle bySpeed = engine.createMaterial(rasm::MaterialType::GLYPHS);
+        rasm::Material values = engine.getMaterial(bySpeed);
+        values.glyphs = {.colorMode = rasm::PointColorMode::SCALAR, .colormap = engine.createColormap(rasm::ColormapPreset::VIRIDIS), .range = {.min = 0.3f, .max = 4.0f}};
+        values.params[static_cast<uint32_t>(rasm::PbrParam::ROUGHNESS)] = 0.5f;
+        engine.updateMaterial(bySpeed, values);
+        addEntity(engine, content, "arrows",
+                  engine.createMesh(rasm::buildGlyphChunk({.shape = arrow,
+                                                           .positions = positions.data(),
+                                                           .orientations = orientations.data(),
+                                                           .scales = scales.data(),
+                                                           .scalars = speeds.data(),
+                                                           .count = static_cast<uint32_t>(positions.size())})),
+                  bySpeed, rasm::Transform{glm::vec3(0.0f, 0.0f, -2.0f)});
+
+        std::vector<glm::vec3> ring;
+        std::vector<uint32_t> colors;
+        for (uint32_t i = 0; i < 12; ++i)
+        {
+            const float a = static_cast<float>(i) / 12.0f * 6.2831853f;
+            ring.emplace_back(0.7f * std::cos(a), 0.0f, 0.7f * std::sin(a));
+            colors.push_back(rasm::packVertexColor(glm::vec4(0.5f + 0.5f * std::cos(a), 0.5f + 0.5f * std::sin(a), 0.9f - 0.6f * static_cast<float>(i % 2), 1.0f)));
+        }
+        const glm::vec3 ringScale[12] = {glm::vec3(0.3f), glm::vec3(0.3f), glm::vec3(0.3f), glm::vec3(0.3f), glm::vec3(0.3f), glm::vec3(0.3f),
+                                         glm::vec3(0.3f), glm::vec3(0.3f), glm::vec3(0.3f, 0.6f, 0.3f), glm::vec3(0.3f), glm::vec3(0.3f), glm::vec3(0.3f)};
+        const rasm::MaterialHandle own = engine.createMaterial(rasm::MaterialType::GLYPHS);
+        values = engine.getMaterial(own);
+        values.params[static_cast<uint32_t>(rasm::PbrParam::ROUGHNESS)] = 0.35f;
+        engine.updateMaterial(own, values);
+        const rasm::EntityHandle spheres = addEntity(engine, content, "spheres",
+                                                     engine.createMesh(rasm::buildGlyphChunk({.shape = sphere, .positions = ring.data(), .scales = ringScale, .colors = colors.data(), .count = 12})),
+                                                     own, rasm::Transform{glm::vec3(1.6f, 1.6f, -0.8f)});
+
+        addGround(engine, assets, content, 4.0f, glm::vec3(0.45f, 0.45f, 0.42f));
+        addEntity(engine, content, "wall", assets.cube, createColorMaterial(engine, glm::vec3(0.7f, 0.35f, 0.25f), 0.6f),
+                  rasm::Transform{glm::vec3(-1.2f, 0.6f, 0.4f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(1.6f, 1.2f, 0.1f)});
+
+        // Streamlines of the swirl from a row of seeds, a scalar per point; and a line whose points have their own colors.
+        std::vector<glm::dvec3> points;
+        std::vector<float> lineSpeeds;
+        std::vector<uint32_t> sizes;
+        for (int seed = 0; seed < 6; ++seed)
+        {
+            glm::vec3 p(0.3f + 0.4f * static_cast<float>(seed), 1.55f, 0.0f);
+            for (int i = 0; i < 60; ++i)
+            {
+                points.emplace_back(glm::dvec3(p) + glm::dvec3(0.0, 0.0, -2.0));
+                lineSpeeds.push_back(glm::length(swirl(p)));
+                const glm::vec3 v = swirl(p);
+                p += 0.06f * glm::vec3(v.x, 0.0f, v.z) / glm::length(glm::vec2(v.x, v.z));
+            }
+            sizes.push_back(60);
+        }
+        rasm::VectorGeometry geometry;
+        rasm::addVectorLines(geometry, glm::dvec3(0.0), points.data(), sizes.data(), static_cast<uint32_t>(sizes.size()), {}, {}, nullptr, nullptr, lineSpeeds.data());
+        // A line without values in the same mesh keeps the material's color (white), not the colormap's.
+        const glm::dvec3 plain[2] = {{-2.8, 1.55, -0.2}, {-0.8, 1.55, -0.2}};
+        const uint32_t plainSize = 2;
+        rasm::addVectorLines(geometry, glm::dvec3(0.0), plain, &plainSize, 1);
+        const rasm::MaterialHandle lineStyle = engine.createMaterial(rasm::MaterialType::VECTOR);
+        values = engine.getMaterial(lineStyle);
+        values.vector.width = 3.0f;
+        values.vector.colorMode = rasm::PointColorMode::SCALAR;
+        values.vector.colormap = engine.createColormap(rasm::ColormapPreset::PLASMA);
+        values.vector.range = {.min = 0.3f, .max = 4.0f};
+        engine.updateMaterial(lineStyle, values);
+        addEntity(engine, content, "streamlines", engine.createMesh(rasm::buildVectorMesh(std::move(geometry))), lineStyle, rasm::Transform{});
+
+        const glm::dvec3 rgbLine[3] = {{-3.0, 0.02, 1.0}, {-1.5, 0.02, 1.6}, {0.0, 0.02, 1.0}};
+        const uint32_t rgbColors[3] = {rasm::packVertexColor(glm::vec4(1.0f, 0.1f, 0.1f, 1.0f)), rasm::packVertexColor(glm::vec4(0.1f, 1.0f, 0.1f, 1.0f)),
+                                       rasm::packVertexColor(glm::vec4(0.1f, 0.2f, 1.0f, 1.0f))};
+        const uint32_t rgbSize = 3;
+        const uint32_t rgbId = 7;
+        rasm::VectorGeometry rgb;
+        rasm::addVectorLines(rgb, glm::dvec3(0.0), rgbLine, &rgbSize, 1, {}, {}, &rgbId, rgbColors);
+        const rasm::MaterialHandle rgbStyle = engine.createMaterial(rasm::MaterialType::VECTOR);
+        values = engine.getMaterial(rgbStyle);
+        values.vector.width = 6.0f;
+        engine.updateMaterial(rgbStyle, values);
+        const rasm::EntityHandle rgbEntity = addEntity(engine, content, "rgb line", engine.createMesh(rasm::buildVectorMesh(std::move(rgb))), rgbStyle, rasm::Transform{});
+
+        content.eye = glm::vec3(0.5f, 3.2f, 4.6f);
+        content.center = glm::vec3(0.0f, 0.4f, -1.6f);
+        content.fovY = 50.0f;
+        // The front of sphere 3 (a glyph's index in the desc), toward the eye; and the middle of the RGB line.
+        const glm::vec3 sphereCentre = glm::vec3(1.6f, 1.6f, -0.8f) + ring[3];
+        const glm::vec3 front = sphereCentre + 0.15f * glm::normalize(content.eye - sphereCentre);
+        content.probes.push_back({.name = "sphere glyph", .point = glm::dvec3(front), .entity = spheres, .feature = 3, .flags = rasm::PICK_HIT_GLYPH | rasm::PICK_HIT_FEATURE, .metres = 0.01});
+        content.probes.push_back({.name = "rgb line", .point = rgbLine[1], .entity = rgbEntity, .feature = rgbId, .flags = rasm::PICK_HIT_FEATURE, .pixels = 6.0});
+        return arrow.isValid() && sphere.isValid() && addSunsetLight(engine, assets, content, 0.6f, glm::vec3(0.5f, -0.7f, -0.4f), 2.0f);
+    }
+
+    bool buildGlyphsOrtho(rasm::Engine &engine, const Assets &assets, Content &content)
+    {
+        content.orthoHeight = 6.0f;
+        return buildGlyphs(engine, assets, content);
+    }
+
     // The picking scene through an orthographic box from the same eye, with a bounded grid just over its ground.
     bool buildOrtho(rasm::Engine &engine, const Assets &assets, Content &content)
     {
@@ -1162,6 +1287,12 @@ namespace
         {.name = "points_msaa4",  .build = buildPoints,        .samples = 4, .picks = true},
         {.name = "points_taa",    .build = buildPoints,        .taa = true, .frames = 16, .picks = true},
         {.name = "points_ortho",  .build = buildPointsOrtho,   .picks = true},
+        // Instanced glyphs: each glyph culled and given its shape's LOD by a compute pass, drawn by one indirect draw; a
+        // second shape in the same draw; data lines colored per point and through a colormap; picks of a glyph.
+        {.name = "glyphs",        .build = buildGlyphs,        .picks = true},
+        {.name = "glyphs_msaa4",  .build = buildGlyphs,        .samples = 4, .picks = true},
+        {.name = "glyphs_taa",    .build = buildGlyphs,        .taa = true, .frames = 16, .picks = true},
+        {.name = "glyphs_ortho",  .build = buildGlyphsOrtho,   .picks = true},
         // Adaptive points grown to close a sparse sheet, and an octree's parent and children (PointChunkLod).
         {.name = "points_adaptive", .build = buildPointsAdaptive},
         // Points of 3 to 5 pixels in each shape, by the compute path and by triangles only: the same pixels.
@@ -1196,6 +1327,7 @@ namespace
         {.name = "far_picking",   .build = buildPicking,       .time = 0.5, .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "picking", .picks = true},
         {.name = "far_grid",      .build = buildGrid,          .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "grid"},
         {.name = "far_points",    .build = buildPoints,        .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "points", .picks = true},
+        {.name = "far_glyphs",    .build = buildGlyphs,        .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "glyphs", .picks = true},
     };
     // clang-format on
 

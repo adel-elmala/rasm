@@ -4,6 +4,7 @@
 #include "rasm/picking.h"
 #include "rasm/pointCloud.h"
 #include "rasm/pointCloudOctree.h"
+#include "rasm/glyphs.h"
 #include "rasm/grid.h"
 #include "rasm/cameraInput.h"
 #include "rasm/light.h"
@@ -1078,4 +1079,72 @@ TEST_CASE("the 1.12 structs start from the C++ defaults, an octree builds on any
     CHECK(octree == nullptr);
     desc.points.size_mode = 7;
     CHECK(rasm_update_material(nullptr, rasm_material{1}, &desc) == RASM_ERROR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("the 1.14 structs start from the C++ defaults, a glyph chunk builds on any thread, and data lines take values")
+{
+    CHECK(RASM_MAX_GLYPH_CHUNK_GLYPHS == rasm::MAX_GLYPH_CHUNK_GLYPHS);
+    CHECK(RASM_PICK_HIT_GLYPH == rasm::PICK_HIT_GLYPH);
+    CHECK(RASM_PICK_SKIP_GLYPHS == rasm::PICK_SKIP_GLYPHS);
+    CHECK((RASM_PICK_SKIP_ALL & RASM_PICK_SKIP_GLYPHS) != 0);
+    CHECK(RASM_C_API_VERSION_MINOR >= 14);
+    rasm_glyph_chunk_desc chunk;
+    REQUIRE(rasm_glyph_chunk_desc_init(&chunk, sizeof(chunk)) == RASM_OK);
+    CHECK(chunk.size == sizeof(chunk));
+    CHECK(chunk.positions == nullptr);
+    CHECK(chunk.orientations == nullptr);
+    CHECK(chunk.count == 0);
+
+    const rasm_vec3 positions[3] = {{0.0f, 0.0f, 0.0f}, {1.0f, 2.0f, 3.0f}, {-4.0f, 0.5f, 2.0f}};
+    const rasm_quat orientations[3] = {{0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.70710678f, 0.70710678f}, {1.0f, 0.0f, 0.0f, 0.0f}};
+    const float scalars[3] = {1.0f, 2.0f, 3.0f};
+    chunk.shape = rasm_mesh{.id = 1ull << 32 | 1u};
+    chunk.positions = positions;
+    chunk.orientations = orientations;
+    chunk.scalars = scalars;
+    chunk.count = 3;
+    rasm_mesh_build *build = nullptr;
+    std::thread worker([&]()
+                       { CHECK(rasm_build_glyph_chunk(&chunk, &build) == RASM_OK); });
+    worker.join();
+    CHECK(build != nullptr);
+    CHECK(rasm_create_mesh_from_build(nullptr, build).id == 0);
+    const uint32_t colors[3] = {};
+    chunk.colors = colors;
+    CHECK(rasm_build_glyph_chunk(&chunk, &build) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(build == nullptr);
+    chunk.colors = nullptr;
+    chunk.shape = rasm_mesh{};
+    CHECK(rasm_build_glyph_chunk(&chunk, &build) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(rasm_build_glyph_chunk(nullptr, &build) == RASM_ERROR_INVALID_ARGUMENT);
+
+    CHECK(rasm_build_glyph_shape(RASM_GLYPH_SHAPE_ARROW, 16, &build) == RASM_OK);
+    CHECK(build != nullptr);
+    rasm_mesh_build_destroy(build);
+    CHECK(rasm_build_glyph_shape(RASM_GLYPH_SHAPE_CUBE + 1, 16, &build) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(contains(rasm_get_last_error(), "shape"));
+    const rasm_quat down = rasm_get_glyph_orientation(rasm_vec3{0.0f, -2.0f, 0.0f});
+    const glm::vec3 turned = glm::quat(down.w, down.x, down.y, down.z) * glm::vec3(0.0f, 1.0f, 0.0f);
+    CHECK(turned.y == doctest::Approx(-1.0f));
+
+    rasm_vector_geometry *geometry = nullptr;
+    REQUIRE(rasm_vector_geometry_create(&geometry) == RASM_OK);
+    const rasm_dvec3 line[2] = {{0.0, 0.0, 0.0}, {10.0, 0.0, 0.0}};
+    const uint32_t lineSize = 2;
+    const float lineScalars[2] = {0.0f, 1.0f};
+    CHECK(rasm_vector_add_data_lines(geometry, line[0], line, &lineSize, 1, nullptr, nullptr, nullptr, nullptr, lineScalars) == RASM_OK);
+    CHECK(rasm_vector_add_data_lines(geometry, line[0], line, &lineSize, 1, nullptr, nullptr, nullptr, colors, lineScalars) == RASM_ERROR_INVALID_ARGUMENT);
+    uint32_t vertexCount = 0;
+    uint32_t indexCount = 0;
+    CHECK(rasm_vector_geometry_get_size(geometry, &vertexCount, &indexCount) == RASM_OK);
+    CHECK(vertexCount == 4);
+    rasm_vector_geometry_destroy(geometry);
+
+    // The new fields come after the 1.10 ones, so a caller of an older version passes a smaller desc.
+    CHECK(offsetof(rasm_material_desc, glyphs) > offsetof(rasm_material_desc, points));
+    CHECK(offsetof(rasm_material_desc, vector_colors) == offsetof(rasm_material_desc, glyphs) + sizeof(rasm_scalar_colors));
+    CHECK(offsetof(rasm_frame_stats, glyphs) > offsetof(rasm_frame_stats, lights_dropped));
+    CHECK(offsetof(rasm_frame_stats, glyphs_visible) == offsetof(rasm_frame_stats, glyphs) + sizeof(uint32_t));
+    rasm_frame_stats stats = {.size = sizeof(rasm_frame_stats)};
+    CHECK(rasm_get_frame_stats(nullptr, &stats) == RASM_ERROR_INVALID_ARGUMENT);
 }

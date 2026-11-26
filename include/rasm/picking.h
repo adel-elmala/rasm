@@ -22,7 +22,8 @@ namespace rasm
     constexpr uint32_t              PICK_SKIP_LABELS        = 1u << 4;
     constexpr uint32_t              PICK_SKIP_OVERLAYS      = 1u << 5;  // VectorDepth::OVERLAY features, labels too
     constexpr uint32_t              PICK_SKIP_POINTS        = 1u << 6;  // point cloud chunks
-    constexpr uint32_t              PICK_SKIP_ALL           = (1u << 7) - 1;
+    constexpr uint32_t              PICK_SKIP_GLYPHS        = 1u << 7;
+    constexpr uint32_t              PICK_SKIP_ALL           = (1u << 8) - 1;
 
     // What a hit is.
     constexpr uint32_t              PICK_HIT_FEATURE        = 1u << 0;  // a vector feature (a label too): PickHit::feature is its id
@@ -31,6 +32,7 @@ namespace rasm
     constexpr uint32_t              PICK_HIT_TERRAIN        = 1u << 3;
     constexpr uint32_t              PICK_HIT_BACK_FACE      = 1u << 4;  // the back of a double-sided surface; the normal faces the camera
     constexpr uint32_t              PICK_HIT_POINT          = 1u << 5;  // a point of a point cloud chunk: PickHit::feature is its index (with PICK_HIT_FEATURE)
+    constexpr uint32_t              PICK_HIT_GLYPH          = 1u << 6;
 
     // A question to a view: what is under these pixels (from the view's top-left corner, in its pixels)?
     struct PickDesc

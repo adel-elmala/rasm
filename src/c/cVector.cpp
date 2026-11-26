@@ -250,6 +250,28 @@ try
 }
 RASM_C_CATCH_RESULT
 
+rasm_result RASM_CALL rasm_vector_add_data_lines(rasm_vector_geometry *geometry, rasm_dvec3 origin, const rasm_dvec3 *points, const uint32_t *line_sizes, uint32_t line_count, const rasm_line_shape *shape,
+                                                 const rasm_vector_placement *placement, const uint32_t *feature_ids, const uint32_t *colors, const float *scalars)
+try
+{
+    LineShape lineShape;
+    VectorPlacement place;
+    TerrainTileDesc tile;
+    if (!c::checkPointer(geometry, __func__, "geometry") || !checkArray(line_sizes, line_count, __func__, "line_sizes") || !c::checkFinite(origin, __func__, "origin") ||
+        !readShape(shape, lineShape, __func__) || !readPlacement(placement, place, tile, __func__))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    if (line_count > 0 && !checkArray(points, sum(line_sizes, line_count) > 0 ? 1 : 0, __func__, "points"))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    if (colors != nullptr && scalars != nullptr)
+    {
+        c::reportError(__func__, "give colors or scalars, not both.");
+        return RASM_ERROR_INVALID_ARGUMENT;
+    }
+    addVectorLines(geometry->geometry, c::toCpp(origin), toCpp(points), line_sizes, line_count, lineShape, place, feature_ids, colors, scalars);
+    return RASM_OK;
+}
+RASM_C_CATCH_RESULT
+
 rasm_result RASM_CALL rasm_vector_add_polygons(rasm_vector_geometry *geometry, rasm_dvec3 origin, const rasm_dvec3 *points, const uint32_t *ring_sizes, const uint32_t *ring_counts, uint32_t polygon_count,
                                                const rasm_vector_placement *placement, const uint32_t *feature_ids)
 try

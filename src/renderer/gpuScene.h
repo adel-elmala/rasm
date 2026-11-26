@@ -17,8 +17,8 @@
 namespace rasm
 {
 
-    // The words of the cull stats buffer. Must match the STATS_* constants in shaders/passes/cull.slang and
-    // shaders/passes/lightClusters.slang.
+    // The words of the cull stats buffer. Must match the STATS_* constants in shaders/passes/cull.slang,
+    // shaders/passes/lightClusters.slang and shaders/passes/glyphCull.slang.
     constexpr uint32_t                  CULL_STATS_DRAWS                                                    = 0;
     constexpr uint32_t                  CULL_STATS_TRIANGLES                                                = 1;    // low, high
     constexpr uint32_t                  CULL_STATS_LOD0_TRIANGLES                                           = 3;    // low, high
@@ -29,7 +29,14 @@ namespace rasm
     constexpr uint32_t                  CULL_STATS_MESHLETS_CULLED                                          = CULL_STATS_MESHLETS + 1;
     constexpr uint32_t                  CULL_STATS_MESHLETS_WHOLE                                           = CULL_STATS_MESHLETS + 2;  // draws past a run's budget, drawn whole
     constexpr uint32_t                  CULL_STATS_LOD_TRIANGLES                                            = CULL_STATS_MESHLETS_WHOLE + 1;    // low, high: before meshlet culling
-    constexpr uint32_t                  CULL_STATS_WORDS                                                    = CULL_STATS_LOD_TRIANGLES + 2;
+    constexpr uint32_t                  CULL_STATS_GLYPHS                                                   = CULL_STATS_LOD_TRIANGLES + 2;
+    constexpr uint32_t                  CULL_STATS_GLYPHS_VISIBLE                                           = CULL_STATS_GLYPHS + 1;
+    constexpr uint32_t                  CULL_STATS_WORDS                                                    = CULL_STATS_GLYPHS_VISIBLE + 1;
+
+    constexpr uint8_t                   POINT_RUN_NONE                                                      = 0;
+    constexpr uint8_t                   POINT_RUN_POINTS                                                    = 1;
+    constexpr uint8_t                   POINT_RUN_GLYPHS                                                    = 2;
+    constexpr uint8_t                   POINT_RUN_GLYPHS_TWO_SIDED                                          = 3;
 
     struct EntityDrawState
     {
@@ -75,6 +82,9 @@ namespace rasm
         uint8_t                         staleSlots                                                          = 0;
         bool                            rebuild                                                             = false;
         std::vector<EntityHandle>       labelEntities;                                                              // drawn entities with labels, for each view's placement
+        uint32_t                        glyphChunks                                                         = 0;
+        uint32_t                        glyphBatches                                                        = 0;
+        CullMode                        glyphCullMode                                                       = CullMode::BACK;
     };
 
     struct SceneView
@@ -108,6 +118,11 @@ namespace rasm
         uint64_t                        pointRasterBytes[MAX_FRAMES_IN_FLIGHT]                              = {};
         uint32_t                        pointBatchCapacity[MAX_FRAMES_IN_FLIGHT]                            = {};
         bool                            rasterPoints                                                        = false;    // this frame's culls send small points to the compute path
+        BufferHandle                    glyphCull[MAX_FRAMES_IN_FLIGHT]                                     = {};
+        uint64_t                        glyphCullBytes[MAX_FRAMES_IN_FLIGHT]                                = {};
+        uint32_t                        glyphChunkCapacity[MAX_FRAMES_IN_FLIGHT]                            = {};
+        uint32_t                        glyphBatchCapacity[MAX_FRAMES_IN_FLIGHT]                            = {};
+        bool                            drawGlyphs                                                          = false;
         uint32_t                        graphs                                                              = 0;    // graphs that hold it; 0 is a free slot
         bool                            ready                                                               = false;
         bool                            culled                                                              = false;
@@ -169,6 +184,7 @@ namespace rasm
         PipelineHandle                  gridPipeline                                                        = {};
         PipelineHandle                  pointPipeline                                                       = {};       // the point run's (passes/points.slang), alpha-to-coverage with more than one sample
         PipelineHandle                  pointResolvePipeline                                                = {};       // the compute path's points into the target (passes/pointRaster.slang)
+        PipelineHandle                  glyphPipeline                                                       = {};
         PipelineHandle                  meshPipeline                                                        = {};       // the opaque and MASK runs' meshlets, with mesh shaders
         PipelineHandle                  meshMaskPipeline                                                    = {};
         DebugPipelines                  debug;
@@ -196,13 +212,16 @@ namespace rasm
         PipelineHandle                  pointResetPipeline                                                  = {};
         PipelineHandle                  pointClearPipeline                                                  = {};
         PipelineHandle                  pointRasterPipeline                                                 = {};
+        PipelineHandle                  glyphResetPipeline                                                  = {};
+        PipelineHandle                  glyphCountPipeline                                                  = {};
+        PipelineHandle                  glyphWritePipeline                                                  = {};
         BufferHandle                    cullStats[MAX_FRAMES_IN_FLIGHT]                                     = {};
         SceneView                       views[MAX_SCENE_VIEWS];
         DrawTotals                      drawTotals[MAX_FRAMES_IN_FLIGHT]                                    = {};
         std::vector<EntityDrawState>    entities;
         std::vector<CullMode>           instanceCullModes;
         std::vector<AlphaMode>          instanceAlphaModes;
-        std::vector<uint8_t>            instancePoints;                                                             // per instance row: 1 for a point cloud chunk with a POINTS material
+        std::vector<uint8_t>            instancePoints;                                                             // per instance row: POINT_RUN_*
         RangeAllocator                  instanceRows;                                                               // a range per entity, reused at once: each slot has its own copy
         RangeAllocator                  meshletWords;                                                               // each view's meshlet visibility words, a range per instance row of a mesh with meshlets
         std::vector<uint32_t>           instanceMeshlets;                                                           // per instance row: the meshlets of its LOD with the most

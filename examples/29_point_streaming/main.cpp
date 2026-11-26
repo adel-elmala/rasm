@@ -462,7 +462,7 @@ int main(int argc, char **argv)
     config.geometryPoolPoints = static_cast<uint32_t>(budget / 8 + budget / 32);
     config.computePoints = !options.triangles;
     applyExampleArgs(args, config);
-    ExampleBench bench{.on = hasBenchFlag(argc, argv)};
+    ExampleBench bench{.on = hasBenchFlag(argc, argv), .warmup = getBenchWarmup(argc, argv)};
     if (bench.on)
     {
         config.enableValidation = false;

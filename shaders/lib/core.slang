@@ -10,7 +10,7 @@ static const uint   INVALID_TEXTURE_INDEX = 0xFFFFFFFF;
 static const uint   MAX_DRAW_RUNS       = 8;
 
 // Selects how fragMain shades a model. Must match rasm::gfx::MaterialId.
-enum class MaterialId : uint32_t { PBR, UNLIT, TERRAIN, VECTOR, POINTS };
+enum class MaterialId : uint32_t { PBR, UNLIT, TERRAIN, VECTOR, POINTS, GLYPHS };
 
 // Must match rasm::AlphaMode.
 enum class AlphaMode : uint32_t { NONE, MASK, BLEND };
@@ -199,6 +199,28 @@ struct PointRasterHeader
     uint32_t            padding[2];
 };
 
+// The head of a view's glyph buffer (passes/glyphCull.slang): the cull's group count, indirect, the chunks it kept and
+// the glyph draw's command count. Must match rasm::gfx::GlyphCullHeader.
+struct GlyphCullHeader
+{
+    uint32_t            groups;
+    uint32_t            groupsY;
+    uint32_t            groupsZ;
+    uint32_t            chunkCount;
+    uint32_t            commandCount;
+    uint32_t            padding[3];
+};
+
+// A glyph chunk the view's cull kept (lib/glyphs.slang). Must match rasm::gfx::GlyphChunkSlot.
+struct GlyphChunkSlot
+{
+    uint32_t            row;
+    uint32_t            firstBatch;         // its glyphs' slots and list entries start at firstBatch * GLYPH_BATCH_GLYPHS
+    uint32_t            firstCommand;       // its shape's LODs' draws in glyphCommandsPtr
+    uint32_t            lodCount;
+    uint32_t            counts[MAX_MESH_LODS];  // its visible glyphs per LOD
+};
+
 // A POINTS material's style (lib/points.slang); zero for the others. Must match rasm::gfx::PointData.
 struct PointData
 {
@@ -330,6 +352,14 @@ struct SceneData
     uint64_t*           pointPixelsPtr;         // per pixel: depth << 32 | instance row << 16 | point, 0 where no point
     uint32_t            pointBatchCapacity;
     uint32_t            pointRasterPadding;
+    GlyphCullHeader*    glyphCullPtr;           // the view's glyph buffer; null: no glyph is drawn (passes/glyphCull.slang)
+    GlyphChunkSlot*     glyphChunksPtr;         // per glyph chunk the cull kept
+    uint32_t*           glyphBatchesPtr;        // per batch: chunk slot << 8 | its batch in the chunk
+    DrawInfo*           glyphCommandsPtr;       // per kept chunk and LOD of its shape: the glyph draw's commands
+    uint32_t*           glyphSlotsPtr;          // per glyph of a kept chunk: its place among its chunk's LOD | lod << 24, or GLYPH_CULLED
+    uint32_t*           glyphListPtr;           // the visible glyphs, chunk slot << 16 | glyph, each chunk's by LOD
+    uint32_t            glyphChunkCapacity;
+    uint32_t            glyphBatchCapacity;
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.
@@ -357,6 +387,16 @@ uint getDrawIndex()
         result:$$uint = OpLoad builtin(DrawIndex:uint);
     };
     return drawIndex + pc.firstDraw;
+}
+
+// The instance's index with the draw's firstInstance in it, which Slang's SV_InstanceID leaves out: the glyph draw's
+// commands start each LOD's instances at its place in the glyph list.
+uint getInstanceIndex()
+{
+    return spirv_asm
+    {
+        result:$$uint = OpLoad builtin(InstanceIndex:uint);
+    };
 }
 #endif
 
@@ -526,6 +566,19 @@ float4 getVertexColor(SceneData *scene, uint geometryIndex, uint vertexIndex)
     uint packed = scene->colorsPtr[uint(colorOffset) + vertexIndex];
     float4 color = float4(packed & 0xFF, (packed >> 8) & 0xFF, (packed >> 16) & 0xFF, packed >> 24) / 255.0;
     return float4(decodeSrgb(color.r), decodeSrgb(color.g), decodeSrgb(color.b), color.a);
+}
+
+// A data line's vertex (a VECTOR material with a colormap): its scalar, from the color stream's word, as (value, 0, 0, -1)
+// for the fragment stage to map (rasm.slang, getVectorColor); white for a mesh without colors and a vertex without a value.
+float4 getVertexScalar(SceneData *scene, uint geometryIndex, uint vertexIndex)
+{
+    int colorOffset = scene->geometryPtr[geometryIndex].colorOffset;
+    if (colorOffset < 0)
+        return float4(1.0);
+    // A feature without values in the same mesh (a label, a polygon, a line added without them) holds white: it keeps
+    // the material's color.
+    uint word = scene->colorsPtr[uint(colorOffset) + vertexIndex];
+    return word == 0xFFFFFFFF ? float4(1.0) : float4(asfloat(word), 0.0, 0.0, -1.0);
 }
 
 #if !defined(RASM_OWN_PUSH_CONSTANTS)

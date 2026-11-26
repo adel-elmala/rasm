@@ -325,7 +325,7 @@ int main(int argc, char **argv)
     config.geometryPoolPoints = static_cast<uint32_t>(tileCount * (8 + tilePoints + (options.rgb ? tilePoints / 2 + 1 : 0)));
     config.computePoints = !options.triangles;
     applyExampleArgs(args, config);
-    ExampleBench bench{.on = hasBenchFlag(argc, argv)};
+    ExampleBench bench{.on = hasBenchFlag(argc, argv), .warmup = getBenchWarmup(argc, argv)};
     if (bench.on)
     {
         config.enableValidation = false;

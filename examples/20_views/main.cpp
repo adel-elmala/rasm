@@ -206,7 +206,7 @@ int main(int argc, char **argv)
         .antiAliasing = rasm::AntiAliasing::TAA};
     applyExampleArgs(args, config);
     // --bench measures the GPU time of one layout (exampleBench.h): no script, no validation, no UI, 1920 x 1080.
-    ExampleBench bench{.on = hasBenchFlag(argc, argv)};
+    ExampleBench bench{.on = hasBenchFlag(argc, argv), .warmup = getBenchWarmup(argc, argv)};
     if (bench.on)
     {
         config.enableValidation = false;

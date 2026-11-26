@@ -89,6 +89,8 @@ namespace rasm
         uint32_t                    lightsGlobal                = 0;    // directional lights and lights without a range, at every pixel
         uint32_t                    lightsVisible               = 0;    // local lights in a view's frustum
         uint32_t                    lightsDropped               = 0;    // lights left out of a full cluster (MAX_CLUSTER_LIGHTS) or screen tile
+        uint32_t                    glyphs                      = 0;
+        uint32_t                    glyphsVisible               = 0;
         VRAMStats                   memory                      = {};
     };
 
@@ -554,6 +556,11 @@ namespace rasm
         void                        recordPointReset(uint32_t view);
         void                        recordPointRaster(uint32_t view);
         void                        drawPointResolve(uint32_t view);
+        void                        prepareGlyphCull(uint32_t view, gfx::SceneData& sceneData);
+        void                        recordGlyphReset(uint64_t sceneAddress);
+        void                        recordGlyphCull(uint64_t sceneAddress, BufferHandle buffer, uint64_t headerOffset);
+        void                        drawViewGlyphs(uint32_t view);
+        void                        drawGlyphs(uint64_t sceneAddress, BufferHandle buffer, uint64_t headerOffset, uint64_t commandsOffset, uint32_t commandCapacity, PipelineHandle pipeline, CullMode cullMode, uint32_t argument);
         void                        drawTransparent(uint32_t view);
         void                        drawCullingGhosts(uint32_t view);
         void                        drawFrozenFrustums(CameraHandle camera);

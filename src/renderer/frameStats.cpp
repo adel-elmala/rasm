@@ -126,6 +126,8 @@ namespace rasm
             stats.meshletsVisible = culled[CULL_STATS_MESHLETS];
             stats.meshletsCulled = culled[CULL_STATS_MESHLETS_CULLED];
             stats.meshletDrawsWhole = culled[CULL_STATS_MESHLETS_WHOLE];
+            stats.glyphs = culled[CULL_STATS_GLYPHS];
+            stats.glyphsVisible = culled[CULL_STATS_GLYPHS_VISIBLE];
         }
         // Full clusters are reported in every frame, measured or not, since they drop light from the image. The
         // warning comes once, and again only while it goes on, every LIGHTS_DROPPED_WARNING.

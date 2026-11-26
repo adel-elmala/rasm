@@ -115,6 +115,11 @@ namespace rasm
             spdlog::error("A point cloud chunk of {} points has {} words and {} vertices; buildPointCloudChunk makes them.", raw.pointCount, raw.points.size(), raw.vertices.size());
             return false;
         }
+        if (raw.glyphCount > 0 && (!raw.vertices.empty() || raw.points.size() % 2 != 0 || raw.points.size() < 2 * gfx::GLYPH_CHUNK_HEADER_UNITS + 4 * static_cast<size_t>(raw.glyphCount)))
+        {
+            spdlog::error("A glyph chunk of {} glyphs has {} words and {} vertices; buildGlyphChunk makes them.", raw.glyphCount, raw.points.size(), raw.vertices.size());
+            return false;
+        }
         if (!raw.colors.empty() && raw.colors.size() != raw.vertices.size())
         {
             spdlog::error("A sub-mesh has {} colors for {} vertices.", raw.colors.size(), raw.vertices.size());
@@ -148,6 +153,8 @@ namespace rasm
     {
         if (raw.pointCount > 0)
             return allocatePoints(raw, geometry);
+        if (raw.glyphCount > 0)
+            return allocateGlyphs(raw, geometry);
         const size_t lodCount = getLodCount(raw);
         size_t lodIndexCount = 0;
         for (size_t i = 1; i < lodCount; ++i)
@@ -274,11 +281,38 @@ namespace rasm
         return true;
     }
 
+    // A glyph chunk takes a range of the point pool and a row, and no indices: it is drawn by its shape's (glyphCull.cpp).
+    // Its sphere holds its glyphs' positions (GlyphChunkHeader); culling grows it by its shape's reach.
+    bool GeometryPool::allocateGlyphs(const ObjRaw &raw, MeshGeometry &geometry)
+    {
+        const auto units = static_cast<uint32_t>(raw.points.size() / 2);
+        uint64_t firstPoint = 0;
+        uint64_t row = 0;
+        if (!pointRanges.allocate(units, firstPoint))
+            return false;
+        if (!subMeshRows.allocate(1, row))
+        {
+            pointRanges.free(firstPoint, units);
+            return false;
+        }
+        gfx::GlyphChunkHeader header{};
+        std::memcpy(&header, raw.points.data(), sizeof(header));
+        geometry = {.indexCount = raw.glyphCount,
+                    .firstPoint = static_cast<uint32_t>(firstPoint),
+                    .pointUnits = units,
+                    .glyphCount = raw.glyphCount,
+                    .geometryIndex = static_cast<uint32_t>(row),
+                    .allocated = true,
+                    .boundsCenter = header.boundsCenter,
+                    .boundsRadius = header.boundsRadius};
+        return true;
+    }
+
     void GeometryPool::free(const MeshGeometry &geometry)
     {
         if (!geometry.allocated)
             return;
-        if (geometry.pointCount > 0)
+        if (geometry.pointCount > 0 || geometry.glyphCount > 0)
         {
             pointRanges.free(geometry.firstPoint, geometry.pointUnits);
             subMeshRows.free(geometry.geometryIndex, 1);
@@ -309,7 +343,7 @@ namespace rasm
     // its last mesh), so one copy of the table is enough.
     bool GeometryPool::write(RenderContext &ctx, const ObjRaw &raw, const MeshGeometry &geometry)
     {
-        if (geometry.pointCount > 0)
+        if (geometry.pointCount > 0 || geometry.glyphCount > 0)
             return writePoints(ctx, raw, geometry);
         const size_t lodCount = getLodCount(raw);
         gfx::GeometryData row{.vertexOffset = static_cast<int32_t>(geometry.firstVertex),
@@ -382,7 +416,8 @@ namespace rasm
     }
 
     // The shared triangles (0, 1, 2, ...) go in with the first chunk. The chunk's row has one LOD, the whole chunk, which culling cuts to a
-    // prefix (cull.slang), and its vertexOffset is the chunk's first unit in the point pool.
+    // prefix (cull.slang), and its vertexOffset is the chunk's first unit in the point pool. A glyph chunk's row has no LOD,
+    // which marks it for the shaders (lib/glyphs.slang): its glyphs draw their shape's.
     bool GeometryPool::writePoints(RenderContext &ctx, const ObjRaw &raw, const MeshGeometry &geometry)
     {
         // The point pool is made with the first chunk, so a renderer that draws no point cloud has none.
@@ -395,7 +430,7 @@ namespace rasm
                 return false;
             }
         }
-        if (!pointTrianglesWritten)
+        if (!pointTrianglesWritten && geometry.pointCount > 0)
         {
             std::vector<uint32_t> triangles(gfx::POINT_INDICES * static_cast<size_t>(MAX_POINT_CHUNK_POINTS));
             for (size_t i = 0; i < triangles.size(); ++i)
@@ -409,7 +444,7 @@ namespace rasm
         gfx::GeometryData row{.vertexOffset = static_cast<int32_t>(geometry.firstPoint),
                               .boundsCenter = geometry.boundsCenter,
                               .boundsRadius = geometry.boundsRadius,
-                              .lodCount = 1,
+                              .lodCount = geometry.glyphCount > 0 ? 0u : 1u,
                               .colorOffset = -1,
                               .skinOffset = -1,
                               .morphOffset = -1,

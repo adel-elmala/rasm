@@ -48,6 +48,10 @@ int main(void)
     rasm_point_cloud_octree *octree = NULL;
     rasm_point_cloud_node node;
     rasm_dvec3 cloud[3] = {{4197000.0, 168000.0, 4786000.0}, {4197001.0, 168000.0, 4786000.0}, {4197000.0, 168001.0, 4786000.5}};
+    rasm_glyph_chunk_desc glyphs;
+    rasm_quat turned;
+    rasm_vec3 down = {0.0f, -1.0f, 0.0f};
+    float speeds[2] = {0.0f, 1.0f};
 
     if (rasm_get_version() != RASM_C_API_VERSION)
         return 1;
@@ -129,6 +133,21 @@ int main(void)
         rasm_get_point_cloud_node_chunk(octree, 0, &chunk) != RASM_OK || chunk.count != 3)
         return 25;
     rasm_point_cloud_octree_destroy(octree);
+    if (rasm_glyph_chunk_desc_init(&glyphs, sizeof(glyphs)) != RASM_OK || glyphs.count != 0 || glyphs.orientations != NULL)
+        return 26;
+    glyphs.shape = mesh;
+    glyphs.positions = points;
+    glyphs.count = 2;
+    if (rasm_build_glyph_chunk(&glyphs, &build) != RASM_ERROR_INVALID_ARGUMENT || build != NULL)
+        return 27;
+    turned = rasm_get_glyph_orientation(down);
+    material.glyphs.color_mode = RASM_POINT_COLOR_MODE_SCALAR;
+    material.vector_colors.range.clamp = RASM_TRUE;
+    if (turned.x != 1.0f || (RASM_PICK_SKIP_ALL & RASM_PICK_SKIP_GLYPHS) == 0 || RASM_MATERIAL_TYPE_GLYPHS != 5 || material.glyphs.color_mode != RASM_POINT_COLOR_MODE_SCALAR)
+        return 28;
+    if (rasm_vector_geometry_create(&geometry) != RASM_OK || rasm_vector_add_data_lines(geometry, line[0], line, &lineSize, 1, NULL, NULL, NULL, NULL, speeds) != RASM_OK)
+        return 29;
+    rasm_vector_geometry_destroy(geometry);
     printf("rasm_c.h %u.%u compiles as C (__STDC_VERSION__ %ld) and links rasm_c_renderer.\n", RASM_C_API_VERSION_MAJOR, RASM_C_API_VERSION_MINOR, (long)__STDC_VERSION__);
     return 0;
 }

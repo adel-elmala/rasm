@@ -95,7 +95,7 @@
 <h2 id="create"><span class="n">1</span>Create a material</h2>
 
 <div class="api" id="MaterialType">
-  <pre class="sig">enum class MaterialType { PBR, UNLIT, TERRAIN, VECTOR, POINTS, COUNT };</pre>
+  <pre class="sig">enum class MaterialType { PBR, UNLIT, TERRAIN, VECTOR, POINTS, GLYPHS, COUNT };</pre>
   <div class="body">
     <dl>
       <dt>PBR</dt><dd>Lit by the scene's lights (metallic-roughness model). Reads the texture slots listed in <a href="#PbrSlot">the slot table</a>.</dd>
@@ -103,6 +103,7 @@
       <dt>TERRAIN</dt><dd>A terrain tile: the shared grid lifted by <code>Material::terrain</code>'s heights, then lit as <code>PBR</code> with the albedo (the imagery) as base color. Made by <a href="scene.html#createTerrainTile"><code>createTerrainTile</code></a> (<a href="../guides/terrain.html">Terrain from height maps</a>).</dd>
       <dt>VECTOR</dt><dd>Lines, polygons and points (<a href="scene.html#vectors">vector features</a>), styled by <code>Material::vector</code>, unlit. It is always <code>BLEND</code> and double-sided, whatever <code>updateMaterial</code> sets: its smooth edges are blended, in the Transparent pass, in its <code>drawOrder</code> (<a href="../guides/vector-rendering.html">Vector lines, polygons and points</a>).</dd>
       <dt>POINTS</dt><dd>A point cloud chunk (<a href="scene.html#point-clouds">point clouds</a>), styled by <code>Material::points</code>, unlit. A chunk is drawn only with a <code>POINTS</code> material, by a run of its own after the opaque and cut-out draws; on a triangle mesh it shades as <code>PBR</code>. <code>alphaMode</code> and <code>doubleSided</code> do not apply (<a href="../guides/point-clouds.html">Point clouds</a>).</dd>
+      <dt>GLYPHS</dt><dd>A glyph chunk (<a href="scene.html#glyphs">glyphs</a>): its shape drawn once per glyph, lit as <code>PBR</code> with its <code>params</code>, the base color times each glyph's color or its scalar through <code>Material::glyphs</code>' colormap. A chunk is drawn only with a <code>GLYPHS</code> material; <code>doubleSided</code> turns off the back-face culling of every glyph draw of the scene, <code>alphaMode</code> does not apply (<a href="../guides/instanced-glyphs.html">Instanced glyphs</a>).</dd>
       <dt>COUNT</dt><dd>Not a type; it counts the values.</dd>
     </dl>
   </div>
@@ -180,6 +181,7 @@ rasm::MaterialHandle brick = engine.createMaterial(rasm::MaterialType::PBR, text
     TerrainMaterial  terrain      = {};
     VectorMaterial   vector       = {};
     PointMaterial    points       = {};
+    GlyphMaterial    glyphs       = {};
 };</pre>
   <div class="body">
     <dl>
@@ -195,6 +197,7 @@ rasm::MaterialHandle brick = engine.createMaterial(rasm::MaterialType::PBR, text
       <dt>alphaCutoff</dt><dd>For <code>MASK</code>: no pixel where alpha is below it. Default 0.5.</dd>
       <dt>vector</dt><dd>For <code>VECTOR</code> only: the style (<a href="#VectorMaterial"><code>VectorMaterial</code></a>). <code>textures[ALBEDO]</code> is the icon atlas of points built with icons.</dd>
       <dt>points</dt><dd>For <code>POINTS</code> only: the points' style (<a href="#PointMaterial"><code>PointMaterial</code></a>).</dd>
+      <dt>glyphs</dt><dd>For <code>GLYPHS</code> only: how the glyphs are colored (<a href="#GlyphMaterial"><code>GlyphMaterial</code></a>).</dd>
       <dt>terrain</dt><dd>For <code>TERRAIN</code> only: the tile's heights (<a href="#TerrainMaterial"><code>TerrainMaterial</code></a>). The imagery is <code>textures[ALBEDO]</code>, and its part of the image <code>textureTransforms[ALBEDO]</code>.</dd>
     </dl>
     <p>The flat <code>params</code> array is easy to index wrongly; <code>docs/code_review.md</code> plans a typed struct (<code>C9</code>).</p>
@@ -237,11 +240,14 @@ rasm::MaterialHandle brick = engine.createMaterial(rasm::MaterialType::PBR, text
     int32_t        drawOrder    = 0;
     VectorDepth    depth        = VectorDepth::TESTED;
     FontHandle     font;
+    PointColorMode colorMode    = PointColorMode::COLOR;
+    TextureHandle  colormap;
+    ScalarRange    range        = {};
 };</pre>
   <div class="body">
     <p>A layer's style. Every feature is at least one pixel wide; a thinner one keeps one pixel and fades by its coverage, so it neither vanishes nor shimmers.</p>
     <dl>
-      <dt>color</dt><dd>Linear RGB and straight alpha, times the vertex colors.</dd>
+      <dt>color</dt><dd>Linear RGB and straight alpha, times the vertex colors (a line's points' colors, <a href="scene.html#addVectorLines"><code>addVectorLines</code></a>).</dd>
       <dt>width, widthUnit</dt><dd>A line's width or a point's diameter, in pixels on screen (<code>VectorUnit::PIXELS</code>) or metres in the world (<code>VectorUnit::METRES</code>). Polygons have none.</dd>
       <dt>facing</dt><dd><code>VectorFacing::SCREEN</code>: spread across the screen, never foreshortened. <code>VectorFacing::GROUND</code>: in the ground's plane under the feature (its up), lying on the ground.</dd>
       <dt>dashLength, gapLength</dt><dd>In <code>widthUnit</code>; both above 0 for dashes. In pixels they follow the pixel's size at each vertex.</dd>
@@ -249,6 +255,7 @@ rasm::MaterialHandle brick = engine.createMaterial(rasm::MaterialType::PBR, text
       <dt>drawOrder</dt><dd>−127 to 127: blended draws of a lower order are drawn first; the scene's other see-through draws sort at 0, by depth. It holds while the GPU blend sort runs; with frozen culling (<a href="engine.html#setCullingFrozen"><code>setCullingFrozen</code></a>) the blended draws go in list order.</dd>
       <dt>depth</dt><dd><code>VectorDepth::TESTED</code>: hidden behind what is in front, nearer than the ground it lies on by 1/4096 of its distance, whatever the projection. <code>VectorDepth::OVERLAY</code>: over everything, never occlusion culled.</dd>
       <dt>font</dt><dd>Labels (<a href="scene.html#addVectorLabels"><code>addVectorLabels</code></a>): the font whose atlas their glyphs come from (<a href="scene.html#createFont"><code>createFont</code></a>). <code>width</code> is then the text's size (an em), <code>outlineColor</code> and <code>outlineWidth</code> its halo, which reaches at most half the atlas's distance range; <code>facing</code> and <code>dashLength</code> do not apply: text always faces the screen. Without a live font, labels draw nothing.</dd>
+      <dt>colorMode, colormap, range</dt><dd>Data lines: <code>COLOR</code> (the default) multiplies by the points' colors. <code>SCALAR</code> reads each point's value as a scalar, given to <code>addVectorLines</code>' <code>scalars</code>, interpolates it along the line and maps it per pixel through <code>range</code> and <code>colormap</code> (<a href="scene.html#createColormap"><code>createColormap</code></a>), times <code>color</code>; a value outside a range without clamp draws nothing, and a line without values is <code>color</code> (<a href="../guides/instanced-glyphs.html#values">Values through a colormap</a>).</dd>
     </dl>
     <pre><code>// examples/25_vector_map: roads 7 px wide with a 1.5 px casing.
 rasm::Material values = engine.getMaterial(material);
@@ -341,7 +348,7 @@ struct PointMaterial
       <dt>color</dt><dd>Linear RGB, times the point's color or its colormap color. Points are opaque: alpha 0 hides them, any other alpha draws them whole, and the points' own colors' alpha is not read.</dd>
       <dt>size, sizeUnit</dt><dd>The diameter in pixels (the same at every distance) or metres; at least one pixel.</dd>
       <dt>shape</dt><dd><code>SQUARE</code>; <code>ROUND</code>, a disc, smooth-edged with MSAA; <code>SPHERE</code>, a disc that writes a sphere's depth, so points meet as balls would. Points under 3 pixels are drawn square.</dd>
-      <dt>colorMode</dt><dd><code>COLOR</code>: the chunk's own colors (white without them). <code>SCALAR</code>: each point's value through <code>range</code> and <code>colormap</code> (<code>color</code> alone without either).</dd>
+      <dt>colorMode</dt><dd><code>PointColorMode</code> also colors <a href="#GlyphMaterial">glyphs</a> and <a href="#VectorMaterial">data lines</a>. <code>COLOR</code>: the chunk's own colors (white without them). <code>SCALAR</code>: each point's value through <code>range</code> and <code>colormap</code> (<code>color</code> alone without either).</dd>
       <dt>colormap, range</dt><dd>A colormap from <a href="scene.html#createColormap"><code>createColormap</code></a>, and the values it spans (<a href="scene.html#ScalarRange"><code>ScalarRange</code></a>).</dd>
       <dt>density</dt><dd>Level of detail: a chunk draws the first <code>density</code> × <var>D</var>² / <var>a</var> points of its order (<var>D</var> its sphere's diameter on screen, <var>a</var> a point's area in pixels, π/4 of the square for a round point). 1 leaves about 0.3 % of a flat surface empty, 2 none; 0 draws every point.</dd>
       <dt>sizeMode, maxSize</dt><dd><code>FIXED</code>: every point is <code>size</code>. <code>ADAPTIVE</code>: a point grows, up to <code>maxSize</code> pixels, where its chunk's points no longer cover the ground <code>density</code> times at <code>size</code>: from that spacing on screen on, and faster, so near the camera they cover it about 4 times and a sparse sample still closes. The spacing is the chunk's (<a href="scene.html#PointCloudChunkDesc"><code>PointCloudChunkDesc::spacing</code></a>); a finer chunk over a point takes it back to <code>size</code> (<a href="scene.html#PointChunkLod"><code>PointChunkLod</code></a>). Points that already cover keep <code>size</code>, so far chunks stay on the compute path; a near chunk whose points grow past 2 pixels is drawn by triangles (<a href="../guides/point-octree.html#adaptive">Adaptive point size</a>).</dd>
@@ -349,6 +356,28 @@ struct PointMaterial
     <pre><code>const rasm::MaterialHandle material = engine.createMaterial(rasm::MaterialType::POINTS);
 rasm::Material values = engine.getMaterial(material);
 values.points = {.size = 2.0f, .colorMode = rasm::PointColorMode::SCALAR, .colormap = engine.createColormap(rasm::ColormapPreset::TURBO), .range = {.min = -20.0f, .max = 50.0f}};
+engine.updateMaterial(material, values);</code></pre>
+  </div>
+</div>
+
+<div class="api" id="GlyphMaterial">
+  <pre class="sig">struct GlyphMaterial
+{
+    PointColorMode colorMode    = PointColorMode::COLOR;
+    TextureHandle  colormap;
+    ScalarRange    range        = {};
+};</pre>
+  <div class="body">
+    <p>How a <code>GLYPHS</code> material colors its glyphs (<a href="../guides/instanced-glyphs.html">Instanced glyphs</a>). The shape is lit as <code>PBR</code>: <code>params</code> give its roughness and metallic, and the albedo factor multiplies each glyph's color.</p>
+    <dl>
+      <dt>colorMode</dt><dd><code>COLOR</code>: the chunk's own colors (<a href="scene.html#GlyphChunkDesc"><code>GlyphChunkDesc::colors</code></a>), white without them. <code>SCALAR</code>: each glyph's scalar through <code>range</code> and <code>colormap</code>; a glyph whose scalar is outside a range without clamp is not drawn.</dd>
+      <dt>colormap, range</dt><dd>A colormap from <a href="scene.html#createColormap"><code>createColormap</code></a>, and the values it spans (<a href="scene.html#ScalarRange"><code>ScalarRange</code></a>, linear or logarithmic).</dd>
+    </dl>
+    <pre><code>// examples/30_glyphs: arrows colored by the flow's speed.
+const rasm::MaterialHandle material = engine.createMaterial(rasm::MaterialType::GLYPHS);
+rasm::Material values = engine.getMaterial(material);
+values.params[static_cast&lt;uint32_t&gt;(rasm::PbrParam::ROUGHNESS)] = 0.45f;
+values.glyphs = {.colorMode = rasm::PointColorMode::SCALAR, .colormap = engine.createColormap(rasm::ColormapPreset::VIRIDIS), .range = {.min = 0.0f, .max = 9.2f}};
 engine.updateMaterial(material, values);</code></pre>
   </div>
 </div>

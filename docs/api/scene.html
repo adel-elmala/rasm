@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Scenes and Meshes · RASM</title>
 <meta name="description" content="Scenes, entities, Transform, meshes (createMesh, loadMesh, loadGLTF, Vertex, SubMesh, MeshLod), animation and morph targets, lights, adding objects to scenes, when changes reach the GPU, and the limits.">
-<meta name="rasm-sources" content="include/rasm/scene.h include/rasm/terrain.h src/scene/terrain.cpp include/rasm/vector.h src/scene/vector.cpp include/rasm/text.h src/scene/text.cpp include/rasm/animation.h src/renderer/animation.cpp src/assets/morphImport.cpp src/assets/environment.cpp src/renderer/environmentBake.cpp include/rasm/entity.h include/rasm/mesh.h include/rasm/light.h include/rasm/transform.h include/rasm/renderer.h include/rasm/types.h src/scene/scene.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/transform.cpp src/assets/mesh.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/material.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/gpuTable.cpp src/renderer/geometryPool.cpp src/core/handle.cpp shaders/lib/pbr.slang shaders/lib/core.slang examples/00_hello_scene/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp examples/05_city/main.cpp examples/14_morph_targets/main.cpp src/assets/meshData.h">
+<meta name="rasm-sources" content="include/rasm/scene.h include/rasm/glyphs.h src/scene/glyphs.cpp include/rasm/terrain.h src/scene/terrain.cpp include/rasm/vector.h src/scene/vector.cpp include/rasm/text.h src/scene/text.cpp include/rasm/animation.h src/renderer/animation.cpp src/assets/morphImport.cpp src/assets/environment.cpp src/renderer/environmentBake.cpp include/rasm/entity.h include/rasm/mesh.h include/rasm/light.h include/rasm/transform.h include/rasm/renderer.h include/rasm/types.h src/scene/scene.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/transform.cpp src/assets/mesh.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/material.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/gpuTable.cpp src/renderer/geometryPool.cpp src/core/handle.cpp shaders/lib/pbr.slang shaders/lib/core.slang examples/00_hello_scene/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp examples/05_city/main.cpp examples/14_morph_targets/main.cpp src/assets/meshData.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -568,9 +568,11 @@ constexpr uint32_t MAX_MORPH_TARGETS = 256;</pre>
     std::vector&lt;TextureHandle&gt;  ownedTextures;
     std::vector&lt;MeshLabel&gt;      labels;
     std::vector&lt;uint16_t&gt;       pointOrder;
+    MeshHandle                 glyphShape;
+    uint32_t                   glyphChunks = 0;
     uint32_t                   users = 0;
 };</pre>
-  <div class="body"><p>A mesh: its load state, its sub-meshes, its clips (<a href="#getAnimations"><code>getAnimations</code></a>) and the name of each morph weight of its entities (<a href="#getMorphTargetNames"><code>getMorphTargetNames</code></a>). <code>ownedMaterials</code> and <code>ownedTextures</code> are what its glTF import made, which <a href="#destroyMesh"><code>destroyMesh</code></a> destroys with it; <code>users</code> counts the entities made with it, so destroying a mesh no entity uses searches nothing. <code>labels</code> are a vector mesh's (<a href="#addVectorLabels"><code>addVectorLabels</code></a>); <code>pointOrder</code> is a point cloud chunk's: for each point in drawn order, its index in the <a href="#PointCloudChunkDesc"><code>PointCloudChunkDesc</code></a> (2 B a point), which picks report.</p></div>
+  <div class="body"><p>A mesh: its load state, its sub-meshes, its clips (<a href="#getAnimations"><code>getAnimations</code></a>) and the name of each morph weight of its entities (<a href="#getMorphTargetNames"><code>getMorphTargetNames</code></a>). <code>ownedMaterials</code> and <code>ownedTextures</code> are what its glTF import made, which <a href="#destroyMesh"><code>destroyMesh</code></a> destroys with it; <code>users</code> counts the entities made with it, so destroying a mesh no entity uses searches nothing. <code>labels</code> are a vector mesh's (<a href="#addVectorLabels"><code>addVectorLabels</code></a>); <code>pointOrder</code> is a point cloud chunk's: for each point in drawn order, its index in the <a href="#PointCloudChunkDesc"><code>PointCloudChunkDesc</code></a> (2 B a point), which picks report. <code>glyphShape</code> is a glyph chunk's shape (<a href="#GlyphChunkDesc"><code>GlyphChunkDesc::shape</code></a>), and <code>glyphChunks</code> counts the chunks that name this mesh as theirs: destroying a shape stops their entities from drawing.</p></div>
 </div>
 
 <div class="api" id="MeshState">
@@ -601,6 +603,7 @@ constexpr uint32_t MAX_MORPH_TARGETS = 256;</pre>
     uint32_t  firstPoint       = 0;
     uint32_t  pointUnits       = 0;
     uint32_t  pointCount       = 0;
+    uint32_t  glyphCount       = 0;
     uint32_t  geometryIndex    = 0;
     glm::vec3 boundsCenter     = glm::vec3(0.0f);
     float     boundsRadius     = 0.0f;
@@ -615,6 +618,7 @@ constexpr uint32_t MAX_MORPH_TARGETS = 256;</pre>
       <dt>firstSkin, skinCount</dt><dd>The sub-mesh's <a href="#SkinVertex"><code>SkinVertex</code></a>es in the skin stream; <code>skinCount</code> is 0 when it is not skinned.</dd>
       <dt>firstMorph, morphCount, morphTargetCount</dt><dd>The sub-mesh's <a href="#MorphDelta"><code>MorphDelta</code></a>s in the morph stream: <code>morphCount</code> = <code>vertexCount</code> · <code>morphTargetCount</code>, target by target. Both are 0 without morph targets.</dd>
       <dt>firstMeshlet, meshletCount, maxLodMeshlets</dt><dd>The sub-mesh's <a href="../guides/meshlets.html">meshlets</a> in the meshlet stream, of every LOD, and the most of one LOD (each instance keeps a visibility bit per meshlet of that LOD). 0 for a sub-mesh without meshlets.</dd>
+      <dt>firstPoint, pointUnits, pointCount, glyphCount</dt><dd>A point cloud chunk's or a glyph chunk's range of the point pool, in 8 B units, and its points or glyphs; both counts are 0 for a mesh of triangles. A glyph chunk has no indices: its <code>indexCount</code> is its glyph count.</dd>
       <dt>firstMeshletData, meshletDataCount</dt><dd>Its <code>ObjRaw::meshletData</code> words in the meshlet data stream, which the mesh shaders read. Taken only where the device has mesh shaders (<a href="low-level.html#hasMeshShaders"><code>RenderContext::hasMeshShaders</code></a>), else 0; a sub-mesh whose data does not fit (<code>EngineConfig::geometryPoolMeshletData</code>) has no meshlets.</dd>
     </dl>
   </div>
@@ -726,13 +730,14 @@ const glm::dvec3 ground = rasm::getTerrainPosition(tile, {.unorm16 = samples.dat
     std::vector&lt;Vertex&gt;         vertices;
     std::vector&lt;uint32_t&gt;       indices;
     std::vector&lt;MeshLabel&gt;      labels;
+    std::vector&lt;uint32_t&gt;       colors;
 };</pre>
-  <div class="body"><p>What the add functions append to; <code>labels</code> holds <a href="#addVectorLabels"><code>addVectorLabels</code></a>' boxes. Build it into a mesh with <a href="#buildVectorMesh"><code>buildVectorMesh</code></a>. The vertex layout is <code>shaders/lib/vector.slang</code>'s; the bits of each vertex's feature id are in <code>tangent.w</code> (read them with <code>std::bit_cast&lt;uint32_t&gt;</code>), exact for any 32-bit id.</p></div>
+  <div class="body"><p>What the add functions append to; <code>labels</code> holds <a href="#addVectorLabels"><code>addVectorLabels</code></a>' boxes, and <code>colors</code> a word per vertex once a line brings values (empty before: the vertices are white), which the mesh keeps as its vertex colors. Build it into a mesh with <a href="#buildVectorMesh"><code>buildVectorMesh</code></a>. The vertex layout is <code>shaders/lib/vector.slang</code>'s; the bits of each vertex's feature id are in <code>tangent.w</code> (read them with <code>std::bit_cast&lt;uint32_t&gt;</code>), exact for any 32-bit id.</p></div>
 </div>
 
 <div class="api" id="addVectorLines">
   <pre class="sig">void addVectorLines(VectorGeometry&amp; geometry, const glm::dvec3&amp; origin, const glm::dvec3* points, const uint32_t* lineSizes, uint32_t lineCount, const LineShape&amp; shape = {},
-                    const VectorPlacement&amp; placement = {}, const uint32_t* featureIds = nullptr);</pre>
+                    const VectorPlacement&amp; placement = {}, const uint32_t* featureIds = nullptr, const uint32_t* colors = nullptr, const float* scalars = nullptr);</pre>
   <div class="body">
     <dl>
       <dt>origin</dt><dd>The world position of the entity that will draw the mesh: the vertices are offsets from it in floats, so a map far from the world's origin keeps its precision.</dd>
@@ -740,12 +745,16 @@ const glm::dvec3 ground = rasm::getTerrainPosition(tile, {.unorm16 = samples.dat
       <dt>shape</dt><dd>Joins and caps, and for a draped road its width in metres (<a href="#LineShape"><code>LineShape</code></a>).</dd>
       <dt>placement</dt><dd>At the points' own heights, or draped on a terrain tile (<a href="#VectorPlacement"><code>VectorPlacement</code></a>).</dd>
       <dt>featureIds</dt><dd>One per line, the id picking will report; null: the line's number.</dd>
+      <dt>colors, scalars</dt><dd>Data lines: a value per point of <code>points</code>, colors or scalars, not both (both: an error, the colors are kept). Colors are RGBA8 with RGB sRGB-encoded (<a href="#packVertexColor"><code>packVertexColor</code></a>), multiplied by the material's color. Scalars go through the material's colormap when its <code>colorMode</code> is <code>SCALAR</code> (<a href="materials.html#VectorMaterial"><code>VectorMaterial</code></a>), interpolated along the line and mapped per pixel. Every vertex a point makes (its segment's corners, a join, a cap) takes its value; a draped line's cut points take the value between their segment's ends; a draped band (<code>drapeWidth</code>) takes none. Lines without values in the same geometry are white, and with a <code>SCALAR</code> material they and the geometry's labels, polygons and points keep the material's color.</dd>
     </dl>
     <pre><code>const glm::dvec3 road[3] = {{0.0, 0.0, 0.0}, {120.0, 0.0, 40.0}, {260.0, 0.0, 10.0}};
 const uint32_t size = 3;
 rasm::VectorGeometry geometry;
 rasm::addVectorLines(geometry, glm::dvec3(0.0), road, &amp;size, 1, {.join = rasm::LineJoin::ROUND, .cap = rasm::LineCap::ROUND});
-const rasm::MeshHandle mesh = engine.createMesh(rasm::buildVectorMesh(std::move(geometry)));</code></pre>
+const rasm::MeshHandle mesh = engine.createMesh(rasm::buildVectorMesh(std::move(geometry)));
+
+// examples/30_glyphs: streamlines, a speed per point, for a material whose vector.colorMode is SCALAR.
+rasm::addVectorLines(lines, origin, points.data(), sizes.data(), lineCount, {.join = rasm::LineJoin::MITER}, {}, nullptr, nullptr, speeds.data());</code></pre>
   </div>
 </div>
 
@@ -1057,9 +1066,69 @@ rasm::MeshBuild build = rasm::buildPointCloudChunk(rasm::getPointCloudNodeChunk(
   </div>
 </div>
 
-<h2 id="colormaps"><span class="n">8</span>Colormaps</h2>
+<h2 id="glyphs"><span class="n">8</span>Glyphs</h2>
 
-<p>A colormap turns a value into a color: a 256 × 1 sRGB texture that a <code>POINTS</code> material reads through its <code>ScalarRange</code> (<a href="../guides/point-clouds.html#colormaps">Colormaps</a>).</p>
+<p>A glyph chunk draws one shape (an arrow, a sphere, a cube, or any mesh) once per data point: up to 65 536 glyphs, each with its own position, orientation, scale and color or scalar, on an entity with a <a href="materials.html#GlyphMaterial"><code>GLYPHS</code> material</a> placed in doubles. A compute pass culls every glyph and picks its shape's LOD each frame, and one indirect draw draws the visible ones (<a href="../guides/instanced-glyphs.html">Instanced glyphs</a>). <code>rasm/glyphs.h</code>.</p>
+
+<div class="api" id="GlyphChunkDesc">
+  <pre class="sig">constexpr uint32_t MAX_GLYPH_CHUNK_GLYPHS = 1u &lt;&lt; 16;
+
+struct GlyphChunkDesc
+{
+    MeshHandle          shape;
+    const glm::vec3*    positions       = nullptr;
+    const glm::quat*    orientations    = nullptr;
+    const glm::vec3*    scales          = nullptr;
+    const uint32_t*     colors          = nullptr;
+    const float*        scalars         = nullptr;
+    uint32_t            count           = 0;
+};</pre>
+  <div class="body">
+    <dl>
+      <dt>shape</dt><dd>The mesh every glyph draws: its first sub-mesh, with its LODs, front faces counter-clockwise. It may still load: the chunk's entities wait for it. Destroying it stops them.</dd>
+      <dt>positions</dt><dd>Offsets from the entity's origin, as floats: keep a chunk within a few kilometres and put its entity at its place in doubles.</dd>
+      <dt>orientations</dt><dd>A rotation per glyph (normalized, kept as four 16-bit numbers); null: the shape's own axes. <a href="#getGlyphOrientation"><code>getGlyphOrientation</code></a> turns +Y to a direction.</dd>
+      <dt>scales</dt><dd>A stretch along the shape's three axes per glyph, above 0, kept as half floats (up to 65 504); null: 1.</dd>
+      <dt>colors, scalars</dt><dd>A color (RGBA8, sRGB-encoded, <a href="#packVertexColor"><code>packVertexColor</code></a>) or a scalar per glyph, for the material's <code>COLOR</code> or <code>SCALAR</code> mode; not both. Null for both: white.</dd>
+      <dt>count</dt><dd>1 to <code>MAX_GLYPH_CHUNK_GLYPHS</code>.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="buildGlyphChunk">
+  <pre class="sig">MeshBuild           buildGlyphChunk(const GlyphChunkDesc&amp; desc);</pre>
+  <div class="body">
+    <p>Checks the glyphs (a shape, a count in range, finite values, no zero orientation, scales above 0 that a half float holds, not colors and scalars both; an error and an invalid build otherwise) and builds the chunk on any thread: 16 B a glyph (its position and its value), 8 B more with orientations, 8 B more with scales. <a href="#createMesh"><code>createMesh</code></a> uploads it into the point pool (<code>RendererConfig::geometryPoolPoints</code>, which point clouds share). A pick's <code>PickHit::feature</code> is the glyph's index in <code>desc</code>'s arrays, with <code>PICK_HIT_GLYPH</code>. Glyphs cast no shadow (<code>D52</code>).</p>
+    <pre><code>// On any thread: an arrow per sample of a vector field.
+rasm::MeshBuild build = rasm::buildGlyphChunk({.shape = arrow, .positions = positions.data(), .orientations = orientations.data(), .scales = scales.data(), .scalars = speeds.data(), .count = count});
+// On the renderer's thread:
+const rasm::EntityHandle chunk = engine.createEntity("glyphs", engine.createMesh(std::move(build)), glyphMaterial, rasm::Transform{blockCorner});
+engine.addEntityToScene(scene, chunk);</code></pre>
+  </div>
+</div>
+
+<div class="api" id="buildGlyphShape">
+  <pre class="sig">enum class GlyphShape : uint32_t
+{
+    ARROW,
+    SPHERE,
+    CUBE,
+};
+
+MeshBuild           buildGlyphShape(GlyphShape shape, uint32_t segments = 16);</pre>
+  <div class="body">
+    <p>A shape to draw glyphs with, on any thread. <code>ARROW</code> runs along +Y from 0 to 1 (a shaft 0.1 across, a head from 0.68, 0.26 across); <code>SPHERE</code> has a diameter of 1, <code>CUBE</code> a side of 1, both around the origin. <code>segments</code> (3 to 64) go around an arrow or a sphere. Their LODs halve the segments while they divide them (16, 8, 4), on the same vertices; an arrow's last LOD leaves out its two caps. <a href="#buildMesh"><code>buildMesh</code></a> builds no LODs for meshes this small, so the shapes bring their own.</p>
+  </div>
+</div>
+
+<div class="api" id="getGlyphOrientation">
+  <pre class="sig">glm::quat           getGlyphOrientation(const glm::vec3&amp; direction);</pre>
+  <div class="body"><p>The rotation that turns +Y, an arrow's axis, to <code>direction</code> (any length above 0; zero gives no rotation). Exact also straight down.</p></div>
+</div>
+
+<h2 id="colormaps"><span class="n">9</span>Colormaps</h2>
+
+<p>A colormap turns a value into a color: a 256 × 1 sRGB texture that a <code>POINTS</code> or <code>GLYPHS</code> material, or a <code>VECTOR</code> material of data lines, reads through its <code>ScalarRange</code> (<a href="../guides/point-clouds.html#colormaps">Colormaps</a>).</p>
 
 <div class="api" id="createColormap">
   <pre class="sig">TextureHandle               createColormap(const glm::vec4* colors, uint32_t count);
@@ -1096,7 +1165,7 @@ enum class ColormapPreset : uint32_t
   <div class="body"><p>A value becomes <var>t</var> = (value − <code>min</code>) / (<code>max</code> − <code>min</code>), or the same with the logarithms of all three when <code>log</code> is set and both ends are above 0; <var>t</var> = 0 is the colormap's first entry and 1 its last. Outside the range a value takes the nearest end with <code>clamp</code>, and its point is not drawn without it.</p></div>
 </div>
 
-<h2 id="animation"><span class="n">9</span>Animation</h2>
+<h2 id="animation"><span class="n">10</span>Animation</h2>
 
 <p>A glTF model's clips move its nodes, and the GPU poses them (<a href="../guides/keyframe-animation.html">Keyframe animation</a>). A skinned model's clips move its joints, and the GPU skins its vertices once per frame for every view (<a href="../guides/skinning.html">Skinning</a>); it plays the same way. A morphed model's clips move its weights too (<a href="#morph-targets">Morph targets</a>). The application owns the clock: it calls <code>setAnimationTime</code> once per frame, and starts a clip on an entity with <code>playAnimation</code>. Nothing else runs per frame on the CPU, however many entities play.</p>
 
@@ -1232,7 +1301,7 @@ enum class AnimationInterpolation : uint32_t { STEP, LINEAR, CUBICSPLINE };</pre
   <div class="body"><p>What the import keeps of a glTF file's animations, in <code>GLTFRaw::animation</code>. <code>nodes</code> holds only the nodes a clip can move, parents before children, with their rest pose (a node below static parents hangs below an extra node whose <code>rest</code> is their world matrix). Each sampler's values are vec4s: a quaternion x, y, z, w, or a translation or scale with w = 0; <code>CUBICSPLINE</code> stores an in-tangent, the value and an out-tangent per key. A sampler that does not parse is skipped with a warning, and its clip keeps its index. <code>joints</code> holds every skin a sub-mesh uses, one skin after another: each joint's node in <code>nodes</code> (a joint is always kept, moved or not) and its inverse bind matrix (the identity when the file has none). <code>morphWeights</code> holds the rest weights of every node that draws a morphed mesh, one node after another (the node's, else the mesh's, else 0), and <code>morphTargetNames</code> one name per weight. A glTF weights sampler becomes one sampler per target, its value in x, and one <code>AnimationPath::WEIGHTS</code> channel per weight, whose <code>node</code> is the weight's index in <code>morphWeights</code>.</p></div>
 </div>
 
-<h2 id="morph-targets"><span class="n">10</span>Morph targets</h2>
+<h2 id="morph-targets"><span class="n">11</span>Morph targets</h2>
 
 <p>A glTF mesh with morph targets has a list of weights per entity. The GPU adds each target's deltas, times its weight, to the vertices once per frame, before the skin, for every view (<a href="../guides/morph-targets.html">Morph targets</a>). A weight comes from the application when it set one, else from the playing clip's weights channel, else from the mesh's rest weights.</p>
 
@@ -1302,7 +1371,7 @@ engine.setMorphWeights(entity, weights.data(), static_cast&lt;uint32_t&gt;(weigh
   <p>An entity of a morphed mesh is posed every frame, with a clip or not, like a skinned one: it takes a row of the animated entity table (<code>EngineConfig::maxAnimatedEntities</code>), and its weights take rows of <code>EngineConfig::maxMorphWeights</code>. The <code>Skin</code> pass reads only the targets whose weight is not 0. The deltas take 24 B per vertex and target in the geometry pool (<code>EngineConfig::geometryPoolMorphs</code>).</p>
 </div>
 
-<h2 id="lights"><span class="n">11</span>Lights</h2>
+<h2 id="lights"><span class="n">12</span>Lights</h2>
 
 <div class="split">
   <div>
@@ -1436,7 +1505,7 @@ engine.updateLight(lamp, light);</code></pre>
   <div class="body"><p>π/4: the default outer angle of a spot light's cone, glTF's default (<code>rasm/light.h</code>).</p></div>
 </div>
 
-<h2 id="environments"><span class="n">12</span>Environments</h2>
+<h2 id="environments"><span class="n">13</span>Environments</h2>
 
 <p>An <b>environment</b> is an HDR photo of the light all around a scene. It lights every <code>PBR</code> material from all directions (soft light from the sky, reflections on shiny surfaces) and shows behind the scene as the sky. The guide <a href="../guides/image-based-lighting.html">Image-based lighting</a> explains how.</p>
 
@@ -1494,7 +1563,7 @@ engine.setSceneEnvironment(scene, {});</code></pre>
   </div>
 </div>
 
-<h2 id="timing"><span class="n">13</span>When changes reach the GPU</h2>
+<h2 id="timing"><span class="n">14</span>When changes reach the GPU</h2>
 
 <div class="table-wrap">
 <table>
@@ -1512,7 +1581,7 @@ engine.setSceneEnvironment(scene, {});</code></pre>
 </div>
 <p>The engine keeps one copy of each table per frame slot. A changed row is uploaded to each copy once, in that copy's own frame, so the GPU never reads a row while the CPU writes it. The guide <a href="../guides/gpu-scene.html">The GPU scene tables</a> explains the details.</p>
 
-<h2 id="limits"><span class="n">14</span>Limits</h2>
+<h2 id="limits"><span class="n">15</span>Limits</h2>
 
 <div class="table-wrap">
 <table>

@@ -5,6 +5,7 @@
 #include "platform/paths.h"
 #include "renderer/blendSort.h"
 #include "renderer/geometryPool.h"
+#include "renderer/glyphCull.h"
 #include "renderer/gpuScene.h"
 #include "renderer/pipelineWarmup.h"
 #include "renderer/viewGraph.h"
@@ -305,6 +306,8 @@ namespace rasm
         uint32_t rowWidth = 0;
         uint32_t rowHeight = 0;
         uint32_t drawCapacity = 0;
+        uint32_t glyphChunks = 0;
+        uint32_t glyphBatches = 0;
         for (uint32_t i = 0; i < picks->requests.size() && chosenCount < MAX_FRAME_PICKS; ++i)
         {
             PickRequest &request = picks->requests[i];
@@ -351,6 +354,11 @@ namespace rasm
             rowWidth += rect.width;
             rowHeight = std::max(rowHeight, rect.height);
             drawCapacity = std::max(drawCapacity, static_cast<uint32_t>(gpuScene->drawLists[view.scene.index].draws.size()));
+            if (view.drawGlyphs)
+            {
+                glyphChunks = std::max(glyphChunks, view.glyphChunkCapacity[frame]);
+                glyphBatches = std::max(glyphBatches, view.glyphBatchCapacity[frame]);
+            }
             chosen[chosenCount] = i;
             views[chosenCount++] = viewIndex;
         }
@@ -386,6 +394,30 @@ namespace rasm
             const std::string pointSource = readFile(pathFromUtf8(config.shaderDir) / "passes/points.slang");
             picks->pointPipeline = createGraphicsPipeline("pointsPick", getShaderVariant("#define RASM_PICK 1\n", pointSource), formats, DEPTH_FORMAT, "vertMain", "pickMain", BlendMode::NONE, true);
         }
+        // A view that drew glyphs culls them again through the rect into the slot's glyph buffer, and draws them with the
+        // glyph pick pipeline, made with the first pick of such a view; without it the pick sees no glyphs.
+        if (pipelines && glyphChunks > 0 && !picks->glyphPipeline.isValid())
+        {
+            if (source.empty())
+                source = readFile(pathFromUtf8(config.shaderDir) / "passes/rasm.slang");
+            picks->glyphPipeline = createGraphicsPipeline("rasmPickGlyphs", getShaderVariant("#define RASM_PICK 1\n#define RASM_GLYPHS 1\n", source), formats, DEPTH_FORMAT, "vertMain", "pickMain",
+                                                          BlendMode::NONE, true);
+        }
+        bool pickGlyphs = glyphChunks > 0 && picks->glyphPipeline.isValid();
+        if (pickGlyphs && (slot.glyphChunkCapacity < glyphChunks || slot.glyphBatchCapacity < glyphBatches))
+        {
+            const uint32_t chunks = std::max(glyphChunks, slot.glyphChunkCapacity);
+            const uint32_t batches = std::max(glyphBatches, slot.glyphBatchCapacity);
+            const uint64_t size = getGlyphCullLayout(chunks, batches).size;
+            if (slot.glyphCull.isValid())
+                pickGlyphs = ctx.resizeBuffer(slot.glyphCull, size);
+            else
+                slot.glyphCull = ctx.createBuffer({.name = "Pick Glyph Buffer", .usage = BufferUsage::INDIRECT, .size = size});
+            pickGlyphs = pickGlyphs && slot.glyphCull.isValid();
+            slot.glyphChunkCapacity = pickGlyphs ? chunks : 0;
+            slot.glyphBatchCapacity = pickGlyphs ? batches : 0;
+        }
+        const GlyphCullLayout glyphLayout = getGlyphCullLayout(slot.glyphChunkCapacity, slot.glyphBatchCapacity);
 
         // The slot's targets, culling buffer and host copy grow to what the frame needs, and stay.
         bool resources = pipelines;
@@ -487,6 +519,12 @@ namespace rasm
             sceneData.pointBatchesPtr = 0;
             sceneData.pointPixelsPtr = 0;
             sceneData.pointBatchCapacity = 0;
+            // Its glyphs are culled into the slot's glyph buffer, never into the view's.
+            const bool glyphs = pickGlyphs && view.culled && view.drawGlyphs;
+            if (glyphs)
+                writeGlyphCullPointers(sceneData, ctx.getBufferDeviceAddress(slot.glyphCull), glyphLayout, slot.glyphChunkCapacity, slot.glyphBatchCapacity);
+            else
+                writeGlyphCullPointers(sceneData, 0, {}, 0, 0);
             const uint32_t sceneDataIndex = MAX_SCENE_VIEWS + i;
             ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), static_cast<size_t>(sceneDataIndex) * sizeof(gfx::SceneData));
             const uint64_t sceneAddress = getSceneDataAddress(ctx, *gpuScene, frame, sceneDataIndex);
@@ -497,6 +535,8 @@ namespace rasm
                 if (i > 0)
                     ctx.memoryBarrier(commandBuffer, PipelineStage::GRAPHICS, PipelineStage::COMPUTE);
                 const gfx::PushConstants cullConstants{.scene = sceneAddress};
+                if (glyphs)
+                    recordGlyphReset(sceneAddress);
                 ctx.bindPipeline(commandBuffer, gpuScene->cullCountPipeline);
                 ctx.pushConstants(commandBuffer, gpuScene->cullCountPipeline, &cullConstants, sizeof(cullConstants), 0);
                 ctx.dispatch(commandBuffer, view.groupCount);
@@ -504,6 +544,8 @@ namespace rasm
                 ctx.bindPipeline(commandBuffer, gpuScene->cullWritePipeline);
                 ctx.pushConstants(commandBuffer, gpuScene->cullWritePipeline, &cullConstants, sizeof(cullConstants), 0);
                 ctx.dispatch(commandBuffer, view.groupCount);
+                if (glyphs)
+                    recordGlyphCull(sceneAddress, slot.glyphCull, 0);
                 if (sorted)
                 {
                     ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::COMPUTE);
@@ -548,6 +590,13 @@ namespace rasm
                     ctx.drawIndexedIndirectCount(commandBuffer, slot.cull, run.first * sizeof(gfx::DrawInfo), slot.cull, layout.drawCounts + r * sizeof(uint32_t), run.count, sizeof(gfx::DrawInfo));
                 else
                     ctx.drawIndexedIndirect(commandBuffer, drawList.buffers[frame], run.first * sizeof(gfx::DrawInfo), run.count, sizeof(gfx::DrawInfo));
+            }
+            if (glyphs)
+            {
+                CullMode cullMode = drawList.glyphCullMode;
+                if (view.mirrored && cullMode != CullMode::NONE)
+                    cullMode = CullMode::FRONT;
+                drawGlyphs(sceneAddress, slot.glyphCull, 0, glyphLayout.commands, glyphLayout.commandCapacity, picks->glyphPipeline, cullMode, argument);
             }
             ctx.setCullMode(commandBuffer, CullMode::NONE);
             ctx.endRendering(commandBuffer);

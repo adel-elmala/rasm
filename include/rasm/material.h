@@ -13,6 +13,7 @@ namespace rasm
         TERRAIN,        // a terrain tile: the shared grid lifted by Material::terrain's heights, shaded as PBR (rasm/terrain.h)
         VECTOR,         // lines, polygons and points (rasm/vector.h), styled by Material::vector, unlit and blended
         POINTS,         // point cloud chunks (rasm/pointCloud.h), styled by Material::points, unlit
+        GLYPHS,
 
         COUNT,
     };
@@ -90,6 +91,12 @@ namespace rasm
         OVERLAY,        // over everything, never hidden
     };
 
+    enum class PointColorMode : uint32_t
+    {
+        COLOR,          // the points' own colors, white without them
+        SCALAR,         // the points' scalars through colormap and range
+    };
+
     // A VECTOR material: the style of a layer of lines, polygons or points. Every feature is at least 1 pixel wide; a
     // thinner one keeps 1 pixel and fades by its coverage, so it neither vanishes nor shimmers.
     struct VectorMaterial
@@ -105,6 +112,9 @@ namespace rasm
         int32_t        drawOrder    = 0;                // -127 to 127: blended draws of a lower order come first; 0 sorts with the scene's see-through draws
         VectorDepth    depth        = VectorDepth::TESTED;
         FontHandle     font;                            // labels: their glyphs' atlas (Renderer::createFont); width is the text's size, outline its halo
+        PointColorMode colorMode    = PointColorMode::COLOR;
+        TextureHandle  colormap;
+        ScalarRange    range        = {};
     };
 
     enum class PointShape : uint32_t
@@ -120,12 +130,6 @@ namespace rasm
         ADAPTIVE,       // from size, grown to the chunk's spacing on screen, up to maxSize pixels
     };
 
-    enum class PointColorMode : uint32_t
-    {
-        COLOR,          // the points' own colors, white without them
-        SCALAR,         // the points' scalars through colormap and range
-    };
-
     struct PointMaterial
     {
         glm::vec4      color        = glm::vec4(1.0f);  // linear RGB, times the point's color; points are opaque, alpha 0 hides them
@@ -138,6 +142,13 @@ namespace rasm
         float          density      = 2.0f;             // points drawn per point-size square of the chunk on screen; 0: all
         PointSizeMode  sizeMode     = PointSizeMode::FIXED;
         float          maxSize      = 8.0f;             // ADAPTIVE: the largest diameter, in pixels
+    };
+
+    struct GlyphMaterial
+    {
+        PointColorMode colorMode    = PointColorMode::COLOR;
+        TextureHandle  colormap;
+        ScalarRange    range        = {};
     };
 
     constexpr uint32_t MAX_TEXTURE_SLOTS = static_cast<uint32_t>(PbrSlot::COUNT);
@@ -158,6 +169,7 @@ namespace rasm
         TerrainMaterial  terrain      = {};         // TERRAIN only; textures[ALBEDO] is the imagery, textureTransforms[ALBEDO] its part of the image
         VectorMaterial   vector       = {};         // VECTOR only; textures[ALBEDO] is a points' icon atlas
         PointMaterial    points       = {};         // POINTS only
+        GlyphMaterial    glyphs       = {};
     };
 
 }

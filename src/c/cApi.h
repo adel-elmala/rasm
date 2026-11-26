@@ -155,6 +155,8 @@ namespace rasm::c
     rasm_vector_material    toC(const VectorMaterial& vector);
     PointMaterial           toCpp(const rasm_point_material& points);
     rasm_point_material     toC(const PointMaterial& points);
+    ScalarRange             toCpp(const rasm_scalar_range& range);
+    rasm_scalar_range       toC(const ScalarRange& range);
     // A material desc's enums, its vector style's included.
     bool                    checkMaterialDesc(const rasm_material_desc& desc, const char* function);
     // A sized rasm_terrain_tile_desc, its defaults past the caller's size.
@@ -248,6 +250,8 @@ namespace rasm::c
     constexpr size_t        POINT_CLOUD_NODE_SIZE_1_12      = offsetof(rasm_point_cloud_node, level) + sizeof(uint32_t);
     constexpr size_t        POINT_CLOUD_LOAD_OPTIONS_SIZE_1_12 = offsetof(rasm_point_cloud_load_options, z_up_to_y_up) + sizeof(rasm_bool);
     constexpr size_t        POINT_CLOUD_INFO_SIZE_1_12      = offsetof(rasm_point_cloud_info, compressed) + sizeof(rasm_bool);
+
+    constexpr size_t        GLYPH_CHUNK_DESC_SIZE_1_14      = offsetof(rasm_glyph_chunk_desc, count) + sizeof(uint32_t);
 
 }
 

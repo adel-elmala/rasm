@@ -4,6 +4,7 @@
 #include "core.slang"
 #include "vector.slang"
 #include "points.slang"
+#include "glyphs.slang"
 
 struct Sphere
 {
@@ -60,6 +61,8 @@ Sphere getWorldSphere(SceneData *scene, DrawInfo draw)
         sphere.radius      += getVectorPadding(scene, material->vector, sphere.center, sphere.radius);
     else if (material->materialId == MaterialId.POINTS)
         sphere.radius      += getPointPadding(scene, material->points, sphere.center, sphere.radius);
+    else if (material->materialId == MaterialId.GLYPHS && geometry->lodCount == 0)
+        sphere.radius      += getGlyphChunkPadding(scene, instance, geometry) * sphere.scale;
     return sphere;
 }
 

@@ -12,6 +12,9 @@
 #if defined(RASM_DEBUG_VIEW)
 #include "debugViews.slang"
 #endif
+#if defined(RASM_GLYPHS)
+#include "glyphs.slang"
+#endif
 
 struct VSInput
 {
@@ -61,6 +64,8 @@ bool isPickSkipped(uint flags, bool vector)
     }
     if ((flags & PICK_HIT_TERRAIN) != 0)
         return (skip & PICK_SKIP_TERRAIN) != 0;
+    if ((flags & PICK_HIT_GLYPH) != 0)
+        return (skip & PICK_SKIP_GLYPHS) != 0;
 #if defined(RASM_ALPHA_BLEND)
     return (skip & PICK_SKIP_BLEND) != 0;
 #else
@@ -77,6 +82,31 @@ Sampler2D gTextures[];
 [[vk::binding(0, 0)]]
 SamplerCube gCubeTextures[];
 
+// A vector feature's color from its vertices: a data line's interpolated scalar (w -1, getVertexScalar) through the
+// material's colormap, which the row's PointData holds; a scalar outside its range without clamp draws nothing.
+float4 getVectorColor(MaterialData *model, float4 color)
+{
+    if (color.w >= 0.0)
+        return color;
+    PointData style = model->points;
+    float t = getColormapPosition(style, color.x);
+    if (t == POINT_OUT_OF_RANGE)
+        return float4(0.0);
+    return style.colormap != INVALID_TEXTURE_INDEX ? gTextures[style.colormap].SampleLevel(getColormapCoordinate(t), 0.0) : float4(1.0);
+}
+
+#if defined(RASM_GLYPHS)
+// The glyph vertMain draws: its place in its chunk's space and its color, for getVertexOutput.
+struct GlyphInstance
+{
+    float4x4        matrix;
+    float3x3        normalMatrix;
+    float4          color;
+    uint            index;
+};
+static GlyphInstance gGlyph;
+#endif
+
 // One vertex of a draw, for vertMain and meshMain alike: vertexID is the sub-mesh's own (the raw index-buffer value),
 // lod and meshletKey only feed the debug views.
 VSOutput getVertexOutput(InstanceData *instance, uint row, int vertexOffset, uint vertexID, uint lod, uint meshletKey)
@@ -86,6 +116,11 @@ VSOutput getVertexOutput(InstanceData *instance, uint row, int vertexOffset, uin
     float4x4 projectionMat  = pc.scene->projection;
     float3x3 normalMat      = getNormalMatrix(pc.scene, instance);
     VertexFull vert         = getVertex(pc.scene, instance, vertexOffset, vertexID);
+#if defined(RASM_GLYPHS)
+    // A glyph's shape, placed in its chunk's entity: the entity's render-space matrix times the glyph's.
+    modelMat                = mul(modelMat, gGlyph.matrix);
+    normalMat               = mul(normalMat, gGlyph.normalMatrix);
+#endif
     MaterialData *model     = pc.scene->materialsPtr + instance->materialIndex;
     if (model->materialId == MaterialId.TERRAIN)
     {
@@ -105,7 +140,7 @@ VSOutput getVertexOutput(InstanceData *instance, uint row, int vertexOffset, uin
         output.worldPosition        = feature.anchor;
         output.worldNormal          = float3(0.0, 1.0, 0.0);
         output.worldTangent         = float4(feature.dash, feature.kind, feature.width, 0.0);
-        output.color                = getVertexColor(pc.scene, instance->geometryIndex, vertexID);
+        output.color                = (model->points.flags & POINT_SCALAR) != 0 ? getVertexScalar(pc.scene, instance->geometryIndex, vertexID) : getVertexColor(pc.scene, instance->geometryIndex, vertexID);
         output.uv0                  = feature.edge;
         output.uv1                  = vert.uv[1];
         output.uv2                  = float2(feature.metric, feature.fade);
@@ -143,7 +178,11 @@ VSOutput getVertexOutput(InstanceData *instance, uint row, int vertexOffset, uin
     float3x3 modelMat3          = (float3x3)modelMat;
     float handedness            = determinant(modelMat3) < 0.0 ? -1.0 : 1.0;
     output.worldTangent         = float4(mul(modelMat3, vert.tangent.xyz), vert.tangent.w * handedness);
+#if defined(RASM_GLYPHS)
+    output.color                = gGlyph.color;
+#else
     output.color                = getVertexColor(pc.scene, instance->geometryIndex, vertexID);
+#endif
     output.uv0                  = vert.uv[0];
     output.uv1                  = vert.uv[1];
     output.uv2                  = vert.uv[2];
@@ -151,7 +190,11 @@ VSOutput getVertexOutput(InstanceData *instance, uint row, int vertexOffset, uin
     output.handedness           = handedness;
 #if defined(RASM_MOTION_VECTORS)
     // The point where the frame before drew it: its last position, world matrix and view.
+#if defined(RASM_GLYPHS)
+    float3 previousPosition     = mul(gGlyph.matrix, float4(vert.pos, 1.0)).xyz;
+#else
     float3 previousPosition     = getPreviousObjectPosition(pc.scene, instance, vertexID, vert.pos);
+#endif
     float3 previousWorld        = getPreviousWorldPosition(pc.scene, instance, previousPosition);
     output.currentClip          = removeJitter(pc.scene, output.clipPosition);
     output.previousClip         = mul(pc.scene->previousViewProjection, float4(previousWorld, 1.0));
@@ -164,6 +207,10 @@ VSOutput getVertexOutput(InstanceData *instance, uint row, int vertexOffset, uin
     output.pickRow              = row;
     output.pickFeature          = 0;
     output.pickFlags            = model->materialId == MaterialId.TERRAIN ? PICK_HIT_TERRAIN : 0;
+#if defined(RASM_GLYPHS)
+    output.pickFeature          = gGlyph.index;
+    output.pickFlags            = PICK_HIT_FEATURE | PICK_HIT_GLYPH;
+#endif
     if (isPickSkipped(output.pickFlags, false))
         output.clipPosition     = float4(0.0, 0.0, -1.0, 1.0);
 #endif
@@ -173,6 +220,25 @@ VSOutput getVertexOutput(InstanceData *instance, uint row, int vertexOffset, uin
 [shader("vertex")]
 VSOutput vertMain(VSInput input)
 {
+#if defined(RASM_GLYPHS)
+    // A visible glyph of the view's list (passes/glyphCull.slang): its chunk's slot and its index in the chunk. The chunk's
+    // row names its shape's geometry row, whose vertices the draw's indices pick. A scalar outside its range draws nothing.
+    uint entry              = pc.scene->glyphListPtr[getInstanceIndex()];
+    GlyphChunkSlot *slot    = pc.scene->glyphChunksPtr + (entry >> 16);
+    InstanceData *instance  = pc.scene->instancesPtr + slot->row;
+    GeometryData *shape     = pc.scene->geometryPtr + uint(instance->meshletVisibility);
+    GlyphChunk chunk        = loadGlyphChunk(pc.scene, uint(pc.scene->geometryPtr[instance->geometryIndex].vertexOffset));
+    Glyph glyph             = loadGlyph(pc.scene, chunk, entry & 0xFFFF);
+    MaterialData *material  = pc.scene->materialsPtr + instance->materialIndex;
+    gGlyph.matrix           = getGlyphMatrix(glyph);
+    gGlyph.normalMatrix     = getGlyphNormalMatrix(glyph);
+    gGlyph.color            = getGlyphColor(gTextures, material->points, chunk, glyph);
+    gGlyph.index            = entry & 0xFFFF;
+    VSOutput output         = getVertexOutput(instance, slot->row, shape->vertexOffset, input.vertexID, 0, 0);
+    if (gGlyph.color.a < 0.0)
+        output.clipPosition = float4(0.0, 0.0, -1.0, 1.0);
+    return output;
+#else
     // Each draw names its instance row in firstInstance (D6). Slang lowers SV_VertexID to (VertexIndex - BaseVertex)
     // to match D3D semantics, so it is the raw index-buffer value and the draw's vertexOffset is added back to address
     // the geometry pool.
@@ -185,6 +251,7 @@ VSOutput vertMain(VSInput input)
     meshletKey              = getMeshletKey(draw->firstIndex, draw->firstInstance);
 #endif
     return getVertexOutput(instance, draw->firstInstance, draw->vertexOffset, input.vertexID, lod, meshletKey);
+#endif
 }
 
 // A visible meshlet (lib/meshletTask.slang): its vertices through getVertexOutput, as vertMain's, and its triangles.
@@ -336,7 +403,7 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
             style.width = input.worldTangent.z;
         if (kind == VECTOR_KIND_GLYPH)
             return VECTOR_OUTPUT(toTarget(shadeGlyph(gTextures[style.font], style, input.color, input.uv1, input.worldTangent.x, input.uv2.y, input.uv2.x > 0.5), 1.0));
-        float4 color = shadeVector(style, input.color, input.uv0, input.uv2.x, input.uv2.y, input.worldTangent.x, kind);
+        float4 color = shadeVector(style, getVectorColor(model, input.color), input.uv0, input.uv2.x, input.uv2.y, input.worldTangent.x, kind);
         uint icon = model->material.metallicRoughness.baseColorTextureIndex;
         if (kind == VECTOR_KIND_POINT && (style.flags & VECTOR_ICON) != 0 && icon != INVALID_TEXTURE_INDEX)
             color *= sampleMaterial(gTextures[icon], input.uv1);
@@ -425,7 +492,7 @@ PickOutput pickMain(VSOutput input, bool isFrontFace : SV_IsFrontFace)
         }
         else
         {
-            float4 color = shadeVector(style, input.color, input.uv0, input.uv2.x, input.uv2.y, input.worldTangent.x, kind);
+            float4 color = shadeVector(style, getVectorColor(model, input.color), input.uv0, input.uv2.x, input.uv2.y, input.worldTangent.x, kind);
             uint icon = model->material.metallicRoughness.baseColorTextureIndex;
             if (kind == VECTOR_KIND_POINT && (style.flags & VECTOR_ICON) != 0 && icon != INVALID_TEXTURE_INDEX)
                 color *= sampleMaterial(gTextures[icon], input.uv1);

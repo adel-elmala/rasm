@@ -47,8 +47,9 @@ namespace rasm
         std::vector<SkinVertex> skin;
         std::vector<MorphDelta> morphs;                     // target-major: target t's delta of vertex v at t * vertices.size() + v
         uint32_t                morphTargetCount    = 0;
-        std::vector<uint32_t>   points;                     // a point cloud chunk's words in the point pool: header, positions, colors
+        std::vector<uint32_t>   points;                     // a point cloud or glyph chunk's words in the point pool
         uint32_t                pointCount          = 0;
+        uint32_t                glyphCount          = 0;
     };
 
     // What a glTF or OBJ import gives the AssetLoader, which uploads it through the renderer.

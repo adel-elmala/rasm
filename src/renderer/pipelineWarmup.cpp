@@ -123,6 +123,10 @@ namespace rasm
             addCompute(requests, "pointRaster", pointRaster, "rasterMain");
         }
         // Last: what a debug view shows its pixels with, the Inspect pass of the RASM window, and the picks.
+        const std::string glyphCull = readFile(folder / "passes/glyphCull.slang");
+        addCompute(requests, "glyphReset", glyphCull, "resetMain");
+        addCompute(requests, "glyphCount", glyphCull, "countMain");
+        addCompute(requests, "glyphWrite", glyphCull, "writeMain");
         addGraphics(requests, "toneMapDebug", toneMap, "vertMain", "fragDebug");
         addGraphics(requests, "toneMapDebugHeat", toneMap, "vertMain", "fragDebugHeat");
         if (config.ui)
@@ -132,6 +136,7 @@ namespace rasm
         addGraphics(requests, "rasmPickMask", getShaderVariant(std::string("#define RASM_PICK 1\n") + MASK_DEFINE, rasm), "vertMain", "pickMain");
         addGraphics(requests, "rasmPickBlend", getShaderVariant("#define RASM_PICK 1\n#define RASM_ALPHA_BLEND 1\n", rasm), "vertMain", "pickMain");
         addGraphics(requests, "pointsPick", getShaderVariant("#define RASM_PICK 1\n", readFile(folder / "passes/points.slang")), "vertMain", "pickMain");
+        addGraphics(requests, "rasmPickGlyphs", getShaderVariant("#define RASM_PICK 1\n#define RASM_GLYPHS 1\n", rasm), "vertMain", "pickMain");
         shaderCompiler->prefetch(requests.data(), static_cast<uint32_t>(requests.size()), false);
     }
 
@@ -165,6 +170,7 @@ namespace rasm
         addGraphics(requests, "points", getShaderVariant(motionDefine + (multisampled ? "#define RASM_ALPHA_TO_COVERAGE 1\n" : ""), points), "vertMain", "fragMain");
         if (ctx.hasBufferInt64Atomics())
             addGraphics(requests, "pointResolve", getShaderVariant(motionDefine, readFile(folder / "passes/pointRaster.slang")), "resolveVert", "resolveFrag");
+        addGraphics(requests, "glyphs", getShaderVariant(motionDefine + "#define RASM_GLYPHS 1\n", rasm), "vertMain", "fragMain");
         if (meshShaders)
             addMesh(requests, "rasmMeshMask", getShaderVariant(maskDefines, rasm), "meshMain", "fragMain");
         if (motion)
