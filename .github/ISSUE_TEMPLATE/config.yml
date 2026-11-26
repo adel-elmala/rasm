@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Ask a question
+    url: https://github.com/adel-elmala/rasm/discussions/categories/q-a
+    about: Questions about building or using RASM go to GitHub Discussions (Q&A).
+  - name: Read the documentation
+    url: https://github.com/adel-elmala/rasm#documentation
+    about: The API reference, the concept guides and the build guide.
+  - name: Report a security vulnerability
+    url: https://github.com/adel-elmala/rasm/security/advisories/new
+    about: Please report security problems privately, never in a public issue.

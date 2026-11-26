@@ -1,0 +1,119 @@
+name: Bug report
+description: Something builds wrong, crashes, prints validation errors or renders wrong.
+title: "[Bug]: "
+labels: ["bug", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please check [`docs/code_review.md`](https://github.com/adel-elmala/rasm/blob/main/docs/code_review.md) first: it lists known issues with IDs such as `B21`.
+        Security problems go to the [Security tab](https://github.com/adel-elmala/rasm/security) instead, never to a public issue.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: A short description of the problem.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Commands and inputs, so someone else can see the same thing.
+      placeholder: |
+        1. cmake --preset x64-debug && cmake --build --preset x64-debug
+        2. ./build/x64-debug/examples/02_gltf --headless --frames 120 --out frame.png
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+    validations:
+      required: true
+
+  - type: input
+    id: example
+    attributes:
+      label: Example or program
+      description: Which example shows it (for example `05_city`), or "my own application".
+      placeholder: 02_gltf
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where does it go wrong?
+      options:
+        - Configure or build (CMake, vcpkg, compiler)
+        - Start-up (device, window, shaders)
+        - Rendering (wrong image, flicker, missing objects)
+        - Crash or hang
+        - Validation layer messages
+        - Asset loading (glTF, OBJ, KTX2, HDR, LAS/LAZ)
+        - C API or bindings
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Windows 11 23H2 / macOS 15.1 / Ubuntu 24.04 (Wayland)
+    validations:
+      required: true
+
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and driver version
+      placeholder: NVIDIA GeForce RTX 3060, driver 566.14
+    validations:
+      required: true
+
+  - type: textarea
+    id: vulkaninfo
+    attributes:
+      label: Vulkan version
+      description: The output of `vulkaninfo --summary` (from the Vulkan SDK). The "Devices" part is enough.
+      render: text
+
+  - type: input
+    id: build
+    attributes:
+      label: Build preset and commit
+      description: The preset (`x64-debug`, `x64-release`, `macOS`, ...) or your own configure line, and the commit (`git rev-parse --short HEAD`).
+      placeholder: x64-debug at d8d8b0d
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Log and validation output
+      description: The console output, especially lines from the validation layer. Examples turn validation on; for your own application set `EngineConfig::enableValidation = true`.
+      render: text
+
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Screenshot
+      description: For rendering bugs, a screenshot or the PNG from `--headless --frames N --out frame.png`. Drag the file here.
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Things you already tried, a model file that triggers it, a RenderDoc capture, ...

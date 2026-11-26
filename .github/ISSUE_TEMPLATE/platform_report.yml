@@ -1,0 +1,88 @@
+name: Platform report
+description: Tell us how RASM ran on your machine, good or bad. Linux, AMD, Intel and Apple GPU reports are most welcome.
+title: "[Platform]: "
+labels: ["platform report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        RASM is developed on Windows with an NVIDIA GPU. CI also builds it on macOS, but nothing has been tested on Linux, and nothing on AMD or Intel GPUs. A short report helps a lot, even if everything worked.
+
+        A quick test, after building with the steps in the [README](https://github.com/adel-elmala/rasm#getting-started) (use the `macOS` preset on macOS; Linux has no preset yet, see [CONTRIBUTING.md](https://github.com/adel-elmala/rasm/blob/main/CONTRIBUTING.md#building)):
+
+        ```sh
+        ctest --preset x64-debug
+        ./build/x64-debug/examples/00_hello_scene
+        ./build/x64-debug/examples/05_city
+        ./build/x64-debug/examples/02_gltf --headless --frames 120 --out frame.png
+        ```
+
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - It runs on my machine
+        - It runs, with problems
+        - It fails on my machine
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: For Linux, the distribution and whether you use X11 or Wayland.
+      placeholder: Arch Linux, kernel 6.12, Wayland (KDE)
+    validations:
+      required: true
+
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and driver
+      placeholder: AMD Radeon RX 7800 XT, Mesa 24.3 (RADV)
+    validations:
+      required: true
+
+  - type: textarea
+    id: vulkaninfo
+    attributes:
+      label: vulkaninfo --summary
+      description: The "Devices" part is enough.
+      render: text
+
+  - type: input
+    id: build
+    attributes:
+      label: How you built it
+      description: Preset or configure line, compiler version, and commit.
+      placeholder: x64-release, Clang 22.1, d8d8b0d
+    validations:
+      required: true
+
+  - type: textarea
+    id: examples
+    attributes:
+      label: What you ran
+      description: Which examples worked and which did not. "All of them" is a fine answer.
+      placeholder: |
+        ctest: passed
+        00_hello_scene: OK
+        05_city: OK, about 1.5 ms a frame in the stats overlay (F1)
+        29_point_streaming: crash on start (log below)
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Errors and validation messages
+      description: Any error or validation layer output.
+      render: text
+
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Screenshots
+      description: Optional. Drag images here.
