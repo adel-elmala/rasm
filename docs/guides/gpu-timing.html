@@ -777,7 +777,7 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
 
 <h3>The counters</h3>
 
-<p>The cull shader counts what it keeps. Each slot has a <b>Cull Stats Buffer</b> of <code>CULL_STATS_WORDS</code> = 20 words, host-visible and host-readable. The <code>STATS_*</code> constants in <code>cull.slang</code> and the <code>CULL_STATS_*</code> ones in <code>gpuScene.h</code> name them:</p>
+<p>The cull shader counts what it keeps. Each slot has a <b>Cull Stats Buffer</b> of <code>CULL_STATS_WORDS</code> = 22 words, host-visible and host-readable. The <code>STATS_*</code> constants in <code>cull.slang</code> and <code>glyphCull.slang</code> and the <code>CULL_STATS_*</code> ones in <code>gpuScene.h</code> name them:</p>
 
 <div class="table-wrap">
 <table>
@@ -789,6 +789,7 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
   <tr><td>[13], [14]</td><td>lights in the clusters, lights dropped</td><td><code>lightsVisible</code>, <code>lightsDropped</code></td></tr>
   <tr><td>[15], [16], [17]</td><td>meshlets drawn, meshlets culled, draws over the meshlet budget</td><td><code>meshletsVisible</code>, <code>meshletsCulled</code>, <code>meshletDrawsWhole</code></td></tr>
   <tr><td>[18] low, [19] high</td><td>the visible draws' triangles at their LOD, before meshlet culling</td><td><code>trianglesVisibleLod</code></td></tr>
+  <tr><td>[20], [21]</td><td>glyphs tested, glyphs drawn (the glyph cull; their triangles go to [1], [2])</td><td><code>glyphs</code>, <code>glyphsVisible</code></td></tr>
 </table>
 </div>
 

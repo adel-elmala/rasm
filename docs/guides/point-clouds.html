@@ -499,7 +499,7 @@
     <text x="631" y="206" class="mid small">atomics, then the resolve</text>
     <text x="20" y="160" class="small">The point run comes after the opaque and MASK runs and before the</text>
     <text x="20" y="176" class="small">blend run. It has its own pipeline per sample count; the depth-only</text>
-    <text x="20" y="192" class="small">views of shadows draw no points.</text>
+    <text x="20" y="192" class="small">views of shadows draw no points. Glyph chunks ride in it too.</text>
   </svg>
 </figure>
 
@@ -514,6 +514,7 @@
   <tr><td>Small points by compute</td><td>The cull pass sends a chunk to <code>shaders/passes/pointRaster.slang</code> when <code>isRasterChunk</code> (<code>shaders/lib/points.slang</code>) holds: in a perspective view points of <code>POINT_RASTER_MAX_SIZE</code> (6) pixels or less at the chunk's centre and <code>POINT_RASTER_MAX_NEAR</code> (8) at its nearest point, in an orthographic view <code>POINT_RASTER_MAX_ORTHO</code> (4), under MSAA (<code>SceneData::depthSamples</code>) <code>POINT_PIXELS_MAX_SIZE</code> (2); at least <code>POINT_RASTER_MIN_DENSITY</code> (0.125) drawn points of 2 pixels per pixel of its rect, instance row under 65 536. <code>rasterPoint</code> cuts each point to <code>getPointShape</code>'s shape, a SPHERE point's depth per pixel from <code>getSphereDepth</code>, as <code>points.slang</code> does. <code>appendPointBatches</code> adds batches of <code>POINT_BATCH_POINTS</code> (1024) and grows the rect. After the last cull: <code>clearMain</code>, <code>rasterMain</code> (indirect); the resolve quad in the last draw pass, before the sky. A view's buffer (<code>SceneView::pointRaster</code>, <code>getPointRasterLayout</code>): a 48 B header, 8 B a batch, 8 B a pixel.</td></tr>
   <tr><td>MSAA and TAA</td><td>Alpha-to-coverage with more than one sample, but points of 2 pixels or less (<code>POINT_SHAPE_PIXELS</code>) cover whole pixels on both paths (the compute path's resolve writes every sample); the centre's motion with TAA, on both paths.</td></tr>
   <tr><td>Picking</td><td>Always by triangles, which take the same pixels as the compute path. A pick pipeline of the point run: <code>PICK_HIT_POINT</code>, and <code>PickHit::feature</code> is the point's index in the arrays given to the builder (<code>Mesh::pointOrder</code> maps it back). <code>PICK_SKIP_POINTS</code> looks through them.</td></tr>
+  <tr><td>The point run's other chunks</td><td>Glyph chunks (a <code>GLYPHS</code> material) sit in the same run, so no draw run was added for them. The cull pass sends them to the glyph cull (<code>appendGlyphChunk</code>), they take no slot, and the point pipeline never draws them (<a href="instanced-glyphs.html#in-rasm">Instanced glyphs</a>). The same colormaps and <code>ScalarRange</code> color glyphs and data lines.</td></tr>
 </table>
 </div>
 
