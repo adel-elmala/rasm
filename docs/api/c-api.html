@@ -688,7 +688,7 @@ if (rasm_build_point_cloud_chunk(&amp;desc, &amp;build) == RASM_OK)
   <pre class="sig">rasm_result      rasm_set_compute_points(rasm_renderer* renderer, rasm_bool on);
 rasm_bool        rasm_get_compute_points(rasm_renderer* renderer);</pre>
   <div class="body">
-    <p>1.11. <a href="engine.html#setComputePoints"><code>setComputePoints</code></a> and <code>getComputePoints</code>: points of 2 pixels or less by the compute path (<a href="../guides/point-clouds.html#compute">point clouds</a>) where the GPU has 64-bit buffer atomics, or every point by triangles. <code>rasm_renderer_config::compute_points</code> (<code>RASM_TRUE</code> by default) is the start value. Both return <code>RASM_ERROR_INVALID_ARGUMENT</code> or <code>RASM_FALSE</code> for a NULL renderer.</p>
+    <p>1.11. <a href="engine.html#setComputePoints"><code>setComputePoints</code></a> and <code>getComputePoints</code>: points of up to 6 pixels (4 in an orthographic view, 2 under MSAA) by the compute path (<a href="../guides/point-clouds.html#compute">point clouds</a>) where the GPU has 64-bit buffer atomics, or every point by triangles. <code>rasm_renderer_config::compute_points</code> (<code>RASM_TRUE</code> by default) is the start value. Both return <code>RASM_ERROR_INVALID_ARGUMENT</code> or <code>RASM_FALSE</code> for a NULL renderer.</p>
   </div>
 </div>
 
