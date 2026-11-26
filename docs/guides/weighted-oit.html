@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Weighted Blended Transparency · RASM</title>
+<meta name="description" content="Order-independent transparency with weighted blending (McGuire and Bavoil 2013): why sorting fails for dense see-through data, the exact coverage and the weighted mean color, the two targets and their blend states, a weight that works at any scale, keeping the weights steady over frames, MSAA and TAA, mixing with sorted and additive draws, and how RASM does each.">
+<meta name="rasm-sources" content="tests/weightedBlendTests.cpp tests/image/imageTests.cpp shaders/lib/weightedBlend.slang shaders/passes/weightedComposite.slang shaders/passes/rasm.slang shaders/passes/cull.slang shaders/lib/glyphs.slang shaders/lib/core.slang src/renderer/weightedBlend.cpp src/renderer/weightedBlend.h src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/glyphCull.cpp src/renderer/picking.cpp src/renderer/pipelineWarmup.cpp src/renderer/uberMaterialTypes.h src/rhi/vulkan/vulkanDevice.cpp include/rasm/material.h include/rasm/types.h include/rasm/render/renderContext.h examples/31_oit/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/weighted-oit.js"></script>
+</head>
+<body data-root="../" data-page="guides/weighted-oit.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-light" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head light"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>Weighted blended transparency</h1>
+<p class="lead">See-through surfaces are usually sorted and drawn back to front (<a href="transparency.html">transparency</a>). Sorting works for a few panes of glass. It fails for dense data: nested iso-surfaces, a stack of volume slices in one mesh, thousands of see-through arrows. <b>Weighted blended order-independent transparency</b> (McGuire and Bavoil, 2013) draws such surfaces in any order, at a fixed cost per pixel, with no popping. This page explains how, and the <a href="#in-rasm">last part</a> shows RASM's version.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>The <b>over</b> operator mixes two things: how much of the background a stack of layers hides (its <b>coverage</b>), and what color they show.</li>
+    <li>The coverage is <b>1 − product of (1 − alpha)</b>. A product has no order, so the coverage is <b>exact</b> in any order.</li>
+    <li>The color is replaced by a <b>weighted mean</b> of the layers' colors: sum of color × alpha × weight, divided by sum of alpha × weight. Sums have no order either.</li>
+    <li>The <b>weight</b> makes near layers count more. It must fall with depth at any scene scale, so it is measured inside the see-through content's own depth range, not in metres.</li>
+    <li>Two targets hold the sums; a <b>composite</b> pass divides them and lays the mean over the background. Cost: one draw of each surface, two blended writes per fragment, one full-screen pass.</li>
+    <li>It is exact where layers are thin or alike, and approximate where a thick layer should hide the ones behind it. Things that need an exact order (labels, UI) stay sorted.</li>
+  </ul>
+</div>
+
+<h2 id="problem"><span class="n">1</span>Why sorting fails for dense data</h2>
+
+<p>Sorting puts each <em>draw</em> in order by one depth, usually its center. Inside a draw, triangles keep the order of the index buffer. Three cases break it:</p>
+
+<div class="vgrid">
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An eye looks at a stack of eight slices that belong to one mesh. The slices are numbered from the far side, so from the other side they are drawn front to back.">
+      <circle cx="24" cy="65" r="8" class="box"/>
+      <line x1="34" y1="65" x2="226" y2="65" class="arrow light dashed"/>
+      <rect x="70" y="20" width="6" height="90" class="gpu o-50"/><rect x="90" y="20" width="6" height="90" class="gpu o-50"/><rect x="110" y="20" width="6" height="90" class="gpu o-50"/><rect x="130" y="20" width="6" height="90" class="gpu o-50"/>
+      <rect x="150" y="20" width="6" height="90" class="gpu o-50"/><rect x="170" y="20" width="6" height="90" class="gpu o-50"/><rect x="190" y="20" width="6" height="90" class="gpu o-50"/><rect x="210" y="20" width="6" height="90" class="gpu o-50"/>
+      <text x="73" y="124" class="mid small">1</text><text x="213" y="124" class="mid small">8</text>
+      <text x="144" y="14" class="mid small">one mesh: drawn 1 to 8</text>
+    </svg>
+    <h4>Layers inside one draw</h4>
+    <p>Volume slices or an iso-surface in one mesh: right from one side, wrong from the other.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Three nested boxes with the same center. Their sort keys are equal, so their order is arbitrary.">
+      <rect x="50" y="20" width="140" height="90" rx="4" class="cpu o-25"/>
+      <rect x="80" y="38" width="80" height="54" rx="4" class="hot o-50"/>
+      <rect x="104" y="52" width="32" height="26" rx="3" class="mem"/>
+      <circle cx="120" cy="65" r="3" class="badge"/>
+      <text x="120" y="124" class="mid small">one center, three draws</text>
+    </svg>
+    <h4>Nested objects</h4>
+    <p>A housing around its parts: the centers are equal, so the order is arbitrary.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two long see-through bars cross. Each is in front of the other at one end, so no draw order is right for both ends.">
+      <rect x="30" y="40" width="180" height="22" rx="3" class="cpu o-50" transform="rotate(12 120 51)"/>
+      <rect x="30" y="64" width="180" height="22" rx="3" class="hot o-50" transform="rotate(-12 120 75)"/>
+      <text x="120" y="124" class="mid small">crossing: no order is right</text>
+    </svg>
+    <h4>Crossing surfaces</h4>
+    <p>Each is in front at one end. The order flips as the camera moves: popping.</p>
+  </div>
+</div>
+
+<p>Sorting per triangle, or per pixel (an A-buffer, depth peeling), is exact, but its cost grows with the number of layers in a pixel. Weighted blending accepts an approximate color to get a cost that does not grow with the layers' order.</p>
+
+<h2 id="idea"><span class="n">2</span>Split over into coverage and color</h2>
+
+<p>For layers 1 to <var>n</var> over a background <var>B</var>, with premultiplied colors <var>C</var><sub>i</sub> and alphas <var>a</var><sub>i</sub>:</p>
+
+<div class="formula">
+  <p class="eq">c = 1 − (1 − a<sub>1</sub>) (1 − a<sub>2</sub>) … (1 − a<sub>n</sub>)</p>
+  <p class="eq">mean = Σ C<sub>i</sub> w<sub>i</sub> / Σ a<sub>i</sub> w<sub>i</sub></p>
+  <p class="eq">result = mean · c + B · (1 − c)</p>
+  <dl>
+    <dt>c</dt><dd>the coverage: how much of the background the layers hide. This is exactly what over gives, in any order.</dd>
+    <dt>C<sub>i</sub></dt><dd>the layer's color times its alpha (premultiplied), its light included</dd>
+    <dt>w<sub>i</sub></dt><dd>the layer's weight: larger for nearer layers (<a href="#weight">section 4</a>)</dd>
+    <dt>mean</dt><dd>the weighted mean color of the layers; with one layer it is that layer's own color</dd>
+  </dl>
+</div>
+
+<p>All three parts are sums or products, so the layers can be added in any order. Only the mean is approximate: over gives a near layer more say in the color than a far one by exactly how much it hides. The weight guesses that from depth. Drag the layers and change their alpha:</p>
+
+<figure class="lab" data-lab="weighted-pixel" data-title="One pixel: exact against weighted">
+  <figcaption>Move the three layers and change their alpha. The weights come from each layer's place in the view's see-through range (the green bracket). The coverage is always exact. Close layers get a color close to the exact one; layers far apart, or thick, show where the mean differs.</figcaption>
+</figure>
+
+<h2 id="targets"><span class="n">3</span>Two targets, two passes</h2>
+
+<p>The sums live in two textures the size of the view, cleared to 0. Each see-through fragment adds to them with the blend unit; nothing reads them until every layer is drawn.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Pass 1, accumulate: each see-through fragment, tested against the opaque depth and not writing it, adds color times weight and alpha times weight into the sums target (blend one, one), and blends its alpha over the coverage target (premultiplied). Pass 2, composite: a full-screen triangle reads both and lays the mean color over the scene by the coverage.">
+    <text x="20" y="24" class="title">pass 1: accumulate (any order)</text>
+    <rect x="20" y="40" width="170" height="70" rx="6" class="shader"/>
+    <text x="105" y="66" class="mid title">fragment i</text>
+    <text x="105" y="86" class="mid small">C, a, depth → w</text>
+    <rect x="20" y="130" width="170" height="40" rx="6" class="solid"/>
+    <text x="105" y="155" class="mid small">opaque depth: test, no write</text>
+    <line x1="105" y1="130" x2="105" y2="112" class="arrow" marker-end="url(#ah)"/>
+    <rect x="260" y="40" width="200" height="54" rx="6" class="mem"/>
+    <text x="360" y="62" class="mid title">sums</text>
+    <text x="360" y="80" class="mid small mono">rgb += C·w, a += a·w</text>
+    <rect x="260" y="112" width="200" height="54" rx="6" class="mem"/>
+    <text x="360" y="134" class="mid title">coverage</text>
+    <text x="360" y="152" class="mid small mono">c = a + c·(1 − a)</text>
+    <line x1="190" y1="66" x2="258" y2="66" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="190" y1="90" x2="258" y2="136" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="530" y="24" class="title">pass 2: composite</text>
+    <rect x="530" y="76" width="210" height="64" rx="6" class="shader"/>
+    <text x="635" y="100" class="mid title">one triangle</text>
+    <text x="635" y="120" class="mid small">mean · c over the scene</text>
+    <line x1="460" y1="67" x2="528" y2="96" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="460" y1="139" x2="528" y2="120" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="530" y="170" width="210" height="40" rx="6" class="gpu"/>
+    <text x="635" y="195" class="mid small">scene color: blend premultiplied</text>
+    <line x1="635" y1="140" x2="635" y2="168" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="20" y="232" class="small">The coverage is kept as c, not as 1 − c, so both targets clear to 0 with one clear value.</text>
+  </svg>
+  <figcaption>The two passes. The coverage blend, c = a + c (1 − a), is the premultiplied over of alpha alone, so its product has the same order-free result as 1 − Π(1 − a).</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Target</th><th>Holds</th><th>Source factor</th><th>Destination factor</th></tr>
+  <tr><td>sums (RGBA, 16-bit float)</td><td>Σ C·w in rgb, Σ a·w in alpha</td><td>one</td><td>one (add)</td></tr>
+  <tr><td>coverage (8-bit)</td><td>c</td><td>one</td><td>one − source alpha</td></tr>
+  <tr><td>with TAA: motion and coverage (RGBA, 16-bit float)</td><td>Σ motion · a · w in rg, c in alpha</td><td>one</td><td>rg: one (add); alpha: one − source alpha</td></tr>
+</table>
+</div>
+
+<p>The targets blend differently, so the device must allow a different blend state per color target (Vulkan's <b>independentBlend</b>, present on desktop and mobile GPUs). The sums need a float format: they pass 1, and a fixed-point format would lose small weights. The coverage stays between 0 and 1, so 8 bits hold it, as in the paper.</p>
+
+<div class="callout">
+  <strong>Every target costs</strong>
+  <p>Each fragment blends into every target, so the cost grows with the number of targets more than with their bytes. Measured on an RTX 3060 in a dense scene: the sums alone cost about what sorted blending costs; adding an 8-bit coverage target adds a third; a third target for motion doubled it. So with TAA the motion shares the coverage's target (motion in rg, coverage in alpha, one blend state each), and the cost stays at two targets.</p>
+</div>
+
+<h2 id="weight"><span class="n">4</span>A weight that works at any scale</h2>
+
+<p>The paper's weights put fixed distances in metres into the formula, for example 10 / (10<sup>−5</sup> + (z/5)<sup>2</sup> + (z/200)<sup>6</sup>), kept between 0.01 and 3000. That fits a room a few metres deep. A map seen from 5 km, or a part seen from 2 cm, gets a flat weight: every layer counts the same, and far layers bleed through near ones.</p>
+
+<p>The fix is to measure depth where the content is. Each frame, culling finds the nearest and the farthest depth of the see-through draws in view. A fragment's <b>place</b> is where its depth lies in that range, 0 at the nearest and 1 at the farthest, measured the way the projection measures size:</p>
+
+<div class="formula">
+  <p class="eq">perspective: place = log(z / z<sub>near</sub>) / log(z<sub>far</sub> / z<sub>near</sub>)</p>
+  <p class="eq">orthographic: place = (z − z<sub>near</sub>) / (z<sub>far</sub> − z<sub>near</sub>)</p>
+  <p class="eq">w = 2<sup>−5·place</sup> &nbsp; (exp2(−5 · place))</p>
+  <dl>
+    <dt>z</dt><dd>the fragment's view depth: its distance along the camera's axis, not the depth buffer's value, so reversed-Z or an infinite far plane do not matter</dd>
+    <dt>log</dt><dd>with perspective, a layer twice as far looks half as big: equal steps per doubling of distance</dd>
+    <dt>w</dt><dd>halves every fifth of the range: 1 at the nearest, 1/32 at the farthest</dd>
+  </dl>
+</div>
+
+<figure class="lab" data-lab="weight-scale" data-title="Scale the scene">
+  <figcaption>Move the scene from 4 m to 40 km away. The weight with fixed metres goes flat; the weight from the place in the range does not change. Try the orthographic projection too.</figcaption>
+</figure>
+
+<p>Why 1/32? Over a test set of random stacks (2 to 10 layers, alpha 0.05 to 0.7, spread over part of the range), the error against the exact over is smallest for a weight that falls by about 2<sup>−5</sup> to 2<sup>−8</sup> across the range; a flat weight is 40 % worse. Thin layers (alpha up to 0.3) like a gentler fall, about 2<sup>−3</sup>, thick ones (0.4 to 0.8) a steeper one: 2<sup>−5</sup> is the middle. A weight that also grows with alpha, as in the paper, did not help on this set.</p>
+
+<h2 id="steady"><span class="n">5</span>Keeping the weights steady</h2>
+
+<p>The range comes from the draws in view, so it moves when an object enters or leaves the view. Every weight then changes, and the color of the whole see-through layer shifts. With TAA that looks like a flicker. Two rules keep it steady:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="A plot over time of the measured far end of the range, which jumps up when a far object enters and down when it leaves, and the range the weights use: it snaps to steps, grows at once to a new step and shrinks only past two steps, and moves toward that step smoothly.">
+    <rect x="60" y="20" width="660" height="160" class="zone"/>
+    <path d="M60,60 H720 M60,100 H720 M60,140 H720" class="grid"/>
+    <text x="54" y="64" class="end small">4 steps</text>
+    <text x="54" y="104" class="end small">2</text>
+    <text x="54" y="144" class="end small">0</text>
+    <path d="M60,150 H200 V46 H420 V150 H520 V138 H560 V150 H720" class="arrow mem"/>
+    <path d="M60,140 H200 C230,90 250,62 300,58 L420,58 C450,100 480,136 520,140 H720" class="arrow gpu thick"/>
+    <text x="210" y="40" class="small t-mem">a far object enters</text>
+    <text x="430" y="40" class="small t-mem">it leaves</text>
+    <text x="530" y="128" class="small">small moves: no change</text>
+    <text x="60" y="200" class="small">time →</text>
+    <text x="720" y="200" class="end small"><tspan class="t-mem">measured far end</tspan> · <tspan class="t-gpu">the far end the weights use</tspan></text>
+  </svg>
+  <figcaption>The measured far end (amber) jumps. The one the weights use (green) snaps to steps with hysteresis, then moves toward them over a quarter second.</figcaption>
+</figure>
+
+<ul>
+  <li><b>Snap with hysteresis.</b> Each end snaps to a step: √2 in depth with perspective, an eighth of the range orthographic. It moves out at once when the content passes it, and in only when the content is two steps inside. An arrow culled at the edge of the view, or a part that moves a little, changes nothing.</li>
+  <li><b>Smooth.</b> The range the weights use moves toward the snapped one with a time constant of 0.25 s, in the same space as the place (log with perspective). A big change, a far object coming into view, becomes a fade of a quarter second instead of a jump.</li>
+</ul>
+
+<p>Fragments outside the range (an object that just came in) clamp their place to 0 or 1, so they still get a valid weight while the range catches up.</p>
+
+<h2 id="aa"><span class="n">6</span>MSAA and TAA</h2>
+
+<div class="vgrid">
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A pixel with four samples. An opaque edge covers two of them; the see-through surface is behind it at those samples and in front at the others. Each sample keeps its own sums and is composited on its own.">
+      <rect x="60" y="15" width="100" height="100" class="paper"/>
+      <polygon points="60,15 160,15 60,115" class="solid o-75"/>
+      <circle cx="85" cy="40" r="7" class="mem"/><circle cx="135" cy="40" r="7" class="mem"/><circle cx="85" cy="90" r="7" class="mem"/><circle cx="135" cy="90" r="7" class="gpu"/>
+      <text x="200" y="45" class="mid small">sums per</text><text x="200" y="60" class="mid small">sample</text>
+    </svg>
+    <h4>MSAA: per sample</h4>
+    <p>The targets have the scene's samples, and the composite runs once per sample (sample-rate shading). An opaque edge in front of the see-through surface stays sharp and clean.</p>
+    <p class="cost">4 samples: 4 × the target memory, 4 composite runs a pixel</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The same pixel composited with the mean of its samples: the opaque edge's samples also get the see-through surface's color, a halo along the edge.">
+      <rect x="60" y="15" width="100" height="100" class="paper"/>
+      <polygon points="60,15 160,15 60,115" class="solid o-75"/>
+      <rect x="60" y="15" width="100" height="100" class="gpu o-25"/>
+      <text x="200" y="52" class="mid small">one mean</text><text x="200" y="67" class="mid small">for all</text>
+    </svg>
+    <h4>MSAA: per pixel</h4>
+    <p>One composite per pixel from the samples' mean: cheaper, but the opaque edge's samples get the see-through color too, a faint halo. A fallback where sample shading is missing.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A see-through arrow moves right over a still background. The motion written for the pixel is the weighted mean of the layers' motion, laid over the background's motion by the coverage.">
+      <rect x="20" y="20" width="200" height="90" class="zone"/>
+      <rect x="70" y="45" width="70" height="40" rx="4" class="gpu o-50"/>
+      <line x1="145" y1="65" x2="200" y2="65" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="120" y="124" class="mid small">motion = mean · c + behind · (1 − c)</text>
+    </svg>
+    <h4>TAA: motion</h4>
+    <p>The coverage's target, 16-bit with TAA, also sums motion × alpha × weight in rg. The composite lays the mean motion over the motion behind by the coverage, so a dense moving layer is followed, and a faint one leaves the background's motion.</p>
+  </div>
+</div>
+
+<h2 id="mixing"><span class="n">7</span>Mixing with sorted and additive draws</h2>
+
+<p>Weighted surfaces are composited once, as one layer. Sorted see-through draws are drawn after that, over the composite. So they cannot go <em>behind</em> a weighted surface:</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Side view: an eye, a weighted see-through layer in front, a sorted pane behind it. The sorted pane is drawn after the composite, so it lands on top.">
+      <circle cx="26" cy="70" r="8" class="box"/>
+      <line x1="36" y1="70" x2="300" y2="70" class="arrow light dashed"/>
+      <rect x="120" y="20" width="10" height="100" class="gpu o-50"/>
+      <rect x="220" y="20" width="10" height="100" class="hot o-50"/>
+      <text x="125" y="134" class="mid small">weighted</text>
+      <text x="225" y="134" class="mid small">sorted</text>
+      <text x="225" y="14" class="mid small t-bad">drawn on top</text>
+    </svg>
+    <h4>Sorted behind weighted</h4>
+    <p>The sorted pane is behind, but it is drawn over the weighted layer.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Side view: an eye, a sorted label in front, the weighted data behind it. The label is drawn last and is on top, as it should be.">
+      <circle cx="26" cy="70" r="8" class="box"/>
+      <line x1="36" y1="70" x2="300" y2="70" class="arrow light dashed"/>
+      <rect x="90" y="40" width="10" height="60" class="hot o-50"/>
+      <rect x="200" y="20" width="10" height="100" class="gpu o-50"/>
+      <text x="95" y="134" class="mid small">sorted label</text>
+      <text x="205" y="134" class="mid small">weighted</text>
+      <text x="95" y="34" class="mid small t-ok">on top</text>
+    </svg>
+    <h4>Sorted in front of weighted</h4>
+    <p>Labels, UI and overlays in front of the data come out right.</p>
+  </div>
+</div>
+
+<div class="callout rule">
+  <strong>Use one method for see-through things that overlap each other</strong>
+  <p>Make all of a dataset's see-through surfaces weighted, and keep sorted blending for what must be exact and lies in front: labels, text, map layers with a draw order, UI.</p>
+</div>
+
+<p><b>Additive</b> surfaces (glows, density or X-ray views) add their light and hide nothing. Addition has no order, so they need no targets at all: they are drawn straight into the scene, in any order, after the weighted composite. A pure-additive surface has no coverage, so it would vanish in the weighted mean (0 / 0); it belongs in the additive method instead. Emissive light on a see-through surface is part of its color and takes part in the mean.</p>
+
+<h2 id="pitfalls"><span class="n">8</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>A bright far layer glows through a dark near one</dt><dd>The mean is not over: a thick near layer should hide more. Steeper weights help; for a nearly opaque layer, use alpha 1 (opaque) or sorted blending.</dd></div>
+  <div><dt>The see-through layer's color shifts when an object enters the view</dt><dd>The weights' range jumped. Keep the range with hysteresis and smooth it (<a href="#steady">section 5</a>).</dd></div>
+  <div><dt>Far layers bleed through at a large scale</dt><dd>The weight has fixed metres in it and is flat at that distance. Measure the place in the content's own range.</dd></div>
+  <div><dt>Black or white sparkles</dt><dd>A sum overflowed or underflowed its float format: keep weights between about 1/1000 and 1, with colors as bright as the scene's own target holds.</dd></div>
+  <div><dt>A see-through surface vanishes where an additive one is</dt><dd>An alpha of 0 adds nothing to the coverage: draw light-only surfaces additive.</dd></div>
+  <div><dt>A halo along opaque edges with MSAA</dt><dd>The composite ran per pixel. Run it per sample.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
+
+<p>A <code>BLEND</code> material picks its method with <code>Material::blendMethod</code>: <code>BlendMethod::SORTED</code> (the default), <code>WEIGHTED</code> or <code>ADDITIVE</code>. A <code>GLYPHS</code> material with <code>AlphaMode::BLEND</code> is always weighted, as glyphs cannot be sorted; a <code>VECTOR</code> one is always sorted, by its <code>drawOrder</code>.</p>
+
+<pre><code>rasm::Material material = engine.getMaterial(handle);
+material.alphaMode = rasm::AlphaMode::BLEND;
+material.blendMethod = rasm::BlendMethod::WEIGHTED;
+engine.updateMaterial(handle, material);</code></pre>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="A shaded view's passes. The cull keeps the weighted, additive and sorted runs for the late phase and measures the weighted draws' depth range. At the end of the last draw pass, after the sky, the weighted run and the weighted glyphs are drawn into the view's weighted target against the scene depth. The Transparent pass draws the grid, the weighted composite, the additive run, then the sorted run, labels included.">
+    <rect x="10" y="30" width="120" height="60" rx="6" class="gpu"/><text x="70" y="54" class="mid title">Cull 2</text><text x="70" y="72" class="mid small">range of weighted</text>
+    <rect x="150" y="30" width="250" height="60" rx="6" class="shader"/><text x="275" y="54" class="mid title">Scene 2</text><text x="275" y="72" class="mid small">late draws, glyphs, points, sky, then …</text>
+    <rect x="420" y="30" width="330" height="60" rx="6" class="shader"/><text x="585" y="54" class="mid title">Transparent</text><text x="585" y="72" class="mid small">grid · composite · additive · sorted · ghosts</text>
+    <line x1="130" y1="60" x2="148" y2="60" class="arrow" marker-end="url(#ah)"/>
+    <line x1="400" y1="60" x2="418" y2="60" class="arrow" marker-end="url(#ah)"/>
+    <rect x="150" y="120" width="250" height="60" rx="6" class="hot o-25"/>
+    <text x="275" y="144" class="mid title">Weighted (in Scene 2)</text>
+    <text x="275" y="162" class="mid small">weighted run + weighted glyphs</text>
+    <line x1="275" y1="90" x2="275" y2="118" class="arrow" marker-end="url(#ah)"/>
+    <rect x="150" y="210" width="120" height="44" rx="6" class="mem"/><text x="210" y="236" class="mid small">sums RGBA16F</text>
+    <rect x="280" y="210" width="120" height="44" rx="6" class="mem"/><text x="340" y="236" class="mid small">coverage R8</text>
+    <rect x="410" y="210" width="120" height="44" rx="6" class="mem o-50"/><text x="470" y="230" class="mid small">TAA: motion rg,</text><text x="470" y="244" class="mid small">coverage a (16F)</text>
+    <line x1="275" y1="180" x2="275" y2="208" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <path d="M530,232 H600 V92" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="610" y="160" class="small">the composite</text>
+    <text x="610" y="176" class="small">reads them</text>
+    <text x="10" y="284" class="small">The weighted target is the view's own, made the first frame the view has weighted draws: no memory and no pass without them.</text>
+  </svg>
+  <figcaption>Where the weighted draws go in a shaded view's passes. The draw pass stops its rendering, draws the weighted surfaces into the view's weighted target with the scene's depth (tested, not written), and goes on.</figcaption>
+</figure>
+
+<h3>Where RASM follows the page, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Choice</td><td>per surface</td><td>Per material: <code>Material::blendMethod</code>. The draw list has a run per method after the point run (<code>getRunKey</code>): weighted, additive, sorted last. <code>MAX_DRAW_RUNS</code> is 10.</td></tr>
+  <tr><td>Targets</td><td>sums, coverage, motion</td><td><code>WEIGHTED_ACCUM_FORMAT</code> (RGBA16F) and <code>WEIGHTED_COVERAGE_FORMAT</code> (R8), or with TAA <code>WEIGHTED_MOTION_FORMAT</code> (RGBA16F: the motion sums in rg, the coverage in alpha), in one render target per view (<code>getWeightedTargetDesc</code>), with the scene target's size and samples. Memory at 1920 × 1080: 19 MB, 33 MB with TAA, 75 MB with 4× MSAA.</td></tr>
+  <tr><td>Blend states</td><td>add; over for coverage</td><td><code>BlendMode::WEIGHTED</code>: color 1 premultiplied, the others add; <code>BlendMode::WEIGHTED_MOTION</code> (TAA): color 1's rg add and its alpha is premultiplied (<code>VulkanDevice::createGraphicsPipeline</code>). Without <code>RenderContext::hasIndependentBlend</code> weighted and additive materials are drawn sorted, with a warning.</td></tr>
+  <tr><td>Weight</td><td>place in the content's range</td><td><code>getWeight</code> and <code>getWeightedPlace</code> in <code>shaders/lib/weightedBlend.slang</code>; <code>WEIGHT_HALVINGS</code> is 5. The cull writes the nearest and farthest view depth of the kept weighted draws and weighted glyph chunks (their bounding spheres, <code>getSphereDepths</code>) to two words of the view (<code>SceneData::weightedRangePtr</code>, with <code>getDepthBits</code>).</td></tr>
+  <tr><td>Steady weights</td><td>snap, hysteresis, smoothing</td><td><code>stepWeightedRange</code> in <code>src/renderer/weightedBlend.cpp</code>: steps of √2 (perspective) or an eighth of the range (orthographic), two steps of hysteresis, <code>WEIGHTED_RANGE_SECONDS</code> 0.25. It reads the words the cull wrote two frames before (the frame slot's), so the first two frames use the cull's own words of the frame.</td></tr>
+  <tr><td>Accumulate</td><td>a pass</td><td><code>Renderer::drawWeighted</code>, at the end of the view's last draw pass: its rendering stops, the weighted run (<code>rasm.slang</code> with <code>RASM_ALPHA_BLEND</code> and <code>RASM_WEIGHTED</code>) and the weighted glyphs draw into the weighted target with the scene's depth, and the pass goes on. GPU timer <code>Weighted</code>.</td></tr>
+  <tr><td>Composite</td><td>a full-screen pass</td><td><code>Renderer::drawWeightedComposite</code> in the <code>Transparent</code> pass, after the grid (<code>shaders/passes/weightedComposite.slang</code>). With MSAA per sample (<code>RASM_PER_SAMPLE</code>), or the pixel's mean where <code>RenderContext::hasSampleRateShading</code> is false. GPU timer <code>OIT Composite</code>.</td></tr>
+  <tr><td>Additive</td><td>straight into the scene</td><td><code>Renderer::drawAdditive</code> after the composite: <code>BlendMode::ADDITIVE_COLOR</code> adds the light, and lays its motion over the motion behind by its alpha. An additive surface casts no shadow; a weighted one casts a hashed-alpha shadow like a sorted one.</td></tr>
+  <tr><td>Glyphs</td><td>—</td><td>The glyph cull puts a weighted chunk's draw commands after the opaque chunks' room (<code>appendGlyphChunk</code>, <code>GlyphCullHeader::weightedCommandCount</code>), so each list is one indirect draw.</td></tr>
+  <tr><td>Picking</td><td>—</td><td>Weighted and additive runs are picked with a pipeline that writes depth, so the nearest surface whose alpha is at least <code>PickDesc::minAlpha</code> is hit; a weighted glyph tests its alpha too.</td></tr>
+  <tr><td>Debug views</td><td>—</td><td>Show the weighted and additive runs unsorted with the sorted run's debug pipeline: a mean of normals would mean nothing. Weighted glyphs are drawn shaded, as the other glyphs (<code>D52</code>).</td></tr>
+</table>
+</div>
+
+<h3>What it costs</h3>
+
+<p id="cost">Measured in <code>examples/31_oit</code> without its arrows (Release, RTX 3060, 1920 × 1080, a perspective TAA view and an orthographic 4× MSAA view, the last 1500 of 3000 frames). The same surfaces, weighted against sorted:</p>
+
+<div class="stats">
+  <div><b>0.99 ms</b><span>the <code>Weighted</code> draws of both views</span><small>sorted: 0.65 ms of draws + 0.04 ms of sort</small></div>
+  <div><b>0.09 ms</b><span>the composite, per sample under MSAA</span><small>0.06 ms with each pixel's mean</small></div>
+  <div><b>1.86 ms</b><span>GPU frame, weighted</span><small>sorted: 1.48 ms</small></div>
+  <div><b>0.63 ms</b><span>weighted draws with both views at one sample</span><small>sorted: 0.53 ms of draws</small></div>
+  <div><b>2.1×</b><span>weighted over sorted in a 4× MSAA perspective view</span><small>2.13 against 0.99 ms: each sample blends into two targets</small></div>
+  <div><b>≤ 1/255</b><span>the weighted layer's change a frame while a far draw flies in and out</span><small><samp>--range-test</samp>; up to 6/255 in one frame with the raw range</small></div>
+</div>
+
+<p>The weighted cost does not grow with how the layers overlap, and it removes the order errors: at one sample it costs a fifth more than sorted draws. The extra cost is the second target: per sample under MSAA it doubles the accumulation. A scene without weighted draws pays nothing: <code>05_city</code>, <code>20_views</code>, <code>25_vector_map</code>, <code>26_picking</code>, <code>27_cad_views</code> and <code>30_glyphs</code> take the same GPU time as before within ±1 %.</p>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The method of a material</td><td><code>BlendMethod</code>, <code>Material::blendMethod</code> in <code>include/rasm/material.h</code>; C: <code>rasm_blend_method</code>, <code>rasm_material_desc</code> (1.15)</td></tr>
+  <tr><td>Runs by method</td><td><code>getBlendMethod</code>, <code>getRunKey</code>, <code>Renderer::updateDrawModes</code>, <code>Renderer::rebuildDrawList</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Targets, pipelines, the range</td><td><code>Renderer::prepareWeightedBlend</code> in <code>src/renderer/weightedBlend.cpp</code></td></tr>
+  <tr><td>Accumulate, composite, additive</td><td><code>Renderer::drawWeighted</code>, <code>drawWeightedComposite</code>, <code>drawAdditive</code> in <code>src/renderer/weightedBlend.cpp</code>; <code>toWeightedOutput</code> in <code>shaders/passes/rasm.slang</code></td></tr>
+  <tr><td>The range in the cull</td><td><code>countMain</code> in <code>shaders/passes/cull.slang</code></td></tr>
+  <tr><td>Tests</td><td><code>tests/weightedBlendTests.cpp</code> (the depth words, the range's snapping, hysteresis and smoothing); image tests <code>weighted</code>, <code>weighted_msaa4</code>, <code>weighted_taa</code>, <code>weighted_ortho</code> and <code>far_weighted</code> in <code>tests/image/imageTests.cpp</code> (nested shells, slices in one mesh, see-through arrows, an additive glow, a sorted pane, picks by <code>minAlpha</code>)</td></tr>
+  <tr><td>An example</td><td><code>examples/31_oit</code>: nested iso-surfaces, 48 slices in one mesh, a see-through assembly and see-through arrows; <samp>--sorted</samp> to compare, <samp>--additive</samp> for an X-ray view of the slices</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <p>The weighted, additive and sorted runs are the last three runs, in that order, each with cull mode <code>NONE</code>; the early cull keeps none of them. Nothing but <code>drawWeighted</code> and the composite touches a view's weighted target. A pick's <code>SceneData</code> has no <code>weightedRangePtr</code>: the range is the view's to measure.</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Morgan McGuire and Louis Bavoil, <i>Weighted Blended Order-Independent Transparency</i>, Journal of Computer Graphics Techniques 2(2), 2013.</li>
+  <li>Morgan McGuire, <i>Implementing Weighted, Blended Order-Independent Transparency</i>, 2015.</li>
+  <li>Thomas Porter and Tom Duff, <i>Compositing Digital Images</i>, SIGGRAPH 1984.</li>
+  <li>Louis Bavoil and Kevin Myers, <i>Order Independent Transparency with Dual Depth Peeling</i>, NVIDIA, 2008: the exact alternative whose cost grows with the layers.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

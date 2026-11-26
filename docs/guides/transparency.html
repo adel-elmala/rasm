@@ -339,7 +339,7 @@
     <rect x="360" y="166" width="80" height="34" rx="4" class="mem"/><text x="400" y="188" class="mid mono small">MASK·FRONT</text>
     <rect x="444" y="166" width="80" height="34" rx="4" class="mem"/><text x="484" y="188" class="mid mono small">MASK·BACK</text>
     <rect x="528" y="166" width="96" height="34" rx="4" class="mem"/><rect x="526" y="164" width="100" height="38" rx="5" class="hot"/><text x="576" y="188" class="mid mono small">BLEND·NONE</text>
-    <text x="736" y="152" class="end small">at most 7 runs: alpha mode, then cull mode</text>
+    <text x="736" y="152" class="end small">alpha mode, then cull mode; the point run and the</text><text x="736" y="214" class="end small">weighted and additive runs (not shown) come before BLEND</text>
   </svg>
   <figcaption>A shaded view with occlusion culling. The early cull keeps none of the blend run, so every see-through draw is drawn once, after the late draws and the sky, in the order the sort left. A depth-only view (a shadow map) draws the blend run like the others, with the cut-out depth pipeline.</figcaption>
 </figure>
@@ -356,7 +356,7 @@
   <tr><td>Order</td><td>solid, sky, then see-through back to front</td><td>The <code>Transparent</code> pass after <code>Scene 2</code> and its sky. The sort runs on the GPU after culling (<a href="gpu-sorting.html">sorting on the GPU</a>), keyed by the view depth of each draw's bounding sphere center.</td></tr>
   <tr><td>Back faces of see-through objects</td><td>cull them, or draw them first</td><td>The blend run is one run with cull mode <code>NONE</code>, so all of it is in one order; a single-sided material discards its back faces in the shader instead (<code>MATERIAL_DOUBLE_SIDED</code>).</td></tr>
   <tr><td>Shadows</td><td>cutoff for cut-outs; hashed alpha for see-through</td><td>Both, in <code>fragMask</code> of <code>shadow.slang</code> (<code>getHashedAlphaThreshold</code>), with a PCG hash of the object-space position.</td></tr>
-  <tr><td>Exactness</td><td>per object, per triangle or OIT</td><td>Per draw (one sub-mesh of one entity). Order-independent transparency is a later plan item.</td></tr>
+  <tr><td>Exactness</td><td>per object, per triangle or OIT</td><td>Per draw (one sub-mesh of one entity) for the default <code>BlendMethod::SORTED</code>. A material can pick <code>BlendMethod::WEIGHTED</code>, order-independent transparency (<a href="weighted-oit.html">weighted blended transparency</a>), or <code>BlendMethod::ADDITIVE</code>; each has a run of its own before the sorted one, and both go under the sorted draws.</td></tr>
 </table>
 </div>
 

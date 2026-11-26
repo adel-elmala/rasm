@@ -721,6 +721,7 @@
   <tr><td>Cut-outs</td><td>sharpened alpha-to-coverage</td><td>The MASK pipeline of a multisampled view is <code>fragMain</code> with <code>RASM_ALPHA_TO_COVERAGE</code>: no discard, alpha = <code>getCoverage</code>, alpha-to-coverage on. Where alpha does not change (no edge), <code>getCoverage</code> covers all or nothing by the cutoff, as discard does, so a cutoff of 1 on opaque texels stays solid. Cut-outs still thin out in the far mips (<code>D25</code>): the sharpening keeps the cutoff's edge, but the mips' alpha is still averaged.</td></tr>
   <tr><td>Depth reads</td><td>every sample, or a resolved depth</td><td>Every sample: <code>hizMain</code> reads <code>SceneData::depthSamples</code> samples of each pixel through <code>Sampler2DMS</code> (<code>loadDepth</code>). No depth resolve.</td></tr>
   <tr><td>Shading</td><td>once per pixel</td><td>The same; the light clusters do not read depth, so they are unchanged.</td></tr>
+  <tr><td>See-through layers</td><td>—</td><td>Weighted blended surfaces (<a href="weighted-oit.html#aa">weighted blended transparency</a>) keep their sums per sample: the view's weighted target has the scene target's samples, and the composite runs once per sample (<code>RASM_PER_SAMPLE</code>, sample-rate shading), or takes each pixel's mean where <code>RenderContext::hasSampleRateShading</code> is false.</td></tr>
 </table>
 </div>
 

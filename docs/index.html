@@ -54,6 +54,7 @@
   <tr><td>show a reference grid, or CAD views that pan and zoom (orthographic)</td><td><a href="api/camera.html#grid">setCameraGrid</a></td></tr>
   <tr><td>draw a point cloud (LiDAR, a scan) colored by a value</td><td><a href="api/scene.html#point-clouds">buildPointCloudChunk</a>, <a href="api/scene.html#colormaps">createColormap</a></td></tr>
   <tr><td>draw a vector field, particles or markers: a shape per data point, colored by a value, and streamlines</td><td><a href="api/scene.html#glyphs">buildGlyphChunk</a>, <a href="api/materials.html#GlyphMaterial">GlyphMaterial</a>, <a href="api/scene.html#addVectorLines">addVectorLines</a></td></tr>
+  <tr><td>draw dense see-through data (nested iso-surfaces, volume slices, see-through parts, glyphs) in any order, or add light for an X-ray view</td><td><a href="api/materials.html#BlendMethod">BlendMethod</a>, <a href="api/materials.html#Material">Material::blendMethod</a></td></tr>
   <tr><td>stream a LAS or LAZ scan bigger than GPU memory</td><td><a href="api/engine.html#loadPointCloud">loadPointCloud</a>, <a href="api/scene.html#point-octree">buildPointCloudOctree</a></td></tr>
   <tr><td>draw terrain from height map tiles</td><td><a href="api/scene.html#createTerrainTile">createTerrainTile</a></td></tr>
   <tr><td>stream a map or an open world under a memory budget</td><td><a href="api/engine.html#TileStreamer">TileStreamer</a></td></tr>

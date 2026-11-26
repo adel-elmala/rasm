@@ -1173,6 +1173,20 @@ void destroyRenderTarget(const RenderTargetHandle&amp; renderTarget);</pre>
   </div>
 </div>
 
+<div class="api" id="hasIndependentBlend">
+  <pre class="sig">bool hasIndependentBlend() const;</pre>
+  <div class="body">
+    <p><code>true</code> when pipelines may blend each color target differently (<code>independentBlend</code>, Vulkan 1.0), which the engine turns on whenever the GPU has it: <code>BlendMode::WEIGHTED</code>, <code>WEIGHTED_MOTION</code> and <code>ADDITIVE_COLOR</code> need it. Without it, weighted and additive materials are drawn sorted (<a href="materials.html#BlendMethod"><code>BlendMethod</code></a>). Desktop GPUs, MoltenVK, lavapipe and current mobile GPUs have it.</p>
+  </div>
+</div>
+
+<div class="api" id="hasSampleRateShading">
+  <pre class="sig">bool hasSampleRateShading() const;</pre>
+  <div class="body">
+    <p><code>true</code> when a fragment shader may run once per sample of a multisampled target (<code>sampleRateShading</code>, Vulkan 1.0; a shader that reads <code>SV_SampleIndex</code>), which the engine turns on whenever the GPU has it. The weighted composite uses it to composite each sample with its own sums (<a href="../guides/weighted-oit.html#aa">weighted blended transparency</a>); without it, each pixel takes the mean of its samples.</p>
+  </div>
+</div>
+
 <div class="api" id="hasMeshShaders">
   <pre class="sig">bool hasMeshShaders() const;</pre>
   <div class="body">

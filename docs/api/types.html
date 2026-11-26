@@ -297,6 +297,9 @@ public:
     NONE,
     PREMULTIPLIED_ALPHA,
     ADDITIVE,
+    WEIGHTED,
+    WEIGHTED_MOTION,
+    ADDITIVE_COLOR,
 };</pre>
   <div class="body">
     <p>How a pipeline's colors mix with what the target holds (<a href="low-level.html#PipelineDesc"><code>PipelineDesc::blendMode</code></a>).</p>
@@ -304,7 +307,11 @@ public:
       <dt>NONE</dt><dd>The shader's color replaces the target's.</dd>
       <dt>PREMULTIPLIED_ALPHA</dt><dd>result = source + (1 − source alpha) × target, for color and alpha. The shader outputs its color already multiplied by its alpha. This is the "over" operator of see-through (glTF <code>BLEND</code>) draws; see the <a href="../guides/transparency.html">transparency guide</a>.</dd>
       <dt>ADDITIVE</dt><dd>result = source + target, for color and alpha. Draws that write 1 count the fragments that reach a pixel: the overdraw view does this (<a href="../guides/debug-views.html">Debug views</a>).</dd>
+      <dt>WEIGHTED</dt><dd>Color 1 blends as <code>PREMULTIPLIED_ALPHA</code>, every other color as <code>ADDITIVE</code>: the sums and the coverage of <a href="../guides/weighted-oit.html">weighted blended transparency</a>.</dd>
+      <dt>WEIGHTED_MOTION</dt><dd>As <code>WEIGHTED</code>, but color 1's color channels add and only its alpha blends as <code>PREMULTIPLIED_ALPHA</code>: motion sums beside the coverage, with TAA.</dd>
+      <dt>ADDITIVE_COLOR</dt><dd>Color 0 blends as <code>ADDITIVE</code>, every other color as <code>PREMULTIPLIED_ALPHA</code>: added light that lays its motion over the motion behind it by its alpha.</dd>
     </dl>
+    <p><code>WEIGHTED</code>, <code>WEIGHTED_MOTION</code> and <code>ADDITIVE_COLOR</code> blend each color differently, which needs the device's <code>independentBlend</code> feature (<a href="low-level.html#hasIndependentBlend"><code>RenderContext::hasIndependentBlend</code></a>).</p>
   </div>
 </div>
 
