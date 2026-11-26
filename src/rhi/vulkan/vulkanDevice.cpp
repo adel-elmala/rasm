@@ -23,6 +23,9 @@ namespace rasm::rhi
                                                                           .viewFormatCount = 2,
                                                                           .pViewFormats = ENCODED_VIEW_FORMATS};
 
+        // From this size a buffer the CPU does not read is not mapped on a discrete GPU (P35).
+        constexpr VkDeviceSize UNMAPPED_BUFFER_BYTES = 16ull << 20;
+
 #if defined(_WIN32)
         constexpr const char *LOADER_NAME = "vulkan-1.dll";
 #elif defined(__APPLE__)
@@ -751,6 +754,11 @@ namespace rasm::rhi
         // Write-only memory may be uncached or across the bus, so a buffer the CPU reads asks for random access.
         if (desc.hostReadable)
             allocCI.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        // New video memory is cleared before the device's next submit runs: about 0.19 ms a MiB when it is host-visible
+        // (resizable BAR) and 0.024 ms a MiB when it is not (RTX 3060, Windows). Mapped, the geometry pools held back
+        // the first frame by up to 50 ms (P35), so a large buffer is filled through the staging ring instead.
+        else if (!desc.hostVisible && physicalDevice.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU && desc.size >= UNMAPPED_BUFFER_BYTES)
+            allocCI.flags = 0;
         else if (!desc.hostVisible)
             allocCI.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT;
         // A staging buffer goes to system memory, unless all of video memory is host-visible: then the GPU's copies

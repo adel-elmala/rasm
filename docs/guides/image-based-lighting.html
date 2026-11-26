@@ -403,8 +403,26 @@ engine.setSceneEnvironment(scene, rasm::SceneEnvironment{.environment = sunset, 
     <text x="20" y="300" class="small">All textures R16G16B16A16_SFLOAT. The cubes and the LUT are written by compute as storage images, then sampled.</text>
     <text x="20" y="318" class="small t-faint">The image is destroyed once the frame that baked it is done.</text>
   </svg>
-  <figcaption>The bake is about 0.8 ms on an RTX 3060 for this panorama, plus 0.15 ms for the LUT, once. A scene uses the environment from the frame that bakes it; until then it has the constant ambient.</figcaption>
+  <figcaption>The bake is about 1 ms on an RTX 3060 for this panorama, plus 0.14 ms for the LUT, once (the table below). A scene uses the environment from the frame that bakes it; until then it has the constant ambient.</figcaption>
 </figure>
+
+<h3>What the bake costs</h3>
+
+<p>GPU time of each step for <samp>venice_sunset_2k.hdr</samp> (a 512 cube), Release, RTX 3060:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Step</th><th>GPU time</th></tr>
+  <tr><td>Cube from the image</td><td>0.12 ms</td></tr>
+  <tr><td>Cube mips</td><td>0.07 ms</td></tr>
+  <tr><td>Specular mips 0 to 5</td><td>0.02, 0.44, 0.13, 0.07, 0.06, 0.05 ms</td></tr>
+  <tr><td>Irradiance</td><td>0.06 ms</td></tr>
+  <tr><td><b>Whole bake</b></td><td><b>about 1.0 ms</b>, in one frame</td></tr>
+  <tr><td>BRDF table</td><td>0.14 ms, once per renderer</td></tr>
+</table>
+</div>
+
+<p>So the bake runs in one frame and is not spread over several. A weak integrated GPU takes longer, once, when the environment loads. A long first frame you measure is more likely new video memory being cleared (<a href="gpu-memory.html#cleared">GPU memory</a>, P35) than the bake.</p>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
 
