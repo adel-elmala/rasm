@@ -21,12 +21,19 @@
 #include <thread>
 #include <vector>
 
+#if defined(_WIN32)
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
 // Point cloud streaming: a LiDAR tile in Earth-centred coordinates (ECEF), larger than the GPU memory it may take,
 // flown through. At its first start the example writes a synthetic scan (rolling ground, roads, buildings and trees, 1 km
 // across, near Paris) as a LAS file into its own folder; AssetLoader::loadPointCloud reads it in doubles, and
 // buildPointCloudOctree makes Potree's octree of it: each node a sample of its cube, its children the detail it lacks.
-// Each node is a TileStreamer tile with TileRefine::ADD, built into a chunk on worker threads when the streamer hands
-// it out, and drawn with its parents. The streamer keeps the loaded nodes under --budget; nodes nobody wants go first.
+// Each node is a TileStreamer tile with TileRefine::ADD, built into a chunk on worker threads, below the main thread's
+// priority, when the streamer hands it out, and drawn with its parents. The streamer keeps the loaded nodes under
+// --budget; nodes nobody wants go first.
 // The cut: a node's children are wanted while its spacing on screen passes --error pixels. A node fades in by its
 // prefix as it shows, and out before it goes (PointChunkLod::drawn), and its parent's adaptive points shrink as it
 // fills their place (PointChunkLod::finer), so nothing pops. The left view flies through with TAA, the right one is an
@@ -43,6 +50,7 @@
 //   --density D       PointMaterial::density (3): the points a far chunk keeps per point's area on screen; 3, not
 //                     the default 2, so the top view's random ground leaves 0.06% of its pixels open, not 0.2%
 //   --fixed-size      points of a fixed size (PointSizeMode::FIXED), not adaptive
+//   --triangles       every point by triangles (Renderer::setComputePoints off)
 //   --swap-aa         the left view with 4x MSAA, the right one with TAA
 //   --sequence A DIR  headless: also write frames A to --frames as DIR/frame_NNNN.png
 //   --stats           print the streamer's numbers every 30 frames
@@ -83,6 +91,7 @@ namespace
         double speed = 14.0;
         float density = 3.0f;
         bool fixedSize = false;
+        bool triangles = false;
         bool swapAa = false;
         bool stats = false;
         uint32_t sequenceFrom = 0;
@@ -350,8 +359,14 @@ namespace
         return count;
     }
 
+    // The builders run below the main thread. On Windows a thread woken at the main thread's priority takes the core of
+    // the thread that woke it (its wake boost puts it above): the main thread then waited in notify_all for a whole
+    // build, 2 to 4 ms, many times a flight. Below it, a woken builder takes a free core instead.
     void runBuilder(Builders &builders)
     {
+#if defined(_WIN32)
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+#endif
         for (;;)
         {
             BuildJob job;
@@ -397,6 +412,7 @@ namespace
             }
             options.zUp = options.zUp || std::strcmp(argv[i], "--z-up") == 0;
             options.fixedSize = options.fixedSize || std::strcmp(argv[i], "--fixed-size") == 0;
+            options.triangles = options.triangles || std::strcmp(argv[i], "--triangles") == 0;
             options.swapAa = options.swapAa || std::strcmp(argv[i], "--swap-aa") == 0;
             options.stats = options.stats || std::strcmp(argv[i], "--stats") == 0;
         }
@@ -451,6 +467,7 @@ int main(int argc, char **argv)
         .shaderDir = RASM_EXAMPLE_SHADER_DIR};
     // The point pool holds the budget and a quarter more, for the frees the GPU still waits on.
     config.geometryPoolPoints = static_cast<uint32_t>(budget / 8 + budget / 32);
+    config.computePoints = !options.triangles;
     applyExampleArgs(args, config);
     ExampleBench bench{.on = hasBenchFlag(argc, argv)};
     if (bench.on)
