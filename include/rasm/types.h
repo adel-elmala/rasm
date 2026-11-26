@@ -145,6 +145,9 @@ namespace rasm
         NONE,
         PREMULTIPLIED_ALPHA,
         ADDITIVE,
+        WEIGHTED,               // color 1 blends as PREMULTIPLIED_ALPHA and the other colors add: weighted blended OIT's sums
+        WEIGHTED_MOTION,        // as WEIGHTED, but color 1's color channels add and only its alpha blends as PREMULTIPLIED_ALPHA
+        ADDITIVE_COLOR,         // color 0 adds and the other colors blend as PREMULTIPLIED_ALPHA: added light over the motion behind it
     };
 
     // Result of acquire, present and swapchain recreation.

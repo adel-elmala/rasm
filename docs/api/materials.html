@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Materials and Textures · RASM</title>
-<meta name="description" content="MaterialType, createMaterial, the Material record with PbrSlot, PbrParam, AlphaMode and TextureTransform, updateMaterial and getMaterial, loadTexture and its format rules, bindless texture slots and SamplerType.">
+<meta name="description" content="MaterialType, createMaterial, the Material record with PbrSlot, PbrParam, AlphaMode, BlendMethod and TextureTransform, updateMaterial and getMaterial, loadTexture and its format rules, bindless texture slots and SamplerType.">
 <meta name="rasm-sources" content="include/rasm/material.h include/rasm/renderer.h include/rasm/types.h include/rasm/mesh.h include/rasm/render/resource.h src/assets/material.cpp src/assets/texture.cpp src/assets/mesh.cpp src/renderer/renderer.cpp src/renderer/gpuScene.cpp src/rhi/renderContext.cpp src/rhi/vulkan/vulkanDevice.cpp shaders/lib/pbr.slang shaders/lib/unlit.slang shaders/lib/core.slang shaders/passes/rasm.slang examples/00_hello_scene/main.cpp examples/01_render_graph/main.cpp examples/03_instances/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
@@ -178,6 +178,7 @@ rasm::MaterialHandle brick = engine.createMaterial(rasm::MaterialType::PBR, text
     bool             doubleSided{};
     AlphaMode        alphaMode{};
     float            alphaCutoff  = 0.5f;
+    BlendMethod      blendMethod  = BlendMethod::SORTED;
     TerrainMaterial  terrain      = {};
     VectorMaterial   vector       = {};
     PointMaterial    points       = {};
@@ -195,6 +196,7 @@ rasm::MaterialHandle brick = engine.createMaterial(rasm::MaterialType::PBR, text
       <dt>doubleSided</dt><dd>Draw back faces too.</dd>
       <dt>alphaMode</dt><dd>Solid, cut-out or see-through (<a href="#AlphaMode"><code>AlphaMode</code></a>). Default <code>NONE</code>: solid.</dd>
       <dt>alphaCutoff</dt><dd>For <code>MASK</code>: no pixel where alpha is below it. Default 0.5.</dd>
+      <dt>blendMethod</dt><dd>For <code>BLEND</code>: sorted, weighted or additive (<a href="#BlendMethod"><code>BlendMethod</code></a>). Default <code>SORTED</code>. A <code>GLYPHS</code> material is always weighted, a <code>VECTOR</code> one sorted.</dd>
       <dt>vector</dt><dd>For <code>VECTOR</code> only: the style (<a href="#VectorMaterial"><code>VectorMaterial</code></a>). <code>textures[ALBEDO]</code> is the icon atlas of points built with icons.</dd>
       <dt>points</dt><dd>For <code>POINTS</code> only: the points' style (<a href="#PointMaterial"><code>PointMaterial</code></a>).</dd>
       <dt>glyphs</dt><dd>For <code>GLYPHS</code> only: how the glyphs are colored (<a href="#GlyphMaterial"><code>GlyphMaterial</code></a>).</dd>
@@ -368,7 +370,7 @@ engine.updateMaterial(material, values);</code></pre>
     ScalarRange    range        = {};
 };</pre>
   <div class="body">
-    <p>How a <code>GLYPHS</code> material colors its glyphs (<a href="../guides/instanced-glyphs.html">Instanced glyphs</a>). The shape is lit as <code>PBR</code>: <code>params</code> give its roughness and metallic, and the albedo factor multiplies each glyph's color.</p>
+    <p>How a <code>GLYPHS</code> material colors its glyphs (<a href="../guides/instanced-glyphs.html">Instanced glyphs</a>). The shape is lit as <code>PBR</code>: <code>params</code> give its roughness and metallic, and the albedo factor multiplies each glyph's color. With <code>alphaMode</code> <code>BLEND</code> the glyphs are see-through, always by <a href="#BlendMethod">weighted blending</a>: their alpha is the albedo factor's times the glyph color's (<code>examples/31_oit</code>).</p>
     <dl>
       <dt>colorMode</dt><dd><code>COLOR</code>: the chunk's own colors (<a href="scene.html#GlyphChunkDesc"><code>GlyphChunkDesc::colors</code></a>), white without them. <code>SCALAR</code>: each glyph's scalar through <code>range</code> and <code>colormap</code>; a glyph whose scalar is outside a range without clamp is not drawn.</dd>
       <dt>colormap, range</dt><dd>A colormap from <a href="scene.html#createColormap"><code>createColormap</code></a>, and the values it spans (<a href="scene.html#ScalarRange"><code>ScalarRange</code></a>, linear or logarithmic).</dd>
@@ -394,9 +396,31 @@ engine.updateMaterial(material, values);</code></pre>
     <dl>
       <dt>NONE</dt><dd>Solid; alpha is ignored. This is glTF's <code>OPAQUE</code> (that name is a macro in <code>&lt;windows.h&gt;</code>).</dd>
       <dt>MASK</dt><dd>A cut-out: no pixel where alpha &lt; <code>alphaCutoff</code>, solid elsewhere. Leaves, fences, decals with hard edges. Its shadow has the same holes.</dd>
-      <dt>BLEND</dt><dd>See-through: drawn after everything else, sorted back to front, mixed with what is behind by its alpha, and not written to depth. Glass, smoke, water. Its shadow is as dense as its alpha.</dd>
+      <dt>BLEND</dt><dd>See-through: drawn after everything else, mixed with what is behind by its alpha, and not written to depth. Glass, smoke, water. How it is mixed is the material's <a href="#BlendMethod"><code>blendMethod</code></a>: sorted back to front by default. Its shadow is as dense as its alpha.</dd>
     </dl>
     <p>Changing it with <code>updateMaterial</code> moves the material's entities to another draw run in the next frame.</p>
+  </div>
+</div>
+
+<div class="api" id="BlendMethod">
+  <pre class="sig">enum class BlendMethod : uint32_t
+{
+    SORTED,
+    WEIGHTED,
+    ADDITIVE,
+};</pre>
+  <div class="body">
+    <p>How a <code>BLEND</code> material's draws go over what is behind them (<code>Material::blendMethod</code>). The <a href="../guides/weighted-oit.html">weighted blended transparency guide</a> explains the weighted and additive methods.</p>
+    <dl>
+      <dt>SORTED</dt><dd>The default. Drawn back to front, a draw at a time, over everything else: exact between draws, but not inside one draw, and nested or crossing objects can pop as the camera moves. For labels, UI, map layers with a draw order and a few panes of glass.</dd>
+      <dt>WEIGHTED</dt><dd>Weighted blended order-independent transparency: drawn in any order, at a fixed cost a pixel, with no popping. The coverage (how much of the background shows) is exact; the color is a mean of the layers weighted toward the near ones. For dense see-through data: nested iso-surfaces, volume slices, see-through CAD parts. Weighted surfaces go under the sorted ones: a sorted surface behind a weighted one is still drawn over it, so use one method for see-through things that overlap each other. A <code>GLYPHS</code> material with <code>AlphaMode::BLEND</code> is always weighted.</dd>
+      <dt>ADDITIVE</dt><dd>Adds its light (color × alpha) and hides nothing, in any order: glows, density and X-ray views. Drawn after the weighted surfaces and before the sorted ones; it casts no shadow.</dd>
+    </dl>
+    <p>A pick (<code>PickDesc::minAlpha</code>) hits the nearest weighted or additive surface whose alpha is at least <code>minAlpha</code>. On a GPU without the <code>independentBlend</code> feature, weighted and additive materials are drawn sorted, with a warning. <code>VECTOR</code> materials are always sorted.</p>
+<pre><code>rasm::Material material = engine.getMaterial(handle);
+material.alphaMode = rasm::AlphaMode::BLEND;
+material.blendMethod = rasm::BlendMethod::WEIGHTED;
+engine.updateMaterial(handle, material);</code></pre>
   </div>
 </div>
 

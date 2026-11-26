@@ -151,6 +151,8 @@ namespace rasm
         bool                                hasAsyncCompute() const;
         bool                                hasMeshShaders() const;
         bool                                hasBufferInt64Atomics() const;
+        bool                                hasIndependentBlend() const;       // pipelines may blend each color differently (BlendMode::WEIGHTED, WEIGHTED_MOTION, ADDITIVE_COLOR)
+        bool                                hasSampleRateShading() const;      // fragment shaders may run once per sample (SV_SampleIndex)
         void                                discardRecording();
         [[nodiscard]] SwapchainStatus       present(const WindowHandle& window = {});
         // The handle is invalid at once; the GPU object, and a texture's bindless slot, are freed once the GPU is done

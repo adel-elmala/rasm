@@ -366,13 +366,15 @@ namespace rasm
             return;
 
         // The pick pipelines: rasm.slang's vertex stage and pickMain, per alpha mode, made on the first pick (P31). The BLEND one
-        // tests depth but does not write it: its draws, sorted, write the ids in the order the view blends them. The point
-        // run's is points.slang's, made once a picked scene has one; without it the pick sees no points.
-        const char *alphaDefines[3] = {"", "#define RASM_ALPHA_MASK 1\n", "#define RASM_ALPHA_BLEND 1\n"};
-        const char *names[3] = {"rasmPick", "rasmPickMask", "rasmPickBlend"};
+        // tests depth but does not write it: its draws, sorted, write the ids in the order the view blends them. The
+        // weighted and additive runs are not sorted, so theirs (the same shaders) writes depth: the nearest surface whose
+        // alpha passes minAlpha is picked. The point run's is points.slang's, made once a picked scene has one; without it
+        // the pick sees no points.
+        const char *alphaDefines[4] = {"", "#define RASM_ALPHA_MASK 1\n", "#define RASM_ALPHA_BLEND 1\n", "#define RASM_ALPHA_BLEND 1\n"};
+        const char *names[4] = {"rasmPick", "rasmPickMask", "rasmPickBlend", "rasmPickBlend"};
         const Format formats[MAX_COLOR_ATTACHMENTS] = {PICK_FORMAT, PICK_FORMAT};
         std::string source;
-        for (uint32_t i = 0; i < 3; ++i)
+        for (uint32_t i = 0; i < 4; ++i)
         {
             if (picks->pipelines[i].isValid())
                 continue;
@@ -381,7 +383,7 @@ namespace rasm
             picks->pipelines[i] = createGraphicsPipeline(names[i], getShaderVariant(std::string("#define RASM_PICK 1\n") + alphaDefines[i], source), formats, DEPTH_FORMAT, "vertMain", "pickMain",
                                                          BlendMode::NONE, i != 2);
         }
-        const bool pipelines = picks->pipelines[0].isValid() && picks->pipelines[1].isValid() && picks->pipelines[2].isValid();
+        const bool pipelines = picks->pipelines[0].isValid() && picks->pipelines[1].isValid() && picks->pipelines[2].isValid() && picks->pipelines[3].isValid();
         bool pointRuns = false;
         for (uint32_t c = 0; c < chosenCount; ++c)
         {
@@ -513,6 +515,10 @@ namespace rasm
             sceneData.sortDrawsPtr = sorted ? cullAddress + layout.sortDraws : 0;
             sceneData.sortCapacity = sortCapacity;
             sceneData.blendRun = sorted ? view.blendRun : gfx::MAX_DRAW_RUNS;
+            // One culling phase keeps every run, and the view's weight span is not the pick's to measure.
+            sceneData.weightedRun = gfx::MAX_DRAW_RUNS;
+            sceneData.additiveRun = gfx::MAX_DRAW_RUNS;
+            sceneData.weightedRangePtr = 0;
             sceneData.debugView = 0;
             // A pick draws every point by triangles, which take the same pixels as the compute path.
             sceneData.pointRasterPtr = 0;
@@ -572,7 +578,10 @@ namespace rasm
                 const DrawRun &run = drawList.runs[r];
                 if (run.points && !picks->pointPipeline.isValid())
                     continue;
-                const PipelineHandle pipeline = run.points ? picks->pointPipeline : picks->pipelines[run.alphaMode == AlphaMode::NONE ? 0 : (run.alphaMode == AlphaMode::MASK ? 1 : 2)];
+                uint32_t kind = run.alphaMode == AlphaMode::NONE ? 0 : (run.alphaMode == AlphaMode::MASK ? 1 : 2);
+                if (run.alphaMode == AlphaMode::BLEND && run.blendMethod != BlendMethod::SORTED)
+                    kind = 3;
+                const PipelineHandle pipeline = run.points ? picks->pointPipeline : picks->pipelines[kind];
                 if (pipeline != bound)
                 {
                     ctx.bindPipeline(commandBuffer, pipeline);
@@ -596,7 +605,9 @@ namespace rasm
                 CullMode cullMode = drawList.glyphCullMode;
                 if (view.mirrored && cullMode != CullMode::NONE)
                     cullMode = CullMode::FRONT;
-                drawGlyphs(sceneAddress, slot.glyphCull, 0, glyphLayout.commands, glyphLayout.commandCapacity, picks->glyphPipeline, cullMode, argument);
+                // The weighted chunks' commands too: a pick sees every glyph, with the BLEND ones' minAlpha.
+                drawGlyphs(sceneAddress, slot.glyphCull, 0, glyphLayout.commands, glyphLayout.commandCapacity, false, picks->glyphPipeline, cullMode, argument);
+                drawGlyphs(sceneAddress, slot.glyphCull, 0, glyphLayout.weightedCommands, glyphLayout.commandCapacity, true, picks->glyphPipeline, cullMode, argument);
             }
             ctx.setCullMode(commandBuffer, CullMode::NONE);
             ctx.endRendering(commandBuffer);

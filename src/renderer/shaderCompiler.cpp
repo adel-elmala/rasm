@@ -630,7 +630,15 @@ namespace rasm
                                      {"glyphSlotsPtr", offsetof(gfx::SceneData, glyphSlotsPtr)},
                                      {"glyphListPtr", offsetof(gfx::SceneData, glyphListPtr)},
                                      {"glyphChunkCapacity", offsetof(gfx::SceneData, glyphChunkCapacity)},
-                                     {"glyphBatchCapacity", offsetof(gfx::SceneData, glyphBatchCapacity)}});
+                                     {"glyphBatchCapacity", offsetof(gfx::SceneData, glyphBatchCapacity)},
+                                     {"weightedRun", offsetof(gfx::SceneData, weightedRun)},
+                                     {"additiveRun", offsetof(gfx::SceneData, additiveRun)},
+                                     {"weightedRangePtr", offsetof(gfx::SceneData, weightedRangePtr)},
+                                     {"weightedDepths", offsetof(gfx::SceneData, weightedDepths)},
+                                     {"weightedAccum", offsetof(gfx::SceneData, weightedAccum)},
+                                     {"weightedCoverage", offsetof(gfx::SceneData, weightedCoverage)},
+                                     {"weightedSamples", offsetof(gfx::SceneData, weightedSamples)},
+                                     {"weightedPadding", offsetof(gfx::SceneData, weightedPadding)}});
 
             valid &= validateStruct(fieldStruct(layouts, scene, "pointRasterPtr"), "PointRasterHeader", sizeof(gfx::PointRasterHeader),
                                     {{"rasterGroups", offsetof(gfx::PointRasterHeader, rasterGroups)},
@@ -650,6 +658,7 @@ namespace rasm
                                      {"groupsZ", offsetof(gfx::GlyphCullHeader, groupsZ)},
                                      {"chunkCount", offsetof(gfx::GlyphCullHeader, chunkCount)},
                                      {"commandCount", offsetof(gfx::GlyphCullHeader, commandCount)},
+                                     {"weightedCommandCount", offsetof(gfx::GlyphCullHeader, weightedCommandCount)},
                                      {"padding", offsetof(gfx::GlyphCullHeader, padding)}});
             valid &= validateStruct(fieldStruct(layouts, scene, "glyphChunksPtr"), "GlyphChunkSlot", sizeof(gfx::GlyphChunkSlot),
                                     {{"row", offsetof(gfx::GlyphChunkSlot, row)},

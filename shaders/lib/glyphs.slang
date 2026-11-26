@@ -158,7 +158,7 @@ float4 getGlyphColor(Sampler2D textures[], PointData style, GlyphChunk chunk, Gl
 // GLYPH_BATCH_GLYPHS, each a group of the glyph cull's dispatches, and a draw command per LOD of its shape. The batches
 // are taken with a compare-exchange that adds only what fits, so every batch below the final count is written; a chunk
 // that does not fit is not drawn this frame (the buffer holds every chunk of the point run, so none should).
-bool appendGlyphChunk(SceneData *scene, uint row, uint glyphCount, uint lodCount)
+bool appendGlyphChunk(SceneData *scene, uint row, uint glyphCount, uint lodCount, bool weighted)
 {
     GlyphCullHeader *header = scene->glyphCullPtr;
     uint slot           = 0;
@@ -178,8 +178,17 @@ bool appendGlyphChunk(SceneData *scene, uint row, uint glyphCount, uint lodCount
             break;
         first           = seen;
     }
+    // A weighted chunk's commands go after the others' room: the weighted draw draws them (glyphCull.cpp).
     uint firstCommand   = 0;
-    InterlockedAdd(header->commandCount, lodCount, firstCommand);
+    if (weighted)
+    {
+        InterlockedAdd(header->weightedCommandCount, lodCount, firstCommand);
+        firstCommand   += scene->glyphChunkCapacity * MAX_MESH_LODS;
+    }
+    else
+    {
+        InterlockedAdd(header->commandCount, lodCount, firstCommand);
+    }
     GlyphChunkSlot *chunk = scene->glyphChunksPtr + slot;
     chunk->row          = row;
     chunk->firstBatch   = first;

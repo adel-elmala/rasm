@@ -89,6 +89,7 @@ const SECTIONS = [
             { path: "guides/uber-shaders.html",          title: "Uber shaders and shader permutations", blurb: "One shader with branches against many variants." },
             { path: "guides/pbr.html",                   title: "PBR shading",                         blurb: "The light math behind metal and roughness." },
             { path: "guides/transparency.html",          title: "Transparency and alpha modes",        blurb: "Cut-outs, see-through surfaces, blend order and see-through shadows." },
+            { path: "guides/weighted-oit.html",          title: "Weighted blended transparency",       blurb: "See-through layers in any order: exact coverage, a weighted mean color." },
             { path: "guides/vector-rendering.html",      title: "Vector lines, polygons and points",   blurb: "Lines spread from their center line, joins and caps, edges smoothed by distance, polygons with holes, draping and culling for pixel widths." },
             { path: "guides/text-and-labels.html",       title: "Text and labels",                     blurb: "Glyphs as signed distances, a halo, text laid out from a font's metrics, labels anchored in the world and placed each frame by priority so they never overlap." },
             { path: "guides/reference-grid.html",       title: "Reference grids",                     blurb: "An endless grid from one triangle: a ray per pixel, lines a pixel wide, levels for any zoom, exact far from the origin." },

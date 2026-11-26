@@ -54,6 +54,8 @@ namespace rasm::rhi
         bool                        hasTransferQueue() const override;
         bool                        hasMeshShaders() const override;
         bool                        hasBufferInt64Atomics() const override;
+        bool                        hasIndependentBlend() const override;
+        bool                        hasSampleRateShading() const override;
         VkShaderStageFlags          getPushConstantStages() const;
         bool                        hasTimestamps(QueueType queueType) const override;
         bool                        fillBuffer(Buffer* buffer, const void* data, size_t size, size_t offset) override;
@@ -130,6 +132,8 @@ namespace rasm::rhi
         uint32_t                        sampleCounts        = VK_SAMPLE_COUNT_1_BIT;
         bool                            meshShaders         = false;    // VK_EXT_mesh_shader, with limits that hold the meshlet passes' workgroups
         bool                            bufferInt64Atomics  = false;    // shaderBufferInt64Atomics: the compute point rasterizer
+        bool                            independentBlend    = false;    // weighted blended transparency's targets blend differently
+        bool                            sampleRateShading   = false;    // its composite runs per sample
         VkShaderStageFlags              pushConstantStages  = PUSH_CONSTANT_STAGES;
     };
 

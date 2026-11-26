@@ -4,6 +4,7 @@
 #include "rasm/rasm.h"
 
 #include "exampleArgs.h"
+#include "exampleBench.h"
 
 #include <algorithm>
 #include <chrono>
@@ -37,6 +38,7 @@
 // Every frame it checks the budget and, after the first frames, that no wanted tile is a hole; a headless run that
 // broke a check exits with 1.
 //   --culling        DebugView::CULLING: drawn draws green or yellow, culled ones as ghosts (their padded spheres)
+//   --bench          the GPU time per pass (exampleBench.h), at 1920 x 1080
 
 namespace
 {
@@ -526,6 +528,15 @@ int main(int argc, char **argv)
         .shaderDir = RASM_EXAMPLE_SHADER_DIR,
         .antiAliasing = rasm::AntiAliasing::TAA};
     applyExampleArgs(args, config);
+    ExampleBench bench{.on = hasBenchFlag(argc, argv), .warmup = getBenchWarmup(argc, argv)};
+    if (bench.on)
+    {
+        config.enableValidation = false;
+        config.ui = false;
+        config.showStats = false;
+        config.windowWidth = 1920;
+        config.windowHeight = 1080;
+    }
     rasm::Engine engine(config);
     if (!engine.running())
         return 1;
@@ -679,10 +690,12 @@ int main(int argc, char **argv)
         overBudget += stats.bytes > stats.budget ? 1 : 0;
         maxDrawn = std::max(maxDrawn, stats.drawn);
         engine.render(views.data(), static_cast<uint32_t>(views.size()));
+        addBenchFrame(bench, engine.getFrameStats());
         if (frame > HOLE_CHECK_AFTER)
             longestFrameMs = std::max(longestFrameMs, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frameStart).count());
     }
 
+    printBench(bench, config, engine.getRenderContext().hasMeshShaders());
     const rasm::TileStreamerStats &stats = streamer.getStats();
     std::printf("%u frames: %llu loads, %llu drops, at most %u tiles drawn, peak %.1f of %.1f MiB, longest frame %.1f ms\n", frame, static_cast<unsigned long long>(stats.totalLoads),
                 static_cast<unsigned long long>(stats.totalDrops), maxDrawn, static_cast<double>(stats.peakBytes) / (1024.0 * 1024.0), static_cast<double>(stats.budget) / (1024.0 * 1024.0),

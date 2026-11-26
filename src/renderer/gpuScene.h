@@ -10,6 +10,7 @@
 #include "renderer/blendSort.h"
 #include "renderer/gpuTable.h"
 #include "renderer/uberMaterialTypes.h"
+#include "renderer/weightedBlend.h"
 
 #include <cstdint>
 #include <vector>
@@ -57,6 +58,7 @@ namespace rasm
         AlphaMode                       alphaMode                                                           = AlphaMode::NONE;
         CullMode                        cullMode                                                            = CullMode::NONE;
         bool                            points                                                              = false;    // point cloud chunks, drawn by the point pipeline
+        BlendMethod                     blendMethod                                                         = BlendMethod::SORTED;  // of a BLEND run: weighted, additive or sorted
         uint32_t                        first                                                               = 0;
         uint32_t                        count                                                               = 0;
         uint32_t                        meshletDraws                                                        = 0;    // draws whose geometry has meshlets
@@ -85,6 +87,7 @@ namespace rasm
         uint32_t                        glyphChunks                                                         = 0;
         uint32_t                        glyphBatches                                                        = 0;
         CullMode                        glyphCullMode                                                       = CullMode::BACK;
+        uint32_t                        weightedGlyphChunks                                                 = 0;    // glyph chunks with a BLEND material, drawn weighted
     };
 
     struct SceneView
@@ -132,6 +135,14 @@ namespace rasm
         bool                            drawBlend                                                           = false;    // a shaded view's Transparent pass has a run and a pipeline
         bool                            sortBlend                                                           = false;    // the cull pass sorts the blend run
         uint32_t                        blendRun                                                            = gfx::MAX_DRAW_RUNS;
+        uint32_t                        weightedRun                                                         = gfx::MAX_DRAW_RUNS;   // a shaded view's BlendMethod::WEIGHTED run
+        uint32_t                        additiveRun                                                         = gfx::MAX_DRAW_RUNS;   // its BlendMethod::ADDITIVE run, which a depth-only view leaves out
+        bool                            drawWeighted                                                        = false;    // this frame draws weighted surfaces (its run, its glyphs) and composites them
+        bool                            drawWeightedGlyphs                                                  = false;
+        bool                            drawAdditive                                                        = false;
+        RenderTargetHandle              weightedTarget                                                      = {};   // the weighted sums, coverage and motion (getWeightedTargetDesc), made at the first weighted frame
+        BufferHandle                    weightedRange[MAX_FRAMES_IN_FLIGHT]                                 = {};   // the cull's nearest and farthest weighted depth, read back two frames later
+        WeightedRange                   weightedDepths                                                      = {};   // the span of the weights over frames
         uint32_t                        groupCount                                                          = 0;
         uint32_t                        hizLevelCount                                                       = 0;
         bool                            late                                                                = false;
@@ -185,6 +196,10 @@ namespace rasm
         PipelineHandle                  pointPipeline                                                       = {};       // the point run's (passes/points.slang), alpha-to-coverage with more than one sample
         PipelineHandle                  pointResolvePipeline                                                = {};       // the compute path's points into the target (passes/pointRaster.slang)
         PipelineHandle                  glyphPipeline                                                       = {};
+        PipelineHandle                  weightedPipeline                                                    = {};       // the weighted run, into the view's weighted target (weightedBlend.cpp)
+        PipelineHandle                  weightedGlyphPipeline                                               = {};       // the glyph chunks with a BLEND material, the same way
+        PipelineHandle                  compositePipeline                                                   = {};       // the weighted target over the view's target
+        PipelineHandle                  additivePipeline                                                    = {};       // the additive run, its light added
         PipelineHandle                  meshPipeline                                                        = {};       // the opaque and MASK runs' meshlets, with mesh shaders
         PipelineHandle                  meshMaskPipeline                                                    = {};
         DebugPipelines                  debug;
@@ -221,6 +236,9 @@ namespace rasm
         std::vector<EntityDrawState>    entities;
         std::vector<CullMode>           instanceCullModes;
         std::vector<AlphaMode>          instanceAlphaModes;
+        std::vector<BlendMethod>        instanceBlendMethods;                                                       // per instance row: getBlendMethod of its material
+        bool                            blendMethodLogged                                                   = false;
+        bool                            sampleShadingLogged                                                 = false;
         std::vector<uint8_t>            instancePoints;                                                             // per instance row: POINT_RUN_*
         RangeAllocator                  instanceRows;                                                               // a range per entity, reused at once: each slot has its own copy
         RangeAllocator                  meshletWords;                                                               // each view's meshlet visibility words, a range per instance row of a mesh with meshlets

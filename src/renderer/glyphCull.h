@@ -13,6 +13,7 @@ namespace rasm
         uint64_t                        chunks                                  = 0;
         uint64_t                        batches                                 = 0;
         uint64_t                        commands                                = 0;
+        uint64_t                        weightedCommands                        = 0;
         uint64_t                        slots                                   = 0;
         uint64_t                        list                                    = 0;
         uint64_t                        size                                    = 0;

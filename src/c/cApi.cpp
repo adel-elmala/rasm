@@ -73,6 +73,7 @@ namespace rasm::c
         constexpr uint32_t asNumber(PbrSlot value) { return static_cast<uint32_t>(value); }
         constexpr uint32_t asNumber(PbrParam value) { return static_cast<uint32_t>(value); }
         constexpr uint32_t asNumber(AlphaMode value) { return static_cast<uint32_t>(value); }
+        constexpr uint32_t asNumber(BlendMethod value) { return static_cast<uint32_t>(value); }
         constexpr uint32_t asNumber(LightType value) { return static_cast<uint32_t>(value); }
         constexpr uint32_t asNumber(CameraProjection::Type value) { return static_cast<uint32_t>(value); }
         constexpr uint32_t asNumber(ReadbackFormat value) { return static_cast<uint32_t>(value); }
@@ -189,6 +190,9 @@ namespace rasm::c
         static_assert(RASM_ALPHA_MODE_NONE == asNumber(AlphaMode::NONE));
         static_assert(RASM_ALPHA_MODE_MASK == asNumber(AlphaMode::MASK));
         static_assert(RASM_ALPHA_MODE_BLEND == asNumber(AlphaMode::BLEND));
+        static_assert(RASM_BLEND_METHOD_SORTED == asNumber(BlendMethod::SORTED));
+        static_assert(RASM_BLEND_METHOD_WEIGHTED == asNumber(BlendMethod::WEIGHTED));
+        static_assert(RASM_BLEND_METHOD_ADDITIVE == asNumber(BlendMethod::ADDITIVE));
         static_assert(RASM_LIGHT_TYPE_DIRECTIONAL == asNumber(LightType::DIRECTIONAL));
         static_assert(RASM_LIGHT_TYPE_POINT == asNumber(LightType::POINT));
         static_assert(RASM_LIGHT_TYPE_SPOT == asNumber(LightType::SPOT));
@@ -783,6 +787,7 @@ namespace rasm::c
         result.vector.colorMode = static_cast<PointColorMode>(material.vector_colors.color_mode);
         result.vector.colormap = toCpp(material.vector_colors.colormap);
         result.vector.range = toCpp(material.vector_colors.range);
+        result.blendMethod = static_cast<BlendMethod>(material.blend_method);
         return result;
     }
 
@@ -807,6 +812,7 @@ namespace rasm::c
         result.points = toC(material.points);
         result.glyphs = {.color_mode = asNumber(material.glyphs.colorMode), .colormap = toC(material.glyphs.colormap), .range = toC(material.glyphs.range)};
         result.vector_colors = {.color_mode = asNumber(material.vector.colorMode), .colormap = toC(material.vector.colormap), .range = toC(material.vector.range)};
+        result.blend_method = asNumber(material.blendMethod);
         return result;
     }
 
@@ -887,7 +893,8 @@ namespace rasm::c
                checkEnum(desc.points.size_mode, RASM_POINT_SIZE_MODE_ADAPTIVE + 1, function, "desc->points.size_mode") && checkEnum(desc.alpha_mode, RASM_ALPHA_MODE_BLEND + 1, function, "desc->alpha_mode") &&
                checkEnum(desc.vector.width_unit, RASM_VECTOR_UNIT_METRES + 1, function, "desc->vector.width_unit") &&
                checkEnum(desc.vector.facing, RASM_VECTOR_FACING_GROUND + 1, function, "desc->vector.facing") &&
-               checkEnum(desc.vector.depth, RASM_VECTOR_DEPTH_OVERLAY + 1, function, "desc->vector.depth");
+               checkEnum(desc.vector.depth, RASM_VECTOR_DEPTH_OVERLAY + 1, function, "desc->vector.depth") &&
+               checkEnum(desc.blend_method, RASM_BLEND_METHOD_ADDITIVE + 1, function, "desc->blend_method");
     }
 
     TerrainMaterial toCpp(const rasm_terrain_material &terrain)

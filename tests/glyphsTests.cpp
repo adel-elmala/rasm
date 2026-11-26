@@ -187,7 +187,9 @@ TEST_CASE("a glyph buffer's parts follow one another, a word per glyph of the ba
     CHECK(layout.batches == layout.chunks + 3 * sizeof(rasm::gfx::GlyphChunkSlot));
     CHECK(layout.commands == layout.batches + 10 * sizeof(uint32_t));
     CHECK(layout.commandCapacity == 3 * rasm::MAX_MESH_LODS);
-    CHECK(layout.slots == layout.commands + layout.commandCapacity * sizeof(rasm::gfx::DrawInfo));
+    // The weighted chunks' commands follow the others' room, where lib/glyphs.slang puts them.
+    CHECK(layout.weightedCommands == layout.commands + layout.commandCapacity * sizeof(rasm::gfx::DrawInfo));
+    CHECK(layout.slots == layout.weightedCommands + layout.commandCapacity * sizeof(rasm::gfx::DrawInfo));
     CHECK(layout.list == layout.slots + 10 * rasm::gfx::GLYPH_BATCH_GLYPHS * sizeof(uint32_t));
     CHECK(layout.size == layout.list + 10 * rasm::gfx::GLYPH_BATCH_GLYPHS * sizeof(uint32_t));
     // The commands are read as DrawInfos: 4-byte aligned.

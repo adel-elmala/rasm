@@ -122,7 +122,7 @@ namespace rasm
         std::vector<PickRequest>    requests;
         std::vector<PickRequest>    spare;                          // taken requests, whose hit vectors keep their capacity
         PickSlot                    slots[MAX_FRAMES_IN_FLIGHT];
-        PipelineHandle              pipelines[3]            = {};   // opaque, MASK, BLEND
+        PipelineHandle              pipelines[4]            = {};   // opaque, MASK, BLEND, then BLEND writing depth for the weighted and additive runs
         PipelineHandle              pointPipeline           = {};   // the point run's (passes/points.slang)
         PipelineHandle              glyphPipeline           = {};
         InstanceOwners              owners;

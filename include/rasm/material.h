@@ -50,6 +50,14 @@ namespace rasm
         BLEND,
     };
 
+    // How a BLEND material's draws are put over what is behind them.
+    enum class BlendMethod : uint32_t
+    {
+        SORTED,         // back to front, a draw at a time: exact between draws (labels, UI, a few panes of glass)
+        WEIGHTED,       // weighted blended order-independent: no order, no popping, for dense see-through data
+        ADDITIVE,       // adds its light, in any order: glows, density and X-ray views
+    };
+
     struct TextureTransform
     {
         glm::vec2      offset       = glm::vec2(0.0f);
@@ -166,6 +174,7 @@ namespace rasm
         bool             doubleSided{};
         AlphaMode        alphaMode{};
         float            alphaCutoff  = 0.5f;
+        BlendMethod      blendMethod  = BlendMethod::SORTED;  // BLEND only; a GLYPHS material is always WEIGHTED, a VECTOR one SORTED
         TerrainMaterial  terrain      = {};         // TERRAIN only; textures[ALBEDO] is the imagery, textureTransforms[ALBEDO] its part of the image
         VectorMaterial   vector       = {};         // VECTOR only; textures[ALBEDO] is a points' icon atlas
         PointMaterial    points       = {};         // POINTS only
