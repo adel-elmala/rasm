@@ -26,8 +26,10 @@ static const uint   POINT_CHUNK_HEADER_UNITS = 6;
 static const uint   POINT_INDICES           = 3;        // a triangle a point
 static const float  POINT_STEP_SCALE        = 1.0 / 65535.0;
 // The compute rasterizer (passes/pointRaster.slang). Must match rasm::gfx::POINT_* in uberMaterialTypes.h.
-static const float  POINT_RASTER_MAX_SIZE   = 2.0;      // a chunk whose points are this many pixels across or less goes to it
-static const float  POINT_RASTER_MIN_DENSITY = 0.125;   // and that draws this many points per pixel of its rect on screen
+static const float  POINT_RASTER_MAX_SIZE   = 6.0;      // a chunk whose points are this many pixels across or less at its centre goes to it
+static const float  POINT_RASTER_MAX_NEAR   = 8.0;      // and at its point nearest the camera (isRasterChunk has the other views' limits)
+static const float  POINT_RASTER_MAX_ORTHO  = 4.0;      // the same in an orthographic view
+static const float  POINT_RASTER_MIN_DENSITY = 0.125;   // and that draws this many points of 2 pixels per pixel of its rect on screen
 static const uint   POINT_BATCH_POINTS      = 1024;     // a group of the raster dispatch
 static const uint   POINT_RASTER_MAX_ROWS   = 1 << 16;  // a pixel's word keeps the instance row in 16 bits
 static const uint   POINT_CLEAR_GROUP_SIZE  = 256;
@@ -126,6 +128,33 @@ float getPointDiameter(SceneData *scene, PointData style, float spacing, float f
     return lerp(grown, size, saturate(finer));
 }
 
+// The shape a point of this diameter is cut to, on both paths: POINT_SHAPE_PIXELS (whole pixels, all their samples) up
+// to POINT_PIXELS_MAX_SIZE, a square under 3 pixels (a disc that small misses the pixel centres it covers), else its
+// style's.
+static const float  POINT_SHAPE_SQUARE      = 0.0;
+static const float  POINT_SHAPE_ROUND       = 1.0;
+static const float  POINT_SHAPE_SPHERE      = 2.0;
+static const float  POINT_SHAPE_PIXELS      = 3.0;
+static const float  POINT_PIXELS_MAX_SIZE   = 2.0;
+
+float getPointShape(PointData style, float diameter)
+{
+    if (diameter <= POINT_PIXELS_MAX_SIZE)
+        return POINT_SHAPE_PIXELS;
+    if (diameter < 3.0)
+        return POINT_SHAPE_SQUARE;
+    return (style.flags & POINT_SPHERE) != 0 ? POINT_SHAPE_SPHERE : ((style.flags & POINT_ROUND) != 0 ? POINT_SHAPE_ROUND : POINT_SHAPE_SQUARE);
+}
+
+// A SPHERE point's depth where the pixel is distance2 (0 to 1, squared) from its centre across its disc: its surface's
+// view depth there, back through the projection: (P22 (-z) + P23) / (P32 (-z) + P33), for a perspective and an
+// orthographic projection alike. centre is the sphere's centre's distance in front of the camera, radius its radius.
+float getSphereDepth(float4x4 p, float centre, float radius, float distance2)
+{
+    float z         = centre - radius * sqrt(saturate(1.0 - distance2));
+    return (p[2][2] * -z + p[2][3]) / (p[3][2] * -z + p[3][3]);
+}
+
 // Where the point's scalar falls in the colormap, 0 to 1. POINT_NO_COLORMAP when it takes none (POINT_SCALAR off, a
 // chunk without scalars, no colormap), POINT_OUT_OF_RANGE when its scalar is outside the range without POINT_CLAMP: it
 // draws nothing. The shaders sample the colormap themselves, from their own bindless array.
@@ -215,21 +244,33 @@ uint selectPointPrefix(SceneData *scene, PointData style, uint total, float3 cen
 }
 
 // The split between the two paths, per chunk. The compute path costs a little per point and, once any chunk takes it,
-// a clear and a resolve per pixel of the rect its chunks cover; the triangles cost four (2 pixel points) to ten (1
-// pixel) times more per point and nothing per pixel. So a chunk takes it when its points are POINT_RASTER_MAX_SIZE pixels or less (squares on both
-// paths: a round one under 3 pixels is drawn square), measured at its sphere's point nearest the camera in this view's
-// own projection (not the LOD camera's, which a frozen view keeps), and when it draws at least
-// POINT_RASTER_MIN_DENSITY points per pixel of its rect on screen. A chunk the camera is inside of, or one partly behind
-// it, goes to the triangles. rect is the pixels its points can reach: its box's corners on screen, and a point's
-// reach past them.
+// a clear and a resolve per pixel of the rect its chunks cover; the triangles cost more per point and nothing per pixel.
+// A thread writes its point's pixels one after another, so the compute path's cost grows with the point's area faster
+// than the rasterizer's, and at the LOD's density a frame of points of one size costs the same on both paths at about
+// 7 pixels in a perspective view and 5 in an orthographic one (RTX 3060, a view of one sample). So a chunk takes it in a
+// perspective view when its points are POINT_RASTER_MAX_SIZE pixels or less at its sphere's centre and
+// POINT_RASTER_MAX_NEAR at its point nearest the camera, its largest; in an orthographic view, where all of them have
+// one size, POINT_RASTER_MAX_ORTHO; under MSAA, where the triangles' edges cover samples by their distance, only the
+// points that cover whole pixels on both paths, up to POINT_PIXELS_MAX_SIZE. Every shape takes it: the compute path cuts
+// each to the triangles' pixels (getPointShape). The sizes are in this view's own projection (not the LOD camera's,
+// which a frozen view keeps). The chunk must also draw POINT_RASTER_MIN_DENSITY points per pixel of its rect on
+// screen, a point of d pixels at its centre counting as (d / 2)^2 of 2 pixels, which cover as many pixels and save as
+// much more over a triangle. A chunk the camera is inside of, or one partly behind it, goes to the triangles. rect is
+// the pixels its points can reach: its box's corners on screen, and a point's reach past them, a whole largest
+// diameter (a SPHERE point's front moves its centre).
 bool isRasterChunk(SceneData *scene, PointData style, float spacing, float3 center, float radius, uint count, out uint4 rect)
 {
     rect                = uint4(0);
     float4x4 viewProjection = mul(scene->projection, scene->view);
-    float w             = mul(viewProjection, float4(center, 1.0)).w;
-    if (scene->projection[3][3] == 0.0)
-        w              -= radius;
-    if (w <= 0.0 || getPointDiameter(scene, style, spacing, 0.0, w) > POINT_RASTER_MAX_SIZE)
+    bool orthographic   = scene->projection[3][3] != 0.0;
+    float middle        = mul(viewProjection, float4(center, 1.0)).w;
+    float w             = orthographic ? middle : middle - radius;
+    if (w <= 0.0)
+        return false;
+    float diameter      = getPointDiameter(scene, style, spacing, 0.0, w);
+    float typical       = getPointDiameter(scene, style, spacing, 0.0, middle);
+    if (scene->depthSamples > 1 ? diameter > POINT_PIXELS_MAX_SIZE
+                                : (orthographic ? diameter > POINT_RASTER_MAX_ORTHO : typical > POINT_RASTER_MAX_SIZE || diameter > POINT_RASTER_MAX_NEAR))
         return false;
     float2 size         = float2(scene->viewportWidth, scene->viewportHeight);
     float2 low          = size;
@@ -244,11 +285,12 @@ bool isRasterChunk(SceneData *scene, PointData style, float spacing, float3 cent
         low             = min(low, pixel);
         high            = max(high, pixel);
     }
-    low                 = clamp(floor(low) - POINT_RASTER_MAX_SIZE, 0.0, size - 1.0);
-    high                = clamp(ceil(high) + POINT_RASTER_MAX_SIZE, 0.0, size - 1.0);
+    float reach         = max(ceil(diameter), POINT_PIXELS_MAX_SIZE);
+    low                 = clamp(floor(low) - reach, 0.0, size - 1.0);
+    high                = clamp(ceil(high) + reach, 0.0, size - 1.0);
     rect                = uint4(uint2(low), uint2(high));
     float2 extent       = high - low + 1.0;
-    return float(count) >= POINT_RASTER_MIN_DENSITY * extent.x * extent.y;
+    return float(count) * max(0.25 * typical * typical, 1.0) >= POINT_RASTER_MIN_DENSITY * extent.x * extent.y;
 }
 
 // Adds a chunk's first count points to the view's batches, POINT_BATCH_POINTS a batch, marked POINT_BATCH_THINNED when

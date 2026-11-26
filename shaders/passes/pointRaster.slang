@@ -3,11 +3,13 @@
 #include "points.slang"
 
 // The compute path for small points (Schuetz, Kerbl and Wimmer 2021, "Rendering Point Clouds with Compute Shaders"). The
-// cull pass sends each chunk whose points are POINT_RASTER_MAX_SIZE pixels or less here instead of to the point run's
-// triangles (isRasterChunk, appendPointBatches): a batch of up to POINT_BATCH_POINTS of its points for each group of
-// rasterMain. A thread projects a point as the triangle path's vertex stage does and writes the pixels whose centre
-// its square holds with a 64-bit atomic max of (depth << 32 | instance row << 16 | point): in reversed-Z the nearest
-// point wins, and on a tie the later one, as the triangles' GREATER_OR_EQUAL test. resolveFrag then writes each
+// cull pass sends each chunk whose points are small enough (isRasterChunk: POINT_RASTER_MAX_SIZE at the chunk's centre
+// and POINT_RASTER_MAX_NEAR at its nearest point in a perspective view, POINT_RASTER_MAX_ORTHO in an orthographic one,
+// POINT_PIXELS_MAX_SIZE under MSAA) here instead of to the point run's triangles (appendPointBatches): a batch of up
+// to POINT_BATCH_POINTS of its points for each group of rasterMain. A thread projects a point as the triangle path's
+// vertex stage does and writes the pixels whose centre its shape holds with a 64-bit atomic max of (depth << 32 |
+// instance row << 16 | point): in reversed-Z the nearest point wins, and on a tie the later one, as the triangles'
+// GREATER_OR_EQUAL test. resolveFrag then writes each
 // pixel's point into the scene's color, motion and depth, once per pixel, into all of its samples.
 //
 // Per frame and view (gpuScene.cpp, pointRaster.cpp): resetMain before the first cull, the culls add batches, then
@@ -52,12 +54,20 @@ void clearMain(uint3 threadId : SV_DispatchThreadID)
         scene->pointPixelsPtr[(low.y + i / width) * scene->viewportWidth + low.x + i % width] = 0;
 }
 
-// The pixels of a point's square: those whose centre is within half its diameter of the point's centre, edges
-// included, as the triangle path's fragment test. The centre is snapped to the rasterizer's 1/256 pixel grid, where
-// the triangle's corners land (their offsets from the centre are whole multiples of half a pixel), so both paths take
-// the same pixels. At most 2 x 2 for a point of POINT_RASTER_MAX_SIZE.
-void rasterPoint(SceneData *scene, float4 clip, float diameter, uint id, uint thinned)
+// The pixels of a point's shape (getPointShape), as the triangle path's fragment test takes them: those whose centre
+// is within half its diameter of the point's centre, edges included, per axis for a square and by distance for a round
+// or SPHERE point, whose depth then follows its surface. The centre is snapped to the rasterizer's 1/256 pixel grid,
+// where the triangle's corners land, so both paths take the same pixels; a SPHERE point's centre is its front's, as
+// its triangle's. A pixel whose centre lies on the shape's edge is taken as the triangle's rasterizer takes it: on the
+// left and the right edge, and on the top but not the bottom one (the top-left rule, the triangle's bottom side being
+// the square's), so a point of d pixels takes at most ceil(d) + 1 columns and ceil(d) rows.
+void rasterPoint(SceneData *scene, float4 viewPosition, float diameter, float shape, uint id, uint thinned)
 {
+    float4 clip         = mul(scene->projection, viewPosition);
+    float pixelWorld    = 2.0 * max(abs(clip.w), 1e-6) / (abs(scene->projection[1][1]) * float(scene->viewportHeight));
+    float radius        = 0.5 * diameter * pixelWorld;
+    if (shape == POINT_SHAPE_SPHERE)
+        clip            = mul(scene->projection, viewPosition + float4(0.0, 0.0, radius, 0.0));
     if (clip.w <= 0.0)
         return;
     float depth         = clip.z / clip.w;
@@ -69,17 +79,34 @@ void rasterPoint(SceneData *scene, float4 clip, float diameter, uint id, uint th
     float2 center       = round(float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) * size * 256.0) / 256.0;
     float reach         = 0.5 * diameter;
     float2 low          = max(ceil(center - reach - 0.5), 0.0);
-    float2 high         = min(min(floor(center + reach - 0.5), low + 1.0), size - 1.0);
+    float2 high         = min(min(floor(center + reach - 0.5), low + float2(ceil(diameter), ceil(diameter) - 1.0)), size - 1.0);
+    bool square         = shape == POINT_SHAPE_SQUARE || shape == POINT_SHAPE_PIXELS;
     // The depth's lowest bit says whether the point's chunk was thinned by the LOD, for the resolve's hole fill: a
     // change of one unit in the last place, far below any depth two points can be told apart by.
-    uint64_t word       = (uint64_t((asuint(depth) & ~1u) | thinned) << 32) | uint64_t(id);
+    uint low32          = (asuint(depth) & ~1u) | thinned;
     for (float y = low.y; y <= high.y; y += 1.0)
     {
         for (float x = low.x; x <= high.x; x += 1.0)
         {
+            uint bits       = low32;
+            if (!square)
+            {
+                float2 corner   = (float2(x, y) + 0.5 - center) / reach;
+                float distance2 = dot(corner, corner);
+                if (distance2 > 1.0)
+                    continue;
+                if (shape == POINT_SHAPE_SPHERE)
+                {
+                    // Past a finite far plane the rim's depth is below 0, which as bits would beat every point.
+                    float rim   = getSphereDepth(scene->projection, -viewPosition.z, radius, distance2);
+                    if (!(rim > 0.0))
+                        continue;
+                    bits        = (asuint(rim) & ~1u) | thinned;
+                }
+            }
             // No read first to skip a losing point's atomic: the atomic returns nothing, so the thread does not wait
             // for it, and a read that it waits on cost more (measured, RTX 3060).
-            InterlockedMax(scene->pointPixelsPtr[uint(y) * scene->viewportWidth + uint(x)], word);
+            InterlockedMax(scene->pointPixelsPtr[uint(y) * scene->viewportWidth + uint(x)], uint64_t(bits) << 32 | uint64_t(id));
         }
     }
 }
@@ -117,10 +144,11 @@ void rasterMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
             continue;
         float3 local        = chunk.boxMin + float3(packed.x & 0xFFFF, packed.x >> 16, packed.y & 0xFFFF) * chunk.boxStep;
         float3 position     = mul(world, float4(local, 1.0)).xyz;
-        float4 clip         = mul(scene->projection, mul(scene->view, float4(position, 1.0)));
+        float4 viewPosition = mul(scene->view, float4(position, 1.0));
+        float w             = mul(scene->projection, viewPosition).w;
         // The fixed size is its own call, which compiles to the size alone.
-        float diameter      = adaptive ? getPointDiameter(scene, style, spacing, getPointFinerShare(lod, local), clip.w) : getPointDiameter(scene, style, 0.0, 0.0, clip.w);
-        rasterPoint(scene, clip, diameter, row << 16 | point, thinned);
+        float diameter      = adaptive ? getPointDiameter(scene, style, spacing, getPointFinerShare(lod, local), w) : getPointDiameter(scene, style, 0.0, 0.0, w);
+        rasterPoint(scene, viewPosition, diameter, getPointShape(style, diameter), row << 16 | point, thinned);
     }
 }
 

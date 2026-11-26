@@ -215,6 +215,31 @@
   </div>
 </div>
 
+<h3 id="builders">Builder threads below the main thread</h3>
+
+<p>The main thread hands the new nodes to the builder threads and wakes them. On Windows a woken thread gets a short priority boost, and the scheduler may run it on the core of the thread that woke it: the main thread then waits, ready but not running, until the build ends. So run the builders one step below the main thread's priority: a woken builder then takes a free core, and the main thread goes on.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="Two time lines of one core. Top: the main thread runs the cut and update, wakes a builder, and the builder takes the core for 3 ms while the main thread waits. Bottom: the builder runs below the main thread's priority on another core, and the main thread goes on to render.">
+    <text x="20" y="22" class="small title">same priority: the woken builder takes the main thread's core</text>
+    <text x="20" y="56" class="small">core 1</text>
+    <rect x="90" y="40" width="70" height="26" rx="3" class="cpu"/><text x="125" y="57" class="mid small">update</text>
+    <rect x="160" y="40" width="300" height="26" rx="3" class="mem"/><text x="310" y="57" class="mid small">builder: one chunk, 2 to 4 ms</text>
+    <rect x="460" y="40" width="90" height="26" rx="3" class="cpu"/><text x="505" y="57" class="mid small">update ends</text>
+    <rect x="550" y="40" width="80" height="26" rx="3" class="cpu"/><text x="590" y="57" class="mid small">render</text>
+    <path d="M160,78 H460" class="arrow hot"/><text x="310" y="94" class="mid small t-hot">the main thread waits: its wall clock runs, its CPU time does not</text>
+    <text x="20" y="132" class="small title">below the main thread: the builder takes a free core</text>
+    <text x="20" y="166" class="small">core 1</text>
+    <rect x="90" y="150" width="70" height="26" rx="3" class="cpu"/><text x="125" y="167" class="mid small">update</text>
+    <rect x="160" y="150" width="30" height="26" rx="3" class="cpu"/>
+    <rect x="190" y="150" width="80" height="26" rx="3" class="cpu"/><text x="230" y="167" class="mid small">render</text>
+    <text x="20" y="206" class="small">core 2</text>
+    <rect x="165" y="190" width="300" height="26" rx="3" class="mem"/><text x="315" y="207" class="mid small">builder: one chunk</text>
+    <path d="M160,146 V186" class="arrow" marker-end="url(#ah)"/>
+  </svg>
+  <figcaption>Example 29 at 1920 × 1080: its cut and update took up to 5.7 ms by wall clock while the main thread ran for 0.3 to 0.5 ms of it, all of the rest inside <code>notify_all</code>. With the builders at <code>THREAD_PRIORITY_BELOW_NORMAL</code> the update's longest is 0.6 ms.</figcaption>
+</figure>
+
 <h2 id="fades"><span class="n">6</span>Fading in and out</h2>
 
 <p>A node that appears at once adds a whole level of points in one frame: the ground gets finer in a block, and the eye sees it. A node that is dropped at once does the reverse. The fix uses the chunks' prefix order (<a href="point-clouds.html#prefix">Level of detail by prefix</a>): any first share of a chunk's points is an even sample, so a node can draw a share that grows from 0 to all of them over a few tenths of a second. Before it is dropped it shrinks back to 0, kept wanted until then.</p>
@@ -332,6 +357,7 @@
   <div><dt>Dark specks on the ground near the camera</dt><dd>Points of a fixed size over a sparse sample. Let them grow with the spacing on screen, or lower the cut's error until finer nodes come in.</dd></div>
   <div><dt>Big blobs over fine detail</dt><dd>A coarse node's grown points over a place where a finer node is drawn. Shrink a node's points per octant as its child fades in.</dd></div>
   <div><dt>Huge discs at the edge of the data</dt><dd>A node with a few scattered points measures a large spacing. They are no surface: never let a node's spacing pass its parent's.</dd></div>
+  <div><dt>A frame stalls a few milliseconds when loads start</dt><dd>A worker woken at the main thread's priority took its core. Run the workers below the main thread's priority.</dd></div>
   <div><dt>Everything loads, the budget is always full</dt><dd>An error too small for the data: every node within view wants its leaves. Raise it, or let adaptive points close the gaps.</dd></div>
   <div><dt>The scene jitters far from the origin</dt><dd>Points kept in floats in world units. Keep them as offsets from their node's centre, and the node in doubles.</dd></div>
 </dl>
@@ -358,7 +384,7 @@
     <text x="20" y="190" class="title t-gpu">The GPU</text>
     <rect x="20" y="202" width="220" height="56" rx="6" class="gpu"/><text x="130" y="225" class="mid small title">cull</text><text x="130" y="242" class="mid small">prefix × drawn share</text>
     <rect x="270" y="202" width="220" height="56" rx="6" class="shader"/><text x="380" y="225" class="mid small title">getPointDiameter</text><text x="380" y="242" class="mid small">adaptive size, finer share</text>
-    <rect x="520" y="202" width="220" height="56" rx="6" class="gpu"/><text x="630" y="225" class="mid small title">compute or triangles</text><text x="630" y="242" class="mid small">2 px or less: compute</text>
+    <rect x="520" y="202" width="220" height="56" rx="6" class="gpu"/><text x="630" y="225" class="mid small title">compute or triangles</text><text x="630" y="242" class="mid small">small enough: compute</text>
     <path d="M130,160 V200" class="arrow gpu" marker-end="url(#ah-gpu)"/>
     <path d="M240,230 H268" class="arrow gpu" marker-end="url(#ah-gpu)"/>
     <path d="M490,230 H518" class="arrow gpu" marker-end="url(#ah-gpu)"/>
@@ -387,10 +413,10 @@
   <div><b>48 M/s</b><span>points read from LAS</span><small>8 M points in 0.16 s, one thread</small></div>
   <div><b>6.3 M/s</b><span>points built into the octree</span><small>1739 nodes in 1.27 s, one thread</small></div>
   <div><b>48 of 92 MiB</b><span>the budget held</span><small>a peak of 48.00 MiB over 1424 frames of flight, 1219 loads, 462 drops</small></div>
-  <div><b>0.11 ms</b><span>cut and streamer update a frame</span><small>760 nodes drawn at most</small></div>
+  <div><b>0.11 ms</b><span>cut and streamer update a frame</span><small>760 nodes drawn at most; 0.74 ms at most at 1920 × 1080 (6.1 ms before the builders ran below the main thread)</small></div>
 </div>
 
-<p>At 1920 × 1080 the two views take 5.8 ms of GPU frame with adaptive points, 3.3 ms with fixed ones, which leave the ground open: near the camera grown points pass 2 pixels and leave the compute path for the triangles (<code>P33</code>). Example 29 sets <code>PointMaterial::density</code> to 3, so the top view's random ground leaves 0.06 % of its pixels open instead of 0.2 %, for 0.4 ms. The images show no pop as nodes come and go: the frames where nodes appear or go change no more pixels than the frames where none do.</p>
+<p>At 1920 × 1080 the two views take 5.1 ms of GPU frame with adaptive points (5.9 ms when only points of 2 pixels or less took the compute path, <code>P33</code>), 3.3 ms with fixed ones, which leave the ground open. The rest of the difference is the grown points' pixels: near the camera they pass the compute path's 8 pixels, and in the top view, with 4× MSAA, the compute path takes only points of 2 pixels or less, so the coarse nodes' grown points there are triangles. Example 29 sets <code>PointMaterial::density</code> to 3, so the top view's random ground leaves 0.06 % of its pixels open instead of 0.2 %, for 0.4 ms. The images show no pop as nodes come and go: the frames where nodes appear or go change no more pixels than the frames where none do.</p>
 
 <h3>Code map</h3>
 <div class="table-wrap">

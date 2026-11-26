@@ -9,7 +9,7 @@
 // cut to its shape here. One pipeline for every shape: a point writes its depth with SV_DepthLessEqual, so the early depth
 // test still culls, and a SPHERE point pushes its rim back from the triangle, which lies at the sphere's front. With several
 // samples per pixel (RASM_ALPHA_TO_COVERAGE) an edge covers samples by its distance instead of discarding, but for a
-// point of POINT_RASTER_MAX_SIZE pixels or less: it covers the whole pixels whose centre it holds, as the compute path
+// point of POINT_PIXELS_MAX_SIZE pixels or less: it covers the whole pixels whose centre it holds, as the compute path
 // (pointRaster.slang) writes it, so the two paths draw the same pixels.
 
 [[vk::binding(0, 0)]]
@@ -20,7 +20,7 @@ struct PointVertex
     float4 clipPosition                 : SV_POSITION;
     float2 corner                       : TEXCOORD0;    // -1 to 1 across the point's square, to 3 at the triangle's corners
     nointerpolation float4 color        : COLOR;
-    nointerpolation float3 sphere       : TEXCOORD1;    // the sphere's centre depth and radius in view units, and the shape: 0 square, 1 round, 2 sphere, 3 a square of whole pixels
+    nointerpolation float3 sphere       : TEXCOORD1;    // the sphere's centre depth and radius in view units, and the shape (getPointShape)
 #if defined(RASM_MOTION_VECTORS)
     nointerpolation float4 currentClip  : TEXCOORD2;    // the point's centre, without jitter
     nointerpolation float4 previousClip : TEXCOORD3;
@@ -61,22 +61,20 @@ PointVertex vertMain(uint vertexID : SV_VertexID)
     float diameter          = getPointDiameter(scene, style, spacing, finer, clip.w);
     float pixelWorld        = 2.0 * max(abs(clip.w), 1e-6) / (abs(scene->projection[1][1]) * float(scene->viewportHeight));
     float radius            = 0.5 * diameter * pixelWorld;
-    // A round point under 3 pixels is drawn square: its disc would miss the pixel centres it covers.
-    float shape             = (style.flags & POINT_SPHERE) != 0 ? 2.0 : ((style.flags & POINT_ROUND) != 0 ? 1.0 : 0.0);
-    shape                   = diameter <= POINT_RASTER_MAX_SIZE ? 3.0 : (diameter < 3.0 ? 0.0 : shape);
+    float shape             = getPointShape(style, diameter);
 #if defined(RASM_ALPHA_TO_COVERAGE)
     // Where the view also has the compute path, whose chunks switch paths as they move on screen, such a square covers
     // every sample of the pixels whose centre it holds, as the compute path writes them: its triangle reaches half a
     // pixel past the square, so that no sample of those pixels lies outside it. That costs about a fifth more for these
     // points (twice the triangle's area), so a view drawn by triangles only keeps the triangle, which leaves out the
     // samples of a pixel's edge beyond the square's left, bottom and diagonal sides.
-    if (shape == 3.0 && scene->pointRasterPtr != nullptr)
+    if (shape == POINT_SHAPE_PIXELS && scene->pointRasterPtr != nullptr)
         corner             *= 1.0 + 1.0 / diameter;
 #endif
 
     PointVertex output;
     output.sphere           = float3(-viewPosition.z, radius, shape);
-    if (shape == 2.0)
+    if (shape == POINT_SHAPE_SPHERE)
         clip                = mul(scene->projection, viewPosition + float4(0.0, 0.0, radius, 0.0));
     clip.xy                += corner * diameter / float2(scene->viewportWidth, scene->viewportHeight) * clip.w;
     output.clipPosition     = clip;
@@ -105,24 +103,21 @@ PointVertex vertMain(uint vertexID : SV_VertexID)
     return output;
 }
 
-// The view depth z of a SPHERE point's surface under the pixel, back through the projection to the depth buffer's
-// value: (P22 (-z) + P23) / (P32 (-z) + P33), for a perspective and an orthographic projection alike.
+// The depth of a SPHERE point's surface under the pixel (getSphereDepth), the others' at their centre.
 float getPointDepth(SceneData *scene, PointVertex input, float distance2)
 {
-    if (input.sphere.z != 2.0)
+    if (input.sphere.z != POINT_SHAPE_SPHERE)
         return input.clipPosition.z;
-    float z         = input.sphere.x - input.sphere.y * sqrt(saturate(1.0 - distance2));
-    float4x4 p      = scene->projection;
-    return (p[2][2] * -z + p[2][3]) / (p[3][2] * -z + p[3][3]);
+    return getSphereDepth(scene->projection, input.sphere.x, input.sphere.y, distance2);
 }
 
 float getPointCoverage(PointVertex input, float distance2)
 {
-    bool square     = input.sphere.z == 0.0 || input.sphere.z == 3.0;
+    bool square     = input.sphere.z == POINT_SHAPE_SQUARE || input.sphere.z == POINT_SHAPE_PIXELS;
     float distance  = square ? max(abs(input.corner.x), abs(input.corner.y)) : sqrt(distance2);
 #if defined(RASM_ALPHA_TO_COVERAGE)
     float soft      = saturate((1.0 - distance) / max(fwidth(distance), 1e-4) + 0.5);
-    return input.sphere.z == 3.0 ? (distance <= 1.0 ? 1.0 : 0.0) : soft;
+    return input.sphere.z == POINT_SHAPE_PIXELS ? (distance <= 1.0 ? 1.0 : 0.0) : soft;
 #else
     return distance <= 1.0 ? 1.0 : 0.0;
 #endif

@@ -1028,6 +1028,55 @@ namespace
         return addSunsetLight(engine, assets, content, 0.6f, glm::vec3(0.5f, -0.7f, -0.4f), 2.0f);
     }
 
+    // Points of 3 to 5 pixels, which the compute path cuts to the triangles' shapes: a wavy sheet of round points of 5
+    // pixels colored by height, a ball of SPHERE points of 4 (their depth per pixel) cutting into it, and a ring of
+    // squares of 3.
+    bool buildPointsLarge(rasm::Engine &engine, const Assets &assets, Content &content)
+    {
+        std::vector<glm::vec3> sheet;
+        std::vector<float> heights;
+        for (int z = 0; z < 128; ++z)
+        {
+            for (int x = 0; x < 128; ++x)
+            {
+                const float px = static_cast<float>(x) / 127.0f * 6.0f - 3.0f;
+                const float pz = static_cast<float>(z) / 127.0f * 6.0f - 3.0f;
+                sheet.emplace_back(px, 0.25f * std::sin(2.0f * px) * std::cos(1.5f * pz), pz);
+                heights.push_back(sheet.back().y);
+            }
+        }
+        const rasm::TextureHandle viridis = engine.createColormap(rasm::ColormapPreset::VIRIDIS);
+        addEntity(engine, content, "sheet", engine.createMesh(rasm::buildPointCloudChunk({.positions = sheet.data(), .scalars = heights.data(), .count = static_cast<uint32_t>(sheet.size())})),
+                  createPointMaterial(engine, {.size = 5.0f, .colorMode = rasm::PointColorMode::SCALAR, .colormap = viridis, .range = {.min = -0.25f, .max = 0.25f}}),
+                  rasm::Transform{glm::vec3(0.0f, 0.0f, -2.0f)});
+
+        std::vector<glm::vec3> ball;
+        for (uint32_t i = 0; i < 3000; ++i)
+        {
+            const float t = static_cast<float>(i) + 0.5f;
+            const float y = 1.0f - 2.0f * t / 3000.0f;
+            const float r = std::sqrt(1.0f - y * y);
+            const float a = t * 2.39996f;
+            ball.emplace_back(0.7f * r * std::cos(a), 0.7f * y, 0.7f * r * std::sin(a));
+        }
+        addEntity(engine, content, "ball", engine.createMesh(rasm::buildPointCloudChunk({.positions = ball.data(), .count = 3000})),
+                  createPointMaterial(engine, {.color = glm::vec4(0.95f, 0.45f, 0.15f, 1.0f), .size = 4.0f, .shape = rasm::PointShape::SPHERE}), rasm::Transform{glm::vec3(0.6f, 0.2f, -1.2f)});
+
+        std::vector<glm::vec3> ring;
+        for (uint32_t i = 0; i < 4000; ++i)
+        {
+            const float a = static_cast<float>(i) / 4000.0f * 6.2831853f;
+            ring.emplace_back(1.1f * std::cos(a), 0.15f * std::sin(5.0f * a), 1.1f * std::sin(a));
+        }
+        addEntity(engine, content, "ring", engine.createMesh(rasm::buildPointCloudChunk({.positions = ring.data(), .count = 4000})),
+                  createPointMaterial(engine, {.color = glm::vec4(0.9f, 0.9f, 0.95f, 1.0f), .size = 3.0f, .shape = rasm::PointShape::SQUARE}), rasm::Transform{glm::vec3(-1.4f, 0.5f, -1.0f)});
+
+        content.eye = glm::vec3(0.0f, 2.2f, 4.2f);
+        content.center = glm::vec3(0.0f, 0.0f, -1.5f);
+        content.fovY = 50.0f;
+        return viridis.isValid() && addSunsetLight(engine, assets, content, 0.6f, glm::vec3(0.5f, -0.7f, -0.4f), 2.0f);
+    }
+
     bool buildPointsOrtho(rasm::Engine &engine, const Assets &assets, Content &content)
     {
         content.orthoHeight = 6.0f;
@@ -1115,6 +1164,9 @@ namespace
         {.name = "points_ortho",  .build = buildPointsOrtho,   .picks = true},
         // Adaptive points grown to close a sparse sheet, and an octree's parent and children (PointChunkLod).
         {.name = "points_adaptive", .build = buildPointsAdaptive},
+        // Points of 3 to 5 pixels in each shape, by the compute path and by triangles only: the same pixels.
+        {.name = "points_large",  .build = buildPointsLarge},
+        {.name = "points_large_triangles", .build = buildPointsLarge, .computePoints = false, .sameAs = "points_large"},
         // The same points by triangles only, as a device without 64-bit atomics draws them: both paths take the same
         // pixels, so the image matches the one the compute path drew. Under MSAA a view without the compute path keeps
         // the points' triangles as they are, which leave out the samples of a pixel's edge past the square's left,

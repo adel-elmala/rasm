@@ -184,8 +184,9 @@ RasmLab.register("point-density", function (lab) {
     });
 });
 
-// The compute path on a 12 x 8 pixel patch: each point writes the pixels whose centre its square holds (the centre
-// snapped to 1/256 of a pixel, as the rasterizer snaps a triangle's corners), with a 64-bit max of depth << 32 | id,
+// The compute path on a 12 x 8 pixel patch: each point writes the pixels whose centre its shape holds (a square, or
+// from 3 pixels a disc; the centre snapped to 1/256 of a pixel, as the rasterizer snaps a triangle's corners), with a
+// 64-bit max of depth << 32 | id,
 // so the nearest point wins whatever the order the threads ran in, and the higher id on a tie, as a later triangle
 // would. The picked point also shows its triangle (corners -1, -1; 3, -1; -1, 3 of its square): the pixel stage keeps
 // the same pixels, so the two paths draw the same picture.
@@ -198,7 +199,8 @@ RasmLab.register("compute-raster", function (lab) {
     const left = 30;
     const top = 20;
     const svg = lab.svg(W, H, "A patch of 12 by 8 pixels. Seven points, each with a depth and an id, write the pixels whose centre lies in their square with a 64-bit max. Each pixel shows the id of the point that won it.");
-    const size = lab.slider({ label: "Point size (pixels)", min: 1, max: 2, step: 0.25, value: 2, format: function (v) { return v.toFixed(2); } });
+    const size = lab.slider({ label: "Point size (pixels)", min: 1, max: 8, step: 0.25, value: 2, format: function (v) { return v.toFixed(2); } });
+    const shape = lab.choice({ label: "Shape", options: [{ value: "square", label: "square" }, { value: "round", label: "round" }], value: "square" });
     const written = lab.slider({ label: "Points written so far", min: 0, max: 7, step: 1, value: 7 });
     const order = lab.choice({ label: "Order the threads ran in", options: [{ value: "id", label: "by id" }, { value: "reversed", label: "reversed" }, { value: "shuffled", label: "shuffled" }], value: "shuffled" });
     const picked = lab.slider({ label: "Show the triangle of point", min: 0, max: 6, step: 1, value: 3 });
@@ -214,27 +216,48 @@ RasmLab.register("compute-raster", function (lab) {
     const orders = { id: [0, 1, 2, 3, 4, 5, 6], reversed: [6, 5, 4, 3, 2, 1, 0], shuffled: [3, 0, 5, 2, 6, 4, 1] };
     const hues = ["--gpu", "--cpu", "--mem", "--shader", "--ok", "--accent", "--bad"];
 
-    // The pixels a point of diameter d writes: x from ceil(c - d/2 - 0.5) to floor(c + d/2 - 0.5), at most two.
+    // The shape a point of d pixels is cut to (getPointShape): a square under 3 pixels, else its style's.
+    function isRound(d) {
+        return shape.value === "round" && d >= 3;
+    }
+    // Whether the pixel (x, y)'s centre is in the point's shape, edges included, around its centre snapped to 1/256.
+    // The triangle's rasterizer leaves out a centre on its bottom side, which is the square's (the top-left rule).
+    function covers(p, d, x, y, triangle) {
+        const cx = Math.round(p.x * 256) / 256;
+        const cy = Math.round(p.y * 256) / 256;
+        const dx = (x + 0.5 - cx) / (d / 2);
+        const dy = (y + 0.5 - cy) / (d / 2);
+        if (triangle && dy >= 1)
+            return false;
+        return isRound(d) ? dx * dx + dy * dy <= 1 : Math.abs(dx) <= 1 && Math.abs(dy) <= 1;
+    }
+    // The pixels the compute path writes for a point of diameter d (rasterPoint): x from ceil(c - d/2 - 0.5) to
+    // floor(c + d/2 - 0.5), at most ceil(d) + 1 columns and ceil(d) rows (a centre on the bottom side is left out, as
+    // by the triangle), and of those a round point's centres in its disc.
     function pixelsOf(p, d) {
         const cx = Math.round(p.x * 256) / 256;
         const cy = Math.round(p.y * 256) / 256;
         const list = [];
         const x0 = Math.ceil(cx - d / 2 - 0.5);
         const y0 = Math.ceil(cy - d / 2 - 0.5);
-        const x1 = Math.min(Math.floor(cx + d / 2 - 0.5), x0 + 1);
-        const y1 = Math.min(Math.floor(cy + d / 2 - 0.5), y0 + 1);
+        const x1 = Math.min(Math.floor(cx + d / 2 - 0.5), x0 + Math.ceil(d));
+        const y1 = Math.min(Math.floor(cy + d / 2 - 0.5), y0 + Math.ceil(d) - 1);
         for (let y = y0; y <= y1; ++y)
             for (let x = x0; x <= x1; ++x)
-                if (x >= 0 && y >= 0 && x < COLS && y < ROWS)
+                if (x >= 0 && y >= 0 && x < COLS && y < ROWS && covers(p, d, x, y, false))
                     list.push([x, y]);
         return list;
     }
-    // The triangle path's test at a pixel's centre: inside the square (edges included), and the depth test with
-    // GREATER_OR_EQUAL, drawn in id order.
+    // The triangle path: every pixel its triangle covers runs the fragment test at its centre (the point's shape, edges
+    // included), then the depth test with GREATER_OR_EQUAL, drawn in id order.
     function byTriangles(d) {
         const winner = new Array(COLS * ROWS).fill(-1);
         for (let i = 0; i < points.length; ++i) {
-            for (const [x, y] of pixelsOf(points[i], d)) {
+            for (let c = 0; c < COLS * ROWS; ++c) {
+                const x = c % COLS;
+                const y = Math.floor(c / COLS);
+                if (!covers(points[i], d, x, y, true))
+                    continue;
                 const w = winner[y * COLS + x];
                 if (w < 0 || points[i].depth >= points[w].depth)
                     winner[y * COLS + x] = i;
@@ -297,7 +320,7 @@ RasmLab.register("compute-raster", function (lab) {
         const r = d / 2 * CELL;
         const cx = left + p.x * CELL;
         const cy = top + p.y * CELL;
-        lab.set(square, { x: cx - r, y: cy - r, width: 2 * r, height: 2 * r });
+        lab.set(square, { x: cx - r, y: cy - r, width: 2 * r, height: 2 * r, rx: isRound(d) ? r : 0 });
         lab.set(triangle, { d: "M" + (cx - r) + "," + (cy + r) + " L" + (cx + 3 * r) + "," + (cy + r) + " L" + (cx - r) + "," + (cy - 3 * r) + " Z" });
         touchedOut.set(String(touched));
         sameOut.set(k === points.length ? (same ? "yes" : "no") : "–", same ? "ok" : "bad");
@@ -306,6 +329,6 @@ RasmLab.register("compute-raster", function (lab) {
         else if (order.value !== "id")
             note.set("Run in another order, the pixels end the same: the max keeps the nearest point, and the higher id on a tie (points 4 and 5).", "ok");
         else
-            note.set("Every pixel holds the nearest point: the same pixels the points' triangles cover, cut to their squares.", "ok");
+            note.set("Every pixel holds the nearest point: the same pixels the points' triangles cover, cut to their shapes.", "ok");
     });
 });

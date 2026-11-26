@@ -38,7 +38,7 @@
     <li>Each point is a <b>splat</b>: a small square, disc or sphere on the screen, a few pixels or a few centimetres wide.</li>
     <li>Points come in <b>chunks</b> of up to 65 536 near each other. A chunk stores each position as three <b>16-bit steps of its box</b>: 8 bytes a point with a value, 12 with a color.</li>
     <li>A point is <b>one triangle</b> around its square; the pixel stage cuts it to its shape.</li>
-    <li>Points of 2 pixels or less skip the triangle: a <b>compute pass</b> writes each pixel with a 64-bit max of depth and point, four (2 pixels) to ten (1 pixel) times faster per point, and a resolve puts them into the scene. Both paths take the same pixels.</li>
+    <li>Small points skip the triangle (up to 6 pixels in a perspective view, 4 in an orthographic one, 2 under MSAA): a <b>compute pass</b> writes each pixel with a 64-bit max of depth and point, two (6 pixels) to twelve (1 pixel) times faster per point, and a resolve puts them into the scene. Both paths take the same pixels, in every shape.</li>
     <li>The builder puts a chunk's points in an order where <b>every prefix is an even sample</b>. A chunk small on screen draws only its first points: level of detail with no extra data.</li>
     <li>A <b>colormap</b> turns a value into a color through a range (linear or logarithmic) and a 256-entry texture.</li>
   </ul>
@@ -111,7 +111,7 @@
 
 <h2 id="compute"><span class="n">3</span>Small points by compute</h2>
 
-<p>A triangle costs the same setup whether it covers 4 pixels or 400. For points of 1 or 2 pixels almost all the time goes there, not into the pixels. A compute shader can skip the triangle: one thread takes a point, finds the pixels its square covers, and writes them itself (Schütz, Kerbl and Wimmer, 2021).</p>
+<p>A triangle costs the same setup whether it covers 4 pixels or 400. For points of 1 or 2 pixels almost all the time goes there, not into the pixels. A compute shader can skip the triangle: one thread takes a point, finds the pixels its shape covers, and writes them itself (Schütz, Kerbl and Wimmer, 2021). For bigger points the pixels take over, and at about 7 pixels the triangles win (<a href="#split">below</a>).</p>
 
 <p>The hard part is the depth test, which the triangle path gets for free. Many threads write the same pixel at once, in any order. The trick: put the depth and the point in <b>one 64-bit word</b> and keep the largest with a 64-bit atomic max (<code>InterlockedMax</code> in Slang). With reversed-Z a nearer point has a larger depth, so the max is the nearest point, whatever order the threads ran in.</p>
 
@@ -181,20 +181,94 @@
   </svg>
 </figure>
 
-<h3>Which chunk takes which path</h3>
+<h3 id="split">Which chunk takes which path</h3>
 
 <p>The cull pass decides per chunk, after it chose the chunk's prefix. A chunk goes to compute when both hold:</p>
 
 <div class="formula">
-  <p class="eq">s ≤ 2 pixels   and   k ≥ 0.125 × (its rect on screen, in pixels)</p>
+  <p class="eq">perspective view:   s<sub>c</sub> ≤ 6 and s<sub>n</sub> ≤ 8 pixels</p>
+  <p class="eq">orthographic view:   s ≤ 4 pixels</p>
+  <p class="eq">view with MSAA:   s<sub>n</sub> ≤ 2 pixels</p>
+  <p class="eq">and   k × max(s<sub>c</sub>² / 4, 1) ≥ 0.125 × (its rect on screen, in pixels)</p>
   <dl>
-    <dt><var>s</var></dt><dd>the points' size at the chunk's point nearest the camera: the largest they get</dd>
+    <dt><var>s<sub>c</sub></var>, <var>s<sub>n</sub></var></dt><dd>the points' size at the chunk's centre, and at its point nearest the camera: the largest they get (in an orthographic view the two are the same)</dd>
     <dt><var>k</var></dt><dd>the points the chunk draws (its prefix)</dd>
-    <dt>rect</dt><dd>its box's corners on screen, and 2 pixels more: where its points can land</dd>
+    <dt>rect</dt><dd>its box's corners on screen, and <var>s<sub>n</sub></var> pixels more (at least 2): where its points can land</dd>
   </dl>
 </div>
 
-<p>The first rule keeps the compute path to squares of at most 2 × 2 pixels; bigger points, and every round or sphere point big enough to show its shape, stay triangles. The second rule is the cost: the compute path pays per point a quarter (2 pixels) to a tenth (1 pixel) of a triangle, but once it runs it also clears and resolves every pixel of the rect its chunks cover. A sparse chunk spread over the screen is cheaper as triangles. A chunk the camera is inside of, or that is partly behind it, stays triangles too.</p>
+<p>The first rule is measured. A thread writes its point's pixels one after another, so the compute path pays for every pixel of every point; the triangle path pays a setup per point, and its early depth test throws away a hidden pixel cheaply. The cost of one more point, every point drawn (no LOD, so many points cover each pixel), one perspective view of 1920 × 1080 with one sample a pixel (<code>28_point_cloud --all-points</code>, 10 M against 20 M points, RTX 3060):</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>point size</th><th>1 px</th><th>2 px</th><th>3 px</th><th>4 px</th><th>6 px</th><th>8 px</th></tr>
+  <tr><td>triangles, round</td><td>1.03 ns</td><td>1.07 ns</td><td>1.39 ns</td><td>1.99 ns</td><td>3.58 ns</td><td>5.53 ns</td></tr>
+  <tr><td>compute, round</td><td>0.088 ns</td><td>0.26 ns</td><td>0.45 ns</td><td>0.79 ns</td><td>1.73 ns</td><td>3.02 ns</td></tr>
+  <tr><td>triangles, square</td><td></td><td></td><td>1.44 ns</td><td>2.09 ns</td><td>3.75 ns</td><td>5.84 ns</td></tr>
+  <tr><td>compute, square</td><td></td><td></td><td>0.58 ns</td><td>1.02 ns</td><td>2.20 ns</td><td>3.88 ns</td></tr>
+</table>
+</div>
+
+<p>Per point the compute path's lead shrinks from 12 times at 1 pixel to under 2 times at 8. Under 3 pixels every shape is a square; a disc has fewer pixels than its square, and a SPHERE point costs what a disc does (its depth at each pixel is a square root and a division more). But at the LOD's density each pixel holds few points, the triangles' depth test has less to throw away, and the compute path also clears and resolves its rect. A whole frame of points of one size decides:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 285" role="img" aria-label="Two charts of GPU frame time against point size. Perspective: the compute path is cheaper up to about 7 pixels, the triangles from 7. Orthographic: the compute path is cheaper up to about 5 pixels.">
+    <text x="60" y="24" class="small title">perspective view: a frame of points of one size</text>
+    <path d="M60,230 H340" class="grid"/>
+    <text x="60" y="248" class="mid small">3 px</text>
+    <text x="116" y="248" class="mid small">4 px</text>
+    <text x="172" y="248" class="mid small">5 px</text>
+    <text x="228" y="248" class="mid small">6 px</text>
+    <text x="284" y="248" class="mid small">7 px</text>
+    <text x="340" y="248" class="mid small">8 px</text>
+    <path d="M60,230 H340" class="grid o-50"/><text x="54" y="234" class="small t-faint" text-anchor="end">2.2 ms</text>
+    <path d="M60,140 H340" class="grid o-50"/><text x="54" y="144" class="small t-faint" text-anchor="end">2.7 ms</text>
+    <path d="M60,50 H340" class="grid o-50"/><text x="54" y="54" class="small t-faint" text-anchor="end">3.2 ms</text>
+    <path d="M228,44 V230" class="arrow hot dashed"/><text x="228" y="38" class="mid small t-hot">takes up to 6</text>
+    <polyline points="116,80 172,131 228,159 284,176 340,185" class="arrow cpu thick"/>
+    <circle cx="116" cy="80" r="4" class="cpu"/>
+    <circle cx="172" cy="131" r="4" class="cpu"/>
+    <circle cx="228" cy="159" r="4" class="cpu"/>
+    <circle cx="284" cy="176" r="4" class="cpu"/>
+    <circle cx="340" cy="185" r="4" class="cpu"/>
+    <polyline points="116,224 172,219 228,196 284,169 340,143" class="arrow gpu thick"/>
+    <circle cx="116" cy="224" r="4" class="gpu"/>
+    <circle cx="172" cy="219" r="4" class="gpu"/>
+    <circle cx="228" cy="196" r="4" class="gpu"/>
+    <circle cx="284" cy="169" r="4" class="gpu"/>
+    <circle cx="340" cy="143" r="4" class="gpu"/>
+    <text x="440" y="24" class="small title">orthographic view (looking down)</text>
+    <path d="M440,230 H720" class="grid"/>
+    <text x="440" y="248" class="mid small">3 px</text>
+    <text x="496" y="248" class="mid small">4 px</text>
+    <text x="552" y="248" class="mid small">5 px</text>
+    <text x="608" y="248" class="mid small">6 px</text>
+    <text x="664" y="248" class="mid small">7 px</text>
+    <text x="720" y="248" class="mid small">8 px</text>
+    <path d="M440,230 H720" class="grid o-50"/><text x="434" y="234" class="small t-faint" text-anchor="end">2.5 ms</text>
+    <path d="M440,140 H720" class="grid o-50"/><text x="434" y="144" class="small t-faint" text-anchor="end">3.1 ms</text>
+    <path d="M440,50 H720" class="grid o-50"/><text x="434" y="54" class="small t-faint" text-anchor="end">3.7 ms</text>
+    <path d="M496,44 V230" class="arrow hot dashed"/><text x="496" y="38" class="mid small t-hot">takes up to 4</text>
+    <polyline points="440,56 496,129 552,167 608,189 720,212" class="arrow cpu thick"/>
+    <circle cx="440" cy="56" r="4" class="cpu"/>
+    <circle cx="496" cy="129" r="4" class="cpu"/>
+    <circle cx="552" cy="167" r="4" class="cpu"/>
+    <circle cx="608" cy="189" r="4" class="cpu"/>
+    <circle cx="720" cy="212" r="4" class="cpu"/>
+    <polyline points="440,109 496,144 552,168 608,182 720,200" class="arrow gpu thick"/>
+    <circle cx="440" cy="109" r="4" class="gpu"/>
+    <circle cx="496" cy="144" r="4" class="gpu"/>
+    <circle cx="552" cy="168" r="4" class="gpu"/>
+    <circle cx="608" cy="182" r="4" class="gpu"/>
+    <circle cx="720" cy="200" r="4" class="gpu"/>
+    <rect x="60" y="262" width="14" height="10" class="gpu"/><text x="80" y="271" class="small">compute path</text><rect x="190" y="262" width="14" height="10" class="cpu"/><text x="210" y="271" class="small">triangles</text><text x="320" y="271" class="small t-faint">GPU frame, 28_point_cloud, 1920 x 1080, RTX 3060; the other view by triangles</text>
+  </svg>
+  <figcaption>The perspective view is cheaper by compute up to 6 pixels (0.8 ms less at 4) and costs the same at about 7; the orthographic view looking down at the ground, where every point of a chunk has one size and most lie on one surface, costs the same at about 5. So a chunk takes the compute path up to 6 pixels at its centre (8 at its nearest point) in a perspective view and up to 4 in an orthographic one.</figcaption>
+</figure>
+
+<p>Under MSAA the triangles' edges cover samples by their distance, and the compute path has one sample a pixel: there it takes only the points that cover whole pixels on both paths, of 2 pixels or less, so an MSAA view draws bigger points as before.</p>
+
+<p>The second rule is the cost per pixel: once the compute path runs it also clears and resolves every pixel of the rect its chunks cover, so a sparse chunk spread over the screen is cheaper as triangles. A point of <var>s<sub>c</sub></var> pixels counts as (<var>s<sub>c</sub></var> / 2)² points of 2 pixels: it covers as many pixels. A chunk the camera is inside of, or that is partly behind it, stays triangles too.</p>
 
 <figure class="lab" data-lab="compute-raster" data-title="Write points with a 64-bit max">
   <figcaption>Step the points in and change the order the threads ran in: the pixels end the same, each holding the nearest point (4 and 5 tie, and 5 wins as the later triangle would). The orange triangle is the one the triangle path draws for the chosen point; it keeps the pixels whose centre is in the dashed square, the same ones.</figcaption>
@@ -202,7 +276,7 @@
 
 <h3>Why the two paths draw the same pixels</h3>
 
-<p>A chunk can switch paths from one frame to the next as the camera moves, so the two must agree to the pixel, or the switch would show. Both take a pixel when its centre lies in the point's square, edges included, and both place the square at the same centre: the compute path snaps it to 1/256 of a pixel, as the rasterizer snaps a triangle's corners. Under MSAA the compute path has one sample a pixel and the resolve writes it into all of the pixel's samples; in a view that also has the compute path, the triangle path covers whole pixels the same way, its triangle reaching half a pixel past the square so no sample of a covered pixel falls outside it. (A view drawn by triangles only keeps the smaller triangle, which is a fifth cheaper under MSAA; see <a href="#in-rasm">Not yet</a>.)</p>
+<p>A chunk can switch paths from one frame to the next as the camera moves, so the two must agree to the pixel, or the switch would show. Both cut a point to the same shape (<code>getPointShape</code>: a square under 3 pixels, from 3 pixels its style's square, disc or sphere) and take a pixel when its centre lies in that shape, edges included, and both place the shape at the same centre: the compute path snaps it to 1/256 of a pixel, as the rasterizer snaps a triangle's corners. A SPHERE point's centre is its front's, as its triangle's, and its depth at each pixel is its surface's, from the same function on both paths (<code>getSphereDepth</code>). A pixel whose centre falls exactly on the shape's border goes as the rasterizer sends it: kept on the left and right sides and on the top, left out on the bottom, which is the triangle's own bottom side (the top-left rule). With the hole fill off, the compute path's perspective view in <code>28_point_cloud</code> then differs from the triangles' in 0.012 % of its pixels for squares of 2 pixels, 0.016 % for squares of 3, 2 pixels for discs of 4 and for spheres of 5: centres a rounding away from a border. Under MSAA the compute path has one sample a pixel and the resolve writes it into all of the pixel's samples; in a view that also has the compute path, the triangle path covers whole pixels the same way, its triangle reaching half a pixel past the square so no sample of a covered pixel falls outside it. (A view drawn by triangles only keeps the smaller triangle, which is a fifth cheaper under MSAA; see <a href="#in-rasm">Not yet</a>.)</p>
 
 <h3>Filling the LOD's holes</h3>
 
@@ -238,6 +312,7 @@
 <div class="stats">
   <div><b>10.6×</b><span>faster per point, 1 pixel</span><small>0.081 ns against 0.86 ns by triangles, all of 33.5 M points a frame</small></div>
   <div><b>4.1×</b><span>faster per point, 2 pixels</span><small>0.28 ns against 1.14 ns by triangles</small></div>
+  <div><b>2.1×</b><span>faster per point, 6 pixels</span><small>1.73 ns against 3.58 ns by triangles, round, every point, one view</small></div>
   <div><b>8 B</b><span>a pixel, per view</span><small>16.6 MB at 1920 × 1080, cleared only in the rect</small></div>
 </div>
 
@@ -431,13 +506,13 @@
 <div class="table-wrap">
 <table>
   <tr><th>This page</th><th>RASM</th></tr>
-  <tr><td>Splats</td><td><code>PointShape</code> <code>SQUARE</code>, <code>ROUND</code> (default), <code>SPHERE</code>; <code>PointMaterial::size</code> in <code>VectorUnit::PIXELS</code> or <code>METRES</code>, at least a pixel; round points under 3 pixels are drawn square. Unlit. <code>PointSizeMode::ADAPTIVE</code> grows them where the chunk's spacing on screen leaves gaps, up to <code>PointMaterial::maxSize</code> (<a href="point-octree.html#adaptive">Adaptive point size</a>).</td></tr>
+  <tr><td>Splats</td><td><code>PointShape</code> <code>SQUARE</code>, <code>ROUND</code> (default), <code>SPHERE</code>; <code>PointMaterial::size</code> in <code>VectorUnit::PIXELS</code> or <code>METRES</code>, at least a pixel; round points under 3 pixels are drawn square (<code>getPointShape</code>, the same on both paths). Unlit. <code>PointSizeMode::ADAPTIVE</code> grows them where the chunk's spacing on screen leaves gaps, up to <code>PointMaterial::maxSize</code> (<a href="point-octree.html#adaptive">Adaptive point size</a>).</td></tr>
   <tr><td>One triangle a point</td><td><code>gfx::POINT_INDICES</code> (3). The chunks share one index range 0, 1, 2, …, taken from the index pool with the first chunk. One pipeline for every shape writes its depth with <code>SV_DepthLessEqual</code>, so the early depth test still works.</td></tr>
   <tr><td>16 bits in the box</td><td><code>gfx::PointChunkHeader</code> (48 B, with the chunk's spacing, given or measured) in the point pool (<code>RendererConfig::geometryPoolPoints</code>, 8 B units, 8 MiB by default); the chunk's <code>GeometryData::vertexOffset</code> is its first unit.</td></tr>
   <tr><td>Prefix LOD</td><td><code>selectPointCount</code> in <code>shaders/lib/points.slang</code>, called by the cull pass for the point run (<code>SceneData::pointRun</code>), the one place that decides what a chunk draws. <code>PointMaterial::density</code> is 2 by default. <code>lodErrorPixels</code> 0 draws every point; the forced LOD <var>k</var> (F2) draws <var>N</var> / 2<sup><var>k</var></sup>.</td></tr>
   <tr><td>Colormaps</td><td><code>Renderer::createColormap</code> from 1 to <code>COLORMAP_SIZE</code> linear colors or a <code>ColormapPreset</code>; <code>PointColorMode::SCALAR</code> reads it through <code>PointMaterial::range</code> (<code>ScalarRange</code>); <code>COLOR</code> takes the points' own colors.</td></tr>
-  <tr><td>Small points by compute</td><td>The cull pass sends a chunk to <code>shaders/passes/pointRaster.slang</code> when <code>isRasterChunk</code> (<code>shaders/lib/points.slang</code>) holds: points of <code>POINT_RASTER_MAX_SIZE</code> (2) pixels or less, at least <code>POINT_RASTER_MIN_DENSITY</code> (0.125) drawn points per pixel of its rect, instance row under 65 536. <code>appendPointBatches</code> adds batches of <code>POINT_BATCH_POINTS</code> (1024) and grows the rect. After the last cull: <code>clearMain</code>, <code>rasterMain</code> (indirect); the resolve quad in the last draw pass, before the sky. A view's buffer (<code>SceneView::pointRaster</code>, <code>getPointRasterLayout</code>): a 48 B header, 8 B a batch, 8 B a pixel.</td></tr>
-  <tr><td>MSAA and TAA</td><td>Alpha-to-coverage with more than one sample, but points of 2 pixels or less cover whole pixels on both paths (the compute path's resolve writes every sample); the centre's motion with TAA, on both paths.</td></tr>
+  <tr><td>Small points by compute</td><td>The cull pass sends a chunk to <code>shaders/passes/pointRaster.slang</code> when <code>isRasterChunk</code> (<code>shaders/lib/points.slang</code>) holds: in a perspective view points of <code>POINT_RASTER_MAX_SIZE</code> (6) pixels or less at the chunk's centre and <code>POINT_RASTER_MAX_NEAR</code> (8) at its nearest point, in an orthographic view <code>POINT_RASTER_MAX_ORTHO</code> (4), under MSAA (<code>SceneData::depthSamples</code>) <code>POINT_PIXELS_MAX_SIZE</code> (2); at least <code>POINT_RASTER_MIN_DENSITY</code> (0.125) drawn points of 2 pixels per pixel of its rect, instance row under 65 536. <code>rasterPoint</code> cuts each point to <code>getPointShape</code>'s shape, a SPHERE point's depth per pixel from <code>getSphereDepth</code>, as <code>points.slang</code> does. <code>appendPointBatches</code> adds batches of <code>POINT_BATCH_POINTS</code> (1024) and grows the rect. After the last cull: <code>clearMain</code>, <code>rasterMain</code> (indirect); the resolve quad in the last draw pass, before the sky. A view's buffer (<code>SceneView::pointRaster</code>, <code>getPointRasterLayout</code>): a 48 B header, 8 B a batch, 8 B a pixel.</td></tr>
+  <tr><td>MSAA and TAA</td><td>Alpha-to-coverage with more than one sample, but points of 2 pixels or less (<code>POINT_SHAPE_PIXELS</code>) cover whole pixels on both paths (the compute path's resolve writes every sample); the centre's motion with TAA, on both paths.</td></tr>
   <tr><td>Picking</td><td>Always by triangles, which take the same pixels as the compute path. A pick pipeline of the point run: <code>PICK_HIT_POINT</code>, and <code>PickHit::feature</code> is the point's index in the arrays given to the builder (<code>Mesh::pointOrder</code> maps it back). <code>PICK_SKIP_POINTS</code> looks through them.</td></tr>
 </table>
 </div>
@@ -460,7 +535,7 @@
   <tr><td>The compute path</td><td><code>preparePointRaster</code>, <code>recordPointReset</code>, <code>recordPointRaster</code>, <code>drawPointResolve</code>, <code>getPointRasterLayout</code> in <code>src/renderer/pointRaster.cpp</code>; the buffers made in <code>createSceneView</code> where <code>RenderContext::hasBufferInt64Atomics</code></td></tr>
   <tr><td>Shaders</td><td><code>shaders/lib/points.slang</code> (header, padding, <code>selectPointCount</code>, <code>isRasterChunk</code>, <code>appendPointBatches</code>), <code>shaders/passes/points.slang</code> (the draw and the pick), <code>shaders/passes/pointRaster.slang</code> (reset, clear, raster, resolve), <code>shaders/passes/cull.slang</code>; <code>getPointDiameter</code> sizes a point for the cull and both paths</td></tr>
   <tr><td>Example</td><td><code>examples/28_point_cloud/main.cpp</code>: a synthetic scan 6 000 km out, colored by height, a perspective and an orthographic view; <samp>--adaptive</samp> for adaptive points</td></tr>
-  <tr><td>Tests</td><td><code>tests/pointCloudTests.cpp</code> (round trip, prefixes); image tests <code>points</code>, <code>points_msaa4</code>, <code>points_taa</code>, <code>points_ortho</code>, <code>far_points</code>, and <code>points_triangles</code>, <code>points_msaa4_triangles</code>, <code>points_taa_triangles</code> (the same scene by triangles only, against the compute path's image), <code>points_adaptive</code></td></tr>
+  <tr><td>Tests</td><td><code>tests/pointCloudTests.cpp</code> (round trip, prefixes); image tests <code>points</code>, <code>points_msaa4</code>, <code>points_taa</code>, <code>points_ortho</code>, <code>far_points</code>, and <code>points_triangles</code>, <code>points_msaa4_triangles</code>, <code>points_taa_triangles</code> (the same scene by triangles only, against the compute path's image), <code>points_adaptive</code>, <code>points_large</code> and <code>points_large_triangles</code> (discs of 5 pixels, spheres of 4, squares of 3 on both paths)</td></tr>
 </table>
 </div>
 
@@ -472,8 +547,9 @@
 <h3>Not yet</h3>
 <ul>
   <li>Without the compute path (no 64-bit atomics, or <code>computePoints</code> off) a small point's triangle under MSAA leaves out the samples of a pixel past the square's left, bottom and diagonal sides (0.7 % of the pixels of the <code>points_msaa4</code> test differ from the compute path's image), and nothing fills the LOD's holes: 0.04 % of the pixels of <code>28_point_cloud</code>'s top view stay black.</li>
-  <li>The hole fill is the compute path's only: a thinned chunk that switches to the triangles shows its few holes again (about 1 pixel in 2 500).</li>
-  <li>Streaming a cloud bigger than memory as a tree of chunks, and reading LAS files.</li>
+  <li>The hole fill is the compute path's only: a thinned chunk that switches to the triangles shows its few holes again (about 1 pixel in 2 500 at 2 pixels). With points of 3 to 8 pixels on the compute path that includes the single-pixel gaps between a thinned chunk's bigger points, squares or discs (0.5 to 0.65 % of the perspective view's pixels in <code>28_point_cloud --size 3</code> and <code>--size 4</code>).</li>
+  <li>Under MSAA the compute path takes points of 2 pixels or less only: bigger ones keep their triangles, whose edges cover samples by their distance. The compute path would be cheaper there too, but with whole pixels, so their rims would change.</li>
+  <li>A thread writes its point's pixels one after another. A group that shares out the pixels of its points among its threads was 0.4 ms faster where a chunk's points have mixed sizes (an adaptive chunk with finer chunks in some octants), but 11 % slower for points of one size, so it is not used.</li>
   <li>Points cast no shadows, and debug views draw them as they are (<code>D50</code>).</li>
 </ul>
 
