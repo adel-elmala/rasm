@@ -268,7 +268,7 @@ namespace rasm
         bool         bloom                   = false;    // Renderer::render adds the bloom passes (Camera::bloomStrength)
         bool         ui                      = false;    // Dear ImGui (CMake RASM_IMGUI): the RASM window on F1 and Renderer::setUiCallback
         AntiAliasing antiAliasing            = AntiAliasing::NONE; // Renderer::render's scene target: MSAA draws it with several samples per pixel
-        bool         computePoints           = true;     // Renderer::setComputePoints: points of 2 pixels or less by the compute rasterizer, where the GPU has 64-bit buffer atomics; false: by triangles
+        bool         computePoints           = true;     // Renderer::setComputePoints: points of 8 pixels or less (2 under MSAA) by the compute rasterizer, where the GPU has 64-bit buffer atomics; false: by triangles
     };
 
     // What an Engine is made with: the RendererConfig and AssetLoaderConfig fields, flat (designated initializers), and
@@ -320,7 +320,7 @@ namespace rasm
         bool         bloom                   = false;    // Renderer::render adds the bloom passes (Camera::bloomStrength)
         bool         ui                      = false;    // Dear ImGui (CMake RASM_IMGUI): the RASM window on F1 and Renderer::setUiCallback
         AntiAliasing antiAliasing            = AntiAliasing::NONE; // Renderer::render's scene target: MSAA draws it with several samples per pixel
-        bool         computePoints           = true;     // Renderer::setComputePoints: points of 2 pixels or less by the compute rasterizer, where the GPU has 64-bit buffer atomics; false: by triangles
+        bool         computePoints           = true;     // Renderer::setComputePoints: points of 8 pixels or less (2 under MSAA) by the compute rasterizer, where the GPU has 64-bit buffer atomics; false: by triangles
         bool         operator==(const EngineConfig&) const = default;
     };
 

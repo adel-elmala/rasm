@@ -19,7 +19,8 @@
 // through a colormap. The scan is cut into square tiles of 32 m, each a chunk of up to 64 K points (buildPointCloudChunk,
 // on worker threads) and an entity placed in doubles. The left view is perspective with TAA, the right one an
 // orthographic top view with 4x MSAA. Far chunks draw only the first points of their order (LOD by prefix). Points of
-// 2 pixels or less are written by a compute pass with 64-bit atomics where the GPU has them, the others by triangles.
+// 8 pixels or less (2 in the MSAA view) are written by a compute pass with 64-bit atomics where the GPU has them, the
+// others by triangles.
 // - Drag to orbit (left view) or pan (right view), wheel to zoom.
 // A headless run (or --check) orbits the left view and picks the point under the right view's centre, which must be
 // the point of the scan the shader drew there. A failed check exits with 1.
@@ -34,8 +35,8 @@
 //   --zoom         a scripted slow zoom: in on the left view, out on the right one (the chunks' LOD changes)
 //   --triangles    every point by triangles (Renderer::setComputePoints off)
 //   --adaptive     the points grow near the camera where the scan is sparser than their size on screen
-//                  (PointSizeMode::ADAPTIVE, up to 8 pixels), so the near ground closes; they then leave the compute
-//                  path, which takes points of 2 pixels or less
+//                  (PointSizeMode::ADAPTIVE, up to 8 pixels), so the near ground closes; in the left view they stay
+//                  on the compute path, which takes points of up to 8 pixels where a pixel has one sample
 //   --bench        the GPU time per pass (exampleBench.h), at 1920 x 1080
 
 namespace

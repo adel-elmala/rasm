@@ -316,7 +316,7 @@ typedef struct rasm_renderer_config
     rasm_anti_aliasing              anti_aliasing;
     uint32_t                        max_bindless_textures;                     /* 1.3: sampled textures at once, 16384 by default, lowered to the device's limit */
     uint32_t                        geometry_pool_points;                      /* 1.10: point cloud chunks, 8 B units: a point takes 1 (1.5 with colors) */
-    rasm_bool                       compute_points;                            /* 1.11: points of 2 pixels or less by the compute rasterizer, where the GPU has 64-bit buffer atomics (RASM_TRUE by default) */
+    rasm_bool                       compute_points;                            /* 1.11: points of 8 pixels or less (2 under MSAA) by the compute rasterizer, where the GPU has 64-bit buffer atomics (RASM_TRUE by default) */
 } rasm_renderer_config;
 
 typedef struct rasm_asset_loader_config
