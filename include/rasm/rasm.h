@@ -23,6 +23,7 @@
 #include "rasm/readback.h"
 #include "rasm/renderSpace.h"
 #include "rasm/terrain.h"
+#include "rasm/threadPriority.h"
 #include "rasm/tileStreamer.h"
 #include "rasm/vector.h"
 #include "rasm/view.h"

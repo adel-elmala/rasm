@@ -1,4 +1,5 @@
 #include "renderer/shaderCompiler.h"
+#include "core/workerPool.h"
 #include "rasm/types.h"
 #include "platform/paths.h"
 #include "renderer/shaderCache.h"
@@ -18,6 +19,7 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <filesystem>
@@ -35,6 +37,7 @@ namespace rasm
 
         // A new layout of the cache's key or files: every old entry misses.
         constexpr uint32_t SHADER_CACHE_KEY_VERSION = 1;
+        constexpr uint32_t SESSION_OPTION_COUNT = 3;
     }
 
     namespace
@@ -800,9 +803,74 @@ namespace rasm
 
             return valid;
         }
+
+        // The returned desc points into options, which must outlive its use. Slang counts any texture gather
+        // (shadow.slang) as spvImageGatherExtended and warns when the profile lacks it; plain gathers emit no such
+        // SPIR-V capability, so naming it changes no code. With spvDemoteToHelperInvocation, discard becomes
+        // OpDemoteToHelperInvocation instead of OpKill: the lane stays in its 2x2 quad as a helper, so the derivatives
+        // of the samples after a cut-out's discard stay defined (B33). A NonUniformResourceIndex sample (pointRaster.slang's
+        // resolve, which reads many materials' colormaps in one draw) makes Slang ask for the other capabilities below
+        // and warn without them; they only allow what a shader uses, so the other shaders' code is the same.
+        slang::TargetDesc getTargetDesc(slang::IGlobalSession *globalSession, ShaderCompiler::Target target, std::vector<slang::CompilerOptionEntry> &options)
+        {
+            static const char *const spirvCapabilities[] = {"spvImageGatherExtended", "spvDemoteToHelperInvocation", "spvShaderNonUniformEXT", "SPV_KHR_non_semantic_info", "SPV_GOOGLE_user_type",
+                                                            "spvDerivativeControl", "spvImageQuery", "spvSparseResidency", "spvMinLod", "spvFragmentFullyCoveredEXT"};
+            slang::TargetDesc targetDesc = {};
+            options.clear();
+            switch (target)
+            {
+            case ShaderCompiler::Target::SPIRV:
+                options.push_back({slang::CompilerOptionName::EmitSpirvDirectly, {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}});
+                for (const char *capability : spirvCapabilities)
+                    options.push_back({slang::CompilerOptionName::Capability, {slang::CompilerOptionValueKind::Int, static_cast<int32_t>(globalSession->findCapability(capability)), 0, nullptr, nullptr}});
+                targetDesc.format = SLANG_SPIRV;
+                targetDesc.profile = globalSession->findProfile("spirv_1_4");
+                targetDesc.compilerOptionEntryCount = static_cast<uint32_t>(options.size());
+                targetDesc.compilerOptionEntries = options.data();
+                break;
+            case ShaderCompiler::Target::MSL:
+                targetDesc.format = SLANG_METAL;
+                targetDesc.profile = globalSession->findProfile("metal_2_3");
+                break;
+            case ShaderCompiler::Target::HLSL:
+                targetDesc.format = SLANG_HLSL;
+                targetDesc.profile = globalSession->findProfile("sm_6_0");
+                break;
+            case ShaderCompiler::Target::GLSL:
+                targetDesc.format = SLANG_GLSL;
+                targetDesc.profile = globalSession->findProfile("glsl_4_5");
+                break;
+            case ShaderCompiler::Target::WGSL:
+                targetDesc.format = SLANG_WGSL;
+                break;
+            default:
+                spdlog::error("Unsupported shader target.");
+                break;
+            }
+            return targetDesc;
+        }
+
+        void removeFromQueue(std::deque<std::string> &queue, const std::string &name)
+        {
+            const auto it = std::find(queue.begin(), queue.end(), name);
+            if (it != queue.end())
+                queue.erase(it);
+        }
+
+        void getSessionOptions(slang::CompilerOptionEntry (&options)[SESSION_OPTION_COUNT])
+        {
+            options[0] = {slang::CompilerOptionName::VulkanUseEntryPointName, {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}};
+            options[1] = {slang::CompilerOptionName::MatrixLayoutColumn, {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}};
+            options[2] = {slang::CompilerOptionName::GLSLForceScalarLayout, {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}};
+        }
     }
 
-    bool ShaderCompiler::initialize(Target target, const std::string &shaderDir, const std::string &cacheDir)
+    ShaderCompiler::ShaderCompiler() = default;
+
+    ShaderCompiler::~ShaderCompiler() = default;
+
+    // workerThreads compile the prefetched shaders; 0 leaves every compile to compileFromString's thread.
+    bool ShaderCompiler::initialize(Target shaderTarget, const std::string &shaderDir, const std::string &cacheDir, uint32_t workerThreads)
     {
         const std::filesystem::path libFolder = pathFromUtf8(shaderDir) / "lib";
         const std::filesystem::path uberShader = pathFromUtf8(shaderDir) / "passes/rasm.slang";
@@ -814,53 +882,23 @@ namespace rasm
         }
         spdlog::info("Loading shaders from {}", shaderDir);
         libDir = std::filesystem::weakly_canonical(libFolder, errorCode);
-
-        // Create Slang Global Session
-        auto result = createGlobalSession(globalSession.writeRef());
-
-        if (SLANG_FAILED(result))
-        {
-            spdlog::error("Failed to create Slang global session. Error code: {}", result);
+        target = shaderTarget;
+        searchPath = pathToUtf8(libFolder);
+        if (!createSlangContext(mainContext))
             return false;
-        }
+        if (workerThreads > 0)
+            workers = std::make_unique<WorkerPool>(workerThreads, UINT64_MAX, "RASM shaders");
 
-        slang::TargetDesc targetDesc = getTargetDesc(target);
-
-        const std::string pathLib = pathToUtf8(libFolder);
-
-        const char *searchPaths[] = {pathLib.c_str()};
-
-        slang::SessionDesc sessionDesc = {};
-        sessionDesc.targets = &targetDesc;
-        sessionDesc.targetCount = 1;
-        sessionDesc.searchPaths = searchPaths;
-        sessionDesc.searchPathCount = static_cast<uint32_t>(sizeof(searchPaths) / sizeof(searchPaths[0]));
-
-        slang::CompilerOptionEntry options[] =
-            {
-                {slang::CompilerOptionName::VulkanUseEntryPointName,
-                 {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}},
-                {slang::CompilerOptionName::MatrixLayoutColumn,
-                 {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}},
-                {slang::CompilerOptionName::GLSLForceScalarLayout,
-                 {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}}};
-
-        sessionDesc.compilerOptionEntries = options;
-        sessionDesc.compilerOptionEntryCount = static_cast<uint32_t>(sizeof(options) / sizeof(options[0]));
-
-        auto sessionResult = globalSession->createSession(sessionDesc, activeSession.writeRef());
-
-        if (SLANG_FAILED(sessionResult))
-        {
-            spdlog::error("Failed to create Slang session. Error code: {}", sessionResult);
-            return false;
-        }
+        std::vector<slang::CompilerOptionEntry> targetOptions;
+        const slang::TargetDesc targetDesc = getTargetDesc(mainContext.globalSession, target, targetOptions);
+        slang::CompilerOptionEntry sessionOptions[SESSION_OPTION_COUNT] = {};
+        getSessionOptions(sessionOptions);
 
         // The key starts with every input all shaders share: the compiler, its target and options, and the included files.
         if (cacheDir.empty())
             return true;
         hashNumber(baseKey, SHADER_CACHE_KEY_VERSION);
-        hashString(baseKey, globalSession->getBuildTagString());
+        hashString(baseKey, mainContext.globalSession->getBuildTagString());
         // The tag is the release ("2026.2"), which a patched build of the same release keeps; its library file does not.
         const std::filesystem::path slangLibrary = pathFromUtf8(getModulePath(reinterpret_cast<const void *>(&slang_createGlobalSession)));
         hashString(baseKey, pathToUtf8(slangLibrary.filename()));
@@ -869,7 +907,7 @@ namespace rasm
         hashNumber(baseKey, static_cast<uint64_t>(targetDesc.format));
         hashNumber(baseKey, static_cast<uint64_t>(targetDesc.profile));
         hashOptions(baseKey, targetDesc.compilerOptionEntries, targetDesc.compilerOptionEntryCount);
-        hashOptions(baseKey, sessionDesc.compilerOptionEntries, sessionDesc.compilerOptionEntryCount);
+        hashOptions(baseKey, sessionOptions, SESSION_OPTION_COUNT);
         const std::filesystem::path folder = pathFromUtf8(cacheDir) / "shaders";
         std::filesystem::create_directories(folder, errorCode);
         if (!hashFolder(baseKey, libDir) || errorCode)
@@ -882,10 +920,62 @@ namespace rasm
         return true;
     }
 
+    // The queued prefetches are dropped and the running ones finish, so nothing compiles once the renderer goes.
     void ShaderCompiler::shutdown()
     {
-        if (stats.cacheHits + stats.compiles > 0)
-            spdlog::info("Shaders: {} from the cache, {} compiled in {:.0f} ms.", stats.cacheHits, stats.compiles, stats.compileSeconds * 1000.0);
+        if (workers)
+            workers->shutdown();
+        {
+            std::lock_guard lock(mutex);
+            stopped = true;
+        }
+        prefetchDone.notify_all();
+        const Stats done = getStats();
+        if (done.cacheHits + done.compiles > 0)
+            spdlog::info("Shaders: {} from the cache, {} compiled in {:.0f} ms ({} on the main thread).", done.cacheHits, done.compiles, done.compileSeconds * 1000.0, done.mainCompiles);
+    }
+
+    // Slang's global session is not thread-safe, and the objects made from one are used by one thread at a time
+    // (slang.h, IGlobalSession), so each thread that compiles has a context of its own.
+    bool ShaderCompiler::createSlangContext(SlangContext &context)
+    {
+        ZoneScoped;
+
+        // A context whose compile failed keeps its global session and takes a new session: the old one keeps the
+        // files it read, so a fix on disk, of a lib/ file too, would not be seen.
+        context.modules.clear();
+        context.session = nullptr;
+        if (!context.globalSession)
+        {
+            const SlangResult result = createGlobalSession(context.globalSession.writeRef());
+            if (SLANG_FAILED(result))
+            {
+                spdlog::error("Failed to create Slang global session. Error code: {}", result);
+                return false;
+            }
+        }
+
+        std::vector<slang::CompilerOptionEntry> targetOptions;
+        slang::TargetDesc targetDesc = getTargetDesc(context.globalSession, target, targetOptions);
+        const char *searchPaths[] = {searchPath.c_str()};
+        slang::CompilerOptionEntry options[SESSION_OPTION_COUNT] = {};
+        getSessionOptions(options);
+
+        slang::SessionDesc sessionDesc = {};
+        sessionDesc.targets = &targetDesc;
+        sessionDesc.targetCount = 1;
+        sessionDesc.searchPaths = searchPaths;
+        sessionDesc.searchPathCount = static_cast<uint32_t>(sizeof(searchPaths) / sizeof(searchPaths[0]));
+        sessionDesc.compilerOptionEntries = options;
+        sessionDesc.compilerOptionEntryCount = SESSION_OPTION_COUNT;
+
+        const SlangResult sessionResult = context.globalSession->createSession(sessionDesc, context.session.writeRef());
+        if (SLANG_FAILED(sessionResult))
+        {
+            spdlog::error("Failed to create Slang session. Error code: {}", sessionResult);
+            return false;
+        }
+        return true;
     }
 
     ShaderCompiler::CompiledShader ShaderCompiler::compile(const std::string &sourcePath, const std::string &outputPath, const std::string &entryPointName)
@@ -900,79 +990,326 @@ namespace rasm
         return compileFromString(sourceCode, outputPath, entryPointName);
     }
 
-    ShaderCompiler::CompiledShader ShaderCompiler::compileFromString(const std::string &sourceCode, const std::string &outputPath, const std::string &entryPointName)
+    // The source has the variant's #define lines, so with the base key this is every input of the SPIR-V. Without a
+    // cache folder the base key is empty, and the key still tells the shaders apart.
+    CacheKey ShaderCompiler::getKey(const std::string &sourceCode, const std::string &outputPath, const std::string &entryPointName) const
     {
-        ZoneScoped;
-
-        // The source has the variant's #define lines, so with the base key this is every input of the SPIR-V.
         CacheKey key = baseKey;
         hashString(key, outputPath);
         hashString(key, entryPointName);
         hashString(key, sourceCode);
-        const std::filesystem::path entryPath = cacheFolder.empty() ? std::filesystem::path() : cacheFolder / (toHex(key) + ".shader");
+        return key;
+    }
 
-        CachedShader shader;
-        if (!entryPath.empty() && readCachedShader(entryPath, key, shader))
+    bool ShaderCompiler::readCachedEntry(const CacheKey &key, CachedShader &shader)
+    {
+        if (cacheFolder.empty() || !readCachedShader(cacheFolder / (toHex(key) + ".shader"), key, shader))
+            return false;
+        std::lock_guard lock(mutex);
+        ++stats.cacheHits;
+        return true;
+    }
+
+    bool ShaderCompiler::compileEntry(SlangContext &context, const CacheKey &key, const std::string &sourceCode, const std::string &outputPath, const std::string &entryPointName,
+                                      CachedShader &shader, bool onWorker)
+    {
+        const auto start = std::chrono::steady_clock::now();
+        // A context whose new session could not be made after a failure tries again.
+        if (!context.session && !createSlangContext(context))
+            return false;
+        // A rejected cache entry may have filled some of shader before it failed.
+        shader = {};
+        CompiledShader compiled;
+        bool cacheable = true;
+        if (!compileWithSlang(context, sourceCode, outputPath, entryPointName, compiled, shader.pushConstants, shader.layouts, cacheable))
         {
-            ++stats.cacheHits;
+            createSlangContext(context);
+            return false;
         }
-        else
+        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        shader.code = std::move(compiled.code);
+        if (!cacheFolder.empty() && cacheable)
+            writeCachedShader(cacheFolder / (toHex(key) + ".shader"), key, shader);
         {
-            const auto start = std::chrono::steady_clock::now();
-            // A rejected entry may have filled some of shader before it failed.
-            shader = {};
-            CompiledShader compiled;
-            bool cacheable = true;
-            if (!compileWithSlang(sourceCode, outputPath, entryPointName, compiled, shader.pushConstants, shader.layouts, cacheable))
-                return {};
-            stats.compileSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+            std::lock_guard lock(mutex);
+            stats.compileSeconds += seconds;
             ++stats.compiles;
-            shader.code = std::move(compiled.code);
-            if (!entryPath.empty() && cacheable)
-                writeCachedShader(entryPath, key, shader);
+            stats.mainCompiles += onWorker ? 0 : 1;
         }
+        // A warm-up that missed a pipeline's shader shows here (and in shutdown's count); an application's own
+        // pipelines and the overlay's and the UI's are compiled here on purpose.
+        if (!onWorker)
+            spdlog::debug("'{}' compiled on the main thread in {:.0f} ms.", outputPath, seconds * 1000.0);
+        return true;
+    }
 
-        // Every build checks, since a Release build with a mismatch would read shifted data on the GPU (B23). The
-        // layouts are Slang's, from this compile or the one the cache kept, so a changed C++ struct is caught either way.
+    // Every build checks, since a Release build with a mismatch would read shifted data on the GPU (B23). The layouts
+    // are Slang's, from this compile or the one the cache kept, so a changed C++ struct is caught either way.
+    ShaderCompiler::CompiledShader ShaderCompiler::useShader(const CachedShader &shader, const std::string &outputPath)
+    {
         if (!validateRasmStructs(shader.pushConstants, shader.layouts))
         {
             spdlog::error("The C++ structs do not match shaders/lib/core.slang; '{}' is not compiled.", outputPath);
             return {};
         }
-        structLayouts.merge(shader.layouts);
-
-        CompiledShader result;
-        result.code = std::move(shader.code);
-        return result;
+        for (const auto &[name, layout] : shader.layouts)
+            structLayouts.try_emplace(name, layout);
+        return {.code = shader.code};
     }
 
-    bool ShaderCompiler::compileWithSlang(const std::string &sourceCode, const std::string &outputPath, const std::string &entryPointName, CompiledShader &shader,
+    // A prefetched shader is taken as its worker left it, waited for while a worker compiles it, or compiled here when no
+    // worker has started it. Without wait, a shader no worker has finished is moved first in the queue and comes back
+    // pending, so the caller draws without it this frame; a cache hit is read here, as it costs less than a frame.
+    ShaderCompiler::CompiledShader ShaderCompiler::compileFromString(const std::string &sourceCode, const std::string &outputPath, const std::string &entryPointName, bool wait)
+    {
+        ZoneScoped;
+
+        const CacheKey key = getKey(sourceCode, outputPath, entryPointName);
+        std::unique_lock lock(mutex);
+        const auto found = prefetches.find(toHex(key));
+        if (found == prefetches.end())
+        {
+            lock.unlock();
+            CachedShader shader;
+            if (readCachedEntry(key, shader))
+                return useShader(shader, outputPath);
+            if (!wait && workers)
+            {
+                const Request request = {.source = sourceCode, .outputPath = outputPath, .entryPoint = entryPointName};
+                prefetch(&request, 1, true);
+                return {.pending = true};
+            }
+            if (!compileEntry(mainContext, key, sourceCode, outputPath, entryPointName, shader, false))
+                return {};
+            return useShader(shader, outputPath);
+        }
+
+        // An entry is never erased, so the reference outlives the unlocks. A failed one is queued again, first, so a
+        // shader fixed on disk is picked up while the application runs; with wait, this thread then compiles it.
+        Prefetch &entry = found->second;
+        if (entry.state == PrefetchState::FAILED)
+        {
+            entry.state = PrefetchState::QUEUED;
+            ++openPrefetches;
+            queue.push_front(found->first);
+            workers->push({.run = [this]()
+                           { runPrefetch(); }});
+        }
+        if (!wait && (entry.state == PrefetchState::QUEUED || entry.state == PrefetchState::RUNNING))
+        {
+            if (entry.state == PrefetchState::QUEUED)
+            {
+                removeFromQueue(queue, found->first);
+                queue.push_front(found->first);
+            }
+            return {.pending = true};
+        }
+        // Taken off the queue, so no worker compiles it a second time.
+        if (entry.state == PrefetchState::QUEUED)
+        {
+            entry.state = PrefetchState::RUNNING;
+            removeFromQueue(queue, found->first);
+            lock.unlock();
+            CachedShader shader;
+            const bool compiled = readCachedEntry(entry.key, shader) ||
+                                  compileEntry(mainContext, entry.key, entry.request.source, entry.request.outputPath, entry.request.entryPoint, shader, false);
+            lock.lock();
+            entry.shader = std::move(shader);
+            endPrefetch(lock, entry, compiled, false);
+        }
+        else if (entry.state == PrefetchState::RUNNING)
+        {
+            ZoneNamedN(waitZone, "waitForShader", true);
+            prefetchDone.wait(lock, [&entry]()
+                              { return entry.state != PrefetchState::RUNNING; });
+        }
+        if (entry.state == PrefetchState::FAILED)
+            return {};
+        // A DONE entry does not change any more.
+        lock.unlock();
+        return useShader(entry.shader, outputPath);
+    }
+
+    // Queues requests for the workers; first puts them before the ones queued already, in their order. A shader asked
+    // for before is not queued again, but moved forward with first while no worker has it.
+    void ShaderCompiler::prefetch(const Request *requests, uint32_t count, bool first)
+    {
+        ZoneScoped;
+
+        if (!workers)
+            return;
+        std::vector<std::string> names;
+        uint32_t added = 0;
+        {
+            std::lock_guard lock(mutex);
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                const CacheKey key = getKey(requests[i].source, requests[i].outputPath, requests[i].entryPoint);
+                const auto [found, inserted] = prefetches.try_emplace(toHex(key));
+                if (inserted)
+                {
+                    found->second.key = key;
+                    hashString(found->second.sourceKey, requests[i].source);
+                    found->second.request = requests[i];
+                    ++openPrefetches;
+                    ++added;
+                    names.push_back(found->first);
+                }
+                else if (first && found->second.state == PrefetchState::QUEUED && std::find(names.begin(), names.end(), found->first) == names.end())
+                {
+                    removeFromQueue(queue, found->first);
+                    names.push_back(found->first);
+                }
+            }
+            queue.insert(first ? queue.begin() : queue.end(), names.begin(), names.end());
+        }
+        for (uint32_t i = 0; i < added; ++i)
+            workers->push({.run = [this]()
+                           { runPrefetch(); }});
+    }
+
+    // Returns once every queued shader is compiled or read; at once without workers, or after shutdown dropped some.
+    void ShaderCompiler::waitForPrefetches()
+    {
+        ZoneScoped;
+
+        std::unique_lock lock(mutex);
+        prefetchDone.wait(lock, [this]()
+                          { return openPrefetches == 0 || stopped; });
+    }
+
+    // One job per queued request, but a job takes whichever is first (the main thread may have moved or taken some),
+    // with the other queued shaders of its source: they reuse the module it loads.
+    void ShaderCompiler::runPrefetch()
+    {
+        ZoneScoped;
+
+        std::unique_lock lock(mutex);
+        std::vector<Prefetch *> group;
+        while (!queue.empty() && group.empty())
+        {
+            Prefetch &front = prefetches.at(queue.front());
+            queue.pop_front();
+            if (front.state == PrefetchState::QUEUED)
+            {
+                front.state = PrefetchState::RUNNING;
+                group.push_back(&front);
+            }
+        }
+        if (group.empty())
+            return;
+        for (const std::string &name : queue)
+        {
+            Prefetch &other = prefetches.at(name);
+            if (other.state == PrefetchState::QUEUED && other.sourceKey == group[0]->sourceKey)
+            {
+                other.state = PrefetchState::RUNNING;
+                group.push_back(&other);
+            }
+        }
+        lock.unlock();
+
+        // A context is made only for a miss, so a run whose cache has every shader makes none.
+        std::unique_ptr<SlangContext> context;
+        for (size_t i = 0; i < group.size(); ++i)
+        {
+            Prefetch &entry = *group[i];
+            CachedShader shader;
+            bool compiled = readCachedEntry(entry.key, shader);
+            if (!compiled && !context)
+            {
+                lock.lock();
+                if (!idleContexts.empty())
+                {
+                    context = std::move(idleContexts.back());
+                    idleContexts.pop_back();
+                }
+                lock.unlock();
+                if (!context)
+                {
+                    context = std::make_unique<SlangContext>();
+                    if (!createSlangContext(*context))
+                        context.reset();
+                    lock.lock();
+                    stats.workerSessions += context ? 1 : 0;
+                    lock.unlock();
+                }
+            }
+            if (!compiled && context)
+                compiled = compileEntry(*context, entry.key, entry.request.source, entry.request.outputPath, entry.request.entryPoint, shader, true);
+            lock.lock();
+            // Back before the last entry ends, so the end of the last open prefetch frees it with the others.
+            if (i + 1 == group.size() && context)
+            {
+                idleContexts.push_back(std::move(context));
+                context = nullptr;
+            }
+            entry.shader = std::move(shader);
+            endPrefetch(lock, entry, compiled, true);
+            lock.unlock();
+        }
+    }
+
+    // Called with the lock held, which it leaves held. The last open prefetch frees the workers' Slang contexts, whose
+    // sessions keep every module they loaded, on a worker: a session takes milliseconds to go.
+    void ShaderCompiler::endPrefetch(std::unique_lock<std::mutex> &lock, Prefetch &entry, bool compiled, bool onWorker)
+    {
+        entry.state = compiled ? PrefetchState::DONE : PrefetchState::FAILED;
+        if (compiled)
+            entry.request.source = std::string();
+        --openPrefetches;
+        std::vector<std::unique_ptr<SlangContext>> freed;
+        const bool release = openPrefetches == 0 && !idleContexts.empty();
+        if (release && onWorker)
+        {
+            freed.swap(idleContexts);
+            stats.workerSessions -= static_cast<uint32_t>(freed.size());
+        }
+        lock.unlock();
+        prefetchDone.notify_all();
+        if (release && !onWorker)
+            workers->push({.run = [this]()
+                           { releaseIdleContexts(); }});
+        freed.clear();
+        lock.lock();
+    }
+
+    void ShaderCompiler::releaseIdleContexts()
+    {
+        std::vector<std::unique_ptr<SlangContext>> freed;
+        std::lock_guard lock(mutex);
+        if (openPrefetches == 0)
+        {
+            freed.swap(idleContexts);
+            stats.workerSessions -= static_cast<uint32_t>(freed.size());
+        }
+    }
+
+    bool ShaderCompiler::compileWithSlang(SlangContext &context, const std::string &sourceCode, const std::string &outputPath, const std::string &entryPointName, CompiledShader &shader,
                                           std::string &pushConstants, StructLayouts &layouts, bool &cacheable)
     {
         ZoneScoped;
 
-        // The session keeps every module and rejects a second one with the same name and different source,
-        // so hash the source into the name.
-        const auto moduleName = outputPath + "." + std::to_string(std::hash<std::string>{}(sourceCode));
-        const std::string modulePath = buildPath + moduleName;
-
-        // Load module
-        Slang::ComPtr<slang::IModule> slangModule;
+        // A module is loaded once per context and source: the stages of a pipeline and the entry points of one file
+        // share it, and only its parse and check, the larger part of a compile, are skipped. The session keeps every
+        // module and rejects a second one with the same name and different source, so the name is the source's hash;
+        // the path names the first shader that loaded it, for the diagnostics.
+        CacheKey sourceKey;
+        hashString(sourceKey, sourceCode);
+        const std::string moduleName = toHex(sourceKey);
+        auto [loaded, inserted] = context.modules.try_emplace(moduleName);
+        if (inserted)
         {
+            ZoneNamedN(loadZone, "loadModule", true);
+            loaded->second.path = buildPath + outputPath + "." + moduleName;
             Slang::ComPtr<slang::IBlob> diagnosticsBlob;
-
-            slangModule = activeSession->loadModuleFromSourceString(moduleName.c_str(),          // Module name
-                                                                    modulePath.c_str(),          // Module path
-                                                                    sourceCode.c_str(),          // Shader source code
-                                                                    diagnosticsBlob.writeRef()); // Optional diagnostic container
-
+            loaded->second.module = context.session->loadModuleFromSourceString(moduleName.c_str(), loaded->second.path.c_str(), sourceCode.c_str(), diagnosticsBlob.writeRef());
             diagnoseIfNeeded(diagnosticsBlob);
-
-            if (!slangModule)
-            {
-                return false;
-            }
         }
+        slang::IModule *slangModule = loaded->second.module;
+        if (!slangModule)
+            return false;
+        const std::string &modulePath = loaded->second.path;
 
         // The key holds the files of lib/ only, so a module that read any other file is not cached.
         for (SlangInt32 i = 0; i < slangModule->getDependencyFileCount(); ++i)
@@ -1003,10 +1340,10 @@ namespace rasm
         Slang::ComPtr<slang::IComponentType> composedProgram;
         {
             Slang::ComPtr<slang::IBlob> diagnosticsBlob;
-            auto result = activeSession->createCompositeComponentType(componentTypes.data(),
-                                                                      componentTypes.size(),
-                                                                      composedProgram.writeRef(),
-                                                                      diagnosticsBlob.writeRef());
+            auto result = context.session->createCompositeComponentType(componentTypes.data(),
+                                                                        componentTypes.size(),
+                                                                        composedProgram.writeRef(),
+                                                                        diagnosticsBlob.writeRef());
 
             diagnoseIfNeeded(diagnosticsBlob);
             if (SLANG_FAILED(result))
@@ -1068,8 +1405,9 @@ namespace rasm
         return true;
     }
 
-    const ShaderCompiler::Stats &ShaderCompiler::getStats() const
+    ShaderCompiler::Stats ShaderCompiler::getStats() const
     {
+        std::lock_guard lock(mutex);
         return stats;
     }
 
@@ -1078,54 +1416,4 @@ namespace rasm
         const auto it = structLayouts.find(name);
         return it != structLayouts.end() ? &it->second.fields : nullptr;
     }
-
-    slang::TargetDesc ShaderCompiler::getTargetDesc(Target target)
-    {
-        // The returned desc only points at these, so they must outlive this function. Slang counts any texture gather
-        // (shadow.slang) as spvImageGatherExtended and warns when the profile lacks it; plain gathers emit no such
-        // SPIR-V capability, so naming it changes no code. With spvDemoteToHelperInvocation, discard becomes
-        // OpDemoteToHelperInvocation instead of OpKill: the lane stays in its 2x2 quad as a helper, so the derivatives
-        // of the samples after a cut-out's discard stay defined (B33). A NonUniformResourceIndex sample (pointRaster.slang's
-        // resolve, which reads many materials' colormaps in one draw) makes Slang ask for the other capabilities below
-        // and warn without them; they only allow what a shader uses, so the other shaders' code is the same.
-        static const char *const spirvCapabilities[] = {"spvImageGatherExtended", "spvDemoteToHelperInvocation", "spvShaderNonUniformEXT", "SPV_KHR_non_semantic_info", "SPV_GOOGLE_user_type",
-                                                        "spvDerivativeControl", "spvImageQuery", "spvSparseResidency", "spvMinLod", "spvFragmentFullyCoveredEXT"};
-        constexpr uint32_t SPIRV_OPTION_COUNT = 1 + sizeof(spirvCapabilities) / sizeof(spirvCapabilities[0]);
-        static slang::CompilerOptionEntry spirvOptions[SPIRV_OPTION_COUNT] = {};
-        spirvOptions[0] = {slang::CompilerOptionName::EmitSpirvDirectly, {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}};
-        for (uint32_t i = 1; i < SPIRV_OPTION_COUNT; ++i)
-            spirvOptions[i] = {slang::CompilerOptionName::Capability, {slang::CompilerOptionValueKind::Int, static_cast<int32_t>(globalSession->findCapability(spirvCapabilities[i - 1])), 0, nullptr, nullptr}};
-
-        slang::TargetDesc targetDesc = {};
-
-        switch (target)
-        {
-        case Target::SPIRV:
-            targetDesc.format = SLANG_SPIRV;
-            targetDesc.profile = globalSession->findProfile("spirv_1_4");
-            targetDesc.compilerOptionEntryCount = SPIRV_OPTION_COUNT;
-            targetDesc.compilerOptionEntries = spirvOptions;
-            break;
-        case Target::MSL:
-            targetDesc.format = SLANG_METAL;
-            targetDesc.profile = globalSession->findProfile("metal_2_3");
-            break;
-        case Target::HLSL:
-            targetDesc.format = SLANG_HLSL;
-            targetDesc.profile = globalSession->findProfile("sm_6_0");
-            break;
-        case Target::GLSL:
-            targetDesc.format = SLANG_GLSL;
-            targetDesc.profile = globalSession->findProfile("glsl_4_5");
-            break;
-        case Target::WGSL:
-            targetDesc.format = SLANG_WGSL;
-            break;
-        default:
-            spdlog::error("Unsupported shader target.");
-            break;
-        }
-        return targetDesc;
-    }
-
 }

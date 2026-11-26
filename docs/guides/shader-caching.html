@@ -373,6 +373,8 @@
   <figcaption>A hit skips Slang only. The struct check, the shader module and the pipeline are made as without a cache, and the pipeline cache lets the driver skip its own compile.</figcaption>
 </figure>
 
+<p>The reads, compiles and writes of this figure mostly run on the shader workers: at startup <code>warmPipelines</code> queues every shader a frame can need, and a pipeline then finds its SPIR-V in memory (<a href="shader-warmup.html">Shader warm-up</a>). Two workers never write one entry: each shader is queued once.</p>
+
 <div class="table-wrap">
 <table>
   <tr><th>This page</th><th>RASM</th></tr>

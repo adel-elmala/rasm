@@ -624,6 +624,7 @@ namespace rasm::c
             .preferredBackend = static_cast<Backend>(config.preferred_backend),
             .shaderDir = config.shader_dir != nullptr ? config.shader_dir : "",
             .cacheDir = config.cache_dir != nullptr ? config.cache_dir : "",
+            .shaderThreads = config.shader_threads,
             .geometryPoolVertices = config.geometry_pool_vertices,
             .geometryPoolColors = config.geometry_pool_colors,
             .geometryPoolSkins = config.geometry_pool_skins,
@@ -706,6 +707,7 @@ namespace rasm::c
             .max_bindless_textures = config.maxBindlessTextures,
             .geometry_pool_points = config.geometryPoolPoints,
             .compute_points = config.computePoints ? RASM_TRUE : RASM_FALSE,
+            .shader_threads = config.shaderThreads,
         };
     }
 

@@ -24,6 +24,7 @@ TEST_CASE("The config conversions copy every field")
         .assetRoot = "assets here",
         .shaderDir = "shaders here",
         .cacheDir = "cache here",
+        .shaderThreads = 30,
         .geometryPoolVertices = 11,
         .geometryPoolColors = 12,
         .geometryPoolSkins = 13,
@@ -109,6 +110,7 @@ TEST_CASE("The config conversions copy every field")
     CHECK(renderer.ui != defaults.ui);
     CHECK(renderer.antiAliasing == rasm::AntiAliasing::TAA);
     CHECK(renderer.computePoints != defaults.computePoints);
+    CHECK(renderer.shaderThreads == 30);
 
     const rasm::AssetLoaderConfig loader = rasm::toAssetLoaderConfig(engine);
     CHECK(loader.assetRoot == "assets here");

@@ -6,6 +6,7 @@
 #include "renderer/blendSort.h"
 #include "renderer/geometryPool.h"
 #include "renderer/gpuScene.h"
+#include "renderer/pipelineWarmup.h"
 #include "renderer/viewGraph.h"
 
 #include "spdlog/spdlog.h"
@@ -369,7 +370,7 @@ namespace rasm
                 continue;
             if (source.empty())
                 source = readFile(pathFromUtf8(config.shaderDir) / "passes/rasm.slang");
-            picks->pipelines[i] = createGraphicsPipeline(names[i], std::string("#define RASM_PICK 1\n") + alphaDefines[i] + "#line 1\n" + source, formats, DEPTH_FORMAT, "vertMain", "pickMain",
+            picks->pipelines[i] = createGraphicsPipeline(names[i], getShaderVariant(std::string("#define RASM_PICK 1\n") + alphaDefines[i], source), formats, DEPTH_FORMAT, "vertMain", "pickMain",
                                                          BlendMode::NONE, i != 2);
         }
         const bool pipelines = picks->pipelines[0].isValid() && picks->pipelines[1].isValid() && picks->pipelines[2].isValid();
@@ -383,7 +384,7 @@ namespace rasm
         if (pipelines && pointRuns && !picks->pointPipeline.isValid())
         {
             const std::string pointSource = readFile(pathFromUtf8(config.shaderDir) / "passes/points.slang");
-            picks->pointPipeline = createGraphicsPipeline("pointsPick", std::string("#define RASM_PICK 1\n#line 1\n") + pointSource, formats, DEPTH_FORMAT, "vertMain", "pickMain", BlendMode::NONE, true);
+            picks->pointPipeline = createGraphicsPipeline("pointsPick", getShaderVariant("#define RASM_PICK 1\n", pointSource), formats, DEPTH_FORMAT, "vertMain", "pickMain", BlendMode::NONE, true);
         }
 
         // The slot's targets, culling buffer and host copy grow to what the frame needs, and stay.
