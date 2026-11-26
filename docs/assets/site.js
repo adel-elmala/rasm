@@ -10,6 +10,26 @@ const SECTIONS = [
         ],
     },
     {
+        title: "API reference",
+        pages: [
+            { path: "api/index.html",                 title: "Getting started" },
+            { path: "api/engine.html",                title: "Engine and Renderer" },
+            { path: "api/scene.html",                 title: "Scenes, entities, meshes, lights" },
+            { path: "api/materials.html",             title: "Materials and textures" },
+            { path: "api/camera.html",                title: "Cameras and input" },
+            { path: "api/render-graph.html",          title: "Render graph and custom passes" },
+            { path: "api/low-level.html",             title: "RenderContext and resources" },
+            { path: "api/types.html",                 title: "Types, handles and limits" },
+            { path: "api/c-api.html",                 title: "C API" },
+        ],
+    },
+    {
+        title: "Guides",
+        pages: [
+            { path: "guides/index.html",              title: "Guide index" },
+        ],
+    },
+    {
         title: "Engine tour",
         guide: true,
         blurb: "How RASM fits together. Read these three first.",
@@ -121,20 +141,6 @@ const SECTIONS = [
             { path: "guides/debug-views.html",           title: "Debug views",                         blurb: "Normals, UVs, overdraw, LODs, culling and light counts in place of the shading." },
             { path: "guides/inspecting-gpu-resources.html", title: "Inspecting GPU resources",         blurb: "Show a target, depth, Hi-Z or light clusters mid-frame, and GPU table rows from reflection." },
             { path: "guides/image-tests.html",           title: "Image tests: golden images",          blurb: "Compare each frame with a stored image, with a threshold for driver noise." },
-        ],
-    },
-    {
-        title: "API reference",
-        pages: [
-            { path: "api/index.html",                 title: "Getting started" },
-            { path: "api/engine.html",                title: "Engine and Renderer" },
-            { path: "api/scene.html",                 title: "Scenes, entities, meshes, lights" },
-            { path: "api/materials.html",             title: "Materials and textures" },
-            { path: "api/camera.html",                title: "Cameras and input" },
-            { path: "api/render-graph.html",          title: "Render graph and custom passes" },
-            { path: "api/low-level.html",             title: "RenderContext and resources" },
-            { path: "api/types.html",                 title: "Types, handles and limits" },
-            { path: "api/c-api.html",                 title: "C API" },
         ],
     },
     {

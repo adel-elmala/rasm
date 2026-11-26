@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guides · RASM</title>
+<meta name="description" content="Concept guides: one rendering technique per page, explained with pictures, then tied to RASM's code.">
+<meta name="rasm-sources" content="">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/index.html">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+  </defs>
+</svg>
+
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow" data-fixed="1">Guides</p>
+<h1>How RASM works</h1>
+<p class="lead">Each guide explains one rendering technique on its own, with pictures first, and ends with an "In RASM" part that shows what the engine does and where in the code. Read them to learn a technique or before you change the engine. To build an application, the <a href="../api/index.html">API reference</a> is the place to start.</p>
+
+<div class="cards">
+  <a class="card" href="big-picture.html"><b>Start with the tour →</b><span>Three pages that show how RASM fits together: the big picture, one frame, and the GPU scene tables.</span></a>
+  <a class="card" href="#topics"><b>Find a guide by topic →</b><span>From a task (shadows, picking, point clouds, …) to the guide that explains it.</span></a>
+  <a class="card" href="#all-guides"><b>All guides →</b><span>Every guide, in reading order and grouped by theme.</span></a>
+</div>
+
+<h2 id="map">The engine on one page</h2>
+<p>Each box is a guide. Click one to open it. The top row runs on the CPU, the middle row on the GPU. Boxes with an orange border are tour pages that show how RASM fits together; the others explain one idea each.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>CPU work</span>
+  <span><i class="gpu"></i>GPU work</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 320" role="img" aria-label="Map of the guides. CPU: your app, streaming assets, bindless materials, the GPU scene tables, uploads. GPU: frustum culling, occlusion culling, indirect draws, PBR shading, render graph passes, present. Under everything: big picture, one frame, frames in flight, the RHI, GPU sync, struct layout.">
+    <text x="10" y="20" class="small t-cpu">CPU · every frame and on change</text>
+    <a href="../api/index.html"><rect x="10" y="30" width="130" height="58" rx="6" class="cpu"/><text x="75" y="54" class="mid title">Your app</text><text x="75" y="72" class="mid small">API reference</text></a>
+    <line x1="140" y1="59" x2="158" y2="59" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <a href="asset-streaming.html"><rect x="160" y="30" width="130" height="58" rx="6" class="cpu"/><text x="225" y="54" class="mid title">Load assets</text><text x="225" y="72" class="mid small">worker pool</text></a>
+    <line x1="290" y1="59" x2="308" y2="59" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <a href="bindless.html"><rect x="310" y="30" width="130" height="58" rx="6" class="cpu"/><text x="375" y="54" class="mid title">Materials</text><text x="375" y="72" class="mid small">bindless textures</text></a>
+    <line x1="440" y1="59" x2="458" y2="59" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <a href="gpu-scene.html"><rect x="460" y="30" width="130" height="58" rx="6" class="cpu"/><rect x="460" y="30" width="130" height="58" rx="6" class="hot"/><text x="525" y="54" class="mid title">GPU scene</text><text x="525" y="72" class="mid small">tables, draw lists</text></a>
+    <line x1="590" y1="59" x2="608" y2="59" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <a href="gpu-memory.html"><rect x="610" y="30" width="140" height="58" rx="6" class="cpu"/><text x="680" y="54" class="mid title">Upload</text><text x="680" y="72" class="mid small">staging, dirty rows</text></a>
+
+    <path d="M680,88 V118 H62 V146" class="arrow" marker-end="url(#ah)"/>
+    <text x="380" y="112" class="mid small">one submit per frame</text>
+
+    <text x="90" y="140" class="small t-gpu">GPU · every frame</text>
+    <a href="frustum-culling.html"><rect x="10" y="150" width="105" height="58" rx="6" class="gpu"/><text x="62" y="174" class="mid title">Frustum</text><text x="62" y="192" class="mid small">cull</text></a>
+    <line x1="115" y1="179" x2="131" y2="179" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <a href="occlusion-culling.html"><rect x="133" y="150" width="105" height="58" rx="6" class="gpu"/><text x="185" y="174" class="mid title">Occlusion</text><text x="185" y="192" class="mid small">Hi-Z cull</text></a>
+    <line x1="238" y1="179" x2="254" y2="179" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <a href="gpu-driven.html"><rect x="256" y="150" width="105" height="58" rx="6" class="gpu"/><text x="308" y="174" class="mid title">Draw</text><text x="308" y="192" class="mid small">indirect</text></a>
+    <line x1="361" y1="179" x2="377" y2="179" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <a href="pbr.html"><rect x="379" y="150" width="105" height="58" rx="6" class="gpu"/><text x="431" y="174" class="mid title">Shade</text><text x="431" y="192" class="mid small">PBR</text></a>
+    <line x1="484" y1="179" x2="500" y2="179" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <a href="render-graphs.html"><rect x="502" y="150" width="105" height="58" rx="6" class="gpu"/><text x="554" y="174" class="mid title">Passes</text><text x="554" y="192" class="mid small">render graph</text></a>
+    <line x1="607" y1="179" x2="623" y2="179" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <a href="swapchain.html"><rect x="625" y="150" width="125" height="58" rx="6" class="gpu"/><text x="687" y="174" class="mid title">Present</text><text x="687" y="192" class="mid small">swapchain</text></a>
+
+    <text x="10" y="248" class="small">Under everything</text>
+    <a href="big-picture.html"><rect x="10" y="258" width="115" height="50" rx="6" class="box"/><rect x="10" y="258" width="115" height="50" rx="6" class="hot"/><text x="67" y="288" class="mid title">Big picture</text></a>
+    <a href="frame-loop.html"><rect x="135" y="258" width="115" height="50" rx="6" class="box"/><rect x="135" y="258" width="115" height="50" rx="6" class="hot"/><text x="192" y="288" class="mid title">One frame</text></a>
+    <a href="frames-in-flight.html"><rect x="260" y="258" width="115" height="50" rx="6" class="box"/><text x="317" y="288" class="mid title">Frames in flight</text></a>
+    <a href="graphics-apis-rhi.html"><rect x="385" y="258" width="115" height="50" rx="6" class="box"/><text x="442" y="288" class="mid title">The RHI</text></a>
+    <a href="gpu-sync.html"><rect x="510" y="258" width="115" height="50" rx="6" class="box"/><text x="567" y="288" class="mid title">GPU sync</text></a>
+    <a href="struct-layout.html"><rect x="635" y="258" width="115" height="50" rx="6" class="box"/><text x="692" y="288" class="mid title">Struct layout</text></a>
+      </svg>
+  <figcaption>The path of a frame: assets become rows in GPU tables, the CPU uploads what changed, the GPU culls, draws, shades, runs the passes and presents, or with no window copies the image back (<a href="headless-readback.html">headless rendering and readback</a>). The window can be RASM's own or your application's (<a href="platform-layer.html">the platform layer</a>).</figcaption>
+</figure>
+
+<h2 id="how-to-read">How a guide is built</h2>
+<p>Every concept guide has the same shape, so you always know where to look.</p>
+
+<ol class="flow">
+  <li><b>In short</b><span>the whole idea in five lines</span></li>
+  <li><b>The problem</b><span>what goes wrong without it</span></li>
+  <li><b>How it works</b><span>pictures, then the math</span></li>
+  <li><b>Variants and pitfalls</b><span>the choices, and the usual bugs</span></li>
+  <li class="gpu"><b>In RASM</b><span>what the engine does, and where in the code</span></li>
+</ol>
+
+<div class="table-wrap">
+<table>
+  <tr><th>On every page</th><th>What it does</th></tr>
+  <tr><td><b>On this page</b> (right side)</td><td>The sections of the page. The one you are reading is marked.</td></tr>
+  <tr><td><b>Find a page</b> (top left, or press <kbd>/</kbd>)</td><td>Type a few letters to filter the list of pages. <kbd>Enter</kbd> opens the first match.</td></tr>
+  <tr><td><b>⤢</b> on a picture</td><td>Shows the picture large. <kbd>Esc</kbd> closes it.</td></tr>
+  <tr><td><b>◀ Back / Next ▶</b> on a picture</td><td>Steps through the states of one diagram. The arrow keys work too.</td></tr>
+  <tr><td>Colors</td><td><span class="c-cpu">Blue</span> is CPU work, <span class="c-gpu">green</span> is GPU work, <span class="c-mem">amber</span> is memory (buffers, textures), <span class="c-shader">purple</span> is shader code.</td></tr>
+</table>
+</div>
+
+<h2 id="topics">Find a guide by topic</h2>
+<div class="table-wrap">
+<table>
+  <tr><th>You want to…</th><th>Read</th></tr>
+  <tr><td>use RASM from C, Python, C#, Rust or Zig</td><td><a href="stable-c-abi.html">A stable C ABI</a></td></tr>
+  <tr><td>understand the engine before changing it</td><td><a href="big-picture.html">The big picture</a>, <a href="frame-loop.html">One frame</a>, <a href="gpu-scene.html">The GPU scene tables</a></td></tr>
+  <tr><td>draw map vector data: roads, lakes, points</td><td><a href="vector-rendering.html">Vector lines, polygons and points</a></td></tr>
+  <tr><td>name places on a map: labels that never overlap</td><td><a href="text-and-labels.html">Text and labels</a></td></tr>
+  <tr><td>select what the mouse is over: an object, a road, a point on the ground</td><td><a href="picking.html">Picking</a></td></tr>
+  <tr><td>show a reference grid, or CAD views that pan and zoom (orthographic)</td><td><a href="reference-grid.html">Reference grids</a>, <a href="camera-controllers.html#pan-zoom">pan and zoom</a></td></tr>
+  <tr><td>draw a point cloud (LiDAR, a scan) colored by a value</td><td><a href="point-clouds.html">Point clouds</a></td></tr>
+  <tr><td>draw a vector field, particles or markers: a shape per data point, colored by a value, and streamlines</td><td><a href="instanced-glyphs.html">Instanced glyphs and data lines</a></td></tr>
+  <tr><td>stream a LAS or LAZ scan bigger than GPU memory</td><td><a href="point-octree.html">Streaming point clouds</a></td></tr>
+  <tr><td>draw terrain from height map tiles</td><td><a href="terrain.html">Terrain from height maps</a></td></tr>
+  <tr><td>stream a map or an open world under a memory budget</td><td><a href="tile-streaming.html">Tile streaming under a memory budget</a></td></tr>
+  <tr><td>add a render pass or post effect</td><td><a href="render-graphs.html">Render graphs</a></td></tr>
+  <tr><td>use last frame's image, several outputs, or less memory for render targets</td><td><a href="temporal-history.html">History buffers</a>, <a href="multiple-render-targets.html">Multiple render targets</a>, <a href="memory-aliasing.html">Transient memory and aliasing</a>, <a href="load-store-ops.html">Load and store ops</a></td></tr>
+  <tr><td>make the image brighter or darker, or change how bright lights look</td><td><a href="tone-mapping.html">Tone mapping and exposure</a></td></tr>
+  <tr><td>smooth jagged edges</td><td><a href="msaa.html">MSAA and alpha-to-coverage</a></td></tr>
+  <tr><td>smooth edges, thin lines and highlights over frames</td><td><a href="taa.html">Temporal anti-aliasing</a></td></tr>
+  <tr><td>make bright lights glow</td><td><a href="bloom.html">Bloom</a></td></tr>
+  <tr><td>light a scene with a sky photo, show the sky behind it</td><td><a href="image-based-lighting.html">Image-based lighting</a></td></tr>
+  <tr><td>add shadows to a scene</td><td><a href="shadow-mapping.html">Shadow mapping</a>, <a href="cascaded-shadows.html">Cascaded shadow maps</a>, <a href="local-light-shadows.html">Shadows of spot and point lights</a></td></tr>
+  <tr><td>play a glTF model's animations</td><td><a href="keyframe-animation.html">Keyframe animation</a></td></tr>
+  <tr><td>play a skinned glTF character (joints and weights)</td><td><a href="skinning.html">Skinning</a></td></tr>
+  <tr><td>blend a glTF mesh between shapes (morph targets), from a clip or from the application</td><td><a href="morph-targets.html">Morph targets</a></td></tr>
+  <tr><td>see normals, UVs, overdraw, LODs, culling, light counts or meshlets on screen</td><td><a href="debug-views.html">Debug views</a></td></tr>
+  <tr><td>look at a render target, a depth, a Hi-Z level, the light clusters or an entity's GPU table rows while it runs</td><td><a href="inspecting-gpu-resources.html">Inspecting GPU resources</a></td></tr>
+  <tr><td>show several views at once: split screen, a map in the corner, editor viewports, a camera's picture on a TV or in the UI</td><td><a href="multiple-views.html">Many views of one scene</a></td></tr>
+  <tr><td>move cameras with your own input, or several cameras at once</td><td><a href="camera-controllers.html#who-drives">Camera controllers</a></td></tr>
+  <tr><td>add debug windows, sliders or tool panels to an app</td><td><a href="immediate-mode-ui.html">Immediate-mode UI</a></td></tr>
+  <tr><td>change a GPU struct or a shader</td><td><a href="struct-layout.html">Struct layout rules</a></td></tr>
+  <tr><td>find why something is slow</td><td><a href="gpu-timing.html">GPU timing and frame statistics</a></td></tr>
+  <tr><td>draw only the visible parts of big, dense meshes</td><td><a href="meshlets.html">Meshlets and cluster culling</a></td></tr>
+  <tr><td>keep a frame free of heap allocations, or find the ones it makes</td><td><a href="frame-allocations.html">Heap memory in the frame</a></td></tr>
+  <tr><td>load without slowing the frames: copies on the GPU's copy engine</td><td><a href="transfer-queue.html">Transfer queues and ownership transfers</a></td></tr>
+  <tr><td>run compute work next to graphics work</td><td><a href="async-compute.html">Async compute and multiple queues</a></td></tr>
+</table>
+</div>
+
+<h2 id="all-guides">All guides</h2>
+<p>The numbers give a reading order, but each guide stands on its own.</p>
+<div id="catalog"></div>
+
+</main>
+</div>
+</body>
+</html>
