@@ -1208,6 +1208,106 @@ namespace
         return buildGlyphs(engine, assets, content);
     }
 
+    // A see-through material: its color and alpha, and how its draws go over what is behind them.
+    rasm::MaterialHandle createBlendMaterial(rasm::Engine &engine, rasm::MaterialType type, const glm::vec4 &color, rasm::BlendMethod method)
+    {
+        const rasm::MaterialHandle material = engine.createMaterial(type, {}, true);
+        rasm::Material values = engine.getMaterial(material);
+        for (uint32_t i = 0; i < 4; ++i)
+            values.params[static_cast<uint32_t>(rasm::PbrParam::ALBEDO) + i] = color[static_cast<int>(i)];
+        values.params[static_cast<uint32_t>(rasm::PbrParam::ROUGHNESS)] = 0.4f;
+        values.alphaMode = rasm::AlphaMode::BLEND;
+        values.blendMethod = method;
+        engine.updateMaterial(material, values);
+        return material;
+    }
+
+    // Weighted blended transparency: three nested see-through spheres around a solid cube, six see-through slices in one
+    // mesh (alpha and color by vertex), see-through arrows (a glyph chunk with a BLEND material), all weighted; an
+    // additive glow; a sorted pane in front of them all, drawn over the weighted ones. Picks through the spheres: the
+    // outer one with minAlpha 0, the inner one (alpha 0.55) with 0.5.
+    bool buildWeighted(rasm::Engine &engine, const Assets &assets, Content &content)
+    {
+        const rasm::MeshHandle sphere = engine.createMesh(rasm::buildGlyphShape(rasm::GlyphShape::SPHERE));
+        const glm::vec3 centre(-0.9f, 1.2f, 0.0f);
+        const float diameters[3] = {2.4f, 1.6f, 0.9f};
+        const glm::vec4 colors[3] = {{0.25f, 0.55f, 0.95f, 0.25f}, {0.2f, 0.9f, 0.45f, 0.35f}, {0.98f, 0.55f, 0.15f, 0.55f}};
+        rasm::EntityHandle spheres[3];
+        for (uint32_t i = 0; i < 3; ++i)
+            spheres[i] = addEntity(engine, content, "shell", sphere, createBlendMaterial(engine, rasm::MaterialType::PBR, colors[i], rasm::BlendMethod::WEIGHTED),
+                                   rasm::Transform{centre, glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(diameters[i])});
+        addEntity(engine, content, "core", assets.cube, createColorMaterial(engine, glm::vec3(0.8f, 0.8f, 0.85f), 0.3f),
+                  rasm::Transform{centre, glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(0.35f)});
+
+        // Slices across x, in one mesh: back to front from one side only, which sorting cannot fix.
+        std::vector<rasm::Vertex> vertices;
+        std::vector<uint32_t> indices;
+        std::vector<uint32_t> sliceColors;
+        for (uint32_t i = 0; i < 6; ++i)
+        {
+            const float x = 0.6f + 0.25f * static_cast<float>(i);
+            const auto first = static_cast<uint32_t>(vertices.size());
+            for (uint32_t corner = 0; corner < 4; ++corner)
+            {
+                rasm::Vertex vertex{};
+                vertex.pos = glm::vec3(x, 0.2f + 1.6f * static_cast<float>(corner / 2), -0.8f + 1.6f * static_cast<float>(corner % 2));
+                vertex.normal = glm::vec3(1.0f, 0.0f, 0.0f);
+                vertices.push_back(vertex);
+                const float t = static_cast<float>(i) / 5.0f;
+                sliceColors.push_back(rasm::packVertexColor(glm::vec4(t, 0.4f + 0.3f * static_cast<float>(corner % 2), 1.0f - t, 0.3f + 0.2f * static_cast<float>(corner / 2))));
+            }
+            indices.insert(indices.end(), {first, first + 1, first + 3, first, first + 3, first + 2});
+        }
+        addEntity(engine, content, "slices", engine.createMesh(rasm::buildMesh(std::move(vertices), std::move(indices), std::move(sliceColors))),
+                  createBlendMaterial(engine, rasm::MaterialType::UNLIT, glm::vec4(1.0f), rasm::BlendMethod::WEIGHTED), rasm::Transform{});
+
+        // See-through arrows, always weighted.
+        const rasm::MeshHandle arrow = engine.createMesh(rasm::buildGlyphShape(rasm::GlyphShape::ARROW));
+        std::vector<glm::vec3> positions;
+        std::vector<glm::quat> orientations;
+        std::vector<float> scalars;
+        for (int z = 0; z < 4; ++z)
+        {
+            for (int x = 0; x < 8; ++x)
+            {
+                positions.emplace_back(static_cast<float>(x) * 0.3f - 1.0f, 0.15f, static_cast<float>(z) * 0.3f + 1.3f);
+                orientations.push_back(rasm::getGlyphOrientation(glm::vec3(1.0f, 0.6f, static_cast<float>(z) - 1.5f)));
+                scalars.push_back(static_cast<float>(x) / 7.0f);
+            }
+        }
+        const rasm::MaterialHandle arrows = engine.createMaterial(rasm::MaterialType::GLYPHS);
+        rasm::Material values = engine.getMaterial(arrows);
+        values.glyphs = {.colorMode = rasm::PointColorMode::SCALAR, .colormap = engine.createColormap(rasm::ColormapPreset::MAGMA), .range = {.min = 0.0f, .max = 1.0f}};
+        values.params[static_cast<uint32_t>(rasm::PbrParam::ALBEDO) + 3] = 0.5f;
+        values.alphaMode = rasm::AlphaMode::BLEND;
+        engine.updateMaterial(arrows, values);
+        addEntity(engine, content, "arrows",
+                  engine.createMesh(rasm::buildGlyphChunk(
+                      {.shape = arrow, .positions = positions.data(), .orientations = orientations.data(), .scalars = scalars.data(), .count = static_cast<uint32_t>(positions.size())})),
+                  arrows, rasm::Transform{});
+
+        addEntity(engine, content, "glow", sphere, createBlendMaterial(engine, rasm::MaterialType::UNLIT, glm::vec4(1.0f, 0.55f, 0.2f, 0.6f), rasm::BlendMethod::ADDITIVE),
+                  rasm::Transform{glm::vec3(1.2f, 2.3f, 0.2f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(0.7f)});
+        addEntity(engine, content, "pane", assets.cube, createBlendMaterial(engine, rasm::MaterialType::PBR, glm::vec4(0.9f, 0.2f, 0.25f, 0.4f), rasm::BlendMethod::SORTED),
+                  rasm::Transform{glm::vec3(-0.2f, 0.9f, 2.2f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(0.9f, 0.6f, 0.02f)});
+        addGround(engine, assets, content, 3.0f, glm::vec3(0.4f, 0.4f, 0.38f));
+
+        content.eye = glm::vec3(0.6f, 2.4f, 5.2f);
+        content.center = glm::vec3(0.0f, 0.9f, 0.0f);
+        content.fovY = 45.0f;
+        // Through the shells' centre from the eye: the outer shell's front with minAlpha 0, the inner one's with 0.5.
+        const glm::vec3 toEye = glm::normalize(content.eye - centre);
+        content.probes.push_back({.name = "outer shell", .point = glm::dvec3(centre + 0.5f * diameters[0] * toEye), .entity = spheres[0], .metres = 0.03, .minAlpha = 0.0f});
+        content.probes.push_back({.name = "inner shell", .point = glm::dvec3(centre + 0.5f * diameters[2] * toEye), .entity = spheres[2], .metres = 0.03, .minAlpha = 0.5f});
+        return addSunsetLight(engine, assets, content, 1.0f, glm::vec3(0.45f, -0.75f, -0.5f), 3.0f);
+    }
+
+    bool buildWeightedOrtho(rasm::Engine &engine, const Assets &assets, Content &content)
+    {
+        content.orthoHeight = 4.5f;
+        return buildWeighted(engine, assets, content);
+    }
+
     // The picking scene through an orthographic box from the same eye, with a bounded grid just over its ground.
     bool buildOrtho(rasm::Engine &engine, const Assets &assets, Content &content)
     {
@@ -1293,6 +1393,12 @@ namespace
         {.name = "glyphs_msaa4",  .build = buildGlyphs,        .samples = 4, .picks = true},
         {.name = "glyphs_taa",    .build = buildGlyphs,        .taa = true, .frames = 16, .picks = true},
         {.name = "glyphs_ortho",  .build = buildGlyphsOrtho,   .picks = true},
+        // Weighted blended transparency: nested shells, slices in one mesh and see-through arrows in any order, an
+        // additive glow, a sorted pane over them; picks through the shells by minAlpha.
+        {.name = "weighted",      .build = buildWeighted,      .picks = true},
+        {.name = "weighted_msaa4", .build = buildWeighted,     .samples = 4, .picks = true},
+        {.name = "weighted_taa",  .build = buildWeighted,      .taa = true, .frames = 16, .picks = true},
+        {.name = "weighted_ortho", .build = buildWeightedOrtho, .picks = true},
         // Adaptive points grown to close a sparse sheet, and an octree's parent and children (PointChunkLod).
         {.name = "points_adaptive", .build = buildPointsAdaptive},
         // Points of 3 to 5 pixels in each shape, by the compute path and by triangles only: the same pixels.
@@ -1328,6 +1434,8 @@ namespace
         {.name = "far_grid",      .build = buildGrid,          .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "grid"},
         {.name = "far_points",    .build = buildPoints,        .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "points", .picks = true},
         {.name = "far_glyphs",    .build = buildGlyphs,        .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "glyphs", .picks = true},
+        // The see-through shells' hashed shadows are noise per shadow texel, so the texel grid's move shifts more of them.
+        {.name = "far_weighted",  .build = buildWeighted,      .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.003, .sameAs = "weighted", .picks = true},
     };
     // clang-format on
 

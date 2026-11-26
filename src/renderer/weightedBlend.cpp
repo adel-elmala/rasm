@@ -144,14 +144,14 @@ namespace rasm
         if (view.debugView != DebugView::NONE)
             return;
 
+        // The strings, the path and the target's desc are made only while something is missing: a steady frame makes no
+        // heap allocation (P27).
         ShadedPipelines &shaded = getShadedPipelines(*gpuScene, ctx, view);
-        const RenderTargetDesc &sceneDesc = ctx.getRenderTargetDesc(view.renderTarget);
         const RenderTarget &sceneTarget = ctx.getRenderTarget(view.renderTarget);
-        const std::string motion = getMotionDefine(ctx, view);
-        const std::filesystem::path folder = pathFromUtf8(config.shaderDir);
         if (view.additiveRun < gfx::MAX_DRAW_RUNS && !shaded.additivePipeline.isValid())
         {
-            shaded.additivePipeline = createScenePipeline("rasmAdditive", "passes/rasm.slang", motion + WEIGHTED_ADDITIVE_DEFINES, view.renderTarget, "vertMain", "fragMain", BlendMode::ADDITIVE_COLOR, false);
+            shaded.additivePipeline = createScenePipeline("rasmAdditive", "passes/rasm.slang", getMotionDefine(ctx, view) + std::string(WEIGHTED_ADDITIVE_DEFINES), view.renderTarget, "vertMain",
+                                                          "fragMain", BlendMode::ADDITIVE_COLOR, false);
             if (!shaded.additivePipeline.isValid())
                 spdlog::error("Failed to create the additive pipeline; the scene is drawn without its additive materials.");
         }
@@ -161,22 +161,22 @@ namespace rasm
         const bool weightedGlyphs = view.drawGlyphs && drawList.weightedGlyphChunks > 0;
         if (!weightedRun && !weightedGlyphs)
             return;
-        RenderTargetDesc desc = getWeightedTargetDesc(sceneDesc);
-        desc.width = sceneTarget.width;
-        desc.height = sceneTarget.height;
         // With motion (TAA) the coverage shares a target with the motion sums, as its alpha: two targets, not three.
-        const BlendMode blendMode = desc.colorFormats[1] == WEIGHTED_MOTION_FORMAT ? BlendMode::WEIGHTED_MOTION : BlendMode::WEIGHTED;
+        const bool motion = sceneTarget.colorCount > 1;
+        const Format colorFormats[MAX_COLOR_ATTACHMENTS] = {WEIGHTED_ACCUM_FORMAT, motion ? WEIGHTED_MOTION_FORMAT : WEIGHTED_COVERAGE_FORMAT};
+        const BlendMode blendMode = motion ? BlendMode::WEIGHTED_MOTION : BlendMode::WEIGHTED;
         if (!shaded.weightedPipeline.isValid() || (weightedGlyphs && !shaded.weightedGlyphPipeline.isValid()) || !shaded.compositePipeline.isValid())
         {
-            const std::string rasm = readFile(folder / "passes/rasm.slang");
+            const std::string defines = getMotionDefine(ctx, view) + std::string(WEIGHTED_DEFINES);
+            const std::string rasm = readFile(pathFromUtf8(config.shaderDir) / "passes/rasm.slang");
             if (!shaded.weightedPipeline.isValid())
-                shaded.weightedPipeline = createGraphicsPipeline("rasmWeighted", getShaderVariant(motion + WEIGHTED_DEFINES, rasm), desc.colorFormats, sceneTarget.depthFormat, "vertMain", "fragMain",
-                                                                 blendMode, false, desc.samples);
+                shaded.weightedPipeline = createGraphicsPipeline("rasmWeighted", getShaderVariant(defines, rasm), colorFormats, sceneTarget.depthFormat, "vertMain", "fragMain", blendMode, false,
+                                                                 sceneTarget.samples);
             if (weightedGlyphs && !shaded.weightedGlyphPipeline.isValid())
-                shaded.weightedGlyphPipeline = createGraphicsPipeline("rasmWeightedGlyphs", getShaderVariant(motion + WEIGHTED_DEFINES + "#define RASM_GLYPHS 1\n", rasm), desc.colorFormats,
-                                                                      sceneTarget.depthFormat, "vertMain", "fragMain", blendMode, false, desc.samples);
+                shaded.weightedGlyphPipeline = createGraphicsPipeline("rasmWeightedGlyphs", getShaderVariant(defines + "#define RASM_GLYPHS 1\n", rasm), colorFormats, sceneTarget.depthFormat,
+                                                                      "vertMain", "fragMain", blendMode, false, sceneTarget.samples);
             if (!shaded.compositePipeline.isValid())
-                shaded.compositePipeline = createScenePipeline("weightedComposite", "passes/weightedComposite.slang", motion + getCompositeDefines(sceneTarget.samples, ctx.hasSampleRateShading()),
+                shaded.compositePipeline = createScenePipeline("weightedComposite", "passes/weightedComposite.slang", getMotionDefine(ctx, view) + std::string(getCompositeDefines(sceneTarget.samples, ctx.hasSampleRateShading())),
                                                                view.renderTarget, "vertMain", "fragMain", BlendMode::PREMULTIPLIED_ALPHA, false, false, false);
             if (!shaded.weightedPipeline.isValid() || !shaded.compositePipeline.isValid())
             {
@@ -192,7 +192,12 @@ namespace rasm
 
         // Made at the view's first weighted frame, and made again when the scene target changes size or samples; the old
         // one goes once the frames in flight are done with it.
-        const bool stale = view.weightedTarget.isValid() && ctx.getRenderTargetDesc(view.weightedTarget) != desc;
+        bool stale = false;
+        if (view.weightedTarget.isValid())
+        {
+            const RenderTarget &weighted = ctx.getRenderTarget(view.weightedTarget);
+            stale = weighted.width != sceneTarget.width || weighted.height != sceneTarget.height || weighted.samples != sceneTarget.samples || weighted.colorFormats[1] != colorFormats[1];
+        }
         if (stale)
         {
             destroyRenderTarget(view.weightedTarget);
@@ -200,6 +205,9 @@ namespace rasm
         }
         if (!view.weightedTarget.isValid())
         {
+            RenderTargetDesc desc = getWeightedTargetDesc(ctx.getRenderTargetDesc(view.renderTarget));
+            desc.width = sceneTarget.width;
+            desc.height = sceneTarget.height;
             view.weightedTarget = ctx.createRenderTarget(desc);
             if (!view.weightedTarget.isValid())
             {
@@ -289,7 +297,7 @@ namespace rasm
         if (!view.ready || !view.drawWeighted)
             return;
         const auto commandBuffer = frameResources[frameCount].commandBuffer;
-        const uint32_t timer = beginGpuTimer(commandBuffer, "Weighted Composite");
+        const uint32_t timer = beginGpuTimer(commandBuffer, "OIT Composite");
         const PipelineHandle pipeline = getShadedPipelines(*gpuScene, ctx, view).compositePipeline;
         const gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, static_cast<uint32_t>(frameCount), viewIndex)};
         ctx.bindPipeline(commandBuffer, pipeline);
