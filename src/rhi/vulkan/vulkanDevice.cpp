@@ -743,7 +743,8 @@ namespace rasm::rhi
         }
 
         // P1: buffers that aren't hostVisible prefer device-local memory, and are mapped only when that memory is
-        // also host-visible (ReBAR, integrated GPUs). Otherwise pMappedData stays null and they are filled by staging.
+        // also host-visible (ReBAR, integrated GPUs) and the buffer is not staged. Otherwise pMappedData stays null and
+        // they are filled by staging.
         VmaAllocationCreateInfo allocCI = {};
         allocCI.usage = VMA_MEMORY_USAGE_AUTO;
         allocCI.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
@@ -751,6 +752,11 @@ namespace rasm::rhi
         // Write-only memory may be uncached or across the bus, so a buffer the CPU reads asks for random access.
         if (desc.hostReadable)
             allocCI.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        // New video memory is cleared before the device's next submit runs: about 0.19 ms a MiB when it is host-visible
+        // (resizable BAR) and 0.024 ms a MiB when it is not (RTX 3060, Windows). Mapped, the geometry pools held back
+        // the first frame by up to 50 ms (P35), so a staged buffer asks for device-local-only memory.
+        else if (desc.staged && !desc.hostVisible && physicalDevice.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
+            allocCI.flags = 0;
         else if (!desc.hostVisible)
             allocCI.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT;
         // A staging buffer goes to system memory, unless all of video memory is host-visible: then the GPU's copies
