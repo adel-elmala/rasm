@@ -1962,10 +1962,13 @@ RASM_C_API rasm_result      RASM_CALL rasm_render_graph_execute(rasm_render_grap
 RASM_C_API uint32_t         RASM_CALL rasm_render_graph_dump(rasm_render_graph* graph, char* buffer, uint32_t capacity);
 
 /* Added in 1.17: commands, only inside a pass callback, with the rasm_commands it was given. A call that does not fit the
- * pass (a draw in a compute pass, a dispatch in a graphics pass, no pipeline bound, push constants past
- * RASM_PUSH_CONSTANTS_SIZE) records nothing and returns RASM_ERROR_INVALID_ARGUMENT. Each pass starts with no pipeline,
- * the viewport and scissor over all of its output and RASM_CULL_MODE_NONE. Binding a pipeline binds RASM's bindless set
- * too. A GPU timer's milliseconds come with rasm_get_gpu_timer_ms a few frames later. */
+ * pass records nothing and returns RASM_ERROR_INVALID_ARGUMENT: a draw in a compute pass or a dispatch in a graphics one,
+ * no pipeline bound, a graphics pipeline made for other formats or samples than the pass writes, push constants past
+ * RASM_PUSH_CONSTANTS_SIZE, an index buffer without RASM_BUFFER_USAGE_INDEX or an indirect one without
+ * RASM_BUFFER_USAGE_INDIRECT, an offset not aligned or reading past the buffer, a stride under 20 bytes, a timer this
+ * callback did not begin. Each pass starts with no pipeline, the viewport and scissor over all of its output and
+ * RASM_CULL_MODE_NONE. Binding a pipeline binds RASM's bindless set too. A timer left open ends with the pass; its
+ * milliseconds come with rasm_get_gpu_timer_ms a few frames later. */
 RASM_C_API rasm_result      RASM_CALL rasm_cmd_get_info(rasm_commands* commands, rasm_pass_info* info);
 RASM_C_API rasm_result      RASM_CALL rasm_cmd_bind_pipeline(rasm_commands* commands, rasm_pipeline pipeline);
 RASM_C_API rasm_result      RASM_CALL rasm_cmd_push_constants(rasm_commands* commands, const void* data, uint32_t size, uint32_t offset);

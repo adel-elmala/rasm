@@ -64,7 +64,8 @@ namespace
     }
 
     // One stage's shader: its entry point compiled from the desc's Slang source, or its own SPIR-V.
-    ShaderHandle createStage(Renderer &renderer, const rasm_pipeline_desc &desc, const rasm_shader_stage &stage, ShaderType type, const char *defaultEntry, const std::string &name, const char *function)
+    ShaderHandle createStage(Renderer &renderer, const rasm_pipeline_desc &desc, const rasm_shader_stage &stage, ShaderType type, const char *defaultEntry, const std::string &name, const char *suffix,
+                             const char *function)
     {
         // SPIR-V names its entry point main unless its compiler was told to keep the source's name.
         const std::string entry = stage.entry_point != nullptr ? stage.entry_point : desc.source != nullptr ? defaultEntry
@@ -77,17 +78,18 @@ namespace
             return {};
         }
         const auto *bytes = static_cast<const uint8_t *>(stage.spirv);
-        return renderer.getRenderContext().createShader({.name = name, .type = type, .entryPoint = entry, .code = std::vector<uint8_t>(bytes, bytes + stage.spirv_size)});
+        return renderer.getRenderContext().createShader({.name = name + suffix, .type = type, .entryPoint = entry, .code = std::vector<uint8_t>(bytes, bytes + stage.spirv_size)});
     }
 
-    PipelineHandle createPipeline(Renderer &renderer, const rasm_pipeline_desc &values, const char *function)
+    // Also what it draws into, for rasm_cmd_bind_pipeline's check against the pass.
+    PipelineHandle createPipeline(Renderer &renderer, const rasm_pipeline_desc &values, c::PipelineInfo &info, const char *function)
     {
         RenderContext &ctx = renderer.getRenderContext();
         const std::string name = values.name != nullptr ? values.name : "";
         PipelineDesc desc = {.name = "Pipeline for " + name, .descriptorSetLayout = ctx.getBindlessDescriptorSetLayout()};
         if (values.type == RASM_PIPELINE_TYPE_COMPUTE)
         {
-            desc.computeShader = createStage(renderer, values, values.compute, ShaderType::COMPUTE, "compMain", name + ".comp", function);
+            desc.computeShader = createStage(renderer, values, values.compute, ShaderType::COMPUTE, "compMain", name, ".comp", function);
             // An invalid handle would turn the desc into a graphics pipeline with no shaders.
             return desc.computeShader.isValid() ? ctx.createPipeline(desc) : PipelineHandle{};
         }
@@ -112,14 +114,17 @@ namespace
             c::reportError(function, "the pipeline would draw into nothing: desc->window has no swapchain.");
             return {};
         }
-        desc.vertexShader = createStage(renderer, values, values.vertex, ShaderType::VERTEX, "vertMain", name + ".vert", function);
-        desc.fragmentShader = createStage(renderer, values, values.fragment, ShaderType::FRAGMENT, "fragMain", name + ".frag", function);
+        desc.vertexShader = createStage(renderer, values, values.vertex, ShaderType::VERTEX, "vertMain", name, ".vert", function);
+        desc.fragmentShader = createStage(renderer, values, values.fragment, ShaderType::FRAGMENT, "fragMain", name, ".frag", function);
         if (!desc.vertexShader.isValid() || !desc.fragmentShader.isValid())
             return {};
         desc.topology = static_cast<PrimitiveTopology>(values.topology);
         desc.blendMode = static_cast<BlendMode>(values.blend_mode);
         desc.depthTest = values.depth_test != 0;
         desc.depthWrite = values.depth_write != 0;
+        std::copy(std::begin(desc.colorAttachmentFormats), std::end(desc.colorAttachmentFormats), std::begin(info.colors));
+        info.depth = desc.depthStencilAttachmentFormat;
+        info.samples = desc.samples;
         return ctx.createPipeline(desc);
     }
 }
@@ -146,12 +151,20 @@ try
         c::reportError(__func__, "desc->byte_size must be above 0.");
         return {};
     }
-    return c::toC(r->createBuffer({.name = values.name != nullptr ? values.name : "",
-                                   .usage = static_cast<BufferUsage>(values.usage),
-                                   .size = values.byte_size,
-                                   .hostVisible = values.host_visible != 0 || values.host_readable != 0,
-                                   .hostReadable = values.host_readable != 0,
-                                   .staged = values.staged != 0}));
+    const BufferHandle buffer = r->createBuffer({.name = values.name != nullptr ? values.name : "",
+                                                 .usage = static_cast<BufferUsage>(values.usage),
+                                                 .size = values.byte_size,
+                                                 .hostVisible = values.host_visible != 0 || values.host_readable != 0,
+                                                 .hostReadable = values.host_readable != 0,
+                                                 .staged = values.staged != 0});
+    if (buffer.isValid())
+    {
+        auto &buffers = renderer->buffers;
+        if (buffer.index >= buffers.size())
+            buffers.resize(buffer.index + 1);
+        buffers[buffer.index] = {.generation = buffer.generation, .usage = static_cast<BufferUsage>(values.usage), .size = values.byte_size};
+    }
+    return c::toC(buffer);
 }
 RASM_C_CATCH({})
 
@@ -161,8 +174,13 @@ try
     Renderer *r = c::getRenderer(renderer, __func__);
     if (r == nullptr || !c::checkHandle(buffer.id, __func__, "buffer"))
         return RASM_ERROR_INVALID_ARGUMENT;
+    if (!c::checkNotRecording(renderer, __func__))
+        return RASM_ERROR_FAILED;
     const c::CallErrors errors;
-    r->destroyBuffer(c::toCpp(buffer));
+    const BufferHandle handle = c::toCpp(buffer);
+    r->destroyBuffer(handle);
+    if (handle.index < renderer->buffers.size() && renderer->buffers[handle.index].generation == handle.generation)
+        renderer->buffers[handle.index] = {};
     return errors.result();
 }
 RASM_C_CATCH_RESULT
@@ -205,8 +223,8 @@ try
 }
 RASM_C_CATCH_RESULT
 
-// A pipeline is never destroyed, as in C++: the same desc gives the same one back. Its type is kept by its index, so
-// rasm_cmd_bind_pipeline can tell a pass that cannot run it.
+// A pipeline is never destroyed, as in C++: the same desc gives the same one back. Its type and formats are kept by its
+// index, so rasm_cmd_bind_pipeline can tell a pass that cannot run it.
 rasm_pipeline RASM_CALL rasm_create_pipeline(rasm_renderer *renderer, const rasm_pipeline_desc *desc)
 try
 {
@@ -216,13 +234,14 @@ try
         !c::checkEnum(values.type, RASM_PIPELINE_TYPE_COMPUTE + 1, __func__, "desc->type") || !c::checkEnum(values.blend_mode, RASM_BLEND_MODE_ADDITIVE_COLOR + 1, __func__, "desc->blend_mode") ||
         !c::checkEnum(values.topology, RASM_PRIMITIVE_TOPOLOGY_LINE_STRIP + 1, __func__, "desc->topology"))
         return {};
-    const PipelineHandle pipeline = createPipeline(*r, values, __func__);
+    c::PipelineInfo info = {.type = static_cast<uint8_t>(values.type + 1)};
+    const PipelineHandle pipeline = createPipeline(*r, values, info, __func__);
     if (!pipeline.isValid())
         return {};
-    auto &types = renderer->pipelineTypes;
-    if (pipeline.index >= types.size())
-        types.resize(pipeline.index + 1, 0);
-    types[pipeline.index] = static_cast<uint8_t>(values.type + 1);
+    auto &pipelines = renderer->pipelines;
+    if (pipeline.index >= pipelines.size())
+        pipelines.resize(pipeline.index + 1);
+    pipelines[pipeline.index] = info;
     return c::toC(pipeline);
 }
 RASM_C_CATCH({})

@@ -38,6 +38,7 @@ INVALID_INDEX = 0xFFFFFFFF
 FORMAT_R8G8B8A8_SRGB = 2
 FORMAT_R16G16B16A16_SFLOAT = 6
 FORMAT_D32_SFLOAT = 10
+FORMAT_BC7_UNORM = 17
 PASS_TYPE_GRAPHICS = 0
 PASS_ACCESS_READ_RENDER_TARGET = 2
 PASS_ACCESS_READ_PREVIOUS_RENDER_TARGET = 3
@@ -248,6 +249,8 @@ def declare(lib):
         "rasm_cmd_bind_pipeline": (c_int32, [c_void_p, Handle]),
         "rasm_cmd_push_constants": (c_int32, [c_void_p, c_void_p, c_uint32, c_uint32]),
         "rasm_cmd_draw": (c_int32, [c_void_p, c_uint32, c_uint32]),
+        "rasm_cmd_end_gpu_timer": (c_int32, [c_void_p, c_uint32]),
+        "rasm_cmd_set_scissor": (c_int32, [c_void_p, c_int32, c_int32, c_uint32, c_uint32]),
     }
     for name, (restype, argtypes) in signatures.items():
         function = getattr(lib, name)
@@ -294,6 +297,13 @@ def draw_graph(lib, renderer, scene, camera, frames, errors, slangc):
     hdr = target(b"hdr", FORMAT_R16G16B16A16_SFLOAT, FORMAT_D32_SFLOAT)
     ldr = target(b"ldr", FORMAT_R8G8B8A8_SRGB)
     trail = target(b"trail", FORMAT_R8G8B8A8_SRGB, history=True)
+    # A block-compressed format cannot be drawn into: refused before it reaches the device.
+    bad = RenderTargetDesc()
+    lib.rasm_render_target_desc_init(byref(bad), ctypes.sizeof(bad))
+    bad.format = FORMAT_BC7_UNORM
+    before = len(errors)
+    check(lib.rasm_render_graph_create_render_target(graph, byref(bad)).id == 0, "a target of a format it cannot draw into is refused", lib)
+    del errors[before:]
     check(lib.rasm_render_graph_add_scene_passes(graph, scene, camera, hdr, None, 0, None, 0) == OK, "rasm_render_graph_add_scene_passes", lib)
     output = ViewOutput()
     lib.rasm_view_output_init(byref(output), ctypes.sizeof(output))
@@ -332,7 +342,12 @@ def draw_graph(lib, renderer, scene, camera, frames, errors, slangc):
             lib.rasm_render(renderer, scene, camera)
             if len(errors) == before + 1 and b"recording" in lib.rasm_get_last_error():
                 counts["refused"] += 1
-                del errors[before:]
+            # A command that does not fit is refused, not recorded: a timer never begun, a scissor off the target.
+            if lib.rasm_cmd_end_gpu_timer(commands, 5) == ERROR_INVALID_ARGUMENT:
+                counts["refused"] += 1
+            if lib.rasm_cmd_set_scissor(commands, -1, 0, 8, 8) == ERROR_INVALID_ARGUMENT:
+                counts["refused"] += 1
+            del errors[before:]
         counts["frames"] += 1
         state["kept"] = commands
         source = lib.rasm_get_bindless_texture_index(renderer, lib.rasm_get_render_target_color(renderer, ldr, 0))
@@ -576,7 +591,7 @@ def main():
     print(f"graph frame center {swapped}, {graph_checks['frames']} Python pass callbacks")
     check(swapped[2] > swapped[1] + 50 and swapped[2] > swapped[0] + 50, f"the Python pass swapped red and blue, got {swapped}", lib)
     check(graph_checks["frames"] >= 2 and graph_checks["history"] == 0 and graph_checks["commands"] == 0, f"the pass callback's checks: {graph_checks['history']} history, {graph_checks['commands']} command errors", lib)
-    check(graph_checks["refused"] == 1, "a call that starts a frame is refused inside a pass callback", lib)
+    check(graph_checks["refused"] == 3, f"a call that starts a frame, and commands that do not fit, are refused in a pass callback: {graph_checks['refused']} of 3", lib)
     check(not errors, "RASM logged errors: " + " | ".join(errors), lib)
     print(f"OK: {os.path.basename(library)} {lib.rasm_get_version() >> 16}.{lib.rasm_get_version() & 0xFFFF} "
           f"drew {args.frames} frames from Python, 6370 km from the origin")

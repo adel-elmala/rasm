@@ -7,6 +7,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <vector>
@@ -27,7 +29,9 @@ struct rasm_commands
     const rasm_renderer *owner = nullptr;
     uint32_t width = 0;
     uint32_t height = 0;
-    std::string timerName; // keeps its capacity, so a timer's name allocates once
+    c::PipelineInfo target;  // a graphics pass's attachments, which a bound pipeline must match
+    uint64_t openTimers = 0; // a bit per GPU timer the callback began and has not ended
+    std::string timerName;   // keeps its capacity, so a timer's name allocates once
 };
 
 struct rasm_render_graph
@@ -41,6 +45,8 @@ struct rasm_render_graph
 
 namespace
 {
+    constexpr uint64_t DRAW_INDEXED_COMMAND_SIZE = 5 * sizeof(uint32_t);
+
     // The graph's commands are active only during a pass callback.
     struct ActiveCommands
     {
@@ -130,6 +136,43 @@ namespace
         return cmd;
     }
 
+    // A buffer of rasm_create_buffer, alive, made for usage, with offset aligned and bytes from it inside the buffer.
+    bool checkBuffer(const rasm_commands &cmd, rasm_buffer buffer, BufferUsage usage, uint64_t offset, uint64_t alignment, uint64_t bytes, const char *function, const char *name)
+    {
+        if (!c::checkHandle(buffer.id, function, name))
+            return false;
+        const BufferHandle handle = c::toCpp(buffer);
+        const auto &buffers = cmd.owner->buffers;
+        const c::BufferInfo *info = handle.index < buffers.size() && buffers[handle.index].generation == handle.generation ? &buffers[handle.index] : nullptr;
+        if (info == nullptr || !cmd.renderer->getRenderContext().isAlive(handle))
+        {
+            c::reportError(function, (std::string(name) + " is not a live buffer of rasm_create_buffer.").c_str());
+            return false;
+        }
+        if (info->usage != usage)
+        {
+            c::reportError(function, (std::string(name) + (usage == BufferUsage::INDEX ? " needs RASM_BUFFER_USAGE_INDEX." : " needs RASM_BUFFER_USAGE_INDIRECT.")).c_str());
+            return false;
+        }
+        if (offset % alignment != 0 || offset > info->size || bytes > info->size - offset)
+        {
+            c::reportError(function, (std::string(name) + ": the offset is not aligned, or what it reads goes past the buffer's end.").c_str());
+            return false;
+        }
+        return true;
+    }
+
+    // Several indirect commands lie stride bytes apart: at least a command, in whole words.
+    bool checkStride(uint32_t count, uint32_t stride, const char *function)
+    {
+        if (count > 1 && (stride < DRAW_INDEXED_COMMAND_SIZE || stride % 4 != 0))
+        {
+            c::reportError(function, "stride must be a multiple of 4 and at least 20 bytes (one VkDrawIndexedIndirectCommand).");
+            return false;
+        }
+        return true;
+    }
+
     rasm_commands *getIndexedRecording(rasm_commands *commands, const char *function)
     {
         rasm_commands *cmd = getRecording(commands, false, function);
@@ -187,10 +230,13 @@ namespace
     }
 
     // The resources' enums and handles: a swapchain write may name the main window with 0, every other one a handle.
-    bool checkResources(const rasm_pass_resource *resources, uint32_t count, rasm_pass_type type, RenderTargetHandle &output, const char *function)
+    // Also what the C++ graph would drop with an error after adding the pass: so a refused pass is never added.
+    bool checkResources(Renderer &renderer, const rasm_pass_resource *resources, uint32_t count, rasm_pass_type type, RenderTargetHandle &output, WindowHandle &window, bool &swapchain,
+                        const char *function)
     {
         if (count > 0 && !c::checkPointer(resources, function, "desc->resources"))
             return false;
+        uint32_t outputs = 0;
         for (uint32_t i = 0; i < count; ++i)
         {
             const rasm_pass_resource &resource = resources[i];
@@ -204,8 +250,33 @@ namespace
                 c::reportError(function, (name + ": only a graphics pass can write the swapchain.").c_str());
                 return false;
             }
+            if (resource.access == RASM_PASS_ACCESS_WRITE_SWAPCHAIN)
+            {
+                window = {c::unpackIndex(resource.id), c::unpackGeneration(resource.id)};
+                swapchain = true;
+                ++outputs;
+            }
             if (resource.access == RASM_PASS_ACCESS_WRITE_RENDER_TARGET)
+            {
                 output = {c::unpackIndex(resource.id), c::unpackGeneration(resource.id)};
+                ++outputs;
+                RenderContext &ctx = renderer.getRenderContext();
+                if (!ctx.isAlive(output))
+                {
+                    c::reportError(function, (name + ": the render target is not alive.").c_str());
+                    return false;
+                }
+                if (type == RASM_PASS_TYPE_ASYNC_COMPUTE || (type == RASM_PASS_TYPE_COMPUTE && !ctx.getRenderTargetDesc(output).storage))
+                {
+                    c::reportError(function, (name + ": an async compute pass writes no render target, a compute pass only a storage one.").c_str());
+                    return false;
+                }
+            }
+        }
+        if (outputs > 1)
+        {
+            c::reportError(function, "a pass writes one render target or one window at most.");
+            return false;
         }
         return true;
     }
@@ -324,7 +395,9 @@ try
         !c::checkEnum(values.type, RASM_PASS_TYPE_ASYNC_COMPUTE + 1, __func__, "desc->type"))
         return RASM_ERROR_INVALID_ARGUMENT;
     RenderTargetHandle output;
-    if (!checkResources(values.resources, values.resource_count, values.type, output, __func__))
+    WindowHandle window;
+    bool swapchain = false;
+    if (!checkResources(*g->owner->renderer, values.resources, values.resource_count, values.type, output, window, swapchain, __func__))
         return RASM_ERROR_INVALID_ARGUMENT;
 
     const rasm_pass_desc *pass = &values;
@@ -336,7 +409,7 @@ try
     const rasm_pass_type type = values.type;
     const rasm_pass_callback callback = values.execute;
     void *userData = values.user_data;
-    const auto execute = [g, type, callback, userData, output](RenderContext &ctx)
+    const auto execute = [g, type, callback, userData, output, window, swapchain](RenderContext &ctx)
     {
         if (callback == nullptr)
             return;
@@ -348,20 +421,35 @@ try
         cmd.passType = type;
         cmd.width = 0;
         cmd.height = 0;
+        cmd.target = {};
+        cmd.openTimers = 0;
         if (type == RASM_PASS_TYPE_GRAPHICS)
         {
             const Viewport &viewport = ctx.getViewport();
             cmd.width = static_cast<uint32_t>(viewport.width);
             cmd.height = static_cast<uint32_t>(viewport.height);
         }
-        else if (output.isValid() && ctx.isAlive(output))
+        if (output.isValid() && ctx.isAlive(output))
         {
             const RenderTarget &target = ctx.getRenderTarget(output);
             cmd.width = target.width;
             cmd.height = target.height;
+            std::copy(std::begin(target.colorFormats), std::end(target.colorFormats), std::begin(cmd.target.colors));
+            cmd.target.depth = target.depthFormat;
+            cmd.target.samples = target.samples;
         }
-        const ActiveCommands active(cmd);
-        callback(userData, &cmd);
+        else if (swapchain)
+            cmd.target.colors[0] = ctx.getSwapchainImageFormat(window);
+        {
+            const ActiveCommands active(cmd);
+            callback(userData, &cmd);
+        }
+        // A timer the callback left open ends with the pass.
+        for (uint32_t timer = 0; cmd.openTimers != 0; ++timer, cmd.openTimers >>= 1)
+        {
+            if ((cmd.openTimers & 1) != 0)
+                cmd.renderer->endGpuTimer(cmd.commandBuffer, timer);
+        }
     };
     const c::CallErrors errors;
     std::string name = values.name != nullptr ? values.name : "";
@@ -531,6 +619,7 @@ try
 }
 RASM_C_CATCH_RESULT
 
+// A graphics pipeline must draw into the pass's attachments: their formats and samples.
 rasm_result RASM_CALL rasm_cmd_bind_pipeline(rasm_commands *commands, rasm_pipeline pipeline)
 try
 {
@@ -538,24 +627,32 @@ try
     if (cmd == nullptr || !c::checkHandle(pipeline.id, __func__, "pipeline"))
         return RASM_ERROR_INVALID_ARGUMENT;
     const PipelineHandle handle = c::toCpp(pipeline);
-    const auto &types = cmd->owner->pipelineTypes;
-    const uint8_t type = handle.index < types.size() ? types[handle.index] : 0;
-    if (type == 0)
+    const auto &pipelines = cmd->owner->pipelines;
+    const c::PipelineInfo *info = handle.index < pipelines.size() && pipelines[handle.index].type != 0 ? &pipelines[handle.index] : nullptr;
+    if (info == nullptr)
     {
         c::reportError(__func__, "pipeline is not one rasm_create_pipeline made.");
         return RASM_ERROR_INVALID_ARGUMENT;
     }
-    const bool compute = type == RASM_PIPELINE_TYPE_COMPUTE + 1;
+    const bool compute = info->type == RASM_PIPELINE_TYPE_COMPUTE + 1;
     if (compute != (cmd->passType != RASM_PASS_TYPE_GRAPHICS))
     {
         c::reportError(__func__, compute ? "a graphics pass cannot bind a compute pipeline." : "a compute pass cannot bind a graphics pipeline.");
         return RASM_ERROR_INVALID_ARGUMENT;
     }
+    if (!compute && (!std::equal(std::begin(info->colors), std::end(info->colors), std::begin(cmd->target.colors)) || info->depth != cmd->target.depth || info->samples != cmd->target.samples))
+    {
+        c::reportError(__func__, "pipeline draws into other formats or samples than this pass writes: make it with the pass's target (or window) as rasm_pipeline_desc::target.");
+        return RASM_ERROR_INVALID_ARGUMENT;
+    }
     RenderContext &ctx = cmd->renderer->getRenderContext();
+    const c::CallErrors errors;
     ctx.bindPipeline(cmd->commandBuffer, handle);
     ctx.bindDescriptorSet(cmd->commandBuffer, handle, cmd->renderer->getBindlessDescriptorSet(), 0);
+    if (errors.result() != RASM_OK)
+        return RASM_ERROR_FAILED;
     cmd->pipeline = handle;
-    cmd->pipelineType = type;
+    cmd->pipelineType = info->type;
     return RASM_OK;
 }
 RASM_C_CATCH_RESULT
@@ -576,8 +673,9 @@ try
         c::reportError(__func__, "size and offset must be multiples of 4, size above 0, and offset + size at most RASM_PUSH_CONSTANTS_SIZE.");
         return RASM_ERROR_INVALID_ARGUMENT;
     }
+    const c::CallErrors errors;
     cmd->renderer->getRenderContext().pushConstants(cmd->commandBuffer, cmd->pipeline, data, size, offset);
-    return RASM_OK;
+    return errors.result();
 }
 RASM_C_CATCH_RESULT
 
@@ -587,7 +685,15 @@ try
     rasm_commands *cmd = getGraphicsCommands(commands, __func__);
     if (cmd == nullptr)
         return RASM_ERROR_INVALID_ARGUMENT;
-    return cmd->renderer->getRenderContext().setViewport(cmd->commandBuffer, x, y, width, height, min_depth, max_depth) ? RASM_OK : RASM_ERROR_FAILED;
+    const bool finite = std::isfinite(x) && std::isfinite(y) && std::isfinite(width) && std::isfinite(height);
+    if (!finite || !(width > 0.0f) || height == 0.0f || !(min_depth >= 0.0f && min_depth <= 1.0f) || !(max_depth >= 0.0f && max_depth <= 1.0f))
+    {
+        c::reportError(__func__, "the viewport needs finite numbers, a width above 0, a height other than 0 and depths from 0 to 1.");
+        return RASM_ERROR_INVALID_ARGUMENT;
+    }
+    const c::CallErrors errors;
+    const bool set = cmd->renderer->getRenderContext().setViewport(cmd->commandBuffer, x, y, width, height, min_depth, max_depth);
+    return set ? errors.result() : RASM_ERROR_FAILED;
 }
 RASM_C_CATCH_RESULT
 
@@ -597,7 +703,14 @@ try
     rasm_commands *cmd = getGraphicsCommands(commands, __func__);
     if (cmd == nullptr)
         return RASM_ERROR_INVALID_ARGUMENT;
-    return cmd->renderer->getRenderContext().setScissor(cmd->commandBuffer, x, y, width, height) ? RASM_OK : RASM_ERROR_FAILED;
+    if (x < 0 || y < 0 || static_cast<int64_t>(x) + width > INT32_MAX || static_cast<int64_t>(y) + height > INT32_MAX)
+    {
+        c::reportError(__func__, "the scissor needs x and y of 0 or more, and x + width and y + height that fit an int32_t.");
+        return RASM_ERROR_INVALID_ARGUMENT;
+    }
+    const c::CallErrors errors;
+    const bool set = cmd->renderer->getRenderContext().setScissor(cmd->commandBuffer, x, y, width, height);
+    return set ? errors.result() : RASM_ERROR_FAILED;
 }
 RASM_C_CATCH_RESULT
 
@@ -607,7 +720,9 @@ try
     rasm_commands *cmd = getGraphicsCommands(commands, __func__);
     if (cmd == nullptr || !c::checkEnum(cull_mode, RASM_CULL_MODE_BACK + 1, __func__, "cull_mode"))
         return RASM_ERROR_INVALID_ARGUMENT;
-    return cmd->renderer->getRenderContext().setCullMode(cmd->commandBuffer, static_cast<CullMode>(cull_mode)) ? RASM_OK : RASM_ERROR_FAILED;
+    const c::CallErrors errors;
+    const bool set = cmd->renderer->getRenderContext().setCullMode(cmd->commandBuffer, static_cast<CullMode>(cull_mode));
+    return set ? errors.result() : RASM_ERROR_FAILED;
 }
 RASM_C_CATCH_RESULT
 
@@ -617,8 +732,9 @@ try
     rasm_commands *cmd = getRecording(commands, false, __func__);
     if (cmd == nullptr)
         return RASM_ERROR_INVALID_ARGUMENT;
+    const c::CallErrors errors;
     cmd->renderer->getRenderContext().draw(cmd->commandBuffer, vertex_count, instance_count);
-    return RASM_OK;
+    return errors.result();
 }
 RASM_C_CATCH_RESULT
 
@@ -626,14 +742,19 @@ rasm_result RASM_CALL rasm_cmd_bind_index_buffer(rasm_commands *commands, rasm_b
 try
 {
     rasm_commands *cmd = getGraphicsCommands(commands, __func__);
-    if (cmd == nullptr || !c::checkHandle(buffer.id, __func__, "buffer"))
+    if (cmd == nullptr)
         return RASM_ERROR_INVALID_ARGUMENT;
     if (index_format != RASM_FORMAT_U16_UINT && index_format != RASM_FORMAT_U32_UINT)
     {
         c::reportError(__func__, "index_format must be RASM_FORMAT_U16_UINT or RASM_FORMAT_U32_UINT.");
         return RASM_ERROR_INVALID_ARGUMENT;
     }
+    if (!checkBuffer(*cmd, buffer, BufferUsage::INDEX, offset, index_format == RASM_FORMAT_U16_UINT ? 2 : 4, 0, __func__, "buffer"))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    const c::CallErrors errors;
     cmd->renderer->getRenderContext().bindIndexBuffer(cmd->commandBuffer, c::toCpp(buffer), offset, static_cast<Format>(index_format));
+    if (errors.result() != RASM_OK)
+        return RASM_ERROR_FAILED;
     cmd->indexBound = true;
     return RASM_OK;
 }
@@ -645,24 +766,30 @@ try
     rasm_commands *cmd = getIndexedRecording(commands, __func__);
     if (cmd == nullptr)
         return RASM_ERROR_INVALID_ARGUMENT;
+    const c::CallErrors errors;
     cmd->renderer->getRenderContext().drawIndexed(cmd->commandBuffer, index_count, instance_count, vertex_offset, first_index, first_instance);
-    return RASM_OK;
+    return errors.result();
 }
 RASM_C_CATCH_RESULT
 
+// Each command is 5 words (VkDrawIndexedIndirectCommand), stride bytes apart.
 rasm_result RASM_CALL rasm_cmd_draw_indexed_indirect(rasm_commands *commands, rasm_buffer buffer, uint64_t offset, uint32_t draw_count, uint32_t stride)
 try
 {
     rasm_commands *cmd = getIndexedRecording(commands, __func__);
-    if (cmd == nullptr || !c::checkHandle(buffer.id, __func__, "buffer"))
+    if (cmd == nullptr || !checkStride(draw_count, stride, __func__))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    const uint64_t bytes = draw_count == 0 ? 0 : static_cast<uint64_t>(draw_count - 1) * stride + DRAW_INDEXED_COMMAND_SIZE;
+    if (!checkBuffer(*cmd, buffer, BufferUsage::INDIRECT, offset, 4, bytes, __func__, "buffer"))
         return RASM_ERROR_INVALID_ARGUMENT;
     if (offset > UINT32_MAX)
     {
         c::reportError(__func__, "offset must be below 4 GiB.");
         return RASM_ERROR_INVALID_ARGUMENT;
     }
+    const c::CallErrors errors;
     cmd->renderer->getRenderContext().drawIndexedIndirect(cmd->commandBuffer, c::toCpp(buffer), static_cast<uint32_t>(offset), draw_count, stride);
-    return RASM_OK;
+    return errors.result();
 }
 RASM_C_CATCH_RESULT
 
@@ -671,10 +798,15 @@ rasm_result RASM_CALL rasm_cmd_draw_indexed_indirect_count(rasm_commands *comman
 try
 {
     rasm_commands *cmd = getIndexedRecording(commands, __func__);
-    if (cmd == nullptr || !c::checkHandle(buffer.id, __func__, "buffer") || !c::checkHandle(count_buffer.id, __func__, "count_buffer"))
+    if (cmd == nullptr || !checkStride(max_draw_count, stride, __func__))
         return RASM_ERROR_INVALID_ARGUMENT;
+    const uint64_t bytes = max_draw_count == 0 ? 0 : static_cast<uint64_t>(max_draw_count - 1) * stride + DRAW_INDEXED_COMMAND_SIZE;
+    if (!checkBuffer(*cmd, buffer, BufferUsage::INDIRECT, offset, 4, bytes, __func__, "buffer") ||
+        !checkBuffer(*cmd, count_buffer, BufferUsage::INDIRECT, count_offset, 4, sizeof(uint32_t), __func__, "count_buffer"))
+        return RASM_ERROR_INVALID_ARGUMENT;
+    const c::CallErrors errors;
     cmd->renderer->getRenderContext().drawIndexedIndirectCount(cmd->commandBuffer, c::toCpp(buffer), offset, c::toCpp(count_buffer), count_offset, max_draw_count, stride);
-    return RASM_OK;
+    return errors.result();
 }
 RASM_C_CATCH_RESULT
 
@@ -684,19 +816,22 @@ try
     rasm_commands *cmd = getRecording(commands, true, __func__);
     if (cmd == nullptr)
         return RASM_ERROR_INVALID_ARGUMENT;
+    const c::CallErrors errors;
     cmd->renderer->getRenderContext().dispatch(cmd->commandBuffer, group_count_x, group_count_y, group_count_z);
-    return RASM_OK;
+    return errors.result();
 }
 RASM_C_CATCH_RESULT
 
+// The group counts are 3 words (VkDispatchIndirectCommand).
 rasm_result RASM_CALL rasm_cmd_dispatch_indirect(rasm_commands *commands, rasm_buffer buffer, uint64_t offset)
 try
 {
     rasm_commands *cmd = getRecording(commands, true, __func__);
-    if (cmd == nullptr || !c::checkHandle(buffer.id, __func__, "buffer"))
+    if (cmd == nullptr || !checkBuffer(*cmd, buffer, BufferUsage::INDIRECT, offset, 4, 3 * sizeof(uint32_t), __func__, "buffer"))
         return RASM_ERROR_INVALID_ARGUMENT;
+    const c::CallErrors errors;
     cmd->renderer->getRenderContext().dispatchIndirect(cmd->commandBuffer, c::toCpp(buffer), offset);
-    return RASM_OK;
+    return errors.result();
 }
 RASM_C_CATCH_RESULT
 
@@ -707,17 +842,20 @@ try
     rasm_commands *cmd = getCommands(commands, __func__);
     if (cmd == nullptr)
         return RASM_ERROR_INVALID_ARGUMENT;
-    constexpr uint32_t stages = RASM_PIPELINE_STAGE_COMPUTE | RASM_PIPELINE_STAGE_GRAPHICS | RASM_PIPELINE_STAGE_HOST;
-    if (cmd->passType == RASM_PASS_TYPE_GRAPHICS || before == 0 || after == 0 || (before & ~stages) != 0 || (after & ~stages) != 0)
+    constexpr uint32_t STAGES = RASM_PIPELINE_STAGE_COMPUTE | RASM_PIPELINE_STAGE_GRAPHICS | RASM_PIPELINE_STAGE_HOST;
+    if (cmd->passType == RASM_PASS_TYPE_GRAPHICS || before == 0 || after == 0 || (before & ~STAGES) != 0 || (after & ~STAGES) != 0)
     {
         c::reportError(__func__, "only a compute pass places barriers, between RASM_PIPELINE_STAGE_ flags.");
         return RASM_ERROR_INVALID_ARGUMENT;
     }
+    const c::CallErrors errors;
     cmd->renderer->getRenderContext().memoryBarrier(cmd->commandBuffer, static_cast<PipelineStage>(before), static_cast<PipelineStage>(after));
-    return RASM_OK;
+    return errors.result();
 }
 RASM_C_CATCH_RESULT
 
+// The callback's open timers are a bit each: ending one twice, or one it did not begin, is refused, and the pass ends
+// those it left open.
 uint32_t RASM_CALL rasm_cmd_begin_gpu_timer(rasm_commands *commands, const char *name)
 try
 {
@@ -725,7 +863,10 @@ try
     if (cmd == nullptr || !c::checkPointer(name, __func__, "name"))
         return RASM_INVALID_INDEX;
     cmd->timerName = name;
-    return cmd->renderer->beginGpuTimer(cmd->commandBuffer, cmd->timerName);
+    const uint32_t timer = cmd->renderer->beginGpuTimer(cmd->commandBuffer, cmd->timerName);
+    if (timer < MAX_GPU_TIMERS)
+        cmd->openTimers |= uint64_t{1} << timer;
+    return timer;
 }
 RASM_C_CATCH(RASM_INVALID_INDEX)
 
@@ -735,11 +876,14 @@ try
     rasm_commands *cmd = getCommands(commands, __func__);
     if (cmd == nullptr)
         return RASM_ERROR_INVALID_ARGUMENT;
-    if (timer >= MAX_GPU_TIMERS && timer != RASM_INVALID_INDEX)
+    if (timer == RASM_INVALID_INDEX)
+        return RASM_OK;
+    if (timer >= MAX_GPU_TIMERS || (cmd->openTimers & (uint64_t{1} << timer)) == 0)
     {
-        c::reportError(__func__, "timer is not one rasm_cmd_begin_gpu_timer gave.");
+        c::reportError(__func__, "timer is not one this callback's rasm_cmd_begin_gpu_timer gave, or it was ended already.");
         return RASM_ERROR_INVALID_ARGUMENT;
     }
+    cmd->openTimers &= ~(uint64_t{1} << timer);
     cmd->renderer->endGpuTimer(cmd->commandBuffer, timer);
     return RASM_OK;
 }

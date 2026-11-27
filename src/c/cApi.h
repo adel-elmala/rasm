@@ -10,6 +10,27 @@
 #include <memory>
 #include <vector>
 
+namespace rasm::c
+{
+    // What rasm_create_pipeline made, by the pipeline's index: rasm_cmd_bind_pipeline checks it against the pass.
+    struct PipelineInfo
+    {
+        uint8_t                         type            = 0;                    // rasm_pipeline_type + 1, 0 for none
+        Format                          colors[MAX_COLOR_ATTACHMENTS] = {};     // a graphics pipeline's attachments
+        Format                          depth           = Format::UNKNOWN;
+        uint32_t                        samples         = 1;
+    };
+
+    // What rasm_create_buffer made, by the buffer's index: the commands check a buffer's use and size without a lookup
+    // that copies its desc.
+    struct BufferInfo
+    {
+        uint64_t                        generation      = 0;                    // 0: none
+        BufferUsage                     usage           = BufferUsage::STORAGE;
+        uint64_t                        size            = 0;
+    };
+}
+
 struct rasm_renderer
 {
                                         rasm_renderer() = default;
@@ -20,7 +41,8 @@ struct rasm_renderer
     rasm::Renderer*                     renderer        = nullptr;
     std::unique_ptr<rasm::Renderer>     owned;                                  // null for an engine's renderer
     std::vector<rasm_render_graph*>     graphs;                                 // the live graphs made on it
-    std::vector<uint8_t>                pipelineTypes;                          // by pipeline index: rasm_create_pipeline's type + 1, 0 for none
+    std::vector<rasm::c::PipelineInfo>  pipelines;                              // by pipeline index
+    std::vector<rasm::c::BufferInfo>    buffers;                                // by buffer index
     uint32_t                            recording       = 0;                    // inside rasm_render_graph_execute
 };
 

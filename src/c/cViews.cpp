@@ -9,6 +9,38 @@
 
 using namespace rasm;
 
+namespace
+{
+    // A color a render target can draw into, or UNKNOWN for none.
+    bool isColorFormat(rasm_format format)
+    {
+        switch (format)
+        {
+        case RASM_FORMAT_UNKNOWN:
+        case RASM_FORMAT_R8G8B8A8_UNORM:
+        case RASM_FORMAT_R8G8B8A8_SRGB:
+        case RASM_FORMAT_B8G8R8A8_SRGB:
+        case RASM_FORMAT_B8G8R8A8_UNORM:
+        case RASM_FORMAT_R16G16B16A16_SFLOAT:
+        case RASM_FORMAT_R32G32B32A32_SFLOAT:
+        case RASM_FORMAT_R32G32_SFLOAT:
+        case RASM_FORMAT_R16G16_SFLOAT:
+        case RASM_FORMAT_R16_UNORM:
+        case RASM_FORMAT_R32_SFLOAT:
+        case RASM_FORMAT_R8_UNORM:
+        case RASM_FORMAT_R32G32B32A32_UINT:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    bool isDepthFormat(rasm_format format)
+    {
+        return format == RASM_FORMAT_UNKNOWN || format == RASM_FORMAT_D24_UNORM_S8_UINT || format == RASM_FORMAT_D32_SFLOAT || format == RASM_FORMAT_D32_SFLOAT_S8_UINT;
+    }
+}
+
 namespace rasm::c
 {
     // One color for the tone map to draw a view into, cleared to opaque black.
@@ -22,13 +54,14 @@ namespace rasm::c
         rasm_render_target_desc values = getRenderTargetDefaults();
         if (!readSized(desc, RENDER_TARGET_DESC_SIZE_1_1, &values, sizeof(values), function, "desc"))
             return false;
-        constexpr uint32_t FORMAT_COUNT = RASM_FORMAT_R32G32B32A32_UINT + 1;
-        if (!checkEnum(values.format, FORMAT_COUNT, function, "desc->format") || !checkEnum(values.depth_format, FORMAT_COUNT, function, "desc->depth_format"))
-            return false;
+        bool formats = isColorFormat(values.format) && isDepthFormat(values.depth_format) && (values.format != RASM_FORMAT_UNKNOWN || values.depth_format != RASM_FORMAT_UNKNOWN);
         for (const rasm_format format : values.more_color_formats)
+            formats = formats && isColorFormat(format);
+        if (!formats)
         {
-            if (!checkEnum(format, FORMAT_COUNT, function, "desc->more_color_formats"))
-                return false;
+            reportError(function, "desc's colors must be formats a target can draw into (8-bit RGBA or BGRA, R8, R16, RG16F, RGBA16F, R32F, RG32F, RGBA32F, RGBA32_UINT), its "
+                                  "depth D24_UNORM_S8_UINT, D32_SFLOAT or D32_SFLOAT_S8_UINT, and it needs a color or a depth.");
+            return false;
         }
         if (!(values.swapchain_scale >= 0.0f) || !std::isfinite(values.swapchain_scale))
         {
