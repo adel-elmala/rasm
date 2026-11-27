@@ -201,6 +201,10 @@ namespace rasm
         PipelineHandle              createPipeline(const std::string& name, const std::string& shaderSource);
         PipelineHandle              createPipeline(const std::string& name, const std::string& shaderSource, const RenderTargetHandle& renderTarget);
         PipelineHandle              createComputePipeline(const std::string& name, const std::string& shaderSource, const std::string& entryPoint = "compMain");
+        // One entry point of Slang source compiled into a shader, for a PipelineDesc of your own (RenderContext::createPipeline,
+        // its descriptorSetLayout getRenderContext().getBindlessDescriptorSetLayout()): blend, depth and topology as you
+        // choose. Returns invalid on failure.
+        ShaderHandle                createShader(const std::string& name, const std::string& shaderSource, ShaderType type, const std::string& entryPoint);
         const Material&             getMaterial(const MaterialHandle& handle);
         Transform                   getTransform(EntityHandle entity);
         // False for an entity that was destroyed (a pick may name one) or never made.
