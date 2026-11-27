@@ -5,7 +5,7 @@
 
 namespace rasm
 {
-    void placeLabels(LabelPlacement &state, LabelCandidate *candidates, uint32_t count, const uint32_t *slotStamps, uint32_t slotCount, uint32_t width, uint32_t height, float step)
+    void placeLabels(LabelPlacement &state, LabelCandidate *candidates, uint32_t count, const uint32_t *slotStamps, uint32_t slotCount, uint32_t width, uint32_t height, float step, float cellPixels)
     {
         // A view's first placement shows its labels at once: there is nothing to fade from.
         const bool first = state.alpha.empty();
@@ -40,8 +40,8 @@ namespace rasm
                           return state.placed[x.slot] > state.placed[y.slot];
                       return x.slot < y.slot; });
 
-        const auto columns = static_cast<uint32_t>(std::ceil(static_cast<float>(width) / LABEL_CELL_PIXELS));
-        const auto rows = static_cast<uint32_t>(std::ceil(static_cast<float>(height) / LABEL_CELL_PIXELS));
+        const auto columns = static_cast<uint32_t>(std::ceil(static_cast<float>(width) / cellPixels));
+        const auto rows = static_cast<uint32_t>(std::ceil(static_cast<float>(height) / cellPixels));
         const size_t words = (static_cast<size_t>(columns) * rows + 63) / 64;
         state.cells.assign(words, 0);
         for (uint32_t index : state.order)
@@ -49,10 +49,10 @@ namespace rasm
             const LabelCandidate &candidate = candidates[index];
             bool free = candidate.inView && columns > 0 && rows > 0;
             // The cells the box covers, clipped to the screen.
-            const auto x0 = static_cast<int32_t>(std::floor(std::max(candidate.low.x, 0.0f) / LABEL_CELL_PIXELS));
-            const auto y0 = static_cast<int32_t>(std::floor(std::max(candidate.low.y, 0.0f) / LABEL_CELL_PIXELS));
-            const auto x1 = std::min(static_cast<int32_t>(std::floor(candidate.high.x / LABEL_CELL_PIXELS)), static_cast<int32_t>(columns) - 1);
-            const auto y1 = std::min(static_cast<int32_t>(std::floor(candidate.high.y / LABEL_CELL_PIXELS)), static_cast<int32_t>(rows) - 1);
+            const auto x0 = static_cast<int32_t>(std::floor(std::max(candidate.low.x, 0.0f) / cellPixels));
+            const auto y0 = static_cast<int32_t>(std::floor(std::max(candidate.low.y, 0.0f) / cellPixels));
+            const auto x1 = std::min(static_cast<int32_t>(std::floor(candidate.high.x / cellPixels)), static_cast<int32_t>(columns) - 1);
+            const auto y1 = std::min(static_cast<int32_t>(std::floor(candidate.high.y / cellPixels)), static_cast<int32_t>(rows) - 1);
             free = free && x0 <= x1 && y0 <= y1;
             for (int32_t y = y0; free && y <= y1; ++y)
             {

@@ -219,8 +219,8 @@ VectorVertex getVectorVertex(SceneData *scene, VectorData style, float4x4 world,
             alpha           = scene->labelsPtr[uint(firstLabel) + asuint(vert.tangent.x)];
         float pixelWorld    = getPixelWorld(scene, output.clipPosition.w);
         bool metres         = (style.flags & VECTOR_METRES) != 0;
-        float textPixels    = metres ? style.width / pixelWorld : style.width;
-        float halo          = metres ? style.outlineWidth / pixelWorld : style.outlineWidth;
+        float textPixels    = metres ? style.width / pixelWorld : style.width * getPixelScale(scene);
+        float halo          = metres ? style.outlineWidth / pixelWorld : style.outlineWidth * getPixelScale(scene);
         if (alpha <= 0.0 || style.font == INVALID_TEXTURE_INDEX || (vert.uv[2].y > 0.5 && halo <= 0.0))
         {
             output.clipPosition = float4(0.0, 0.0, -1.0, 1.0);
@@ -252,8 +252,8 @@ VectorVertex getVectorVertex(SceneData *scene, VectorData style, float4x4 world,
         float widthPixels   = 2.0 * builtHalf / pixelWorld;
         float halfWorld     = 0.5 * max(widthPixels, 1.0) * pixelWorld;
         output.fade         = saturate(widthPixels);
-        output.dash         = metres ? vert.uv[1].x : vert.uv[1].x / pixelWorld;
-        output.width        = metres ? 2.0 * builtHalf : widthPixels;
+        output.dash         = metres ? vert.uv[1].x : vert.uv[1].x / (pixelWorld * getPixelScale(scene));
+        output.width        = metres ? 2.0 * builtHalf : widthPixels / getPixelScale(scene);
         float3 across       = getAcross(along, up);
         float4 side         = mul(viewProjection, float4(anchor + across * halfWorld, 1.0));
         float onScreen      = side.w > 0.0 ? length(toPixels(scene, side) - toPixels(scene, output.clipPosition)) : 0.5;
@@ -271,12 +271,12 @@ VectorVertex getVectorVertex(SceneData *scene, VectorData style, float4x4 world,
     {
         float pixelWorld    = getPixelWorld(scene, output.clipPosition.w);
         bool metres         = (style.flags & VECTOR_METRES) != 0;
-        float widthPixels   = metres ? style.width / pixelWorld : style.width;
+        float widthPixels   = metres ? style.width / pixelWorld : style.width * getPixelScale(scene);
         // Never under a pixel: a thinner feature keeps one and fades by its coverage.
         output.fade         = saturate(widthPixels);
         float halfPixels    = 0.5 * max(widthPixels, 1.0);
         if (kind == VECTOR_KIND_LINE)
-            output.dash     = metres ? vert.uv[1].x : vert.uv[1].x / pixelWorld;
+            output.dash     = metres ? vert.uv[1].x : vert.uv[1].x / (pixelWorld * getPixelScale(scene));
         if ((style.flags & VECTOR_GROUND) != 0)
         {
             // In the ground's plane: the half width in the world, and how many pixels it covers across the screen,

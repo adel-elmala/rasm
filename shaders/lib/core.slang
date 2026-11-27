@@ -370,8 +370,23 @@ struct SceneData
     uint32_t            weightedAccum;          // bindless: the weighted sums (color times weight, alpha times weight)
     uint32_t            weightedCoverage;       // bindless: the coverage, 1 - the product of (1 - alpha), in r; with motion in a, after the motion sums
     uint32_t            weightedSamples;        // samples per pixel of the two
-    uint32_t            weightedPadding;        // keeps the size a multiple of 8
+    float               pixelScale;             // output pixels per pixel of a size given in pixels (widths, text, points, the grid's lines) and of the LOD error: 1, or an export's
 };
+
+// Output pixels per pixel of a size given in pixels. Only an export's pipelines (RASM_EXPORT_VIEW) and the compute passes
+// every view shares (RASM_PIXEL_SCALE) read it; every other view's is 1, which the compiler folds away, so their shaders
+// do no work for it.
+#if defined(RASM_EXPORT_VIEW) || defined(RASM_PIXEL_SCALE)
+float getPixelScale(SceneData *scene)
+{
+    return scene->pixelScale;
+}
+#else
+float getPixelScale(SceneData *scene)
+{
+    return 1.0;
+}
+#endif
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.
 // argument is the cull phase (cull.slang, and the draw passes for the culling debug view) or the Hi-Z level.

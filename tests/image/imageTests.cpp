@@ -147,6 +147,7 @@ namespace
         bool secondWindow = false;    // a views test that reads the content's second window instead of the main one
         const char *sameAs = nullptr; // compare with this test's image of the same run instead of a golden
         bool picks = false;           // also checks the content's pick probes, and picks under the centre in the steady frames
+        uint32_t exportTile = 0;      // drawn by Engine::exportView (4 samples, no bloom) in tiles of this size instead of a frame
     };
 
     struct Comparison
@@ -1436,6 +1437,14 @@ namespace
         {.name = "far_glyphs",    .build = buildGlyphs,        .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "glyphs", .picks = true},
         // The see-through shells' hashed shadows are noise per shadow texel, so the texel grid's move shifts more of them.
         {.name = "far_weighted",  .build = buildWeighted,      .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.003, .sameAs = "weighted", .picks = true},
+        // An export in tiles of 128 pixels, each drawn in a rect of 256 with its guard, and the same export in one tile.
+        {.name = "export_labels", .build = buildLabels,        .exportTile = 128},
+        {.name = "export_labels_single", .build = buildLabels, .sameAs = "export_labels", .exportTile = 4096},
+        {.name = "export_weighted", .build = buildWeighted,    .exportTile = 128},
+        {.name = "export_weighted_single", .build = buildWeighted, .sameAs = "export_weighted", .exportTile = 4096},
+        {.name = "export_grid",   .build = buildGrid,          .exportTile = 128},
+        {.name = "export_grid_single", .build = buildGrid,     .sameAs = "export_grid", .exportTile = 4096},
+        {.name = "export_far_labels", .build = buildLabels,    .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "export_labels", .exportTile = 128},
     };
     // clang-format on
 
@@ -1677,6 +1686,8 @@ namespace
             {.scene = content->scene, .camera = content->map, .output = {.rect = {.x = 0.75f, .y = 0.0f, .width = 0.25f, .height = 0.44f}}, .bloom = rasm::ViewToggle::OFF},
             {.scene = content->scene, .camera = content->security, .output = {.window = content->window}},
         };
+        // An export test draws the camera's view alone through Engine::render, with no anti-aliasing of its own.
+        const rasm::View exported{.scene = content->scene, .camera = camera, .bloom = rasm::ViewToggle::OFF, .antiAliasing = rasm::AntiAliasing::NONE};
         rasm::RenderGraph graph = engine.createRenderGraph();
         rasm::RenderTargetHandle sceneTarget;
         // A picking test picks a 5 x 5 rect under the centre every frame, so the steady frames count its allocations too.
@@ -1695,12 +1706,14 @@ namespace
             }
             if (test.picks && !hover.isValid())
                 hover = engine.pick(content->scene, camera, sceneTarget, {.rect = {.x = WIDTH / 2 - 2, .y = HEIGHT / 2 - 2, .width = 5, .height = 5}});
-            if (test.views)
+            if (test.exportTile > 0)
+                engine.render(&exported, 1);
+            else if (test.views)
                 engine.render(views, 5);
             else
                 graph.execute(camera);
         };
-        if (!test.views && !buildGraph(engine, test, *content, camera, graph, sceneTarget))
+        if (!test.views && test.exportTile == 0 && !buildGraph(engine, test, *content, camera, graph, sceneTarget))
         {
             engine.setDebugView(rasm::DebugView::NONE);
             engine.setMeshletPath(rasm::MeshletPath::OFF);
@@ -1710,11 +1723,22 @@ namespace
         engine.waitForLoads();
         for (uint32_t i = 0; i < test.frames; ++i)
             frame();
-        const rasm::ReadbackHandle copy = test.secondWindow ? engine.readFrame(content->window, rasm::ReadbackFormat::RGBA8_SRGB) : engine.readFrame(rasm::ReadbackFormat::RGBA8_SRGB);
-        // The frame that copies keeps the same clock; the readback is ready once the GPU has finished it.
-        for (uint32_t extra = 0; extra < 8 && copy.isValid() && !engine.isReadbackReady(copy); ++extra)
-            frame();
-        const bool taken = copy.isValid() && engine.takeReadback(copy, image);
+        bool taken = false;
+        if (test.exportTile > 0)
+        {
+            const rasm::ExportHandle still = engine.exportView(exported, {.width = WIDTH, .height = HEIGHT, .samples = 4, .tileSize = test.exportTile});
+            for (uint32_t extra = 0; extra < 2000 && engine.getExportProgress(still).state == rasm::ExportState::RUNNING; ++extra)
+                frame();
+            taken = engine.takeExport(still, image);
+        }
+        else
+        {
+            const rasm::ReadbackHandle copy = test.secondWindow ? engine.readFrame(content->window, rasm::ReadbackFormat::RGBA8_SRGB) : engine.readFrame(rasm::ReadbackFormat::RGBA8_SRGB);
+            // The frame that copies keeps the same clock; the readback is ready once the GPU has finished it.
+            for (uint32_t extra = 0; extra < 8 && copy.isValid() && !engine.isReadbackReady(copy); ++extra)
+                frame();
+            taken = copy.isValid() && engine.takeReadback(copy, image);
+        }
         // Each probe's pick at the pixel its point projects to, all in one frame, read when the GPU is done with it.
         pickFailures = 0;
         if (test.picks && taken)

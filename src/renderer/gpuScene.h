@@ -155,6 +155,7 @@ namespace rasm
         uint32_t                        width                                                               = 0;
         uint32_t                        height                                                              = 0;
         bool                            jitter                                                              = false;    // addTaaPass: the projection takes a sub-pixel offset per frame
+        bool                            exported                                                            = false;    // an export's view: its pipelines are the RASM_EXPORT_VIEW variants
         uint32_t                        jitterFrame                                                         = 0;        // counts the jittered frames, for getTaaJitter
         bool                            hasPrevious                                                         = false;
         LabelPlacement                  labels;                                                                     // a shaded view's labels over frames
@@ -176,6 +177,7 @@ namespace rasm
     // A shaded view's pipelines for one sample count of its target: they must match the attachments they draw into.
     constexpr uint32_t                  SAMPLE_VARIANTS                                                     = 4;        // 1, 2, 4 and 8 samples
     constexpr uint32_t                  MOTION_VARIANT                                                      = SAMPLE_VARIANTS;  // 1 sample and a MOTION_FORMAT color
+    constexpr uint32_t                  EXPORT_VARIANTS                                                     = MOTION_VARIANT + 1;   // an export's view, by log2 of its samples: RASM_EXPORT_VIEW
 
     struct DebugPipelines
     {
@@ -212,7 +214,7 @@ namespace rasm
         GpuTable                        instances;
         GpuTable                        materials;
         BufferHandle                    sceneData[MAX_FRAMES_IN_FLIGHT]                                     = {};
-        ShadedPipelines                 shaded[SAMPLE_VARIANTS + 1]                                         = {};       // by log2 of the target's samples, then MOTION_VARIANT
+        ShadedPipelines                 shaded[2 * SAMPLE_VARIANTS + 1]                                     = {};       // by log2 of the target's samples, then MOTION_VARIANT, then EXPORT_VARIANTS
         PipelineHandle                  depthPipeline                                                       = {};
         PipelineHandle                  depthMaskPipeline                                                   = {};
         PipelineHandle                  depthMeshPipeline                                                   = {};

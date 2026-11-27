@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Vector Lines, Polygons and Points · RASM</title>
 <meta name="description" content="How a map engine draws vector data: wide lines spread from their center line in the vertex shader, joins and caps, edges smoothed by the distance to them, a one-pixel minimum, widths in pixels or metres, polygons with holes by ear clipping, points and markers, draw order and depth, draping on terrain, culling that pads for pixel widths, and motion for TAA. Then how RASM does it.">
-<meta name="rasm-sources" content="include/rasm/vector.h include/rasm/material.h include/rasm/mesh.h src/scene/vector.cpp src/assets/mesh.cpp shaders/lib/vector.slang shaders/passes/rasm.slang shaders/lib/frustumCulling.slang shaders/passes/cull.slang shaders/passes/sort.slang src/c/cVector.cpp include/rasm/rasm_c.h examples/25_vector_map/main.cpp examples/24_map_tiles/main.cpp tests/vectorTests.cpp">
+<meta name="rasm-sources" content="include/rasm/vector.h include/rasm/material.h include/rasm/mesh.h src/scene/vector.cpp src/assets/mesh.cpp shaders/lib/vector.slang shaders/passes/rasm.slang shaders/lib/frustumCulling.slang shaders/passes/cull.slang shaders/passes/sort.slang src/c/cVector.cpp include/rasm/rasm_c.h examples/25_vector_map/main.cpp examples/24_map_tiles/main.cpp tests/vectorTests.cpp shaders/lib/core.slang">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -335,6 +335,8 @@
 <h2 id="in-rasm"><span class="n">13</span>In RASM</h2>
 
 <p>A layer of vector features is an ordinary entity: a mesh built by the vector builders (<code>include/rasm/vector.h</code>), drawn with a <code>MaterialType::VECTOR</code> material whose <code>VectorMaterial</code> is the style. So it goes through the GPU culling, the Transparent pass's sort, TAA and MSAA like any blended mesh, and is a <a href="tile-streaming.html">TileStreamer</a> tile's content like any other. Labels are vector features too: a fourth kind of vertex, the glyph, with its own page, <a href="text-and-labels.html">Text and labels</a>.</p>
+
+<div class="callout"><strong>Pixel sizes in an export</strong> In a <a href="tiled-export.html">tiled export</a>'s pipelines (<code>RASM_EXPORT_VIEW</code>) sizes given in pixels are multiplied by <code>SceneData::pixelScale</code> (<code>getPixelScale</code>), its <code>ExportDesc::pixelScale</code>, which also divides the LOD's pixels per unit; in every other view it is 1 and the shaders do no work for it. Sizes in metres do not change.</div>
 
 <div class="legend">
   <span><i class="cpu"></i>any thread</span>

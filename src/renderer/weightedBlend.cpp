@@ -3,6 +3,7 @@
 #include "rasm/renderer.h"
 #include "core/utils.h"
 #include "platform/paths.h"
+#include "renderer/export.h"
 #include "renderer/glyphCull.h"
 #include "renderer/gpuScene.h"
 #include "renderer/pipelineWarmup.h"
@@ -252,6 +253,15 @@ namespace rasm
         const RenderTarget &weighted = ctx.getRenderTarget(view.weightedTarget);
         sceneData.weightedRangePtr = ctx.getBufferDeviceAddress(view.weightedRange[frame]);
         sceneData.weightedDepths = getWeightedDepths(view.weightedDepths);
+        // An export's survey gathers its tiles' words, and its tiles take the span they found: the same in every tile.
+        const ExportViewFrame *exportFrame = exports ? getExportViewFrame(*exports, view.scene, view.camera, view.renderTarget) : nullptr;
+        if (exportFrame != nullptr)
+        {
+            if (words[0] <= words[1])
+                gatherExportWeightedWords(*exports, frame, fromDepthBits(words[0]), fromDepthBits(words[1]));
+            if (exportFrame->frozen)
+                sceneData.weightedDepths = exportFrame->weightedDepths;
+        }
         sceneData.weightedAccum = getBindlessTextureIndex(weighted.attachments[frame].color[0]);
         sceneData.weightedCoverage = getBindlessTextureIndex(weighted.attachments[frame].color[1]);
         sceneData.weightedSamples = weighted.samples;

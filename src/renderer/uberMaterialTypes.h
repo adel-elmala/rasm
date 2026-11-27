@@ -608,7 +608,7 @@ namespace rasm::gfx
         uint32_t         weightedAccum;             // bindless: the weighted sums (color times weight, alpha times weight)
         uint32_t         weightedCoverage;          // bindless: the coverage, 1 - the product of (1 - alpha), in r; with motion in a, after the motion sums
         uint32_t         weightedSamples;           // samples per pixel of the two
-        uint32_t         weightedPadding;           // keeps the size a multiple of 8
+        float            pixelScale;                // output pixels per pixel of a size given in pixels (widths, text, points, the grid's lines) and of the LOD error: 1, or an export's ExportDesc::pixelScale
     };
 
     struct PushConstants
@@ -707,6 +707,42 @@ namespace rasm::gfx
     };
 
     struct InspectPushConstants
+    {
+        uint64_t         params;
+        uint32_t         padding[2];
+    };
+
+    // The Export pass's flags and output encodings (shaders/passes/export.slang, src/renderer/export.cpp).
+    constexpr uint32_t   EXPORT_FLAG_FIRST          = 1u << 0;  // the tile's first sample: the sum starts at it
+    constexpr uint32_t   EXPORT_FLAG_LAST           = 1u << 1;  // its last: the sum is written to the output
+    constexpr uint32_t   EXPORT_FLAG_TONE_MAP       = 1u << 2;  // AgX; without it the scene's linear HDR color
+    constexpr uint32_t   EXPORT_FLAG_TRANSPARENT    = 1u << 3;  // the color's alpha is the coverage; else it is 1
+    constexpr uint32_t   EXPORT_OUTPUT_SRGB8        = 0;        // 4 B a pixel: RGBA8, sRGB, straight alpha
+    constexpr uint32_t   EXPORT_OUTPUT_SRGB16       = 1;        // 8 B: RGBA16, sRGB, straight alpha
+    constexpr uint32_t   EXPORT_OUTPUT_HALF         = 2;        // 8 B: RGBA half, linear, premultiplied
+    constexpr uint32_t   EXPORT_OUTPUT_FLOAT        = 3;        // 16 B: RGBA float, linear, premultiplied
+
+    // The Export pass's parameters, in a host-visible buffer per frame slot: one sample of a tile of an export, added
+    // to the tile's sum, and on its last sample the sum, encoded, into the output buffer the CPU reads.
+    struct ExportParams
+    {
+        uint64_t         accumPtr;          // float4 per kept pixel, rows of width: the sum of the samples so far times weight
+        uint64_t         outputPtr;         // the tile's pixels in the EXPORT_OUTPUT_* encoding, rows of width, tightly packed
+        uint32_t         source;            // bindless: the view's resolved HDR color
+        uint32_t         bloom;             // bindless: its bloom, INVALID_TEXTURE_INDEX without one
+        float            exposure;
+        float            bloomStrength;
+        uint32_t         offsetX;           // the kept rect's corner in the source
+        uint32_t         offsetY;
+        uint32_t         width;             // the kept rect's size
+        uint32_t         height;
+        float            weight;            // 1 / the tile's samples
+        uint32_t         flags;             // EXPORT_FLAG_*
+        uint32_t         output;            // EXPORT_OUTPUT_*
+        uint32_t         padding;
+    };
+
+    struct ExportPushConstants
     {
         uint64_t         params;
         uint32_t         padding[2];
@@ -898,6 +934,10 @@ namespace rasm::gfx
     static_assert(sizeof(InspectPushConstants) == PUSH_CONSTANTS_SIZE, "InspectPushConstants must fill the push-constant range");
     static_assert(sizeof(InspectParams) == 64, "InspectParams must match the shader's scalar layout");
     static_assert(offsetof(InspectParams, depthRange) == 60, "InspectParams must match the shader's scalar layout");
+    static_assert(sizeof(ExportPushConstants) == PUSH_CONSTANTS_SIZE, "ExportPushConstants must fill the push-constant range");
+    static_assert(sizeof(ExportParams) == 64, "ExportParams must match the shader's scalar layout");
+    static_assert(offsetof(ExportParams, source) == 16, "ExportParams must match the shader's scalar layout");
+    static_assert(offsetof(ExportParams, padding) == 60, "ExportParams must match the shader's scalar layout");
 
 
 } // namespace rasm::gfx

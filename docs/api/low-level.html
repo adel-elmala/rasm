@@ -740,6 +740,13 @@ float takeUploadGpuMs();</pre>
   </div>
 </div>
 
+<div class="api" id="getMaxImageSize">
+  <pre class="sig">uint32_t getMaxImageSize() const;</pre>
+  <div class="body">
+    <p>The widest and tallest 2D texture or render target the device makes, in pixels (Vulkan: <samp>maxImageDimension2D</samp>, often 16 384 or 32 768); 0 without a device. <code>createTexture</code> refuses a larger one. <a href="engine.html#exportView"><code>exportView</code></a> keeps its tiles and their guard band under it.</p>
+  </div>
+</div>
+
 <div class="api" id="getTextureState">
   <pre class="sig">TextureUsage getTextureState(const TextureHandle&amp; texture);</pre>
   <div class="body">

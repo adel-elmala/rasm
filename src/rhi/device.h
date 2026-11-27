@@ -273,6 +273,8 @@ namespace rasm::rhi
         virtual bool                    hasTransferQueue() const = 0;
         virtual bool                    hasMeshShaders() const = 0;
         virtual bool                    hasBufferInt64Atomics() const = 0;
+        // The widest and tallest 2D image the device makes, in pixels.
+        virtual uint32_t                maxImageSize() const = 0;
         virtual bool                    hasIndependentBlend() const = 0;
         virtual bool                    hasSampleRateShading() const = 0;
         // Timestamps on the queue count like the graphics queue's: same valid bits and period.

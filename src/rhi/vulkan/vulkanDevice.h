@@ -54,6 +54,7 @@ namespace rasm::rhi
         bool                        hasTransferQueue() const override;
         bool                        hasMeshShaders() const override;
         bool                        hasBufferInt64Atomics() const override;
+        uint32_t                    maxImageSize() const override;
         bool                        hasIndependentBlend() const override;
         bool                        hasSampleRateShading() const override;
         VkShaderStageFlags          getPushConstantStages() const;

@@ -47,6 +47,10 @@ float4 fragMain(VSOutput input) : SV_TARGET
     // takes out the projection's TAA jitter (jitter), so the sky moves with the scene.
     float3 viewRay      = float3(0.0, 0.0, -1.0);
     float2 ndc          = input.ndc - pc.scene->jitter;
+#if defined(RASM_EXPORT_VIEW)
+    // An export tile's window: the projection's off-center terms (its jitter is in them too, and SceneData::jitter is 0).
+    ndc                 = input.ndc + float2(projection[0][2], projection[1][2]);
+#endif
     if (projection[3][3] == 0.0)
         viewRay         = float3(ndc.x / projection[0][0], ndc.y / projection[1][1], -1.0);
     // The view matrix's 3x3 is a rotation, so its transpose turns view space back into world space.

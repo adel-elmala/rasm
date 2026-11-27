@@ -500,6 +500,28 @@ namespace rasm
                                        {"depthRange", offsetof(gfx::InspectParams, depthRange)}}) &&
                        valid;
             }
+            if (pcName == "ExportPushConstants")
+            {
+                bool valid = validateStruct(pushConstants, "ExportPushConstants", sizeof(gfx::ExportPushConstants),
+                                            {{"params", offsetof(gfx::ExportPushConstants, params)},
+                                             {"padding", offsetof(gfx::ExportPushConstants, padding)}});
+                return validateStruct(fieldStruct(layouts, pushConstants, "params"), "ExportParams", sizeof(gfx::ExportParams),
+                                      {{"accumPtr", offsetof(gfx::ExportParams, accumPtr)},
+                                       {"outputPtr", offsetof(gfx::ExportParams, outputPtr)},
+                                       {"source", offsetof(gfx::ExportParams, source)},
+                                       {"bloom", offsetof(gfx::ExportParams, bloom)},
+                                       {"exposure", offsetof(gfx::ExportParams, exposure)},
+                                       {"bloomStrength", offsetof(gfx::ExportParams, bloomStrength)},
+                                       {"offsetX", offsetof(gfx::ExportParams, offsetX)},
+                                       {"offsetY", offsetof(gfx::ExportParams, offsetY)},
+                                       {"width", offsetof(gfx::ExportParams, width)},
+                                       {"height", offsetof(gfx::ExportParams, height)},
+                                       {"weight", offsetof(gfx::ExportParams, weight)},
+                                       {"flags", offsetof(gfx::ExportParams, flags)},
+                                       {"output", offsetof(gfx::ExportParams, output)},
+                                       {"padding", offsetof(gfx::ExportParams, padding)}}) &&
+                       valid;
+            }
             if (pcName == "EnvironmentPushConstants")
             {
                 return validateStruct(pushConstants, "EnvironmentPushConstants", sizeof(gfx::EnvironmentPushConstants),
@@ -638,7 +660,7 @@ namespace rasm
                                      {"weightedAccum", offsetof(gfx::SceneData, weightedAccum)},
                                      {"weightedCoverage", offsetof(gfx::SceneData, weightedCoverage)},
                                      {"weightedSamples", offsetof(gfx::SceneData, weightedSamples)},
-                                     {"weightedPadding", offsetof(gfx::SceneData, weightedPadding)}});
+                                     {"pixelScale", offsetof(gfx::SceneData, pixelScale)}});
 
             valid &= validateStruct(fieldStruct(layouts, scene, "pointRasterPtr"), "PointRasterHeader", sizeof(gfx::PointRasterHeader),
                                     {{"rasterGroups", offsetof(gfx::PointRasterHeader, rasterGroups)},

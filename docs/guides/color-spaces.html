@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Color Spaces: sRGB and Linear · RASM</title>
 <meta name="description" content="How sRGB and linear color work: the sRGB transfer function, why lighting, filtering and blending must happen in linear light, which textures are color and which are data, how _SRGB formats convert in hardware, tone mapping, and how RASM does it.">
-<meta name="rasm-sources" content="src/assets/material.cpp src/assets/texture.cpp src/assets/ktxImage.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/offscreenSwapchain.h src/renderer/renderer.cpp include/rasm/types.h include/rasm/renderer.h shaders/lib/pbr.slang shaders/lib/unlit.slang shaders/lib/core.slang shaders/passes/rasm.slang shaders/passes/statsOverlay.slang shaders/passes/toneMap.slang src/renderer/toneMap.cpp src/renderer/viewGraph.cpp examples/05_city/main.cpp">
+<meta name="rasm-sources" content="src/assets/material.cpp src/assets/texture.cpp src/assets/ktxImage.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/offscreenSwapchain.h src/renderer/renderer.cpp include/rasm/types.h include/rasm/renderer.h shaders/lib/pbr.slang shaders/lib/unlit.slang shaders/lib/core.slang shaders/passes/rasm.slang shaders/passes/statsOverlay.slang shaders/passes/toneMap.slang src/renderer/toneMap.cpp src/renderer/viewGraph.cpp examples/05_city/main.cpp shaders/lib/agx.slang">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -897,7 +897,7 @@ encode (linear light L → sRGB code s):
   <tr><td>sRGB-correct mips</td><td><code>VulkanDevice::fillTexture</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
   <tr><td>Swapchain format</td><td><code>buildSwapchain</code> in <code>src/rhi/vulkan/vulkanSwapchain.cpp</code>; headless, <code>OffscreenSwapchain::FORMAT</code> in <code>src/rhi/offscreenSwapchain.h</code></td></tr>
   <tr><td>Lighting</td><td><code>shadePBR</code> in <code>shaders/lib/pbr.slang</code>; <code>shadeUnlit</code> in <code>shaders/lib/unlit.slang</code></td></tr>
-  <tr><td>Tone mapping</td><td><code>Renderer::addToneMapPass</code> in <code>src/renderer/toneMap.cpp</code>; the curve and the debug views' display (<code>fragDebug</code>) in <code>shaders/passes/toneMap.slang</code></td></tr>
+  <tr><td>Tone mapping</td><td><code>Renderer::addToneMapPass</code> in <code>src/renderer/toneMap.cpp</code>; the curve in <code>shaders/lib/agx.slang</code>, the debug views' display (<code>fragDebug</code>) in <code>shaders/passes/toneMap.slang</code></td></tr>
   <tr><td>Hand-made textures, both kinds</td><td><code>createFilledTexture</code> calls in <code>examples/05_city/main.cpp</code></td></tr>
 </table>
 </div>

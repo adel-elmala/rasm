@@ -32,7 +32,7 @@ namespace rasm
         std::vector<uint64_t>       cells;                                  // scratch: the screen's cells a placed box covers, a bit each
     };
 
-    // Square cells of the screen collision marks: two boxes collide when they share a cell.
+    // Square cells of the screen collision marks, in pixels: two boxes collide when they share a cell.
     constexpr float                 LABEL_CELL_PIXELS   = 8.0f;
     // Seconds a label takes to fade in or out.
     constexpr float                 LABEL_FADE_SECONDS  = 0.25f;
@@ -49,9 +49,9 @@ namespace rasm
     // placed last frame, then by slot, so equal labels keep the same winner and nothing flickers. A label is placed when
     // its anchor is in view and none of its cells is taken; each label then fades toward placed (1) or not (0) by step,
     // except on the state's first placement, which shows them at once. slotStamps holds each slot's stamp: a slot whose
-    // stamp changed holds a new label, which starts hidden.
+    // stamp changed holds a new label, which starts hidden. cellPixels: LABEL_CELL_PIXELS, times an export's pixelScale.
     void                            placeLabels(LabelPlacement& state, LabelCandidate* candidates, uint32_t count, const uint32_t* slotStamps, uint32_t slotCount,
-                                                uint32_t width, uint32_t height, float step);
+                                                uint32_t width, uint32_t height, float step, float cellPixels);
 
 }
 // clang-format on

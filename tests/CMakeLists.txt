@@ -8,6 +8,7 @@ add_executable(rasm_tests
             "main.cpp"
             "animationTests.cpp"
             "blendSortTests.cpp"
+            "exportTests.cpp"
             "cApiHandleTests.cpp"
             "bloomTests.cpp"
             "cacheFileTests.cpp"
@@ -63,7 +64,9 @@ add_executable(rasm_tests
 # The KTX tests encode small Basis images in memory with libktx, and the point cloud load tests write LAZ files with
 # LASzip, so they need no test files.
 find_package(laszip REQUIRED)
-target_link_libraries(rasm_tests PRIVATE rasm::rasm doctest::doctest KTX::ktx laszip::laszip)
+# The export tests read the PNG and EXR files the image writer deflates.
+find_package(ZLIB REQUIRED)
+target_link_libraries(rasm_tests PRIVATE rasm::rasm doctest::doctest KTX::ktx laszip::laszip ZLIB::ZLIB)
 # Private classes such as rhi::UploadManager are tested against a fake rhi::Device.
 target_include_directories(rasm_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_compile_definitions(rasm_tests PRIVATE RASM_TEST_EXECUTABLE_DIR="$<TARGET_FILE_DIR:rasm_tests>"

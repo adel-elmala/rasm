@@ -5,6 +5,7 @@
 #include "platform/paths.h"
 #include "platform/platform.h"
 #include "renderer/environmentBake.h"
+#include "renderer/export.h"
 #include "renderer/geometryPool.h"
 #include "renderer/frameStats.h"
 #include "renderer/gpuScene.h"
@@ -62,6 +63,7 @@ namespace rasm
     {
         readbacks = std::make_unique<Readbacks>();
         picks = std::make_unique<Picks>();
+        exports = std::make_unique<Exports>();
         // Room for a burst of events, so a steady frame does not grow the queue (P27).
         inputState = std::make_unique<InputState>();
         inputEvents.reserve(256);
@@ -768,6 +770,7 @@ namespace rasm
         ctx.collectReleases();
         // Before this frame's endFrame records new picks into the slot, and before syncGpuScene gives its rows away.
         readPicks(static_cast<uint32_t>(frameCount));
+        readExports(static_cast<uint32_t>(frameCount));
 
         // After the wait: they read what the slot's last frame measured and rewrite the tables it read.
         updateFrameStats();
@@ -882,6 +885,7 @@ namespace rasm
         ctx.tagReleases({.fence = frameFence, .value = frameFenceValue}, {.fence = computeFence, .value = computeFenceValue});
         finishReadbackSubmit(presenting);
         finishPickSubmit(presenting);
+        finishExportSubmit(presenting);
         finishEnvironmentBakes();
         for (uint32_t i = 0; i < MAX_WINDOWS && presenting; ++i)
         {

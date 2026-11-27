@@ -202,6 +202,7 @@ namespace
         bool hasAsyncCompute() const override { return false; }
         bool hasMeshShaders() const override { return false; }
         bool hasBufferInt64Atomics() const override { return false; }
+        uint32_t maxImageSize() const override { return 16384; }
         bool hasIndependentBlend() const override { return false; }
         bool hasSampleRateShading() const override { return false; }
         bool hasTransferQueue() const override { return false; }

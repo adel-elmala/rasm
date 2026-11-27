@@ -8,11 +8,13 @@
 #include "platform/paths.h"
 #include "renderer/blendSort.h"
 #include "renderer/environmentBake.h"
+#include "renderer/export.h"
 #include "renderer/geometryPool.h"
 #include "renderer/lightClusters.h"
 #include "renderer/animation.h"
 #include "renderer/localShadows.h"
 #include "renderer/picking.h"
+#include "renderer/pipelineWarmup.h"
 #include "renderer/renderSpace.h"
 #include "renderer/shadowCascades.h"
 #include "renderer/uberMaterialTypes.h"
@@ -483,12 +485,16 @@ namespace rasm
         const RenderTarget &target = ctx.getRenderTarget(view.renderTarget);
         if (target.colorCount == 2)
             return gpuScene.shaded[MOTION_VARIANT];
-        return gpuScene.shaded[std::min(static_cast<uint32_t>(std::countr_zero(target.samples)), SAMPLE_VARIANTS - 1)];
+        const uint32_t samples = std::min(static_cast<uint32_t>(std::countr_zero(target.samples)), SAMPLE_VARIANTS - 1);
+        return gpuScene.shaded[view.exported ? EXPORT_VARIANTS + samples : samples];
     }
 
-    // The define that makes a shaded pipeline write motion too, for a target with a MOTION_FORMAT second color.
+    // The define that makes a shaded pipeline write motion too, for a target with a MOTION_FORMAT second color, or an
+    // export's view's (which has no motion) take its tile window and pixel scale.
     const char *getMotionDefine(RenderContext &ctx, const SceneView &view)
     {
+        if (view.exported)
+            return EXPORT_VIEW_DEFINE;
         return ctx.getRenderTarget(view.renderTarget).colorCount == 2 ? "#define RASM_MOTION_VECTORS 1\n" : "";
     }
 
@@ -1512,7 +1518,7 @@ namespace rasm
         if (!depthOnly)
         {
             const RenderTarget &target = ctx.getRenderTarget(renderTarget);
-            warmScenePipelines(target.colorCount == 2, target.samples > 1, true);
+            warmScenePipelines(target.colorCount == 2, target.samples > 1, exports && isExportView(*exports, scene, camera, renderTarget), true);
         }
 
         SceneView view = {.scene = scene, .camera = camera, .renderTarget = renderTarget, .face = face, .shadowCount = shadowCount, .depthOnly = depthOnly, .graphs = 1};
@@ -1705,6 +1711,12 @@ namespace rasm
         const auto frame = static_cast<uint32_t>(frameCount);
         // A pick of this frame finds the view drawn; one that is not ready shows nothing.
         view.preparedSync = gpuScene->syncCount;
+        // An export's view draws one tile of the whole image with the camera made for the whole image, or nothing while
+        // the export waits (src/renderer/export.cpp).
+        const ExportViewFrame *exportFrame = exports ? getExportViewFrame(*exports, view.scene, view.camera, view.renderTarget) : nullptr;
+        view.exported = exportFrame != nullptr;
+        if (exportFrame != nullptr && exportFrame->idle)
+            return;
         if (drawList.draws.empty() || (drawList.staleSlots & (1u << frame)) != 0)
         {
             // Nothing to draw, but the sky still shows, so a scene whose meshes still load is not left black. The sky
@@ -1716,11 +1728,17 @@ namespace rasm
             const glm::dmat4 worldView = getViewMatrix(view.camera);
             gfx::SceneData sceneData{};
             sceneData.projection = getProjectionMatrix(view.camera, static_cast<float>(target.width) / static_cast<float>(target.height));
+            sceneData.pixelScale = 1.0f;
+            if (exportFrame != nullptr)
+            {
+                sceneData.projection = exportFrame->tileClip * getProjectionMatrix(view.camera, static_cast<float>(exportFrame->imageWidth) / static_cast<float>(exportFrame->imageHeight));
+                sceneData.pixelScale = exportFrame->pixelScale;
+            }
             sceneData.view = toRenderMatrix(worldView, origin);
             writeRenderOrigin(sceneData, origin);
             writeViewMotion(view, sceneData, worldView, origin, target.width, target.height);
             sceneData.grid = makeGridData(registry.cameras[view.camera.index].grid, origin);
-            const bool sky = writeSceneEnvironment(*environments, registry.scenes[view.scene.index].environment, sceneData);
+            const bool sky = writeSceneEnvironment(*environments, registry.scenes[view.scene.index].environment, sceneData) && !(exportFrame != nullptr && exportFrame->transparent);
             if (!ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), viewIndex * sizeof(gfx::SceneData)))
                 return;
             view.sky = sky;
@@ -1792,7 +1810,8 @@ namespace rasm
         // A debug view's pipelines are made the first time it is chosen, like MASK and BLEND: rasm.slang compiled with
         // RASM_DEBUG_VIEW, with its MASK cut-outs discarded rather than covered. OVERDRAW's add up their fragments, so
         // they have pipelines of their own, and the culling view also draws its ghosts.
-        if (!view.depthOnly && debugView != DebugView::NONE)
+        // An export draws its view shaded, whatever debug view the frames show.
+        if (!view.depthOnly && debugView != DebugView::NONE && exportFrame == nullptr)
         {
             DebugPipelines &debug = debugView == DebugView::OVERDRAW ? shaded.overdraw : shaded.debug;
             const BlendMode blendMode = debugView == DebugView::OVERDRAW ? BlendMode::ADDITIVE : BlendMode::NONE;
@@ -2026,7 +2045,8 @@ namespace rasm
         // visibility that frame's late pass left, so only the early pass runs. That pass then also culls the blend run,
         // which no late pass takes, and its draws go unsorted. A depth-only view is not frozen: the shadow maps
         // follow the camera.
-        const bool frozen = cullingFrozen && !view.depthOnly;
+        // An export culls every tile with its own frustum, whatever the debug toggles.
+        const bool frozen = cullingFrozen && !view.depthOnly && exportFrame == nullptr;
         view.late = view.hizLevelCount > 0 && !frozen;
         if (frozen && view.hizLevelCount > 0)
             view.sortBlend = false;
@@ -2038,8 +2058,8 @@ namespace rasm
         // surface is shadowed by the same triangles it is drawn with. Any other view uses its own camera and size.
         const bool shadowView = view.depthOnly && view.shadowCount > 0;
         // A frozen reader keeps its LOD camera, so its shadow maps take that one too.
-        uint32_t cameraWidth = width;
-        uint32_t cameraHeight = height;
+        uint32_t cameraWidth = exportFrame != nullptr ? exportFrame->imageWidth : width;
+        uint32_t cameraHeight = exportFrame != nullptr ? exportFrame->imageHeight : height;
         const SceneView *frozenReader = nullptr;
         for (uint32_t i = 0; shadowView && i < MAX_SCENE_VIEWS; ++i)
         {
@@ -2074,8 +2094,9 @@ namespace rasm
             return;
 
         gfx::SceneData sceneData{};
-        sceneData.projection = cameraProjection;
+        sceneData.projection = exportFrame != nullptr ? exportFrame->tileClip * cameraProjection : cameraProjection;
         sceneData.view = cameraView;
+        sceneData.pixelScale = exportFrame != nullptr ? exportFrame->pixelScale : 1.0f;
         for (uint32_t i = 0; shadowView && i < view.shadows[0].mapCount; ++i)
         {
             if (view.shadows[0].maps[i] != view.renderTarget)
@@ -2087,6 +2108,8 @@ namespace rasm
         writeRenderOrigin(sceneData, origin);
         if (!view.depthOnly)
             writeViewMotion(view, sceneData, worldCameraView, origin, width, height);
+        if (exportFrame != nullptr)
+            sceneData.textureLodBias = exportFrame->textureLodBias;
         getFrustumPlanes(sceneData.projection * sceneData.view, sceneData.frustumPlanes);
         sceneData.cullViewPoint = getCullViewPoint(sceneData.projection, sceneData.view);
         sceneData.nearZ = getNearZ(cameraRef);
@@ -2187,11 +2210,12 @@ namespace rasm
         // A depth-only view shades nothing, so it has no environment and no lights.
         if (!view.depthOnly)
             writeSceneLights(viewIndex, view.scene, sceneData);
-        const bool sky = writeSceneEnvironment(*environments, view.depthOnly ? SceneEnvironment{} : sceneRef.environment, sceneData);
+        const bool sky = writeSceneEnvironment(*environments, view.depthOnly ? SceneEnvironment{} : sceneRef.environment, sceneData) && !(exportFrame != nullptr && exportFrame->transparent);
         if (!view.depthOnly)
             sceneData.grid = makeGridData(cameraRef.grid, origin);
 
-        sceneData.lodPixelsPerUnit = std::abs(cameraProjection[1][1]) * 0.5f * static_cast<float>(cameraHeight);
+        // LODs are chosen in the pixels sizes are given in: an export's pixelScale output pixels each.
+        sceneData.lodPixelsPerUnit = std::abs(cameraProjection[1][1]) * 0.5f * static_cast<float>(cameraHeight) / sceneData.pixelScale;
         if (cameraProjection[3][3] == 0.0f)
         {
             const glm::mat4 lodViewProjection = cameraProjection * cameraView;
@@ -2232,7 +2256,7 @@ namespace rasm
                 spdlog::error("Failed to create the Label Depth pipeline; labels are hidden glyph by glyph by the depth.");
         }
         if (!view.depthOnly && !drawList.labelEntities.empty())
-            placeViewLabels(viewIndex, cameraProjection, worldCameraView, width, height, sceneData);
+            placeViewLabels(viewIndex, cameraProjection, worldCameraView, cameraWidth, cameraHeight, sceneData);
         preparePointRaster(viewIndex, sceneData);
         prepareGlyphCull(viewIndex, sceneData);
         prepareWeightedBlend(viewIndex, sceneData);
@@ -2279,6 +2303,10 @@ namespace rasm
         const uint32_t frame = static_cast<uint32_t>(frameCount);
         const bool perspective = projection[3][3] == 0.0f;
         const double pixelScale = 2.0 / (std::abs(static_cast<double>(projection[1][1])) * height);
+        // An export places its labels once on the whole image, with sizes in its pixelScale, at once (no fade), and its
+        // probes test each anchor in the tile that keeps it.
+        const ExportViewFrame *exportFrame = exports ? getExportViewFrame(*exports, view.scene, view.camera, view.renderTarget) : nullptr;
+        const double sizeScale = exportFrame != nullptr ? exportFrame->pixelScale : 1.0;
         std::vector<LabelCandidate> &candidates = view.labelCandidates;
         candidates.clear();
         uint32_t lowSlot = UINT32_MAX;
@@ -2312,8 +2340,8 @@ namespace rasm
                     // The text's size in pixels: the style's, or its metres at the anchor's depth.
                     const double pixelWorld = pixelScale * (perspective ? clip.w : 1.0);
                     const bool metres = style.widthUnit == VectorUnit::METRES;
-                    const double textPixels = metres ? style.width / pixelWorld : style.width;
-                    const double haloPixels = metres ? style.outlineWidth / pixelWorld : style.outlineWidth;
+                    const double textPixels = metres ? style.width / pixelWorld : style.width * sizeScale;
+                    const double haloPixels = metres ? style.outlineWidth / pixelWorld : style.outlineWidth * sizeScale;
                     const auto center = glm::vec2((ndc.x * 0.5 + 0.5) * width, (0.5 - ndc.y * 0.5) * height);
                     const auto halfSize = glm::vec2(glm::dvec2(label.halfSize) * textPixels + haloPixels);
                     const auto boxCenter = center + glm::vec2(label.center.x, -label.center.y) * static_cast<float>(textPixels);
@@ -2323,7 +2351,7 @@ namespace rasm
                     // The depth the anchor must be in front of: its own, moved toward the camera by a few pixels' size
                     // there (reversed-Z: a larger depth is nearer), for any projection. An anchor off the screen keeps
                     // its fade.
-                    const glm::dvec4 nearer = glm::dmat4(projection) * (viewPosition + glm::dvec4(0.0, 0.0, LABEL_DEPTH_PIXELS * pixelWorld, 0.0));
+                    const glm::dvec4 nearer = glm::dmat4(projection) * (viewPosition + glm::dvec4(0.0, 0.0, LABEL_DEPTH_PIXELS * sizeScale * pixelWorld, 0.0));
                     const float test = overlay ? LABEL_PROBE_OVERLAY : LABEL_PROBE_DEPTH;
                     if (candidate.inView)
                         candidate.probe = glm::vec4(center, static_cast<float>(nearer.z / nearer.w), test);
@@ -2350,7 +2378,8 @@ namespace rasm
             if ((hidden || fadesGrow) && candidate.probe.w != LABEL_PROBE_NONE)
                 candidate.probe.w += LABEL_PROBE_RESET;
         }
-        placeLabels(view.labels, candidates.data(), static_cast<uint32_t>(candidates.size()), gpuScene->labelStamps.data(), MAX_LABELS, width, height, deltaTime / LABEL_FADE_SECONDS);
+        placeLabels(view.labels, candidates.data(), static_cast<uint32_t>(candidates.size()), gpuScene->labelStamps.data(), MAX_LABELS, width, height,
+                    exportFrame != nullptr ? 1.0f : deltaTime / LABEL_FADE_SECONDS, LABEL_CELL_PIXELS * static_cast<float>(sizeScale));
 
         if (view.labelCapacity[frame] < needed)
         {
@@ -2370,15 +2399,16 @@ namespace rasm
         bool tested = false;
         for (const LabelCandidate &candidate : candidates)
         {
-            probes[candidate.slot - lowSlot] = candidate.probe;
-            tested = tested || candidate.probe.w == LABEL_PROBE_DEPTH || candidate.probe.w == LABEL_PROBE_DEPTH + LABEL_PROBE_RESET;
+            glm::vec4 probe = exportFrame != nullptr ? getExportLabelProbe(*exportFrame, candidate.probe) : candidate.probe;
+            probes[candidate.slot - lowSlot] = probe;
+            tested = tested || probe.w == LABEL_PROBE_DEPTH || probe.w == LABEL_PROBE_DEPTH + LABEL_PROBE_RESET;
         }
         if (!tested || !gpuScene->labelDepthPipeline.isValid() || view.labelFadeCapacity < needed || sceneData.depthTexture == UINT32_MAX || ctx.getRenderTargetDesc(view.renderTarget).cube ||
             !ctx.fillBuffer(view.labelProbes[frame], probes.data(), probes.size() * sizeof(glm::vec4), static_cast<size_t>(lowSlot) * sizeof(glm::vec4)))
             return;
         sceneData.labelProbesPtr = ctx.getBufferDeviceAddress(view.labelProbes[frame]);
         sceneData.labelFadesPtr = ctx.getBufferDeviceAddress(view.labelFades);
-        sceneData.labelFadeStep = deltaTime / LABEL_FADE_SECONDS;
+        sceneData.labelFadeStep = exportFrame != nullptr ? 0.0f : deltaTime / LABEL_FADE_SECONDS;
         sceneData.labelSlotCount = needed;
         view.labelDepthFirst = lowSlot;
         view.labelDepthSlots = needed;

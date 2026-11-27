@@ -95,6 +95,10 @@ FragmentOutput fragMain(VSOutput input)
     if (perspective)
     {
         float2 ndc      = input.ndc - pc.scene->jitter;
+#if defined(RASM_EXPORT_VIEW)
+        // An export tile's window: the projection's off-center terms (its jitter is in them too).
+        ndc             = input.ndc + float2(projection[0][2], projection[1][2]);
+#endif
         viewRay         = float3(ndc.x / projection[0][0], ndc.y / projection[1][1], -1.0);
     }
     else
@@ -122,22 +126,23 @@ FragmentOutput fragMain(VSOutput input)
     // The level whose cells are FADE_PIXELS wide here, and the share of the next.
     uint subdivisions   = uint(grid.subdivisions + 0.5);
     float footprint     = max(derivative.x, derivative.y);
-    float lod           = max(log(footprint * FADE_PIXELS) / log(grid.subdivisions), 0.0);
+    float scale         = getPixelScale(pc.scene);
+    float lod           = max(log(footprint * FADE_PIXELS * scale) / log(grid.subdivisions), 0.0);
     uint level          = min(uint(lod), grid.levelCount - 2);
     float blend         = min(lod - float(level), 1.0);
     uint sizeA          = getLevelSize(subdivisions, level);
     uint sizeB          = sizeA * subdivisions;
     uint sizeC          = sizeB * subdivisions;
-    float a             = getLineCoverage(getLevelUv(grid, cells, sizeA), derivative / float(sizeA), grid.lineWidth) * (1.0 - blend);
-    float b             = getLineCoverage(getLevelUv(grid, cells, sizeB), derivative / float(sizeB), lerp(grid.majorLineWidth, grid.lineWidth, blend));
-    float c             = getLineCoverage(getLevelUv(grid, cells, sizeC), derivative / float(sizeC), grid.majorLineWidth) * blend;
+    float a             = getLineCoverage(getLevelUv(grid, cells, sizeA), derivative / float(sizeA), grid.lineWidth * scale) * (1.0 - blend);
+    float b             = getLineCoverage(getLevelUv(grid, cells, sizeB), derivative / float(sizeB), lerp(grid.majorLineWidth, grid.lineWidth, blend) * scale);
+    float c             = getLineCoverage(getLevelUv(grid, cells, sizeC), derivative / float(sizeC), grid.majorLineWidth * scale) * blend;
     float4 middle       = lerp(grid.majorColor, grid.minorColor, blend);
     float4 color        = blendOver(float4(0.0), grid.minorColor.rgb, grid.minorColor.a * a);
     color               = blendOver(color, middle.rgb, middle.a * b);
     color               = blendOver(color, grid.majorColor.rgb, grid.majorColor.a * c);
 
     float2 place        = grid.originCells + cells;
-    float axisWidth     = grid.majorLineWidth + 0.5;
+    float axisWidth     = (grid.majorLineWidth + 0.5) * scale;
     color               = blendOver(color, grid.zAxisColor.rgb, grid.zAxisColor.a * getAxisCoverage(place.x, derivative.x, axisWidth));
     color               = blendOver(color, grid.xAxisColor.rgb, grid.xAxisColor.a * getAxisCoverage(place.y, derivative.y, axisWidth));
 

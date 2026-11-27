@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Many Views of One Scene · RASM</title>
 <meta name="description" content="Split screen, picture-in-picture, editor viewports, render to texture and more windows: a view is a camera and an output, a viewport is a rect of a window, a view texture is an image other passes sample, a view's history belongs to the view, and each window has a swapchain of its own. How RASM draws a list of views in one frame.">
-<meta name="rasm-sources" content="include/rasm/view.h include/rasm/renderer.h include/rasm/types.h include/rasm/scene.h include/rasm/render/renderContext.h src/renderer/view.cpp src/renderer/viewGraph.h src/renderer/viewGraph.cpp src/renderer/toneMap.cpp src/renderer/taa.h src/renderer/taa.cpp src/renderer/ui.cpp src/renderer/gpuScene.cpp src/rhi/renderContext.cpp src/renderer/renderer.cpp examples/20_views/main.cpp tests/viewTests.cpp tests/image/imageTests.cpp include/rasm/window.h include/rasm/input.h src/platform/platform.h src/platform/sdlPlatform.cpp src/platform/nativePlatform.cpp src/platform/headlessPlatform.cpp src/rhi/device.h src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanQueue.cpp src/rhi/vulkan/vulkanDevice.cpp src/renderer/renderGraph.cpp src/renderer/readback.cpp examples/19_embedding/main.cpp">
+<meta name="rasm-sources" content="include/rasm/view.h include/rasm/renderer.h include/rasm/types.h include/rasm/scene.h include/rasm/render/renderContext.h src/renderer/view.cpp src/renderer/viewGraph.h src/renderer/viewGraph.cpp src/renderer/toneMap.cpp src/renderer/taa.h src/renderer/taa.cpp src/renderer/ui.cpp src/renderer/gpuScene.cpp src/rhi/renderContext.cpp src/renderer/renderer.cpp examples/20_views/main.cpp tests/viewTests.cpp tests/image/imageTests.cpp include/rasm/window.h include/rasm/input.h src/platform/platform.h src/platform/sdlPlatform.cpp src/platform/nativePlatform.cpp src/platform/headlessPlatform.cpp src/rhi/device.h src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanQueue.cpp src/rhi/vulkan/vulkanDevice.cpp src/renderer/renderGraph.cpp src/renderer/readback.cpp examples/19_embedding/main.cpp src/renderer/export.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -338,6 +338,8 @@
 <h2 id="in-rasm"><span class="n">11</span>In RASM</h2>
 
 <p><code>Renderer::render(views, count)</code> draws a list of <code>View</code>s in one frame: each is a scene, a camera and a <code>ViewOutput</code>, which is a <code>ViewRect</code> of the window or of a <code>target</code>. <code>Renderer::render(scene, camera)</code> is the same with one view. <code>ViewOutput::window</code> puts a view into another window from <code>Renderer::addWindow</code>. <code>examples/20_views</code> shows split screen, a map, four views, a TV in the scene and a second window; <code>examples/19_embedding</code> a second window of the application's own (<code>PlatformType::NATIVE</code>).</p>
+
+<div class="callout"><strong>A hidden view: exports</strong> <a href="../api/engine.html#exportView"><code>exportView</code></a> adds a view of its own to the graph after yours, with a copy of the camera and a target of one tile and its guard band, and draws a still of any size there, one tile sample a frame (<a href="tiled-export.html">Tiled offscreen export</a>). The graph is built again when an export starts or ends.</div>
 
 <div class="legend">
   <span><i class="cpu"></i>the application and the engine</span>

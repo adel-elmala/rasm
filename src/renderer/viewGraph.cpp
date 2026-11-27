@@ -1,5 +1,6 @@
 #include "renderer/viewGraph.h"
 #include "rasm/renderer.h"
+#include "renderer/export.h"
 #include "renderer/taa.h"
 
 #include "spdlog/spdlog.h"
@@ -94,9 +95,13 @@ namespace rasm
             sizes.emplace_back(pixels.width, pixels.height);
         }
 
-        const bool same = built && viewCount == graphViews.size() && std::equal(views, views + viewCount, graphViews.begin()) && sizes == graphSizes;
+        // A running export's view joins the graph, and leaves it when the export ends (src/renderer/export.cpp).
+        renderer.updateExports();
+        const bool same = built && viewCount == graphViews.size() && std::equal(views, views + viewCount, graphViews.begin()) && sizes == graphSizes &&
+                          exportKey == renderer.exports->graphKey;
         if (!same)
             build(views, viewCount);
+        renderer.collectExports();
         // The built-in controller moves the camera of the first view in the main window: view textures come first in a list.
         CameraHandle controlled = viewCount > 0 ? views[0].camera : CameraHandle{};
         for (uint32_t i = viewCount; i-- > 0;)
@@ -136,6 +141,9 @@ namespace rasm
             if (!addView(next, view, sizes[i]))
                 spdlog::error("render: view {} (camera {}) could not be added; it is left out this frame and until the list changes.", i, view.camera.index);
         }
+        // An export whose view failed is failed: the next frame builds the graph again without it.
+        const bool exportAdded = renderer.addExportPasses(next, textures.data(), static_cast<uint32_t>(textures.size()));
+        exportKey = exportAdded ? renderer.exports->graphKey : renderer.exports->graphKey + 1;
         renderer.addUiPass(next, textures.data(), static_cast<uint32_t>(textures.size()));
 
         // The new graph holds the kept views already, so the old one lets go of them without freeing them.
@@ -253,6 +261,8 @@ namespace rasm
 
     bool ViewGraph::draws(SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget) const
     {
+        if (built && isExportView(*renderer.exports, scene, camera, renderTarget))
+            return true;
         return built && std::any_of(states.begin(), states.end(), [&](const ViewState &state)
                                     { return state.used && state.scene == scene && state.camera == camera && state.sceneTarget == renderTarget; });
     }
@@ -270,8 +280,12 @@ namespace rasm
     // The next render builds a new graph from its list.
     void ViewGraph::release(SceneHandle scene, CameraHandle camera)
     {
-        const bool holds = std::any_of(states.begin(), states.end(), [scene, camera](const ViewState &state)
-                                       { return state.scene == scene || state.camera == camera; });
+        // An export of the scene fails: its view goes with the graph.
+        const bool exported = scene.isValid() && failSceneExports(*renderer.exports, scene);
+        if (exported)
+            ++renderer.exports->graphKey;
+        const bool holds = exported || std::any_of(states.begin(), states.end(), [scene, camera](const ViewState &state)
+                                                   { return state.scene == scene || state.camera == camera; });
         if (!holds)
             return;
         graph = renderer.createRenderGraph();

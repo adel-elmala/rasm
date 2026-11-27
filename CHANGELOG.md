@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Offscreen export at any size: `Renderer::exportView` draws a still of a view (an 8K, a 16K, a poster larger than the device's biggest image) in tiles with an off-center projection, with no seams at tile borders (guard bands, labels and transparency ranges decided once for the whole image, a frozen streaming cut), anti-aliased by averaging jittered samples, and streams it to a PNG (8 or 16 bits) or an EXR (half or float) file, with a transparent background and scene-linear HDR as options; `getExportProgress` polls it without blocking. C API 1.16: `rasm_export_view` and its calls. zlib is a new dependency of `rasm::renderer`.
+
 ## [0.1.0] - YYYY-MM-DD (draft, not released yet)
 
 The first release. Vulkan 1.4 is the only backend. Windows x64 is built and tested in CI; macOS (through MoltenVK) is built and unit-tested in CI; Linux is not tested yet.
