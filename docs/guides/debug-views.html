@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Debug views · RASM</title>
 <meta name="description" content="How a renderer shows what it does instead of the shaded image: normals and UVs as colors, overdraw counted with additive blending, light counts per cluster, LODs as tints, and a culling view with ghosts of the culled draws and a frozen frustum. How the values reach the screen without a tone curve, and how such views cost nothing while they are off.">
-<meta name="rasm-sources" content="src/renderer/debugViews.cpp shaders/lib/debugViews.slang shaders/passes/rasm.slang shaders/passes/debugGhosts.slang shaders/passes/toneMap.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/engineUi.cpp src/renderer/ui.cpp include/rasm/renderer.h include/rasm/types.h include/rasm/render/resource.h src/rhi/resource.cpp src/rhi/vulkan/vulkanDevice.cpp src/renderer/uberMaterialTypes.h shaders/lib/core.slang examples/15_debug_ui/main.cpp examples/05_city/main.cpp shaders/lib/heat.slang">
+<meta name="rasm-sources" content="src/c/cDebug.cpp src/renderer/debugViews.cpp shaders/lib/debugViews.slang shaders/passes/rasm.slang shaders/passes/debugGhosts.slang shaders/passes/toneMap.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/engineUi.cpp src/renderer/ui.cpp include/rasm/renderer.h include/rasm/types.h include/rasm/render/resource.h src/rhi/resource.cpp src/rhi/vulkan/vulkanDevice.cpp src/renderer/uberMaterialTypes.h shaders/lib/core.slang examples/15_debug_ui/main.cpp examples/05_city/main.cpp shaders/lib/heat.slang">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -365,7 +365,7 @@
 
 <h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
 
-<p>An application calls <code>Renderer::setDebugView</code> with a <code>DebugView</code>, and <code>Renderer::setCullingFrozen</code>. The RASM window (<kbd>F1</kbd>, with <code>EngineConfig::ui</code>) has both under <b>Debug views</b>, with a color key for the view. <code>examples/15_debug_ui</code> and <code>examples/05_city</code> take <samp>--debug-view overdraw</samp> and <samp>--freeze-culling</samp>.</p>
+<p>An application calls <code>Renderer::setDebugView</code> with a <code>DebugView</code> (<code>getDebugView</code> reads it back), and <code>Renderer::setCullingFrozen</code>. From C (1.18) they are <code>rasm_set_debug_view</code>, <code>rasm_get_debug_view</code> and <code>rasm_set_culling_frozen</code>; <code>examples/33_c_render_graph</code> takes <samp>--debug-view normals</samp>. The RASM window (<kbd>F1</kbd>, with <code>EngineConfig::ui</code>) has both under <b>Debug views</b>, with a color key for the view. <code>examples/15_debug_ui</code> and <code>examples/05_city</code> take <samp>--debug-view overdraw</samp> and <samp>--freeze-culling</samp>.</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 270" role="img" aria-label="A scene view's passes with a debug view on. Cull 1, then Scene 1 with the debug pipelines and push constant argument 0, Hi-Z, Cull 2, Scene 2 with argument 1, Transparent with the debug blend pipeline and then the ghosts of the culling view. The sky is not drawn. Then the tone map binds the debug display or heat pipeline, and bloom dispatches nothing. With culling frozen, Hi-Z, Cull 2 and Scene 2 record nothing.">
@@ -427,7 +427,7 @@
 <div class="table-wrap">
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
-  <tr><td>API</td><td><code>Renderer::setDebugView</code>, <code>Renderer::setCullingFrozen</code>, <code>getDrawnDebugView</code> in <code>src/renderer/debugViews.cpp</code>; <code>DebugView</code> in <code>include/rasm/types.h</code></td></tr>
+  <tr><td>API</td><td><code>Renderer::setDebugView</code>, <code>Renderer::getDebugView</code>, <code>Renderer::setCullingFrozen</code>, <code>getDrawnDebugView</code> in <code>src/renderer/debugViews.cpp</code>; the C calls in <code>src/c/cDebug.cpp</code>; <code>DebugView</code> in <code>include/rasm/types.h</code></td></tr>
   <tr><td>Pipelines, freeze, draws, ghosts</td><td><code>prepareSceneView</code>, <code>drawSceneView</code>, <code>drawTransparent</code>, <code>drawCullingGhosts</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Shaders</td><td><code>shaders/lib/debugViews.slang</code>, <code>shaders/passes/rasm.slang</code>, <code>shaders/passes/debugGhosts.slang</code>, <code>shaders/passes/toneMap.slang</code></td></tr>
   <tr><td>Display</td><td><code>addToneMapPass</code> in <code>src/renderer/toneMap.cpp</code>, <code>bloomRuns</code> in <code>src/renderer/bloom.cpp</code></td></tr>

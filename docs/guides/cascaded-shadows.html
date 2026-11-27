@@ -390,7 +390,7 @@
 
 <h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
 
-<p>RASM has cascaded shadows for directional lights; a shaded view reads up to <code>MAX_VIEW_SHADOWS</code> (4) shadows. <code>Renderer::addShadowPasses</code> makes the cascades: one depth-only render target and one set of scene passes per cascade, all drawn from the application's camera. It returns a <code>SceneShadow</code>, which <code>addScenePasses</code> takes for the view that is shaded with it. No light camera exists: every view of the shadow fits the cascades again each frame, with the same function, so the maps are drawn and read with the same matrices. <code>examples/06_shadows</code> shows it.</p>
+<p>RASM has cascaded shadows for directional lights; a shaded view reads up to <code>MAX_VIEW_SHADOWS</code> (4) shadows. <code>Renderer::addShadowPasses</code> makes the cascades: one depth-only render target and one set of scene passes per cascade, all drawn from the application's camera. It returns a <code>SceneShadow</code>, which <code>addScenePasses</code> takes for the view that is shaded with it. No light camera exists: every view of the shadow fits the cascades again each frame, with the same function, so the maps are drawn and read with the same matrices. <code>examples/06_shadows</code> shows it. In a list of views, <code>View::shadows</code> fits each view's cascades to its own camera; views of different cameras draw one set of maps in turn (<a href="multiple-views.html#in-rasm">Multiple views</a>), and <code>examples/20_views</code> shows four of them.</p>
 
 <pre><code>const rasm::SceneShadow shadow = engine.addShadowPasses(graph, scene, camera, rasm::ShadowDesc{.light = sun, .cascadeCount = CASCADE_COUNT, .size = 2048, .distance = 60.0f, .splitLambda = 0.7f});
 if (shadow.mapCount == 0 || !engine.addScenePasses(graph, scene, camera, sceneTarget, &amp;shadow, 1))
@@ -487,7 +487,7 @@ if (shadow.mapCount == 0 || !engine.addScenePasses(graph, scene, camera, sceneTa
 <div class="callout rule">
   <strong>Keep these true</strong>
   <ul>
-    <li>The views that draw the cascades and the view that reads them must fit with the same inputs in the same frame: the same camera, the same aspect ratio, the same <code>SceneShadow</code>. <code>addScenePasses</code> rejects a shadow that <code>addShadowPasses</code> did not make for the same scene and camera in the same graph, and a second view that reads the same shadow.</li>
+    <li>The views that draw the cascades and the view that reads them must fit with the same inputs in the same frame: the same camera, the same aspect ratio, the same <code>SceneShadow</code>. <code>addScenePasses</code> rejects a shadow that <code>addShadowPasses</code> did not make for the same scene and camera in the same graph, and a second view of the same camera that reads the same shadow. A view of another camera may read the same maps only after it drew them again from its own camera: the graph orders those draws after the earlier readers.</li>
     <li>The sphere's radius must not depend on the camera's direction, and the box must move in whole texels, or shadows shimmer and crawl.</li>
     <li><code>MAX_SHADOW_CASCADES</code> in <code>include/rasm/scene.h</code> and in <code>shaders/lib/core.slang</code> must match.</li>
     <li>The cascade loop in <code>sampleShadow</code> stays unrolled, so each texture index is uniform over the draw.</li>
