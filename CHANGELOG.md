@@ -10,6 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Offscreen export at any size: `Renderer::exportView` draws a still of a view (an 8K, a 16K, a poster larger than the device's biggest image) in tiles with an off-center projection, with no seams at tile borders (guard bands, labels and transparency ranges decided once for the whole image, a frozen streaming cut), anti-aliased by averaging jittered samples, and streams it to a PNG (8 or 16 bits) or an EXR (half or float) file, with a transparent background and scene-linear HDR as options; `getExportProgress` polls it without blocking. C API 1.16: `rasm_export_view` and its calls. zlib is a new dependency of `rasm::renderer`.
 
+### Fixed
+
+- A point cloud drawn after other scenes could lose the device (a page fault on an RTX 3060, a crash on lavapipe): the point resolve's empty pixels, which `discard` leaves running as helpers, read the point of instance row 0, a mesh there, and followed it out of the point buffer (`B39`).
+- A scene with no light crashed on lavapipe: its light loops indexed a null pointer, which lavapipe loads even for a loop of 0 lights (`B38`).
+
 ## [0.1.0] - YYYY-MM-DD (draft, not released yet)
 
 The first release. Vulkan 1.4 is the only backend. Windows x64 is built and tested in CI; macOS (through MoltenVK) is built and unit-tested in CI; Linux is not tested yet.

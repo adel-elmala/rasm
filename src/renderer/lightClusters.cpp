@@ -231,6 +231,9 @@ namespace rasm
         // A list that this slot could not upload leaves the view without its lights for a frame.
         const SceneLightList &list = gpuLights->lists[scene.index];
         sceneData.lightsPtr = ctx.getBufferDeviceAddress(gpuLights->lights.buffer(frame));
+        // The light loops' pointer is never null, even with no light to read (B38): lavapipe runs a loop's body once
+        // with no lane on, and its loads of a uniform address still read memory. Row 0 of the light table is no light.
+        sceneData.sceneLightsPtr = sceneData.lightsPtr;
         if ((list.staleSlots & (1u << frame)) != 0 || list.rows.empty())
             return;
         sceneData.sceneLightsPtr = getAddress(ctx, list.buffers[frame]);

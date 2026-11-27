@@ -369,6 +369,8 @@
 
 <p>The tests found a real bug on their first run. The MASK shader sampled textures after a <code class="lang-text">discard</code> that killed the pixel, so those samples had undefined derivatives. Real GPUs drew a plausible image; lavapipe crashed. Now <code class="lang-text">discard</code> demotes the pixel to a helper (<code>B33</code>).</p>
 
+<p>Two more crashes showed lavapipe running code a real GPU skips. A demoted pixel keeps running and loading: the point resolve's empty pixels read the point of instance row 0, which after another scene was a mesh, and followed it out of the point buffer (<code>B39</code>; the RTX 3060 lost the device on the same reads). And lavapipe runs a loop's body once with no lane on: a scene with no light made the light loop load through a null pointer (<code>B38</code>). The tests <code class="lang-text">export_points</code> and <code class="lang-text">no_light</code> keep both fixed.</p>
+
 <h3>Code map</h3>
 <div class="table-wrap">
 <table>

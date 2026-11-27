@@ -1309,6 +1309,26 @@ namespace
         return buildWeighted(engine, assets, content);
     }
 
+    // A scene with no light and no environment (B38): a lit cube on the ground, shaded by the small ambient term only, and
+    // an unlit one.
+    bool buildNoLight(rasm::Engine &engine, const Assets &assets, Content &content)
+    {
+        addGround(engine, assets, content, 3.0f, glm::vec3(0.4f, 0.4f, 0.38f));
+        addEntity(engine, content, "lit", assets.cube, createColorMaterial(engine, glm::vec3(0.8f, 0.3f, 0.2f), 0.5f),
+                  rasm::Transform{glm::vec3(-1.0f, 0.5f, 0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(1.0f)});
+        const rasm::MaterialHandle unlit = engine.createMaterial(rasm::MaterialType::UNLIT);
+        rasm::Material values = engine.getMaterial(unlit);
+        values.params[static_cast<uint32_t>(rasm::PbrParam::ALBEDO) + 0] = 0.2f;
+        values.params[static_cast<uint32_t>(rasm::PbrParam::ALBEDO) + 1] = 0.7f;
+        values.params[static_cast<uint32_t>(rasm::PbrParam::ALBEDO) + 2] = 0.9f;
+        engine.updateMaterial(unlit, values);
+        addEntity(engine, content, "unlit", assets.cube, unlit, rasm::Transform{glm::vec3(1.0f, 0.5f, 0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(1.0f)});
+        content.eye = glm::vec3(0.6f, 2.4f, 5.2f);
+        content.center = glm::vec3(0.0f, 0.5f, 0.0f);
+        content.fovY = 45.0f;
+        return assets.cube.isValid();
+    }
+
     // The picking scene through an orthographic box from the same eye, with a bounded grid just over its ground.
     bool buildOrtho(rasm::Engine &engine, const Assets &assets, Content &content)
     {
@@ -1400,6 +1420,8 @@ namespace
         {.name = "weighted_msaa4", .build = buildWeighted,     .samples = 4, .picks = true},
         {.name = "weighted_taa",  .build = buildWeighted,      .taa = true, .frames = 16, .picks = true},
         {.name = "weighted_ortho", .build = buildWeightedOrtho, .picks = true},
+        // No light and no environment: the light loops run for no light (B38).
+        {.name = "no_light",      .build = buildNoLight},
         // Adaptive points grown to close a sparse sheet, and an octree's parent and children (PointChunkLod).
         {.name = "points_adaptive", .build = buildPointsAdaptive},
         // Points of 3 to 5 pixels in each shape, by the compute path and by triangles only: the same pixels.
@@ -1442,6 +1464,9 @@ namespace
         {.name = "export_labels_single", .build = buildLabels, .sameAs = "export_labels", .exportTile = 4096},
         {.name = "export_weighted", .build = buildWeighted,    .exportTile = 128},
         {.name = "export_weighted_single", .build = buildWeighted, .sameAs = "export_weighted", .exportTile = 4096},
+        // After export_weighted, whose scene left instance row 0 to a mesh, which the point resolve read (B39).
+        {.name = "export_points", .build = buildPoints,        .exportTile = 128},
+        {.name = "export_points_single", .build = buildPoints, .sameAs = "export_points", .exportTile = 4096},
         {.name = "export_grid",   .build = buildGrid,          .exportTile = 128},
         {.name = "export_grid_single", .build = buildGrid,     .sameAs = "export_grid", .exportTile = 4096},
         {.name = "export_far_labels", .build = buildLabels,    .origin = FAR_ORIGIN, .threshold = 8, .fraction = 0.001, .sameAs = "export_labels", .exportTile = 128},

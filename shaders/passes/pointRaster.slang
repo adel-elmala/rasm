@@ -233,13 +233,22 @@ uint64_t getHoleFill(SceneData *scene, uint2 pixel)
 ResolveOutput resolveFrag(ResolveVertex input)
 {
     SceneData *scene        = pc.scene;
+    PointRasterHeader *header = scene->pointRasterPtr;
     uint2 pixel             = uint2(input.position.xy);
-    uint64_t word           = scene->pointPixelsPtr[pixel.y * scene->viewportWidth + pixel.x];
-    if ((word >> 32) == 0)
+    // A helper lane of a quad on the rect's edge can lie outside it, where the words were not cleared this frame (and
+    // past the last row, outside the buffer): it reads no word.
+    bool inside             = all(pixel >= uint2(header->rectMinX, header->rectMinY)) && all(pixel <= uint2(header->rectMaxX, header->rectMaxY));
+    uint64_t word           = inside ? scene->pointPixelsPtr[pixel.y * scene->viewportWidth + pixel.x] : 0;
+    if (inside && (word >> 32) == 0)
         word                = getHoleFill(scene, pixel);
     uint depthBits          = uint(word >> 32);
+    // discard demotes the lane to a helper, which runs on: without the return it would read the point of instance row
+    // 0 (id 0), which may be no point chunk, and follow its words out of the point buffer (B39).
     if (depthBits == 0)
+    {
         discard;
+        return (ResolveOutput)0;
+    }
     uint id                 = uint(word);
     InstanceData *instance  = scene->instancesPtr + (id >> 16);
     uint point              = id & 0xFFFF;
