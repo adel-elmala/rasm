@@ -20,6 +20,8 @@ Report them privately through GitHub:
 2. Click **Report a vulnerability**.
 3. Describe the problem, the version or commit, and how to reproduce it. A sample file that triggers it is the most useful thing you can attach.
 
+If you cannot use GitHub's form, email the maintainer at [adel.elmala2025@gmail.com](mailto:adel.elmala2025@gmail.com) with "RASM security" in the subject.
+
 Only the maintainer can see the report. You can discuss it there, and the fix can be prepared in a private fork before it is published.
 
 ## What to expect
