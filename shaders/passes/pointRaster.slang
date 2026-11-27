@@ -1,4 +1,6 @@
 // clang-format off
+// Every view's cull and point raster run this one pipeline, an export's too: it reads the view's pixel scale.
+#define RASM_PIXEL_SCALE 1
 #include "core.slang"
 #include "points.slang"
 

@@ -14,6 +14,7 @@
 #include "renderer/animation.h"
 #include "renderer/localShadows.h"
 #include "renderer/picking.h"
+#include "renderer/pipelineWarmup.h"
 #include "renderer/renderSpace.h"
 #include "renderer/shadowCascades.h"
 #include "renderer/uberMaterialTypes.h"
@@ -484,12 +485,16 @@ namespace rasm
         const RenderTarget &target = ctx.getRenderTarget(view.renderTarget);
         if (target.colorCount == 2)
             return gpuScene.shaded[MOTION_VARIANT];
-        return gpuScene.shaded[std::min(static_cast<uint32_t>(std::countr_zero(target.samples)), SAMPLE_VARIANTS - 1)];
+        const uint32_t samples = std::min(static_cast<uint32_t>(std::countr_zero(target.samples)), SAMPLE_VARIANTS - 1);
+        return gpuScene.shaded[view.exported ? EXPORT_VARIANTS + samples : samples];
     }
 
-    // The define that makes a shaded pipeline write motion too, for a target with a MOTION_FORMAT second color.
+    // The define that makes a shaded pipeline write motion too, for a target with a MOTION_FORMAT second color, or an
+    // export's view's (which has no motion) take its tile window and pixel scale.
     const char *getMotionDefine(RenderContext &ctx, const SceneView &view)
     {
+        if (view.exported)
+            return EXPORT_VIEW_DEFINE;
         return ctx.getRenderTarget(view.renderTarget).colorCount == 2 ? "#define RASM_MOTION_VECTORS 1\n" : "";
     }
 
@@ -1513,7 +1518,7 @@ namespace rasm
         if (!depthOnly)
         {
             const RenderTarget &target = ctx.getRenderTarget(renderTarget);
-            warmScenePipelines(target.colorCount == 2, target.samples > 1, true);
+            warmScenePipelines(target.colorCount == 2, target.samples > 1, exports && isExportView(*exports, scene, camera, renderTarget), true);
         }
 
         SceneView view = {.scene = scene, .camera = camera, .renderTarget = renderTarget, .face = face, .shadowCount = shadowCount, .depthOnly = depthOnly, .graphs = 1};
@@ -1709,6 +1714,7 @@ namespace rasm
         // An export's view draws one tile of the whole image with the camera made for the whole image, or nothing while
         // the export waits (src/renderer/export.cpp).
         const ExportViewFrame *exportFrame = exports ? getExportViewFrame(*exports, view.scene, view.camera, view.renderTarget) : nullptr;
+        view.exported = exportFrame != nullptr;
         if (exportFrame != nullptr && exportFrame->idle)
             return;
         if (drawList.draws.empty() || (drawList.staleSlots & (1u << frame)) != 0)

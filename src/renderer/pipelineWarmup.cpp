@@ -86,7 +86,7 @@ namespace rasm
         shaderCompiler->prefetch(requests.data(), static_cast<uint32_t>(requests.size()), false);
 
         const AntiAliasing antiAliasing = config.antiAliasing;
-        warmScenePipelines(antiAliasing == AntiAliasing::TAA, antiAliasing == AntiAliasing::MSAA_2X || antiAliasing == AntiAliasing::MSAA_4X || antiAliasing == AntiAliasing::MSAA_8X, false);
+        warmScenePipelines(antiAliasing == AntiAliasing::TAA, antiAliasing == AntiAliasing::MSAA_2X || antiAliasing == AntiAliasing::MSAA_4X || antiAliasing == AntiAliasing::MSAA_8X, false, false);
 
         // What a scene asks for once it has shadows, an environment, see-through or animated meshes, labels or points.
         requests.clear();
@@ -141,20 +141,20 @@ namespace rasm
         shaderCompiler->prefetch(requests.data(), static_cast<uint32_t>(requests.size()), false);
     }
 
-    // The shaded pipelines of one kind of scene target: with a motion target (TAA) or not, with several samples or one.
-    // Queued once per kind, at startup for the configured anti-aliasing and when a view of another kind is made, then
-    // first, since that view draws in this frame.
-    void Renderer::warmScenePipelines(bool motion, bool multisampled, bool first)
+    // The shaded pipelines of one kind of scene target: with a motion target (TAA) or not, with several samples or one,
+    // an export's view (RASM_EXPORT_VIEW) or not. Queued once per kind, at startup for the configured anti-aliasing and
+    // when a view of another kind is made, then first, since that view draws in this frame.
+    void Renderer::warmScenePipelines(bool motion, bool multisampled, bool exported, bool first)
     {
         ZoneScoped;
 
-        const uint32_t variant = 1u << ((motion ? 2u : 0u) + (multisampled ? 1u : 0u));
+        const uint32_t variant = 1u << ((exported ? 4u : 0u) + (motion ? 2u : 0u) + (multisampled ? 1u : 0u));
         if ((warmedSceneVariants & variant) != 0)
             return;
         warmedSceneVariants |= variant;
 
         const std::filesystem::path folder = pathFromUtf8(config.shaderDir);
-        const std::string motionDefine = motion ? MOTION_DEFINE : "";
+        const std::string motionDefine = exported ? EXPORT_VIEW_DEFINE : (motion ? MOTION_DEFINE : "");
         const std::string maskDefines = motionDefine + (multisampled ? COVERAGE_DEFINES : MASK_DEFINE);
         const std::string rasm = readFile(folder / "passes/rasm.slang");
         const std::string shaded = getShaderVariant(motionDefine, rasm);

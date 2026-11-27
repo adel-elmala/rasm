@@ -117,14 +117,14 @@ float getPointDiameter(SceneData *scene, PointData style, float spacing, float f
 {
     float pixelWorld    = 2.0 * max(abs(w), 1e-6) / (abs(scene->projection[1][1]) * float(scene->viewportHeight));
     bool metres         = (style.flags & POINT_METRES) != 0;
-    float size          = max(metres ? style.size / pixelWorld : style.size * scene->pixelScale, 1.0);
+    float size          = max(metres ? style.size / pixelWorld : style.size * getPixelScale(scene), 1.0);
     if ((style.flags & POINT_ADAPTIVE) == 0 || !(spacing > 0.0))
         return size;
     float area          = (style.flags & (POINT_ROUND | POINT_SPHERE)) != 0 ? 0.785398 : 1.0;
     float density       = max(style.density, 1.0);
     float covering      = spacing / pixelWorld * sqrt(density / area);
     float faster        = sqrt(max(POINT_ADAPTIVE_COVER / density, 1.0));
-    float grown         = clamp(size + faster * max(covering - size, 0.0), size, max(getPointMaxSize(style) * scene->pixelScale, size));
+    float grown         = clamp(size + faster * max(covering - size, 0.0), size, max(getPointMaxSize(style) * getPixelScale(scene), size));
     return lerp(grown, size, saturate(finer));
 }
 

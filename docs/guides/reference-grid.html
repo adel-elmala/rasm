@@ -298,7 +298,7 @@
 
 <p>A grid belongs to a camera: <code>Renderer::setCameraGrid(camera, Grid)</code> draws it in every shaded view of that camera, so each viewport of a CAD layout can have its own plane. A <code>Grid</code> is the plane (<code>origin</code> in doubles, <code>orientation</code>: its local XZ plane), the finest <code>cellSize</code>, <code>subdivisions</code>, an <code>extent</code> (0: endless), colors and widths, the axes, and a <code>fadeDistance</code>.</p>
 
-<div class="callout"><strong>Pixel sizes in an export</strong> Sizes given in pixels are multiplied by <code>SceneData::pixelScale</code>: 1 in every view, an export's <code>ExportDesc::pixelScale</code> in a <a href="tiled-export.html">tiled export</a>, which also divides the LOD's pixels per unit by it. Sizes in metres do not change.</div>
+<div class="callout"><strong>Pixel sizes in an export</strong> In a <a href="tiled-export.html">tiled export</a>'s pipelines (<code>RASM_EXPORT_VIEW</code>) sizes given in pixels are multiplied by <code>SceneData::pixelScale</code> (<code>getPixelScale</code>), its <code>ExportDesc::pixelScale</code>, which also divides the LOD's pixels per unit; in every other view it is 1 and the shaders do no work for it. Sizes in metres do not change.</div>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 200" role="img" aria-label="A shaded view's passes. Scene 1 and Scene 2 draw the opaque scene and the sky and write depth. Then the Transparent pass draws the grid first, one triangle with its own depth tested but not written, then the blend run: see-through meshes, vector features and labels go over the grid.">

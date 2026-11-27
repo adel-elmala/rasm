@@ -504,7 +504,7 @@ namespace rasm
         PipelineHandle              createMeshScenePipeline(const std::string& name, const std::string& shaderFile, const std::string& defines, const RenderTargetHandle& renderTarget, const char* meshEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite, bool alphaToCoverage = false, bool* pending = nullptr);
         PipelineHandle              createScenePipeline(const std::string& name, const std::string& shaderFile, const std::string& defines, const RenderTargetHandle& renderTarget, const char* vertexEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite, bool alphaToCoverage = false, bool depthTest = true, bool* pending = nullptr);
         void                        warmPipelines();
-        void                        warmScenePipelines(bool motion, bool multisampled, bool first);
+        void                        warmScenePipelines(bool motion, bool multisampled, bool exported, bool first);
         void                        warmDebugPipelines(bool motion);
         bool                        hasMeshShaderPipelines() const;
         EnvironmentHandle           createEnvironment(const std::string& name);

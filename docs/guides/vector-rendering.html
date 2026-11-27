@@ -336,7 +336,7 @@
 
 <p>A layer of vector features is an ordinary entity: a mesh built by the vector builders (<code>include/rasm/vector.h</code>), drawn with a <code>MaterialType::VECTOR</code> material whose <code>VectorMaterial</code> is the style. So it goes through the GPU culling, the Transparent pass's sort, TAA and MSAA like any blended mesh, and is a <a href="tile-streaming.html">TileStreamer</a> tile's content like any other. Labels are vector features too: a fourth kind of vertex, the glyph, with its own page, <a href="text-and-labels.html">Text and labels</a>.</p>
 
-<div class="callout"><strong>Pixel sizes in an export</strong> Sizes given in pixels are multiplied by <code>SceneData::pixelScale</code>: 1 in every view, an export's <code>ExportDesc::pixelScale</code> in a <a href="tiled-export.html">tiled export</a>, which also divides the LOD's pixels per unit by it. Sizes in metres do not change.</div>
+<div class="callout"><strong>Pixel sizes in an export</strong> In a <a href="tiled-export.html">tiled export</a>'s pipelines (<code>RASM_EXPORT_VIEW</code>) sizes given in pixels are multiplied by <code>SceneData::pixelScale</code> (<code>getPixelScale</code>), its <code>ExportDesc::pixelScale</code>, which also divides the LOD's pixels per unit; in every other view it is 1 and the shaders do no work for it. Sizes in metres do not change.</div>
 
 <div class="legend">
   <span><i class="cpu"></i>any thread</span>
