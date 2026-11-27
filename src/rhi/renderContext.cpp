@@ -1770,6 +1770,11 @@ namespace rasm
         return impl->device && isSampleCount(samples, impl->device->supportedSampleCounts());
     }
 
+    uint32_t RenderContext::getMaxImageSize() const
+    {
+        return impl->device ? impl->device->maxImageSize() : 0;
+    }
+
     bool RenderContext::supportsTextureFormat(Format format) const
     {
         return impl->device && impl->device->supportsTextureFormat(format);

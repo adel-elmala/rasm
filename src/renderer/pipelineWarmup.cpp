@@ -137,6 +137,7 @@ namespace rasm
         addGraphics(requests, "rasmPickBlend", getShaderVariant("#define RASM_PICK 1\n#define RASM_ALPHA_BLEND 1\n", rasm), "vertMain", "pickMain");
         addGraphics(requests, "pointsPick", getShaderVariant("#define RASM_PICK 1\n", readFile(folder / "passes/points.slang")), "vertMain", "pickMain");
         addGraphics(requests, "rasmPickGlyphs", getShaderVariant("#define RASM_PICK 1\n#define RASM_GLYPHS 1\n", rasm), "vertMain", "pickMain");
+        addCompute(requests, "export", readFile(folder / "passes/export.slang"), "exportMain");
         shaderCompiler->prefetch(requests.data(), static_cast<uint32_t>(requests.size()), false);
     }
 

@@ -4,6 +4,7 @@
 #include "rasm/picking.h"
 #include "rasm/pointCloud.h"
 #include "rasm/pointCloudOctree.h"
+#include "rasm/export.h"
 #include "rasm/glyphs.h"
 #include "rasm/grid.h"
 #include "rasm/cameraInput.h"
@@ -1088,6 +1089,41 @@ TEST_CASE("the 1.15 material blend method is the C++ one, at the end of the mate
     CHECK(RASM_BLEND_METHOD_WEIGHTED == static_cast<uint32_t>(rasm::BlendMethod::WEIGHTED));
     CHECK(RASM_BLEND_METHOD_ADDITIVE == static_cast<uint32_t>(rasm::BlendMethod::ADDITIVE));
     CHECK(offsetof(rasm_material_desc, blend_method) == offsetof(rasm_material_desc, vector_colors) + sizeof(rasm_scalar_colors));
+}
+
+TEST_CASE("the 1.16 export structs start from the C++ defaults, and an export call with a bad argument gives a last error")
+{
+    CHECK(RASM_C_API_VERSION_MINOR >= 16);
+    const rasm::ExportDesc defaults;
+    rasm_export_desc desc;
+    REQUIRE(rasm_export_desc_init(&desc, sizeof(desc)) == RASM_OK);
+    CHECK(desc.size == sizeof(desc));
+    CHECK(desc.width == 0);
+    CHECK(desc.path == nullptr);
+    CHECK(desc.format == RASM_EXPORT_FORMAT_PNG8);
+    CHECK(desc.samples == defaults.samples);
+    CHECK(desc.pixel_scale == defaults.pixelScale);
+    CHECK(desc.tone_map == RASM_TRUE);
+    CHECK(desc.transparent == RASM_FALSE);
+    CHECK(desc.msaa == RASM_FALSE);
+    CHECK(desc.tile_size == 0);
+    CHECK(RASM_EXPORT_FORMAT_EXR_FLOAT == static_cast<uint32_t>(rasm::ExportFormat::EXR_FLOAT));
+    CHECK(RASM_EXPORT_STATE_DONE == static_cast<uint32_t>(rasm::ExportState::DONE));
+    CHECK(RASM_DEFAULT_EXPORT_TILE_SIZE == rasm::DEFAULT_EXPORT_TILE_SIZE);
+    rasm_export_progress progress;
+    REQUIRE(rasm_export_progress_init(&progress, sizeof(progress)) == RASM_OK);
+    CHECK(progress.state == RASM_EXPORT_STATE_FAILED);
+    CHECK(progress.fraction == 0.0f);
+
+    rasm_view view;
+    rasm_view_init(&view, sizeof(view));
+    CHECK(rasm_export_view(nullptr, &view, &desc).id == 0);
+    CHECK(contains(rasm_get_last_error(), "renderer is NULL"));
+    CHECK(rasm_get_export_progress(nullptr, rasm_export{}, &progress) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(rasm_cancel_export(nullptr, rasm_export{}) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(rasm_take_export(nullptr, rasm_export{}, nullptr) == RASM_ERROR_INVALID_ARGUMENT);
+    desc.size = 8;
+    CHECK(rasm_export_desc_init(&desc, 8) == RASM_ERROR_INVALID_ARGUMENT);
 }
 
 TEST_CASE("the 1.14 structs start from the C++ defaults, a glyph chunk builds on any thread, and data lines take values")

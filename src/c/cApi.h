@@ -102,6 +102,7 @@ namespace rasm::c
     inline TileHandle       toCpp(rasm_tile h)              { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
     inline FontHandle       toCpp(rasm_font h)              { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
     inline PickHandle       toCpp(rasm_pick h)              { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
+    inline ExportHandle     toCpp(rasm_export h)            { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
 
     inline rasm_scene       toC(SceneHandle h)              { return {packHandle(h.index, h.generation)}; }
     inline rasm_entity      toC(EntityHandle h)             { return {packHandle(h.index, h.generation)}; }
@@ -117,6 +118,7 @@ namespace rasm::c
     inline rasm_tile        toC(TileHandle h)               { return {packHandle(h.index, h.generation)}; }
     inline rasm_font        toC(FontHandle h)               { return {packHandle(h.index, h.generation)}; }
     inline rasm_pick        toC(PickHandle h)               { return {packHandle(h.index, h.generation)}; }
+    inline rasm_export      toC(ExportHandle h)             { return {packHandle(h.index, h.generation)}; }
 
     inline glm::vec2        toCpp(const rasm_vec2& v)       { return {v.x, v.y}; }
     inline glm::vec3        toCpp(const rasm_vec3& v)       { return {v.x, v.y, v.z}; }
@@ -252,6 +254,9 @@ namespace rasm::c
     constexpr size_t        POINT_CLOUD_INFO_SIZE_1_12      = offsetof(rasm_point_cloud_info, compressed) + sizeof(rasm_bool);
 
     constexpr size_t        GLYPH_CHUNK_DESC_SIZE_1_14      = offsetof(rasm_glyph_chunk_desc, count) + sizeof(uint32_t);
+
+    constexpr size_t        EXPORT_DESC_SIZE_1_16           = offsetof(rasm_export_desc, tile_size) + sizeof(uint32_t);
+    constexpr size_t        EXPORT_PROGRESS_SIZE_1_16       = offsetof(rasm_export_progress, fraction) + sizeof(float);
 
 }
 

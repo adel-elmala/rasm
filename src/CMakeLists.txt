@@ -19,6 +19,7 @@ find_package(meshoptimizer CONFIG REQUIRED)
 find_package(slang CONFIG REQUIRED)
 find_package(Ktx CONFIG REQUIRED)
 find_package(laszip REQUIRED)
+find_package(ZLIB REQUIRED)
 if (RASM_IMGUI)
     find_package(imgui CONFIG REQUIRED)
 endif()
@@ -95,6 +96,8 @@ target_sources(rasm_renderer PRIVATE
     "renderer/picking.cpp"
     "renderer/pointRaster.cpp"
     "renderer/glyphCull.cpp"
+    "renderer/export.cpp"
+    "renderer/imageWriter.cpp"
     "renderer/weightedBlend.cpp"
     "renderer/readback.cpp"
     "renderer/shadowCascades.cpp"
@@ -164,6 +167,8 @@ target_link_libraries(rasm_renderer PRIVATE Vulkan::Headers volk::volk GPUOpen::
 target_link_libraries(rasm_renderer PRIVATE vk-bootstrap::vk-bootstrap)
 target_link_libraries(rasm_renderer PRIVATE slang::slang)
 target_link_libraries(rasm_renderer PRIVATE meshoptimizer::meshoptimizer)
+# The export writes PNG and EXR files a band at a time through deflate (src/renderer/imageWriter.cpp).
+target_link_libraries(rasm_renderer PRIVATE ZLIB::ZLIB)
 
 target_link_libraries(rasm PUBLIC rasm_renderer)
 # ktxImage.cpp names Vulkan formats (vulkan_core.h); rasm_renderer's PRIVATE Vulkan::Headers does not reach rasm.
@@ -214,7 +219,7 @@ if (RASM_C_API)
     # Linked into the shared libraries, so their code must be position independent where that is not the default.
     set_target_properties(rasm_renderer rasm PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-    add_library(rasm_c_objects OBJECT "c/cApi.cpp" "c/cRenderer.cpp" "c/cScene.cpp" "c/cInput.cpp" "c/cViews.cpp" "c/cAnimation.cpp" "c/cTiles.cpp" "c/cTerrain.cpp" "c/cVector.cpp" "c/cText.cpp" "c/cPicking.cpp" "c/cPointCloud.cpp" "c/cGlyphs.cpp")
+    add_library(rasm_c_objects OBJECT "c/cApi.cpp" "c/cRenderer.cpp" "c/cScene.cpp" "c/cInput.cpp" "c/cViews.cpp" "c/cAnimation.cpp" "c/cTiles.cpp" "c/cTerrain.cpp" "c/cVector.cpp" "c/cText.cpp" "c/cPicking.cpp" "c/cPointCloud.cpp" "c/cGlyphs.cpp" "c/cExport.cpp")
     target_link_libraries(rasm_c_objects PRIVATE rasm_renderer spdlog::spdlog)
 
     add_library(rasm_c_renderer SHARED)

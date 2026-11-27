@@ -32,6 +32,7 @@ if ("renderer" IN_LIST _rasm_components OR "rasm" IN_LIST _rasm_components)
     find_dependency(spdlog CONFIG)
     find_dependency(meshoptimizer CONFIG)
     find_dependency(slang CONFIG)
+    find_dependency(ZLIB)
     # Only a rasm built with RASM_IMGUI links Dear ImGui (the vcpkg port, static).
     if (@RASM_IMGUI@)
         find_dependency(imgui CONFIG)

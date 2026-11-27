@@ -103,7 +103,7 @@ float getPointFinerShare(int lod, float3 local)
     return float((uint(lod) >> (3 * octant)) & 7u) / 7.0;
 }
 
-// A point's diameter in pixels at clip w: its size in pixels, or in metres through a pixel's size in the world at its
+// A point's diameter in pixels at clip w: its size in pixels (times pixelScale), or in metres through a pixel's size in the world at its
 // depth; at least a pixel, so it neither vanishes nor flickers. POINT_ADAPTIVE grows it, up to maxSize, once the chunk's
 // points no longer cover its ground density times at that size (the rule the prefix LOD keeps, selectPointCount): from
 // where its spacing on screen times sqrt(density / area) passes the size (area 1 for a square, pi / 4 for a round
@@ -117,14 +117,14 @@ float getPointDiameter(SceneData *scene, PointData style, float spacing, float f
 {
     float pixelWorld    = 2.0 * max(abs(w), 1e-6) / (abs(scene->projection[1][1]) * float(scene->viewportHeight));
     bool metres         = (style.flags & POINT_METRES) != 0;
-    float size          = max(metres ? style.size / pixelWorld : style.size, 1.0);
+    float size          = max(metres ? style.size / pixelWorld : style.size * scene->pixelScale, 1.0);
     if ((style.flags & POINT_ADAPTIVE) == 0 || !(spacing > 0.0))
         return size;
     float area          = (style.flags & (POINT_ROUND | POINT_SPHERE)) != 0 ? 0.785398 : 1.0;
     float density       = max(style.density, 1.0);
     float covering      = spacing / pixelWorld * sqrt(density / area);
     float faster        = sqrt(max(POINT_ADAPTIVE_COVER / density, 1.0));
-    float grown         = clamp(size + faster * max(covering - size, 0.0), size, max(getPointMaxSize(style), size));
+    float grown         = clamp(size + faster * max(covering - size, 0.0), size, max(getPointMaxSize(style) * scene->pixelScale, size));
     return lerp(grown, size, saturate(finer));
 }
 

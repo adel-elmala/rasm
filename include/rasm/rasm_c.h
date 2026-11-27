@@ -24,7 +24,7 @@
 
 // NOLINTBEGIN(readability-identifier-naming): C names, snake_case with the rasm_ prefix, as C APIs and their bindings expect
 #define RASM_C_API_VERSION_MAJOR    1
-#define RASM_C_API_VERSION_MINOR    15
+#define RASM_C_API_VERSION_MINOR    16
 #define RASM_C_API_VERSION          (((uint32_t)RASM_C_API_VERSION_MAJOR << 16) | (uint32_t)RASM_C_API_VERSION_MINOR)
 
 #if defined(_WIN32)
@@ -1172,6 +1172,55 @@ typedef struct rasm_pick_hit
     double                          distance;                                  /* from the camera */
 } rasm_pick_hit;
 
+/* 1.16: offscreen export at any size (rasm/export.h). An export draws a still of a view in tiles over the frames of
+ * rasm_render_views and writes it as it goes. */
+typedef struct rasm_export          { uint64_t id; } rasm_export;
+
+#define RASM_DEFAULT_EXPORT_TILE_SIZE 2048      /* 1.16 */
+#define RASM_MAX_EXPORT_SAMPLES     256         /* 1.16 */
+
+/* 1.16: a PNG is sRGB with straight alpha, an EXR linear with premultiplied alpha. */
+typedef uint32_t                    rasm_export_format;
+enum
+{
+    RASM_EXPORT_FORMAT_PNG8         = 0,
+    RASM_EXPORT_FORMAT_PNG16        = 1,
+    RASM_EXPORT_FORMAT_EXR_HALF     = 2,
+    RASM_EXPORT_FORMAT_EXR_FLOAT    = 3,
+};
+
+typedef uint32_t                    rasm_export_state;
+enum
+{
+    RASM_EXPORT_STATE_RUNNING       = 0,
+    RASM_EXPORT_STATE_DONE          = 1,
+    RASM_EXPORT_STATE_FAILED        = 2,
+};
+
+typedef struct rasm_export_desc
+{
+    uint32_t                        size;
+    uint32_t                        width;
+    uint32_t                        height;
+    const char*                     path;                                      /* UTF-8, copied; NULL or "": kept in memory for rasm_take_export */
+    rasm_export_format              format;                                    /* PNG8 by default */
+    uint32_t                        samples;                                   /* jittered frames averaged per pixel, 1 to RASM_MAX_EXPORT_SAMPLES; 16 by default */
+    float                           pixel_scale;                               /* output pixels per pixel of sizes in pixels and of the LOD error; 1 by default */
+    rasm_bool                       tone_map;                                  /* false: linear HDR, EXR only; true by default */
+    rasm_bool                       transparent;                               /* no sky: alpha is what covers each pixel */
+    rasm_bool                       msaa;                                      /* the view's MSAA in each sample too */
+    uint32_t                        tile_size;                                 /* 0: RASM_DEFAULT_EXPORT_TILE_SIZE */
+} rasm_export_desc;
+
+typedef struct rasm_export_progress
+{
+    uint32_t                        size;
+    rasm_export_state               state;
+    uint32_t                        tiles_done;
+    uint32_t                        tile_count;
+    float                           fraction;                                  /* of its frames, 0 to 1 */
+} rasm_export_progress;
+
 /* 1.8: what a mouse button's drag does (rasm/cameraInput.h), and a camera's reference grid (rasm/grid.h). */
 typedef uint32_t                    rasm_camera_drag;
 enum
@@ -1671,6 +1720,19 @@ RASM_C_API rasm_result      RASM_CALL rasm_build_glyph_chunk(const rasm_glyph_ch
 RASM_C_API rasm_result      RASM_CALL rasm_build_glyph_shape(rasm_glyph_shape shape, uint32_t segments, rasm_mesh_build** build);
 RASM_C_API rasm_quat        RASM_CALL rasm_get_glyph_orientation(rasm_vec3 direction);
 RASM_C_API rasm_result      RASM_CALL rasm_vector_add_data_lines(rasm_vector_geometry* geometry, rasm_dvec3 origin, const rasm_dvec3* points, const uint32_t* line_sizes, uint32_t line_count, const rasm_line_shape* shape, const rasm_vector_placement* placement, const uint32_t* feature_ids, const uint32_t* colors, const float* scalars);
+
+/* Added in 1.16: offscreen export at any size. rasm_export_view starts a still of the view (its scene, camera, bloom and
+ * anti-aliasing) at desc->width x desc->height: it is drawn in tiles, one jittered sample a frame, in the frames of
+ * rasm_render_views after the application's views, and written to desc->path as it goes, so neither the device's
+ * largest image nor memory bounds it. The camera is copied when it starts; the scene must hold still. Poll
+ * rasm_get_export_progress; it never waits. rasm_take_export gives a DONE export's image (one kept in memory; image may
+ * be NULL for a file) and forgets it; rasm_cancel_export stops one (its file is removed) or forgets a finished one. */
+RASM_C_API rasm_result      RASM_CALL rasm_export_desc_init(rasm_export_desc* desc, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_export_progress_init(rasm_export_progress* progress, uint32_t size);
+RASM_C_API rasm_export      RASM_CALL rasm_export_view(rasm_renderer* renderer, const rasm_view* view, const rasm_export_desc* desc);
+RASM_C_API rasm_result      RASM_CALL rasm_get_export_progress(rasm_renderer* renderer, rasm_export export_handle, rasm_export_progress* progress);
+RASM_C_API rasm_result      RASM_CALL rasm_cancel_export(rasm_renderer* renderer, rasm_export export_handle);
+RASM_C_API rasm_result      RASM_CALL rasm_take_export(rasm_renderer* renderer, rasm_export export_handle, rasm_image* image);
 
 #ifdef __cplusplus
 }

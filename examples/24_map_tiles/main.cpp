@@ -4,6 +4,7 @@
 #include "rasm/rasm.h"
 
 #include "exampleArgs.h"
+#include "exampleExport.h"
 
 #include <algorithm>
 #include <chrono>
@@ -710,11 +711,13 @@ int main(int argc, char **argv)
     ExampleArgs args = parseExampleArgs(argc, argv);
     uint64_t budgetMiB = 48;
     bool fast = false;
+    bool exportCheck = false;
     for (int i = 1; i < argc; ++i)
     {
         if (i + 1 < argc && std::strcmp(argv[i], "--budget") == 0)
             budgetMiB = static_cast<uint64_t>(std::max(0L, std::strtol(argv[++i], nullptr, 10)));
         fast = fast || std::strcmp(argv[i], "--fast") == 0;
+        exportCheck = exportCheck || std::strcmp(argv[i], "--export-check") == 0;
     }
 
     rasm::EngineConfig config = {
@@ -801,17 +804,10 @@ int main(int argc, char **argv)
     double seconds = 0.0;
     rasm::TileState landmarkStates[LANDMARK_COUNT] = {};
 
-    if (args.waitForLoads)
-        engine.waitForLoads();
-    while (exampleRunning(engine, args))
+    // A frame's streaming: the fetches that came in, the cut for this frame's views, and the new fetches. An export calls
+    // it each frame too, with the camera held still.
+    auto stream = [&](uint32_t frame) -> double
     {
-        const auto frameStart = std::chrono::steady_clock::now();
-        seconds += 1.0 / 60.0;
-        const uint32_t frame = ++world.frame;
-        const rasm::Transform eye = flight(seconds);
-        engine.setCameraTransform(camera, eye);
-        engine.updateTransform(marker, rasm::Transform{eye.position + glm::dvec3(0.0, 2500.0, 0.0), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(700.0f)});
-
         views.clear();
         views.push_back({.scene = scene, .camera = camera});
         views.push_back({.scene = scene, .camera = map, .output = {.rect = {.x = 0.73f, .y = 0.02f, .width = 0.25f, .height = 0.25f * 16.0f / 9.0f}}, .bloom = rasm::ViewToggle::OFF});
@@ -871,6 +867,49 @@ int main(int argc, char **argv)
             landmarkStates[l] = state;
         }
 
+        return updateMs;
+    };
+
+    // --export-check: half-way through the flight, with the camera held still, the main view is exported in tiles of 256
+    // pixels and in one tile, while the streamer works on; the export keeps the tiles drawn fixed, so the two match.
+    bool exportMatched = true;
+    // The streamer drew a fixed set while the export ran: the flight's new tiles load in the frames after it.
+    uint32_t checkAfter = HOLE_CHECK_AFTER;
+    if (args.waitForLoads)
+        engine.waitForLoads();
+    while (exampleRunning(engine, args))
+    {
+        const auto frameStart = std::chrono::steady_clock::now();
+        seconds += 1.0 / 60.0;
+        const uint32_t frame = ++world.frame;
+        const rasm::Transform eye = flight(seconds);
+        engine.setCameraTransform(camera, eye);
+        engine.updateTransform(marker, rasm::Transform{eye.position + glm::dvec3(0.0, 2500.0, 0.0), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(700.0f)});
+        const double updateMs = stream(frame);
+        if (exportCheck && frame == std::max(args.frames / 2, 2u))
+        {
+            const auto streamFrame = [&]()
+            {
+                stream(++world.frame);
+            };
+            rasm::ExportDesc desc{.width = 1920, .height = 1088, .samples = 4, .tileSize = 256};
+            rasm::ReadbackImage tiled;
+            rasm::ReadbackImage single;
+            double tiledSeconds = 0.0;
+            double singleSeconds = 0.0;
+            bool done = runExport(engine, views.data(), static_cast<uint32_t>(views.size()), engine.exportView(views[0], desc), "tiled", streamFrame, tiled, tiledSeconds);
+            desc.tileSize = 16384;
+            done = done && runExport(engine, views.data(), static_cast<uint32_t>(views.size()), engine.exportView(views[0], desc), "single", streamFrame, single, singleSeconds);
+            rasm::ReadbackImage diffImage;
+            const ExportDiff diff = compareExports(tiled, single, 3, &diffImage);
+            printExportDiff("export, tiled vs single", diff, 3);
+            const std::string folder = std::string(args.out).substr(0, std::string(args.out).find_last_of("/\\") + 1);
+            rasm::writePng(folder + "export_tiled.png", tiled);
+            rasm::writePng(folder + "export_diff.png", diffImage);
+            exportMatched = done && static_cast<double>(diff.over) <= 0.001 * static_cast<double>(diff.pixels);
+            checkAfter = world.frame + HOLE_CHECK_AFTER;
+        }
+
         // Tile records of places nobody visited for a while go, so the records stay bounded too.
         if (frame % 120 == 0)
         {
@@ -891,7 +930,7 @@ int main(int argc, char **argv)
         totals.updateMs += updateMs;
         totals.maxUpdateMs = std::max(totals.maxUpdateMs, updateMs);
         totals.overBudget += stats.bytes > stats.budget ? 1 : 0;
-        totals.holes += frame > HOLE_CHECK_AFTER ? stats.holes : 0;
+        totals.holes += world.frame > checkAfter ? stats.holes : 0;
         totals.maxFallbacks = std::max(totals.maxFallbacks, stats.fallbacks);
         totals.maxWaiting = std::max(totals.maxWaiting, stats.waitingForBudget);
         totals.maxDrawn = std::max(totals.maxDrawn, stats.drawn);
@@ -903,7 +942,7 @@ int main(int argc, char **argv)
 
         engine.render(views.data(), static_cast<uint32_t>(views.size()));
         // After the first frames, which build pipelines.
-        if (frame > HOLE_CHECK_AFTER)
+        if (world.frame > checkAfter)
             totals.maxFrameMs = std::max(totals.maxFrameMs, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frameStart).count());
     }
 
@@ -915,6 +954,11 @@ int main(int argc, char **argv)
                 frame, static_cast<unsigned long long>(world.tilesMade), static_cast<unsigned long long>(stats.totalLoads), static_cast<unsigned long long>(stats.totalDrops),
                 totals.maxDrawn, totals.maxFallbacks, totals.maxWaiting, static_cast<double>(stats.peakBytes) / (1024.0 * 1024.0), static_cast<double>(stats.budget) / (1024.0 * 1024.0),
                 frame > 0 ? totals.updateMs / frame : 0.0, totals.maxUpdateMs, totals.maxFrameMs, totals.landmarksLoaded, totals.landmarksCancelled);
+    if (!exportMatched)
+    {
+        std::fprintf(stderr, "error: the tiled export differs from the single one.\n");
+        return 1;
+    }
     if (totals.overBudget > 0 || totals.holes > 0)
     {
         std::fprintf(stderr, "error: %u frames over the budget, %u holes after frame %u.\n", totals.overBudget, totals.holes, HOLE_CHECK_AFTER);

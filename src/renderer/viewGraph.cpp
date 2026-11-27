@@ -1,5 +1,6 @@
 #include "renderer/viewGraph.h"
 #include "rasm/renderer.h"
+#include "renderer/export.h"
 #include "renderer/taa.h"
 
 #include "spdlog/spdlog.h"
@@ -94,9 +95,13 @@ namespace rasm
             sizes.emplace_back(pixels.width, pixels.height);
         }
 
-        const bool same = built && viewCount == graphViews.size() && std::equal(views, views + viewCount, graphViews.begin()) && sizes == graphSizes;
+        // A running export's view joins the graph, and leaves it when the export ends (src/renderer/export.cpp).
+        renderer.updateExports();
+        const bool same = built && viewCount == graphViews.size() && std::equal(views, views + viewCount, graphViews.begin()) && sizes == graphSizes &&
+                          exportKey == renderer.exports->graphKey;
         if (!same)
             build(views, viewCount);
+        renderer.collectExports();
         // The built-in controller moves the camera of the first view in the main window: view textures come first in a list.
         CameraHandle controlled = viewCount > 0 ? views[0].camera : CameraHandle{};
         for (uint32_t i = viewCount; i-- > 0;)
@@ -136,6 +141,9 @@ namespace rasm
             if (!addView(next, view, sizes[i]))
                 spdlog::error("render: view {} (camera {}) could not be added; it is left out this frame and until the list changes.", i, view.camera.index);
         }
+        if (!renderer.addExportPasses(next, textures.data(), static_cast<uint32_t>(textures.size())))
+            spdlog::error("render: the running export's view could not be added; it waits until the graph is built again.");
+        exportKey = renderer.exports->graphKey;
         renderer.addUiPass(next, textures.data(), static_cast<uint32_t>(textures.size()));
 
         // The new graph holds the kept views already, so the old one lets go of them without freeing them.

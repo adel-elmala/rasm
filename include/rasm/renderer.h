@@ -6,6 +6,7 @@
 #include "rasm/camera.h"
 #include "rasm/cameraInput.h"
 #include "rasm/entity.h"
+#include "rasm/export.h"
 #include "rasm/scene.h"
 #include "rasm/material.h"
 #include "rasm/render/renderGraph.h"
@@ -53,6 +54,8 @@ namespace rasm
     struct Inspector;
     struct Readbacks;
     struct Picks;
+    struct Exports;
+    struct ExportJob;
     struct PickRequest;
     struct InspectEntry;
     struct TaaState;
@@ -309,6 +312,20 @@ namespace rasm
         // Returns false when it failed (its view did not draw in that frame), or no frame has drawn it yet (then it
         // stays pending).
         bool                        takePick(PickHandle pick, PickHit* hits, uint32_t capacity, uint32_t& hitCount);
+        // A still of the view (its scene, camera, bloom and anti-aliasing; not its output) at desc.width x desc.height,
+        // any size: drawn in tiles with an off-center projection, one sample a frame in the frames of render(...) after
+        // the application's views, and written to desc.path as it goes, so neither the device's largest image nor memory
+        // bounds it. The camera is copied when it starts, so the application's camera may move; the scene must hold still
+        // (tile streamers of the scene keep what they draw while it runs). Exports run one after another. Returns invalid
+        // for a bad view or desc.
+        ExportHandle                exportView(const View& view, const ExportDesc& desc);
+        // Never waits. A handle that is unknown, cancelled or taken gives FAILED.
+        ExportProgress              getExportProgress(ExportHandle exportHandle) const;
+        // Stops it (a file it was writing is removed) or forgets a finished one.
+        bool                        cancelExport(ExportHandle exportHandle);
+        // For a DONE export: the image of an export without a path (an empty image for a file), and the export is
+        // forgotten. False while it runs or when it failed.
+        bool                        takeExport(ExportHandle exportHandle, ReadbackImage& image);
         bool                        running() const;
         bool                        recreateSwapchain();
         bool                        recreateSwapchain(WindowHandle window);
@@ -476,6 +493,7 @@ namespace rasm
         std::unique_ptr<Inspector>                                  inspector                               = {};
         std::unique_ptr<Readbacks>                                  readbacks                               = {};
         std::unique_ptr<Picks>                                      picks                                   = {};
+        std::unique_ptr<Exports>                                    exports                                 = {};
         uint32_t                                                    warmedSceneVariants                     = 0;
         uint32_t                                                    warmedDebugVariants                     = 0;
 
@@ -591,6 +609,15 @@ namespace rasm
         void                        recordPicks();
         void                        finishPickSubmit(bool submitted);
         void                        readPicks(uint32_t slot);
+        void                        updateExports();
+        bool                        startExport(ExportJob& job);
+        void                        failExport(ExportJob& job, const char* reason);
+        void                        destroyExportResources(ExportJob& job);
+        bool                        addExportPasses(RenderGraph& graph, const RenderTargetHandle* sampled, uint32_t sampledCount);
+        void                        recordExport(ExportJob& job, const RenderTargetHandle& source, const RenderTargetHandle& bloom);
+        void                        finishExportSubmit(bool submitted);
+        void                        readExports(uint32_t slot);
+        void                        collectExports();
 
         LoadHooks*                                                              loads               = nullptr;  // the attached AssetLoader's
         std::unordered_set<TextureHandle, HandleHash>                           loadingTextures;    // made by a loader, not filled yet: isLoaded false

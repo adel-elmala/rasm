@@ -1555,6 +1555,11 @@ namespace rasm::rhi
         return bufferInt64Atomics;
     }
 
+    uint32_t VulkanDevice::maxImageSize() const
+    {
+        return physicalDevice.properties.limits.maxImageDimension2D;
+    }
+
     // Every pipeline layout's push-constant range, which every push must name (vkCmdPushConstants).
     VkShaderStageFlags VulkanDevice::getPushConstantStages() const
     {

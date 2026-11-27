@@ -11,8 +11,9 @@ SamplerCube gCubeTextures[];
 
 struct VSOutput
 {
-    float4 pos : SV_POSITION;
-    float2 ndc : TEXCOORD0;
+    float4                  pos     : SV_POSITION;
+    float2                  ndc     : TEXCOORD0;
+    nointerpolation float2  window  : TEXCOORD1;    // the projection's offset of its centre without TAA's jitter: an export tile's window, else 0
 };
 
 [shader("vertex")]
@@ -23,6 +24,8 @@ VSOutput vertMain(uint vertexID : SV_VertexID)
     // Clip space is Y-up, so the top of the target is y = 1.
     output.ndc      = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
     output.pos      = float4(output.ndc, 0.0, 1.0);
+    // projection[i][2] is -jitter plus the window: per triangle, not per pixel.
+    output.window   = float2(pc.scene->projection[0][2], pc.scene->projection[1][2]) + pc.scene->jitter;
     return output;
 }
 
@@ -44,11 +47,12 @@ float4 fragMain(VSOutput input) : SV_TARGET
 {
     float4x4 projection = pc.scene->projection;
     // The view-space ray through the pixel. An orthographic camera looks the same way from every pixel. The ray
-    // takes out the projection's TAA jitter (jitter), so the sky moves with the scene.
+    // takes out the projection's TAA jitter (jitter), so the sky moves with the scene, and follows the rest of its
+    // centre's offset (projection[i][2] is -jitter plus an export tile's off-center window).
     float3 viewRay      = float3(0.0, 0.0, -1.0);
     float2 ndc          = input.ndc - pc.scene->jitter;
     if (projection[3][3] == 0.0)
-        viewRay         = float3(ndc.x / projection[0][0], ndc.y / projection[1][1], -1.0);
+        viewRay         = float3((ndc.x + input.window.x) / projection[0][0], (ndc.y + input.window.y) / projection[1][1], -1.0);
     // The view matrix's 3x3 is a rotation, so its transpose turns view space back into world space.
     float3 direction    = normalize(mul(transpose((float3x3)pc.scene->view), viewRay));
     float3 color        = gCubeTextures[pc.scene->environmentSky].SampleLevel(toEnvironment(direction, pc.scene->environmentRotation, pc.scene->environmentOrientation), 0.0).rgb;

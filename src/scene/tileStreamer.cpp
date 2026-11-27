@@ -1,6 +1,7 @@
 #include "rasm/tileStreamer.h"
 
 #include "rasm/renderer.h"
+#include "renderer/export.h"
 #include "renderer/gpuScene.h"
 #include "renderer/uberMaterialTypes.h"
 #include "scene/tileResidency.h"
@@ -90,6 +91,11 @@ namespace rasm
         uint32_t budgetAge = BUDGET_REFRESH;
         VRAMStats memory = {};
         TileStreamerStats stats;
+
+        Exports &getExports() const
+        {
+            return *renderer.exports;
+        }
 
         bool sceneLive() const
         {
@@ -292,16 +298,21 @@ namespace rasm
                 height = window.pixelHeight;
             }
             const ViewPixels pixels = getViewPixels(view.output.rect, width, height);
-            if (pixels.width == 0 || pixels.height == 0)
-                return false;
+            return makeView(view.camera, pixels.width, pixels.height, 1.0, tileView);
+        }
 
-            const Camera &camera = renderer.registry.cameras[view.camera.index];
-            const glm::mat4 projection = renderer.getProjectionMatrix(view.camera, static_cast<float>(pixels.width) / static_cast<float>(pixels.height));
-            const glm::dmat4 viewMatrix = renderer.getViewMatrix(view.camera);
+        // A camera's view of width x height pixels, its errors in pixels of pixelScale output pixels each (an export's).
+        bool makeView(CameraHandle cameraHandle, uint32_t width, uint32_t height, double pixelScale, TileView &tileView)
+        {
+            if (width == 0 || height == 0 || !renderer.isLive(cameraHandle))
+                return false;
+            const Camera &camera = renderer.registry.cameras[cameraHandle.index];
+            const glm::mat4 projection = renderer.getProjectionMatrix(cameraHandle, static_cast<float>(width) / static_cast<float>(height));
+            const glm::dmat4 viewMatrix = renderer.getViewMatrix(cameraHandle);
             getSidePlanes(glm::dmat4(projection) * viewMatrix, tileView.planes);
             tileView.origin = camera.rig.transform.position;
             tileView.forward = glm::normalize(-glm::dvec3(viewMatrix[0][2], viewMatrix[1][2], viewMatrix[2][2]));
-            tileView.pixelsPerUnit = std::abs(static_cast<double>(projection[1][1])) * 0.5 * static_cast<double>(pixels.height);
+            tileView.pixelsPerUnit = std::abs(static_cast<double>(projection[1][1])) * 0.5 * static_cast<double>(height) / pixelScale;
             tileView.orthographic = camera.projection.type == CameraProjection::Type::ORTHOGRAPHIC;
             return true;
         }
@@ -387,6 +398,14 @@ namespace rasm
             if (impl->makeView(views[i], impl->views[impl->viewCount]))
                 ++impl->viewCount;
         }
+        // A running export of the scene wants its whole image's detail, so its cut loads before its tiles start.
+        CameraHandle camera;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        float pixelScale = 1.0f;
+        if (impl->viewCount < MAX_SCENE_VIEWS && getExportStreamView(impl->getExports(), impl->scene, camera, width, height, pixelScale) &&
+            impl->makeView(camera, width, height, pixelScale, impl->views[impl->viewCount]))
+            ++impl->viewCount;
     }
 
     double TileStreamer::getScreenError(const glm::dvec3 &center, double radius, double geometricError) const
@@ -433,6 +452,12 @@ namespace rasm
             }
         }
 
+        // While an export of the scene draws its tiles nothing drawn changes: loads still finish, and show once it ends.
+        if (isExportFrozen(impl->getExports(), impl->scene))
+        {
+            impl->toLoad.clear();
+            return;
+        }
         residency.update(impl->views, impl->viewCount, wanted, wantedCount, impl->getLimits());
 
         // Hidden first, so a tile and its stand-in never draw together.
@@ -446,6 +471,8 @@ namespace rasm
         for (uint32_t index : residency.getToLoad())
             impl->toLoad.push_back(residency.handleOf(index));
 
+        setExportStreamSettled(impl->getExports(), impl->scene,
+                               residency.getLoading().empty() && impl->toLoad.empty() && residency.getToShow().empty() && residency.getToHide().empty() && residency.getToDrop().empty());
         impl->stats = residency.getStats();
         impl->stats.deviceBudget = impl->memory.vramBudget;
         impl->stats.deviceUsage = impl->memory.vramUsage;

@@ -10,8 +10,10 @@
 
 struct VSOutput
 {
-    float4 pos : SV_POSITION;
-    float2 ndc : TEXCOORD0;
+    float4                  pos     : SV_POSITION;
+    float2                  ndc     : TEXCOORD0;
+    nointerpolation float2  window  : TEXCOORD1;    // the projection's offset of its centre without TAA's jitter: an export tile's window, else 0
+    nointerpolation float   scale   : TEXCOORD2;    // SceneData::pixelScale
 };
 
 struct FragmentOutput
@@ -34,6 +36,9 @@ VSOutput vertMain(uint vertexID : SV_VertexID)
     // Clip space is Y-up, so the top of the target is y = 1.
     output.ndc      = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
     output.pos      = float4(output.ndc, 0.0, 1.0);
+    // projection[i][2] is -jitter plus the window: per triangle, not per pixel.
+    output.window   = float2(pc.scene->projection[0][2], pc.scene->projection[1][2]) + pc.scene->jitter;
+    output.scale    = pc.scene->pixelScale;
     return output;
 }
 
@@ -87,15 +92,15 @@ FragmentOutput fragMain(VSOutput input)
 {
     GridData grid       = pc.scene->grid;
     float4x4 projection = pc.scene->projection;
-    // The pixel's ray in view space, as sky.slang finds it. An orthographic ray starts across the near plane; its
-    // jitter is in the projection's offset, a perspective one's comes off the pixel's NDC.
+    // The pixel's ray in view space, as sky.slang finds it: without TAA's jitter, through the rest of the projection's
+    // offset of its centre (an export tile's window). An orthographic ray starts across the near plane.
     bool perspective    = projection[3][3] == 0.0;
     float3 viewOrigin   = float3(0.0);
     float3 viewRay      = float3(0.0, 0.0, -1.0);
     if (perspective)
     {
         float2 ndc      = input.ndc - pc.scene->jitter;
-        viewRay         = float3(ndc.x / projection[0][0], ndc.y / projection[1][1], -1.0);
+        viewRay         = float3((ndc.x + input.window.x) / projection[0][0], (ndc.y + input.window.y) / projection[1][1], -1.0);
     }
     else
         viewOrigin      = float3((input.ndc.x - projection[0][3]) / projection[0][0], (input.ndc.y - projection[1][3]) / projection[1][1], 0.0);
@@ -122,22 +127,22 @@ FragmentOutput fragMain(VSOutput input)
     // The level whose cells are FADE_PIXELS wide here, and the share of the next.
     uint subdivisions   = uint(grid.subdivisions + 0.5);
     float footprint     = max(derivative.x, derivative.y);
-    float lod           = max(log(footprint * FADE_PIXELS) / log(grid.subdivisions), 0.0);
+    float lod           = max(log(footprint * FADE_PIXELS * input.scale) / log(grid.subdivisions), 0.0);
     uint level          = min(uint(lod), grid.levelCount - 2);
     float blend         = min(lod - float(level), 1.0);
     uint sizeA          = getLevelSize(subdivisions, level);
     uint sizeB          = sizeA * subdivisions;
     uint sizeC          = sizeB * subdivisions;
-    float a             = getLineCoverage(getLevelUv(grid, cells, sizeA), derivative / float(sizeA), grid.lineWidth) * (1.0 - blend);
-    float b             = getLineCoverage(getLevelUv(grid, cells, sizeB), derivative / float(sizeB), lerp(grid.majorLineWidth, grid.lineWidth, blend));
-    float c             = getLineCoverage(getLevelUv(grid, cells, sizeC), derivative / float(sizeC), grid.majorLineWidth) * blend;
+    float a             = getLineCoverage(getLevelUv(grid, cells, sizeA), derivative / float(sizeA), grid.lineWidth * input.scale) * (1.0 - blend);
+    float b             = getLineCoverage(getLevelUv(grid, cells, sizeB), derivative / float(sizeB), lerp(grid.majorLineWidth, grid.lineWidth, blend) * input.scale);
+    float c             = getLineCoverage(getLevelUv(grid, cells, sizeC), derivative / float(sizeC), grid.majorLineWidth * input.scale) * blend;
     float4 middle       = lerp(grid.majorColor, grid.minorColor, blend);
     float4 color        = blendOver(float4(0.0), grid.minorColor.rgb, grid.minorColor.a * a);
     color               = blendOver(color, middle.rgb, middle.a * b);
     color               = blendOver(color, grid.majorColor.rgb, grid.majorColor.a * c);
 
     float2 place        = grid.originCells + cells;
-    float axisWidth     = grid.majorLineWidth + 0.5;
+    float axisWidth     = (grid.majorLineWidth + 0.5) * input.scale;
     color               = blendOver(color, grid.zAxisColor.rgb, grid.zAxisColor.a * getAxisCoverage(place.x, derivative.x, axisWidth));
     color               = blendOver(color, grid.xAxisColor.rgb, grid.xAxisColor.a * getAxisCoverage(place.y, derivative.y, axisWidth));
 

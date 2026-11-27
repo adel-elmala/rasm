@@ -137,6 +137,8 @@ namespace rasm
         float                               takeUploadGpuMs();
         bool                                supportsTextureFormat(Format format) const;
         bool                                supportsSampleCount(uint32_t samples) const;
+        // The widest and tallest 2D texture or render target the device makes, in pixels; 0 without a device.
+        uint32_t                            getMaxImageSize() const;
         // At the window's pixel size now.
         [[nodiscard]] SwapchainStatus       recreateSwapchain(const Window& window);
         bool                                beginRendering(const CommandBufferHandle& commandBuffer, const TextureHandle* colorAttachments, uint32_t colorCount, TextureHandle depthAttachment, const glm::vec4& clearColor, const AttachmentOps& ops = {}, uint32_t face = 0);

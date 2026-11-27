@@ -21,7 +21,8 @@
         "shader-slang",
         "doctest",
         "earcut-hpp",
-        "laszip"
+        "laszip",
+        "zlib"
     ],
     "features": {
         "imgui": {

@@ -52,6 +52,8 @@ int main(void)
     rasm_quat turned;
     rasm_vec3 down = {0.0f, -1.0f, 0.0f};
     float speeds[2] = {0.0f, 1.0f};
+    rasm_export_desc exportDesc;
+    rasm_export_progress exportProgress;
 
     if (rasm_get_version() != RASM_C_API_VERSION)
         return 1;
@@ -150,6 +152,10 @@ int main(void)
     if (rasm_vector_geometry_create(&geometry) != RASM_OK || rasm_vector_add_data_lines(geometry, line[0], line, &lineSize, 1, NULL, NULL, NULL, NULL, speeds) != RASM_OK)
         return 29;
     rasm_vector_geometry_destroy(geometry);
+    if (rasm_export_desc_init(&exportDesc, sizeof(exportDesc)) != RASM_OK || exportDesc.samples != 16 || exportDesc.tone_map != RASM_TRUE || exportDesc.format != RASM_EXPORT_FORMAT_PNG8 ||
+        rasm_export_progress_init(&exportProgress, sizeof(exportProgress)) != RASM_OK || rasm_export_view(NULL, &views[0], &exportDesc).id != 0 ||
+        rasm_get_export_progress(NULL, rasm_export_view(NULL, &views[0], &exportDesc), &exportProgress) != RASM_ERROR_INVALID_ARGUMENT || RASM_EXPORT_STATE_FAILED != 2)
+        return 30;
     printf("rasm_c.h %u.%u compiles as C (__STDC_VERSION__ %ld) and links rasm_c_renderer.\n", RASM_C_API_VERSION_MAJOR, RASM_C_API_VERSION_MINOR, (long)__STDC_VERSION__);
     return 0;
 }

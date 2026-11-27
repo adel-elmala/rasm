@@ -370,7 +370,7 @@ struct SceneData
     uint32_t            weightedAccum;          // bindless: the weighted sums (color times weight, alpha times weight)
     uint32_t            weightedCoverage;       // bindless: the coverage, 1 - the product of (1 - alpha), in r; with motion in a, after the motion sums
     uint32_t            weightedSamples;        // samples per pixel of the two
-    uint32_t            weightedPadding;        // keeps the size a multiple of 8
+    float               pixelScale;             // output pixels per pixel of a size given in pixels (widths, text, points, the grid's lines) and of the LOD error: 1, or an export's
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.

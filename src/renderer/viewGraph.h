@@ -60,6 +60,7 @@ namespace rasm
         std::vector<ViewState>              states;
         std::vector<RenderTargetHandle>     textures;               // the view textures added so far, which later views sample
         bool                                built       = false;
+        uint64_t                            exportKey   = 0;        // Exports::graphKey of the graph's export passes
     };
 }
 // clang-format on
