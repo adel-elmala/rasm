@@ -24,7 +24,7 @@
 
 // NOLINTBEGIN(readability-identifier-naming): C names, snake_case with the rasm_ prefix, as C APIs and their bindings expect
 #define RASM_C_API_VERSION_MAJOR    1
-#define RASM_C_API_VERSION_MINOR    17
+#define RASM_C_API_VERSION_MINOR    18
 #define RASM_C_API_VERSION          (((uint32_t)RASM_C_API_VERSION_MAJOR << 16) | (uint32_t)RASM_C_API_VERSION_MINOR)
 
 #if defined(_WIN32)
@@ -853,6 +853,8 @@ typedef struct rasm_view
     rasm_window                     window;                                    /* without a target: this window; 0: the main one */
     rasm_view_toggle                bloom;
     rasm_anti_aliasing              anti_aliasing;
+    uint32_t                        shadow_count;                              /* 1.18: 0 to RASM_MAX_VIEW_SHADOWS; 0 by default */
+    const struct rasm_shadow_desc*  shadows;                                   /* 1.18: shadow_count shadows of lights of the scene, read during the call */
 } rasm_view;
 
 typedef struct rasm_render_target_desc
@@ -1583,6 +1585,49 @@ typedef struct rasm_pipeline_desc
     rasm_primitive_topology         topology;                                  /* TRIANGLE_LIST by default */
 } rasm_pipeline_desc;
 
+/* 1.18: debug views and the buffer inspector. */
+#define RASM_MAX_VIEW_SHADOWS       4                                           /* rasm_view's shadows */
+#define RASM_INSPECT_ALL_SAMPLES    0xFFFFFFFFu                                 /* rasm_inspection's sample: the samples' average */
+#define RASM_INSPECT_TILES          24                                          /* rasm_inspection's level of LIGHT_CLUSTERS: the screen tiles' counts */
+
+typedef uint32_t                    rasm_debug_view;
+enum
+{
+    RASM_DEBUG_VIEW_NONE            = 0,
+    RASM_DEBUG_VIEW_NORMALS         = 1,
+    RASM_DEBUG_VIEW_UVS             = 2,
+    RASM_DEBUG_VIEW_OVERDRAW        = 3,
+    RASM_DEBUG_VIEW_LODS            = 4,
+    RASM_DEBUG_VIEW_CULLING         = 5,
+    RASM_DEBUG_VIEW_LIGHT_COUNT     = 6,
+    RASM_DEBUG_VIEW_MESHLETS        = 7,
+};
+
+typedef uint32_t                    rasm_inspect_kind;
+enum
+{
+    RASM_INSPECT_KIND_COLOR         = 0,                                       /* a color of a render target */
+    RASM_INSPECT_KIND_DEPTH         = 1,                                       /* a render target's depth, as view depth */
+    RASM_INSPECT_KIND_HIZ           = 2,                                       /* a scene view's Hi-Z level */
+    RASM_INSPECT_KIND_LIGHT_CLUSTERS = 3,                                      /* a scene view's lights per cluster or screen tile */
+};
+
+/* What the RASM window's Buffers section shows (Inspection in C++); it needs the UI (rasm_renderer_config's ui). */
+typedef struct rasm_inspection
+{
+    uint32_t                        size;
+    const char*                     target;                                    /* a render target's name, for HIZ and LIGHT_CLUSTERS the view's; NULL or "": nothing. Copied by rasm_set_inspection */
+    rasm_inspect_kind               kind;                                      /* COLOR by default */
+    uint32_t                        attachment;                                /* COLOR: which color */
+    uint32_t                        face;                                      /* a cube target's face; HIZ, LIGHT_CLUSTERS: the view's face */
+    uint32_t                        level;                                     /* HIZ: the level; LIGHT_CLUSTERS: the depth slice, or RASM_INSPECT_TILES */
+    uint32_t                        sample;                                    /* a multisampled target's sample, or RASM_INSPECT_ALL_SAMPLES */
+    uint32_t                        channel;                                   /* COLOR: 0 all, 1 to 4 red, green, blue or alpha alone as gray */
+    float                           exposure;                                  /* COLOR: the multiplier before the clamp to 0..1; 1 by default */
+    float                           depth_range;                               /* DEPTH, HIZ: the view depth shown black; 50 by default */
+    rasm_entity                     entity;                                    /* the GPU tables' rows of this entity; 0: none */
+} rasm_inspection;
+
 typedef void (RASM_CALL* rasm_log_callback)(void* user_data, rasm_log_level level, const char* message);
 
 /* The library */
@@ -2009,6 +2054,21 @@ RASM_C_API uint32_t         RASM_CALL rasm_get_render_target_storage_index(rasm_
 RASM_C_API uint32_t         RASM_CALL rasm_get_gpu_timer_count(rasm_renderer* renderer);
 RASM_C_API uint32_t         RASM_CALL rasm_get_gpu_timer_name(rasm_renderer* renderer, uint32_t index, char* buffer, uint32_t capacity);
 RASM_C_API float            RASM_CALL rasm_get_gpu_timer_ms(rasm_renderer* renderer, uint32_t index);
+
+/* Added in 1.18: debug views and the buffer inspector (rasm_view's shadows are 1.18 too). A debug view draws every
+ * shaded view of the frame its way, from the next frame on. Frozen culling keeps the frustum and the LOD camera of the
+ * frame it froze in, so flying away shows what was culled. rasm_set_inspection picks what the RASM window's Buffers
+ * section shows, as picking it there does, and copies the target's name; rasm_get_inspection writes the pick into
+ * *inspection with its name copied into target_buffer (target then points to it), cut to capacity - 1 bytes, and
+ * returns the name's full length. */
+RASM_C_API rasm_result      RASM_CALL rasm_set_debug_view(rasm_renderer* renderer, rasm_debug_view view);
+RASM_C_API rasm_debug_view  RASM_CALL rasm_get_debug_view(rasm_renderer* renderer);
+RASM_C_API rasm_result      RASM_CALL rasm_set_culling_frozen(rasm_renderer* renderer, rasm_bool frozen);
+RASM_C_API rasm_result      RASM_CALL rasm_set_meshlet_path(rasm_renderer* renderer, rasm_meshlet_path path);
+RASM_C_API rasm_meshlet_path RASM_CALL rasm_get_meshlet_path(rasm_renderer* renderer);
+RASM_C_API rasm_result      RASM_CALL rasm_inspection_init(rasm_inspection* inspection, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_set_inspection(rasm_renderer* renderer, const rasm_inspection* inspection);
+RASM_C_API uint32_t         RASM_CALL rasm_get_inspection(rasm_renderer* renderer, rasm_inspection* inspection, char* target_buffer, uint32_t capacity);
 
 #ifdef __cplusplus
 }

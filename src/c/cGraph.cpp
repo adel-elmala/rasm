@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bitset>
 #include <cmath>
 #include <iterator>
 #include <memory>
@@ -29,9 +30,9 @@ struct rasm_commands
     const rasm_renderer *owner = nullptr;
     uint32_t width = 0;
     uint32_t height = 0;
-    c::PipelineInfo target;  // a graphics pass's attachments, which a bound pipeline must match
-    uint64_t openTimers = 0; // a bit per GPU timer the callback began and has not ended
-    std::string timerName;   // keeps its capacity, so a timer's name allocates once
+    c::PipelineInfo target;                 // a graphics pass's attachments, which a bound pipeline must match
+    std::bitset<MAX_GPU_TIMERS> openTimers; // a bit per GPU timer the callback began and has not ended
+    std::string timerName;                  // keeps its capacity, so a timer's name allocates once
 };
 
 struct rasm_render_graph
@@ -322,8 +323,7 @@ RASM_C_CATCH_RESULT
 rasm_result RASM_CALL rasm_shadow_desc_init(rasm_shadow_desc *desc, uint32_t size)
 try
 {
-    const ShadowDesc shadow = {};
-    const rasm_shadow_desc defaults = {.size = sizeof(rasm_shadow_desc), .cascade_count = shadow.cascadeCount, .map_size = shadow.size, .distance = shadow.distance, .split_lambda = shadow.splitLambda};
+    const rasm_shadow_desc defaults = c::getShadowDescDefaults();
     return c::initSized(desc, size, c::SHADOW_DESC_SIZE_1_17, &defaults, sizeof(defaults), __func__, "desc");
 }
 RASM_C_CATCH_RESULT
@@ -422,7 +422,7 @@ try
         cmd.width = 0;
         cmd.height = 0;
         cmd.target = {};
-        cmd.openTimers = 0;
+        cmd.openTimers.reset();
         if (type == RASM_PASS_TYPE_GRAPHICS)
         {
             const Viewport &viewport = ctx.getViewport();
@@ -445,11 +445,12 @@ try
             callback(userData, &cmd);
         }
         // A timer the callback left open ends with the pass.
-        for (uint32_t timer = 0; cmd.openTimers != 0; ++timer, cmd.openTimers >>= 1)
+        for (uint32_t timer = 0; cmd.openTimers.any() && timer < MAX_GPU_TIMERS; ++timer)
         {
-            if ((cmd.openTimers & 1) != 0)
+            if (cmd.openTimers.test(timer))
                 cmd.renderer->endGpuTimer(cmd.commandBuffer, timer);
         }
+        cmd.openTimers.reset();
     };
     const c::CallErrors errors;
     std::string name = values.name != nullptr ? values.name : "";
@@ -467,12 +468,9 @@ rasm_shadow RASM_CALL rasm_render_graph_add_shadow_passes(rasm_render_graph *gra
 try
 {
     rasm_render_graph *g = getGraph(graph, __func__);
-    const ShadowDesc shadow = {};
-    rasm_shadow_desc values = {.size = sizeof(rasm_shadow_desc), .cascade_count = shadow.cascadeCount, .map_size = shadow.size, .distance = shadow.distance, .split_lambda = shadow.splitLambda};
-    if (g == nullptr || !c::checkHandle(scene.id, __func__, "scene") || !c::checkHandle(camera.id, __func__, "camera") ||
-        !c::readSized(desc, c::SHADOW_DESC_SIZE_1_17, &values, sizeof(values), __func__, "desc") || !c::checkHandle(values.light.id, __func__, "desc->light"))
+    ShadowDesc maps;
+    if (g == nullptr || !c::checkHandle(scene.id, __func__, "scene") || !c::checkHandle(camera.id, __func__, "camera") || !c::readShadowDesc(desc, maps, __func__, "desc"))
         return {};
-    const ShadowDesc maps = {.light = c::toCpp(values.light), .cascadeCount = values.cascade_count, .size = values.map_size, .distance = values.distance, .splitLambda = values.split_lambda};
     const SceneShadow added = g->owner->renderer->addShadowPasses(*g->graph, c::toCpp(scene), c::toCpp(camera), maps);
     if (added.mapCount == 0)
         return {};
@@ -865,7 +863,7 @@ try
     cmd->timerName = name;
     const uint32_t timer = cmd->renderer->beginGpuTimer(cmd->commandBuffer, cmd->timerName);
     if (timer < MAX_GPU_TIMERS)
-        cmd->openTimers |= uint64_t{1} << timer;
+        cmd->openTimers.set(timer);
     return timer;
 }
 RASM_C_CATCH(RASM_INVALID_INDEX)
@@ -878,12 +876,12 @@ try
         return RASM_ERROR_INVALID_ARGUMENT;
     if (timer == RASM_INVALID_INDEX)
         return RASM_OK;
-    if (timer >= MAX_GPU_TIMERS || (cmd->openTimers & (uint64_t{1} << timer)) == 0)
+    if (timer >= MAX_GPU_TIMERS || !cmd->openTimers.test(timer))
     {
         c::reportError(__func__, "timer is not one this callback's rasm_cmd_begin_gpu_timer gave, or it was ended already.");
         return RASM_ERROR_INVALID_ARGUMENT;
     }
-    cmd->openTimers &= ~(uint64_t{1} << timer);
+    cmd->openTimers.reset(timer);
     cmd->renderer->endGpuTimer(cmd->commandBuffer, timer);
     return RASM_OK;
 }

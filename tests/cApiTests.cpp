@@ -1297,3 +1297,41 @@ TEST_CASE("the 1.17 graph structs start from the C++ defaults, and graph, comman
     CHECK(rasm_get_gpu_timer_count(nullptr) == 0);
     CHECK(rasm_get_gpu_timer_ms(nullptr, 0) == 0.0f);
 }
+
+TEST_CASE("the 1.18 view shadows and inspection start from the C++ defaults, and the debug calls check their renderer")
+{
+    CHECK(RASM_C_API_VERSION_MINOR >= 18);
+    CHECK(RASM_MAX_VIEW_SHADOWS == rasm::MAX_VIEW_SHADOWS);
+    CHECK(RASM_INSPECT_ALL_SAMPLES == rasm::INSPECT_ALL_SAMPLES);
+    CHECK(RASM_INSPECT_TILES == rasm::INSPECT_TILES);
+
+    // The 1.1 fields keep their offsets; the shadows follow, none by default.
+    CHECK(offsetof(rasm_view, shadow_count) > offsetof(rasm_view, anti_aliasing));
+    rasm_view view;
+    REQUIRE(rasm_view_init(&view, sizeof(view)) == RASM_OK);
+    CHECK(view.shadow_count == 0);
+    CHECK(view.shadows == nullptr);
+
+    const rasm::Inspection defaults;
+    rasm_inspection inspection;
+    REQUIRE(rasm_inspection_init(&inspection, sizeof(inspection)) == RASM_OK);
+    CHECK(inspection.target == nullptr);
+    CHECK(inspection.kind == static_cast<uint32_t>(defaults.kind));
+    CHECK(inspection.attachment == defaults.attachment);
+    CHECK(inspection.sample == defaults.sample);
+    CHECK(inspection.channel == defaults.channel);
+    CHECK(inspection.exposure == defaults.exposure);
+    CHECK(inspection.depth_range == defaults.depthRange);
+    CHECK(inspection.entity.id == 0);
+    CHECK(rasm_inspection_init(&inspection, 8) == RASM_ERROR_INVALID_ARGUMENT);
+
+    CHECK(rasm_set_debug_view(nullptr, RASM_DEBUG_VIEW_NORMALS) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(contains(rasm_get_last_error(), "renderer is NULL"));
+    CHECK(rasm_get_debug_view(nullptr) == RASM_DEBUG_VIEW_NONE);
+    CHECK(rasm_set_culling_frozen(nullptr, RASM_TRUE) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(rasm_set_meshlet_path(nullptr, RASM_MESHLET_PATH_OFF) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(rasm_get_meshlet_path(nullptr) == RASM_MESHLET_PATH_AUTO);
+    CHECK(rasm_set_inspection(nullptr, &inspection) == RASM_ERROR_INVALID_ARGUMENT);
+    char name[8];
+    CHECK(rasm_get_inspection(nullptr, &inspection, name, sizeof(name)) == 0);
+}

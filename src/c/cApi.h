@@ -226,8 +226,12 @@ namespace rasm::c
     bool                    checkInputEvent(const rasm_input_event& event, const char* function);
     bool                    checkCameraController(const rasm_camera_controller& controller, const char* function);
     bool                    checkView(const rasm_view& view, const char* function);
-    // A sized rasm_view array, each element the size of the first, into views (at most MAX_SCENE_VIEWS).
+    // A sized rasm_view array, each element the size of the first, into views (at most MAX_SCENE_VIEWS), with each
+    // view's shadows read the same way.
     bool                    readViews(const rasm_view* views, uint32_t viewCount, View* converted, const char* function);
+    rasm_shadow_desc        getShadowDescDefaults();
+    // A sized rasm_shadow_desc with a light, its defaults past the caller's size, as the C++ desc.
+    bool                    readShadowDesc(const rasm_shadow_desc* desc, ShadowDesc& shadow, const char* function, const char* name);
 
     // An enum value from the caller: false, with an error, when it is past the last constant.
     bool                    checkEnum(uint32_t value, uint32_t count, const char* function, const char* name);
@@ -306,6 +310,8 @@ namespace rasm::c
     constexpr size_t        VIEW_OUTPUT_SIZE_1_17           = offsetof(rasm_view_output, window) + sizeof(rasm_window);
     constexpr size_t        BUFFER_DESC_SIZE_1_17           = offsetof(rasm_buffer_desc, staged) + sizeof(rasm_bool);
     constexpr size_t        PIPELINE_DESC_SIZE_1_17         = offsetof(rasm_pipeline_desc, topology) + sizeof(rasm_primitive_topology);
+
+    constexpr size_t        INSPECTION_SIZE_1_18            = offsetof(rasm_inspection, entity) + sizeof(rasm_entity);
 
 }
 

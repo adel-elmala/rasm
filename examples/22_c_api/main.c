@@ -19,14 +19,16 @@
  * square as the root, so the picture does not change, only who draws it.
  *
  * Three views draw each frame: a top-down map with a reference grid (1.8) into a view texture (a render target), which
- * a board in the scene shows; the main camera into the window; and the map again into a corner of the window. The main camera has a trackball
+ * a board in the scene shows; the main camera into the window; and the map again into a corner of the window. Each
+ * view draws the shadows of its list (1.18). The main camera has a trackball
  * controller, which a script drives with synthetic mouse events (rasm_add_input_event), the way an application with its
  * own event loop feeds RASM; with --fixed-step, which fixes the easing's time step, frame N is the same on every run. At frame 20 it picks the main view's centre (1.7) and prints what is there, a
  * couple of frames later; a headless run whose pick hit nothing exits with 1. At the end it prints the frame and pool stats.
  *
  * Flags, as the C++ examples take them: --headless, --frames N (60), --out <file.png> (frame.png), --fixed-step,
- * --wait-for-loads, --no-cache, --transfer-queue on|off. A headless run copies frame N back into a rasm_image, writes
- * it as a PNG and exits, with code 1 when the frame was not written.
+ * --wait-for-loads, --no-cache, --transfer-queue on|off, --no-shadows, and --bench (no validation and no UI; prints the
+ * average CPU and GPU frame times after 120 frames). A headless run copies frame N back into a rasm_image, writes it as
+ * a PNG and exits, with code 1 when the frame was not written.
  */
 
 #define WIDTH 1280
@@ -38,20 +40,24 @@
 #define GROUND_TILES 5
 #define REFINE_PIXELS 16.0
 
+#define BENCH_WARMUP 120u
+
 typedef struct ExampleArgs
 {
     int headless;
     int fixedStep;
     int waitForLoads;
     int noCache;
+    int bench;
     int transferQueue; /* 1 on, 0 off, -1 the default */
+    int shadows;
     unsigned frames;
     const char *out;
 } ExampleArgs;
 
 static ExampleArgs parseArgs(int argc, char **argv)
 {
-    ExampleArgs args = {0, 0, 0, 0, -1, 60, "frame.png"};
+    ExampleArgs args = {0, 0, 0, 0, 0, -1, 1, 60, "frame.png"};
     int i;
     for (i = 1; i < argc; ++i)
     {
@@ -63,6 +69,10 @@ static ExampleArgs parseArgs(int argc, char **argv)
             args.waitForLoads = 1;
         else if (strcmp(argv[i], "--no-cache") == 0)
             args.noCache = 1;
+        else if (strcmp(argv[i], "--bench") == 0)
+            args.bench = 1;
+        else if (strcmp(argv[i], "--no-shadows") == 0)
+            args.shadows = 0;
         else if (i + 1 < argc && strcmp(argv[i], "--frames") == 0)
         {
             const int frames = atoi(argv[++i]);
@@ -341,6 +351,7 @@ int main(int argc, char **argv)
     rasm_render_target_desc mapDesc;
     rasm_render_target mapTarget;
     rasm_view views[3];
+    rasm_shadow_desc mainShadows[2], mapShadow;
     rasm_frame_stats frameStats;
     rasm_pool_stats poolStats;
     rasm_readback readback = {0};
@@ -349,6 +360,8 @@ int main(int argc, char **argv)
     rasm_image *image;
     int written = 0;
     unsigned frame;
+    unsigned benchFrames = 0;
+    double benchCpuMs = 0.0, benchGpuMs = 0.0;
 
     printf("RASM C API %u.%u (header %u.%u)\n", rasm_get_version() >> 16, rasm_get_version() & 0xFFFFu, RASM_C_API_VERSION_MAJOR, RASM_C_API_VERSION_MINOR);
 
@@ -357,7 +370,10 @@ int main(int argc, char **argv)
     rendererConfig.app_name = "example_22";
     rendererConfig.window_width = WIDTH;
     rendererConfig.window_height = HEIGHT;
-    rendererConfig.enable_validation = RASM_TRUE;
+    rendererConfig.enable_validation = args.bench ? RASM_FALSE : RASM_TRUE;
+    /* --bench: no validation and no UI, which would change the timings. */
+    if (args.bench)
+        rendererConfig.ui = RASM_FALSE;
     rendererConfig.shader_dir = RASM_EXAMPLE_SHADER_DIR;
     if (args.fixedStep)
         rendererConfig.fixed_delta_time = 1.0f / 60.0f;
@@ -432,13 +448,24 @@ int main(int argc, char **argv)
     light.direction = normalize(vec3(0.6f, -1.0f, -0.35f));
     light.intensity = 3.0f;
     light.range = 0.0f;
-    rasm_add_light_to_scene(renderer, scene, rasm_create_light(renderer, &light));
+    rasm_shadow_desc_init(&mainShadows[0], sizeof(mainShadows[0]));
+    mainShadows[0].light = rasm_create_light(renderer, &light);
+    mainShadows[0].distance = 12.0f;
+    rasm_add_light_to_scene(renderer, scene, mainShadows[0].light);
     light.type = RASM_LIGHT_TYPE_POINT;
     light.color = vec3(1.0f, 0.6f, 0.3f);
     light.position = vec3(0.8f, -0.4f, 1.4f);
     light.intensity = 6.0f;
     light.range = 6.0f;
-    rasm_add_light_to_scene(renderer, scene, rasm_create_light(renderer, &light));
+    rasm_shadow_desc_init(&mainShadows[1], sizeof(mainShadows[1]));
+    mainShadows[1].light = rasm_create_light(renderer, &light);
+    mainShadows[1].map_size = 1024;
+    mainShadows[1].distance = 6.0f;
+    rasm_add_light_to_scene(renderer, scene, mainShadows[1].light);
+    /* The map's sun shadow: one cascade over the whole ground. */
+    mapShadow = mainShadows[0];
+    mapShadow.cascade_count = 1;
+    mapShadow.map_size = 1024;
 
     /* 4. The main camera, with a trackball around the helmet: the script below turns it. */
     rasm_camera_projection_init(&projection, sizeof(projection));
@@ -506,16 +533,22 @@ int main(int argc, char **argv)
         rasm_add_entity_to_scene(renderer, scene, rasm_create_entity(renderer, "board", createBoard(renderer), board, &at));
     }
 
-    /* The views, in drawing order: the map texture first, so the board shows this frame's map, then the window's. */
+    /* The views, in drawing order: the map texture first, so the board shows this frame's map, then the window's. Each
+     * draws its shadows fitted to its own camera (1.18): the main view the sun's in four cascades and the point light's
+     * cube, the maps the sun's in one cascade (they share a camera, so each has its own maps). --no-shadows: none. */
     rasm_view_init(&views[0], sizeof(views[0]));
     views[0].scene = scene;
     views[0].camera = map;
     views[0].target = mapTarget;
     views[0].bloom = RASM_VIEW_TOGGLE_OFF;
     views[0].anti_aliasing = RASM_ANTI_ALIASING_NONE;
+    views[0].shadows = &mapShadow;
+    views[0].shadow_count = args.shadows ? 1 : 0;
     rasm_view_init(&views[1], sizeof(views[1]));
     views[1].scene = scene;
     views[1].camera = camera;
+    views[1].shadows = mainShadows;
+    views[1].shadow_count = args.shadows ? 2 : 0;
     views[2] = views[0];
     views[2].target.id = 0;
     views[2].rect.height = 0.32f;
@@ -571,6 +604,13 @@ int main(int argc, char **argv)
         if (args.headless && frame == args.frames)
             readback = rasm_read_frame(renderer, RASM_READBACK_FORMAT_RGBA8_SRGB);
         rasm_render_views(renderer, views, 3);
+        /* --bench averages the frame times after BENCH_WARMUP frames. */
+        if (args.bench && frame > BENCH_WARMUP && rasm_get_frame_stats(renderer, &frameStats) == RASM_OK)
+        {
+            benchCpuMs += frameStats.cpu_frame_ms;
+            benchGpuMs += frameStats.gpu_frame_ms;
+            ++benchFrames;
+        }
         if (args.headless && frame == args.frames)
         {
             written = rasm_take_readback(renderer, readback, image) == RASM_OK && rasm_image_write_png(image, args.out) == RASM_OK;
@@ -583,6 +623,8 @@ int main(int argc, char **argv)
         }
     }
 
+    if (benchFrames > 0)
+        printf("bench: %u frames after %u: CPU %.3f ms, GPU %.3f ms a frame.\n", benchFrames, BENCH_WARMUP, benchCpuMs / benchFrames, benchGpuMs / benchFrames);
     poolStats.size = sizeof(poolStats);
     if (rasm_get_frame_stats(renderer, &frameStats) == RASM_OK && rasm_get_pool_stats(renderer, &poolStats) == RASM_OK)
         printf("%u entities, %u meshes, %u materials; %u draws, %u visible.\n", poolStats.entities, poolStats.meshes, poolStats.materials, frameStats.draws, frameStats.draws_visible);
@@ -598,13 +640,13 @@ int main(int argc, char **argv)
     rasm_engine_destroy(engine);
     if (args.headless && !written)
     {
-        fprintf(stderr, "error: frame %u was not written to %s: %s\n", args.frames, args.out, rasm_get_last_error());
-        return 1;
+            fprintf(stderr, "error: frame %u was not written to %s: %s\n", args.frames, args.out, rasm_get_last_error());
+            return 1;
     }
     if (args.headless && !picked)
     {
-        fprintf(stderr, "error: the pick at the view's centre hit nothing: %s\n", rasm_get_last_error());
-        return 1;
+            fprintf(stderr, "error: the pick at the view's centre hit nothing: %s\n", rasm_get_last_error());
+            return 1;
     }
     return 0;
 }
