@@ -62,7 +62,7 @@ namespace rasm
     namespace gfx { struct SceneData; }
 
     constexpr uint32_t MAX_CAMERAS          = 32;
-    constexpr uint32_t MAX_GPU_TIMERS       = 128;
+    constexpr uint32_t MAX_GPU_TIMERS       = 256;
     // Output formats the tone-map pass keeps pipelines for at once: the swapchain's and its view textures'.
     constexpr uint32_t MAX_TONE_MAP_FORMATS = 4;
 
