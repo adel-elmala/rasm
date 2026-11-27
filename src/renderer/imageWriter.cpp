@@ -280,6 +280,8 @@ namespace rasm
             {
                 failure = true;
                 spdlog::error("Export: writing '{}' failed.", path);
+                std::lock_guard<std::mutex> lock(mutex);
+                error = true;
             }
         }
         failure = failure || !close();

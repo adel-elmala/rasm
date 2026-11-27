@@ -82,11 +82,11 @@ namespace
                 }
             }
             else if (std::strcmp(argv[i], "--tile") == 0 && more)
-                options.tile = static_cast<uint32_t>(std::max(0, std::atoi(argv[++i])));
+                options.tile = static_cast<uint32_t>(std::max(0L, std::strtol(argv[++i], nullptr, 10)));
             else if (std::strcmp(argv[i], "--samples") == 0 && more)
-                options.samples = static_cast<uint32_t>(std::max(1, std::atoi(argv[++i])));
+                options.samples = static_cast<uint32_t>(std::max(1L, std::strtol(argv[++i], nullptr, 10)));
             else if (std::strcmp(argv[i], "--scale") == 0 && more)
-                options.scale = static_cast<float>(std::atof(argv[++i]));
+                options.scale = std::strtof(argv[++i], nullptr);
             else if (std::strcmp(argv[i], "--format") == 0 && more)
             {
                 const std::string format = argv[++i];
@@ -356,7 +356,7 @@ int main(int argc, char **argv)
         rasm::writePng((folder / "export_tiled.png").string(), tiled);
         rasm::writePng((folder / "export_single.png").string(), single);
         rasm::writePng((folder / "export_diff.png").string(), diffImage);
-        const bool same = static_cast<double>(diff.over) <= CHECK_FRACTION * static_cast<double>(diff.pixels);
+        const bool same = diff.pixels > 0 && static_cast<double>(diff.over) <= CHECK_FRACTION * static_cast<double>(diff.pixels);
         std::printf("check: %s\n", same ? "the tiles match the single render" : "FAILED: the tiles differ from the single render");
         status = same ? 0 : 1;
     }

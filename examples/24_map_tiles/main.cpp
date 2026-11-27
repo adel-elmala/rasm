@@ -906,7 +906,7 @@ int main(int argc, char **argv)
             const std::string folder = std::string(args.out).substr(0, std::string(args.out).find_last_of("/\\") + 1);
             rasm::writePng(folder + "export_tiled.png", tiled);
             rasm::writePng(folder + "export_diff.png", diffImage);
-            exportMatched = done && static_cast<double>(diff.over) <= 0.001 * static_cast<double>(diff.pixels);
+            exportMatched = done && diff.pixels > 0 && static_cast<double>(diff.over) <= 0.001 * static_cast<double>(diff.pixels);
             checkAfter = world.frame + HOLE_CHECK_AFTER;
         }
 

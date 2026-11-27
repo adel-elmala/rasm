@@ -2039,7 +2039,8 @@ namespace rasm
         // visibility that frame's late pass left, so only the early pass runs. That pass then also culls the blend run,
         // which no late pass takes, and its draws go unsorted. A depth-only view is not frozen: the shadow maps
         // follow the camera.
-        const bool frozen = cullingFrozen && !view.depthOnly;
+        // An export culls every tile with its own frustum, whatever the debug toggles.
+        const bool frozen = cullingFrozen && !view.depthOnly && exportFrame == nullptr;
         view.late = view.hizLevelCount > 0 && !frozen;
         if (frozen && view.hizLevelCount > 0)
             view.sortBlend = false;

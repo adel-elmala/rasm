@@ -253,6 +253,27 @@ namespace rasm
         return true;
     }
 
+    bool isExportView(const Exports &exports, SceneHandle scene, CameraHandle camera, const RenderTargetHandle &target)
+    {
+        const ExportJob *job = getRunningJob(exports);
+        return job != nullptr && job->view.scene == scene && job->camera == camera && job->target == target && target.isValid();
+    }
+
+    bool failSceneExports(Exports &exports, SceneHandle scene)
+    {
+        bool inGraph = false;
+        for (const std::unique_ptr<ExportJob> &job : exports.jobs)
+        {
+            if (job->state != ExportState::RUNNING || job->cancelled || !(job->view.scene == scene))
+                continue;
+            spdlog::error("Export {}: its scene was destroyed.", job->handle.index);
+            inGraph = inGraph || job->target.isValid();
+            job->state = ExportState::FAILED;
+            job->writer.reset();
+        }
+        return inGraph;
+    }
+
     bool isExportFrozen(const Exports &exports, SceneHandle scene)
     {
         const ExportJob *job = getRunningJob(exports);
@@ -468,7 +489,7 @@ namespace rasm
                 return;
             }
         }
-        if (job->writer && job->writer->finished() && job->writer->failed())
+        if (job->writer && job->writer->failed())
         {
             failExport(*job, "the file could not be written.");
             return;
@@ -511,8 +532,13 @@ namespace rasm
                 else
                 {
                     job->writer->finish();
+                    if (job->writer->finished() && job->writer->failed())
+                    {
+                        failExport(*job, "the file could not be written.");
+                        return;
+                    }
                     if (job->writer->finished())
-                        job->state = job->writer->failed() ? ExportState::FAILED : ExportState::DONE;
+                        job->state = ExportState::DONE;
                 }
                 if (job->state != ExportState::RUNNING)
                     ++state.graphKey;
@@ -548,13 +574,17 @@ namespace rasm
         ExportJob *job = getRunningJob(*exports);
         if (job == nullptr || !job->target.isValid() || !isLive(job->camera))
             return true;
-        if (!addScenePasses(graph, job->view.scene, job->camera, job->target, nullptr, 0, sampled, sampledCount))
-            return false;
+        // A view that can't be added (all MAX_SCENE_VIEWS scene views in use, a failed allocation) fails the export, so
+        // the ones after it run.
+        const bool added = addScenePasses(graph, job->view.scene, job->camera, job->target, nullptr, 0, sampled, sampledCount);
         RenderTargetHandle resolved = job->target;
-        if (ctx.getRenderTarget(job->target).samples > 1)
+        if (added && ctx.getRenderTarget(job->target).samples > 1)
             resolved = addMsaaResolvePass(graph, job->target, job->camera);
-        if (!resolved.isValid())
+        if (!added || !resolved.isValid())
+        {
+            failExport(*job, "its view could not be added to the frame's graph.");
             return false;
+        }
         const RenderTargetHandle bloom = hasBloom(job->view, config) ? addBloomPasses(graph, resolved, job->camera) : RenderTargetHandle{};
         const ExportHandle handle = job->handle;
         graph.addComputePass(

@@ -1,4 +1,5 @@
 .vscode/
 .vs/
 build/
-install/
+install/# The default --out of a headless example run from the repository root.
+/frame.png

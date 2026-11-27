@@ -36,6 +36,7 @@ namespace rasm
         void                        finish();
         // The file is closed: written, or failed. Destroyed before that, it stops and removes the file.
         bool                        finished();
+        // A write failed: true at once, before the file is closed.
         bool                        failed();
 
     private:

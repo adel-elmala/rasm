@@ -54,7 +54,8 @@ inline bool runExport(rasm::Renderer &engine, const rasm::View *views, uint32_t 
     return engine.takeExport(exportHandle, image);
 }
 
-// a and b must be RGBA8 images of one size. diff, when not null, gets an image of the differences: gray where the
+// a and b must be RGBA8 images of one size; images of two sizes (or empty ones) give no pixels, which the callers count
+// as a failure. diff, when not null, gets an image of the differences: gray where the
 // pixels are equal, orange up to the threshold, red past it.
 inline ExportDiff compareExports(const rasm::ReadbackImage &a, const rasm::ReadbackImage &b, uint32_t threshold, rasm::ReadbackImage *diff)
 {

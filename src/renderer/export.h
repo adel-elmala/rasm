@@ -162,6 +162,10 @@ namespace rasm
     glm::vec4                       getExportLabelProbe(const ExportViewFrame& frame, glm::vec4 probe);
     // The weighted words a slot's last frame wrote, when that frame was a survey frame of the running export.
     void                            gatherExportWeightedWords(Exports& exports, uint32_t slot, float nearest, float farthest);
+    // The running export draws this scene view (ViewGraph::draws: the view graph owns it).
+    bool                            isExportView(const Exports& exports, SceneHandle scene, CameraHandle camera, const RenderTargetHandle& target);
+    // Fails the exports of a scene that is destroyed. True when one of them was in the graph.
+    bool                            failSceneExports(Exports& exports, SceneHandle scene);
     // While a scene's export draws its survey and tiles, its tile streamers change nothing that is drawn.
     bool                            isExportFrozen(const Exports& exports, SceneHandle scene);
     // A tile streamer of the scene has nothing loading nor changing, or not (it answers each update).

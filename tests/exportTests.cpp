@@ -105,7 +105,7 @@ namespace
         for (uint32_t b = 0; b < blocks; ++b)
         {
             uint64_t offset = 0;
-            std::memcpy(&offset, &file[at + b * 8], 8);
+            std::memcpy(&offset, &file[at + static_cast<size_t>(b) * 8], 8);
             int32_t line = 0;
             int32_t size = 0;
             std::memcpy(&line, &file[offset], 4);
@@ -277,11 +277,12 @@ TEST_CASE("the image writer's PNGs and EXRs hold the rows it was given")
 {
     constexpr uint32_t WIDTH = 37;
     constexpr uint32_t HEIGHT = 41;
-    std::vector<uint8_t> rgba8(WIDTH * HEIGHT * 4);
-    std::vector<uint16_t> rgba16(WIDTH * HEIGHT * 4);
-    std::vector<float> rgba32(WIDTH * HEIGHT * 4);
-    std::vector<uint16_t> halves(WIDTH * HEIGHT * 4);
-    for (uint32_t i = 0; i < WIDTH * HEIGHT * 4; ++i)
+    constexpr size_t VALUES = static_cast<size_t>(WIDTH) * HEIGHT * 4;
+    std::vector<uint8_t> rgba8(VALUES);
+    std::vector<uint16_t> rgba16(VALUES);
+    std::vector<float> rgba32(VALUES);
+    std::vector<uint16_t> halves(VALUES);
+    for (size_t i = 0; i < VALUES; ++i)
     {
         rgba8[i] = static_cast<uint8_t>(i * 7 + i / 13);
         rgba16[i] = static_cast<uint16_t>(i * 1031 + i / 7);
@@ -333,7 +334,7 @@ TEST_CASE("the image writer's PNGs and EXRs hold the rows it was given")
         {
             rasm::ImageWriter writer;
             REQUIRE(writer.start(rasm::pathToUtf8(path), rasm::ExportFormat::PNG8, WIDTH, HEIGHT));
-            writer.push(std::vector<uint8_t>(rgba8.begin(), rgba8.begin() + WIDTH * 4 * 3), 3);
+            writer.push(std::vector<uint8_t>(rgba8.begin(), rgba8.begin() + static_cast<std::ptrdiff_t>(WIDTH) * 4 * 3), 3);
         }
         CHECK_FALSE(std::filesystem::exists(path));
     }
