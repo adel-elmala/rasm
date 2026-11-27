@@ -151,6 +151,8 @@ RASM_C_CATCH_RESULT
 void RASM_CALL rasm_engine_destroy(rasm_engine *engine)
 try
 {
+    if (engine != nullptr && !c::checkNotRecording(&engine->renderer, __func__))
+        return;
     delete engine;
 }
 RASM_C_CATCH_VOID

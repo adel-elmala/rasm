@@ -901,6 +901,27 @@ if (engine.beginFrame(camera))
   </div>
 </div>
 
+<div class="api" id="createShader">
+  <pre class="sig">ShaderHandle createShader(
+    const std::string&amp; name,
+    const std::string&amp; shaderSource,
+    ShaderType type,
+    const std::string&amp; entryPoint);</pre>
+  <div class="body">
+    <p>Compiles one entry point of Slang <code>shaderSource</code> into a shader of one stage (<code>VERTEX</code>, <code>FRAGMENT</code>, <code>COMPUTE</code>, <code>TASK</code> or <code>MESH</code>), for a <code>PipelineDesc</code> of your own: give its <code>descriptorSetLayout</code> <code>getRenderContext().getBindlessDescriptorSetLayout()</code> and make it with <code>RenderContext::createPipeline</code>. Unlike <code>createPipeline</code>, the pipeline then sets its own blend mode, depth test and write, and topology. The C API's <a href="c-api.html#rasm_create_pipeline"><code>rasm_create_pipeline</code></a> works this way.</p>
+<pre><code>auto &amp;ctx = engine.getRenderContext();
+rasm::PipelineDesc desc = {.name = "overlay",
+                           .vertexShader = engine.createShader("overlay", source, rasm::ShaderType::VERTEX, "vertMain"),
+                           .fragmentShader = engine.createShader("overlay", source, rasm::ShaderType::FRAGMENT, "fragMain"),
+                           .descriptorSetLayout = ctx.getBindlessDescriptorSetLayout(),
+                           .colorAttachmentFormats = {ctx.getSwapchainImageFormat()},
+                           .blendMode = rasm::BlendMode::PREMULTIPLIED_ALPHA,
+                           .depthTest = false};
+rasm::PipelineHandle overlay = ctx.createPipeline(desc);</code></pre>
+    <p><span class="tag">errors</span> A compile error, a missing entry point or a type of more than one stage logs an error and returns an invalid handle.</p>
+  </div>
+</div>
+
 <h2><span class="n">6</span>Timing your own GPU work</h2>
 
 <div class="api" id="beginGpuTimer">

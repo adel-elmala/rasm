@@ -413,6 +413,8 @@ try
     Renderer *r = c::getRenderer(renderer, __func__);
     if (r == nullptr)
         return RASM_ERROR_INVALID_ARGUMENT;
+    if (!c::checkNotRecording(renderer, __func__))
+        return RASM_ERROR_FAILED;
     const c::CallErrors errors;
     r->destroyTexture(c::toCpp(texture));
     return errors.result();

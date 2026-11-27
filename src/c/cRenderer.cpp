@@ -55,6 +55,8 @@ try
         c::reportError(__func__, "this renderer belongs to an engine: destroy the engine with rasm_engine_destroy.");
         return;
     }
+    if (!c::checkNotRecording(renderer, __func__))
+        return;
     delete renderer;
 }
 RASM_C_CATCH_VOID
@@ -70,7 +72,8 @@ RASM_C_CATCH(RASM_FALSE)
 void RASM_CALL rasm_render(rasm_renderer *renderer, rasm_scene scene, rasm_camera camera)
 try
 {
-    if (Renderer *r = c::getRenderer(renderer, __func__))
+    Renderer *r = c::getRenderer(renderer, __func__);
+    if (r != nullptr && c::checkNotRecording(renderer, __func__))
         r->render(c::toCpp(scene), c::toCpp(camera));
 }
 RASM_C_CATCH_VOID

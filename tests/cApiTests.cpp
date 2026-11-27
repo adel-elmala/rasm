@@ -9,6 +9,7 @@
 #include "rasm/grid.h"
 #include "rasm/cameraInput.h"
 #include "rasm/light.h"
+#include "rasm/render/resource.h"
 #include "rasm/scene.h"
 #include "rasm/input.h"
 #include "rasm/types.h"
@@ -1192,4 +1193,107 @@ TEST_CASE("the 1.14 structs start from the C++ defaults, a glyph chunk builds on
     CHECK(offsetof(rasm_frame_stats, glyphs_visible) == offsetof(rasm_frame_stats, glyphs) + sizeof(uint32_t));
     rasm_frame_stats stats = {.size = sizeof(rasm_frame_stats)};
     CHECK(rasm_get_frame_stats(nullptr, &stats) == RASM_ERROR_INVALID_ARGUMENT);
+}
+
+TEST_CASE("the 1.17 graph structs start from the C++ defaults, and graph, command and resource calls check their arguments")
+{
+    CHECK(RASM_C_API_VERSION_MINOR >= 17);
+    CHECK(RASM_PUSH_CONSTANTS_SIZE == rasm::PUSH_CONSTANTS_SIZE);
+    CHECK(RASM_MAX_COLOR_ATTACHMENTS == rasm::MAX_COLOR_ATTACHMENTS);
+    CHECK(RASM_SCENE_COLOR_FORMAT == static_cast<uint32_t>(rasm::SCENE_COLOR_FORMAT));
+    CHECK(RASM_MOTION_FORMAT == static_cast<uint32_t>(rasm::MOTION_FORMAT));
+    CHECK(sizeof(rasm_pass_resource) == 16);
+
+    // The 1.1 fields keep their offsets; the 1.17 ones follow.
+    CHECK(offsetof(rasm_render_target_desc, swapchain_scale) > offsetof(rasm_render_target_desc, readable));
+    rasm_render_target_desc target;
+    REQUIRE(rasm_render_target_desc_init(&target, sizeof(target)) == RASM_OK);
+    const rasm::RenderTargetDesc targetDefaults;
+    CHECK(target.swapchain_scale == targetDefaults.swapchainScale);
+    CHECK(target.depth_format == RASM_FORMAT_UNKNOWN);
+    CHECK(target.more_color_formats[0] == RASM_FORMAT_UNKNOWN);
+    CHECK(target.samples == targetDefaults.samples);
+    CHECK(target.history == RASM_FALSE);
+    CHECK(target.storage == RASM_FALSE);
+    CHECK(target.cube == RASM_FALSE);
+
+    const rasm::ShadowDesc shadowDefaults;
+    rasm_shadow_desc shadow;
+    REQUIRE(rasm_shadow_desc_init(&shadow, sizeof(shadow)) == RASM_OK);
+    CHECK(shadow.light.id == 0);
+    CHECK(shadow.cascade_count == shadowDefaults.cascadeCount);
+    CHECK(shadow.map_size == shadowDefaults.size);
+    CHECK(shadow.distance == shadowDefaults.distance);
+    CHECK(shadow.split_lambda == shadowDefaults.splitLambda);
+
+    rasm_view_output output;
+    REQUIRE(rasm_view_output_init(&output, sizeof(output)) == RASM_OK);
+    CHECK(output.rect.width == 1.0f);
+    CHECK(output.rect.height == 1.0f);
+    CHECK(output.target.id == 0);
+
+    rasm_pass_desc pass;
+    REQUIRE(rasm_pass_desc_init(&pass, sizeof(pass)) == RASM_OK);
+    CHECK(pass.type == RASM_PASS_TYPE_GRAPHICS);
+    CHECK(pass.execute == nullptr);
+    CHECK(pass.resource_count == 0);
+
+    const rasm::BufferDesc bufferDefaults;
+    rasm_buffer_desc buffer;
+    REQUIRE(rasm_buffer_desc_init(&buffer, sizeof(buffer)) == RASM_OK);
+    CHECK(buffer.usage == static_cast<uint32_t>(bufferDefaults.usage));
+    CHECK(buffer.byte_size == 0);
+    CHECK(buffer.host_visible == RASM_FALSE);
+
+    const rasm::PipelineDesc pipelineDefaults;
+    rasm_pipeline_desc pipeline;
+    REQUIRE(rasm_pipeline_desc_init(&pipeline, sizeof(pipeline)) == RASM_OK);
+    CHECK(pipeline.type == RASM_PIPELINE_TYPE_GRAPHICS);
+    CHECK(pipeline.source == nullptr);
+    CHECK(pipeline.blend_mode == static_cast<uint32_t>(pipelineDefaults.blendMode));
+    CHECK(pipeline.depth_test == RASM_TRUE);
+    CHECK(pipeline.depth_write == RASM_TRUE);
+    CHECK(pipeline.topology == static_cast<uint32_t>(pipelineDefaults.topology));
+    CHECK(rasm_pipeline_desc_init(&pipeline, 8) == RASM_ERROR_INVALID_ARGUMENT);
+
+    // No renderer, no graph, no commands: each call refuses with a code and says why.
+    rasm_render_graph *graph = reinterpret_cast<rasm_render_graph *>(1);
+    CHECK(rasm_render_graph_create(nullptr, &graph) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(graph == nullptr);
+    CHECK(contains(rasm_get_last_error(), "renderer is NULL"));
+    rasm_render_graph_destroy(nullptr);
+    CHECK(rasm_render_graph_add_pass(nullptr, &pass) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(contains(rasm_get_last_error(), "graph is NULL"));
+    CHECK(rasm_render_graph_create_render_target(nullptr, &target).id == 0);
+    CHECK(rasm_render_graph_add_shadow_passes(nullptr, rasm_scene{1}, rasm_camera{1}, &shadow).id == 0);
+    CHECK(rasm_render_graph_add_scene_passes(nullptr, rasm_scene{1}, rasm_camera{1}, rasm_render_target{1}, nullptr, 0, nullptr, 0) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(rasm_render_graph_add_taa_pass(nullptr, rasm_render_target{1}, rasm_camera{1}).id == 0);
+    CHECK(rasm_render_graph_add_tone_map_pass(nullptr, rasm_render_target{1}, rasm_camera{1}, rasm_render_target{}, &output) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(rasm_render_graph_add_ui_pass(nullptr, nullptr, 0) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(rasm_render_graph_compile(nullptr) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(rasm_render_graph_execute(nullptr, rasm_camera{1}) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(rasm_render_graph_dump(nullptr, nullptr, 0) == 0);
+
+    const uint32_t words[4] = {};
+    CHECK(rasm_cmd_bind_pipeline(nullptr, rasm_pipeline{1}) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(contains(rasm_get_last_error(), "commands is NULL"));
+    CHECK(rasm_cmd_push_constants(nullptr, words, sizeof(words), 0) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(rasm_cmd_draw(nullptr, 3, 1) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(rasm_cmd_dispatch(nullptr, 1, 1, 1) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(rasm_cmd_memory_barrier(nullptr, RASM_PIPELINE_STAGE_COMPUTE, RASM_PIPELINE_STAGE_COMPUTE) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(rasm_cmd_begin_gpu_timer(nullptr, "timer") == RASM_INVALID_INDEX);
+    CHECK(rasm_cmd_end_gpu_timer(nullptr, 0) == RASM_ERROR_INVALID_ARGUMENT);
+    rasm_pass_info info = {.size = sizeof(rasm_pass_info)};
+    CHECK(rasm_cmd_get_info(nullptr, &info) == RASM_ERROR_INVALID_ARGUMENT);
+
+    CHECK(rasm_create_buffer(nullptr, &buffer).id == 0);
+    CHECK(contains(rasm_get_last_error(), "renderer is NULL"));
+    CHECK(rasm_write_buffer(nullptr, rasm_buffer{1}, words, sizeof(words), 0) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(rasm_get_buffer_device_address(nullptr, rasm_buffer{1}) == 0);
+    CHECK(rasm_create_pipeline(nullptr, &pipeline).id == 0);
+    CHECK(rasm_get_bindless_texture_index(nullptr, rasm_texture{1}) == RASM_INVALID_INDEX);
+    CHECK(rasm_get_render_target_color(nullptr, rasm_render_target{1}, 0).id == 0);
+    CHECK(rasm_get_previous_render_target_color(nullptr, rasm_render_target{1}, 0).id == 0);
+    CHECK(rasm_get_gpu_timer_count(nullptr) == 0);
+    CHECK(rasm_get_gpu_timer_ms(nullptr, 0) == 0.0f);
 }

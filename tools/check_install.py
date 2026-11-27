@@ -17,6 +17,7 @@ Exit code 0 when everything passes.
 """
 
 import argparse
+import glob
 import os
 import re
 import shutil
@@ -143,6 +144,10 @@ def main():
         command = [sys.executable, os.path.join(REPO, "tests", "c_api", "ctypes_smoke.py"), libraries["rasm_c"]]
         if args.validation:
             command.append("--validation")
+        # vcpkg's slangc, which the shader-slang port installs, for the SPIR-V pipeline path.
+        slangc = glob.glob(os.path.join(REPO, "build", args.preset, "vcpkg_installed", "*", "tools", "shader-slang", "slangc*"))
+        if slangc:
+            command += ["--slangc", slangc[0]]
         # The validation layer prints through vk-bootstrap's messenger, not RASM's log, so its lines are read here.
         print("+ " + " ".join(command), flush=True)
         result = subprocess.run(command, capture_output=True, text=True, errors="replace")

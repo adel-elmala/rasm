@@ -80,7 +80,7 @@ It offers a high-level API that puts a scene on screen in a few lines, a low-lev
 - Native window handles (Win32, Metal, X11, XCB, Wayland), several windows, several views per window, and render-to-texture.
 - Headless rendering with frame readback, for servers, tests and offline output.
 - Optional Dear ImGui integration, and camera controllers that your application drives.
-- A stable C API (`rasm_c.h`) as a shared library, for bindings in C, Python, C#, Rust or Zig.
+- A stable C API (`rasm_c.h`) as a shared library, for bindings in C, Python, C#, Rust or Zig, with render passes of their own written in those languages.
 
 ## Platform support
 
@@ -185,7 +185,7 @@ int main()
 
 ## Examples
 
-The [`examples/`](examples) folder has 31 programs, each built around one feature. Some highlights:
+The [`examples/`](examples) folder has 34 programs, each built around one feature. Some highlights:
 
 | Example | Shows |
 |---|---|
@@ -197,7 +197,7 @@ The [`examples/`](examples) folder has 31 programs, each built around one featur
 | [`13_skinning`](examples/13_skinning), [`14_morph_targets`](examples/14_morph_targets) | Skeletal animation and morph targets |
 | [`19_embedding`](examples/19_embedding), [`21_renderer`](examples/21_renderer) | RASM in your own window, or the renderer alone |
 | [`20_views`](examples/20_views) | Split screen, picture-in-picture and render-to-texture |
-| [`22_c_api`](examples/22_c_api) | The C API, from a program written in C |
+| [`22_c_api`](examples/22_c_api), [`33_c_render_graph`](examples/33_c_render_graph) | The C API, from a program written in C, and a frame built from C with passes of its own |
 | [`23_large_world`](examples/23_large_world) | A scene 6,370 km from the origin, with no jitter |
 | [`24_map_tiles`](examples/24_map_tiles), [`25_vector_map`](examples/25_vector_map) | Streamed terrain, vector tiles and labels |
 | [`26_picking`](examples/26_picking) | Hover and click picking with world positions |

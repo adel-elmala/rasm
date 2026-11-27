@@ -705,6 +705,28 @@ namespace rasm
         return ctx.createPipeline({.name = "Compute Pipeline for " + name, .computeShader = shader, .descriptorSetLayout = bindlessDescriptorSetLayout});
     }
 
+    ShaderHandle Renderer::createShader(const std::string &name, const std::string &shaderSource, ShaderType type, const std::string &entryPoint)
+    {
+        ZoneScoped;
+
+        const char *suffix = type == ShaderType::VERTEX ? ".vert" : type == ShaderType::FRAGMENT ? ".frag"
+                                                                : type == ShaderType::COMPUTE    ? ".comp"
+                                                                : type == ShaderType::TASK       ? ".task"
+                                                                                                 : ".mesh";
+        if (type == ShaderType::VERTEX_FRAGMENT || type == ShaderType::ALL)
+        {
+            spdlog::error("Shader '{}' needs one stage: VERTEX, FRAGMENT, COMPUTE, TASK or MESH.", name);
+            return {};
+        }
+        auto compiled = shaderCompiler->compileFromString(shaderSource, name + suffix + ".slang", entryPoint);
+        if (compiled.code.empty())
+        {
+            spdlog::error("Failed to compile entry point '{}' of shader '{}'.", entryPoint, name);
+            return {};
+        }
+        return ctx.createShader({.name = name + suffix, .type = type, .entryPoint = entryPoint, .code = std::move(compiled.code)});
+    }
+
     // Recreates each window's swapchain when the window changed size or it is out of date. Returns false when no
     // window can show anything: each is minimized or zero-sized (B5), or its recreation failed. Renderer::render polls and
     // calls it before beginFrame, so its views take a window's new size in the same frame.

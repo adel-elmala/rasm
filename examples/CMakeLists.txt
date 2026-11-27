@@ -39,6 +39,12 @@ if (RASM_C_API)
     if (UNIX AND NOT APPLE)
         target_link_libraries(22_c_api PRIVATE m)
     endif()
+    # Its own frame from C: RASM's passes and three of its own, through the render graph.
+    rasm_add_example(33_c_render_graph rasm::c)
+    set_target_properties(33_c_render_graph PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    if (UNIX AND NOT APPLE)
+        target_link_libraries(33_c_render_graph PRIVATE m)
+    endif()
 endif()
 # Calls ImGui itself, so it needs a rasm with Dear ImGui.
 if (RASM_IMGUI)

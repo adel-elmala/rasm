@@ -5,6 +5,13 @@
 /* Built twice, as strict C99 and as C11, against rasm_c_renderer: the header is plain C, and the renderer library has
  * every renderer function. It runs as a test, so its few calls must pass too. */
 
+/* A pass callback as C writes one: it records through the commands it is given. */
+static void RASM_CALL recordNothing(void *userData, rasm_commands *commands)
+{
+    (void)userData;
+    rasm_cmd_draw(commands, 3, 1);
+}
+
 int main(void)
 {
     rasm_renderer_config config;
@@ -54,6 +61,11 @@ int main(void)
     float speeds[2] = {0.0f, 1.0f};
     rasm_export_desc exportDesc;
     rasm_export_progress exportProgress;
+    rasm_pass_desc passDesc;
+    rasm_pass_resource passResource = {RASM_PASS_ACCESS_WRITE_SWAPCHAIN, 0, 0};
+    rasm_pipeline_desc pipelineDesc;
+    rasm_buffer_desc bufferDesc;
+    rasm_render_graph *graph = NULL;
 
     if (rasm_get_version() != RASM_C_API_VERSION)
         return 1;
@@ -156,6 +168,15 @@ int main(void)
         rasm_export_progress_init(&exportProgress, sizeof(exportProgress)) != RASM_OK || rasm_export_view(NULL, &views[0], &exportDesc).id != 0 ||
         rasm_get_export_progress(NULL, rasm_export_view(NULL, &views[0], &exportDesc), &exportProgress) != RASM_ERROR_INVALID_ARGUMENT || RASM_EXPORT_STATE_FAILED != 2)
         return 30;
+    if (rasm_pass_desc_init(&passDesc, sizeof(passDesc)) != RASM_OK || rasm_pipeline_desc_init(&pipelineDesc, sizeof(pipelineDesc)) != RASM_OK ||
+        rasm_buffer_desc_init(&bufferDesc, sizeof(bufferDesc)) != RASM_OK || pipelineDesc.depth_test != RASM_TRUE || bufferDesc.usage != RASM_BUFFER_USAGE_STORAGE)
+        return 31;
+    passDesc.execute = recordNothing;
+    passDesc.resources = &passResource;
+    passDesc.resource_count = 1;
+    if (rasm_render_graph_create(NULL, &graph) != RASM_ERROR_INVALID_ARGUMENT || graph != NULL || rasm_render_graph_add_pass(graph, &passDesc) != RASM_ERROR_INVALID_ARGUMENT ||
+        rasm_cmd_draw(NULL, 3, 1) != RASM_ERROR_INVALID_ARGUMENT || RASM_PUSH_CONSTANTS_SIZE != 16 || sizeof(rasm_pass_resource) != 16)
+        return 32;
     printf("rasm_c.h %u.%u compiles as C (__STDC_VERSION__ %ld) and links rasm_c_renderer.\n", RASM_C_API_VERSION_MAJOR, RASM_C_API_VERSION_MINOR, (long)__STDC_VERSION__);
     return 0;
 }

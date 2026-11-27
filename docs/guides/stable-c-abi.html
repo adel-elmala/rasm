@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>A Stable C ABI · RASM</title>
 <meta name="description" content="Why a C++ library has no stable binary interface, and how a C facade gives one: extern C, opaque pointers, handles as integers, fixed-size types, structs with a size field, error codes instead of exceptions, clear memory ownership, exported symbols, version rules, and how RASM does it.">
-<meta name="rasm-sources" content="include/rasm/rasm_c.h src/c/cApi.h src/c/cApi.cpp src/c/cRenderer.cpp src/c/cScene.cpp src/c/cInput.cpp src/c/cViews.cpp src/c/cAnimation.cpp src/c/cTiles.cpp src/c/cLoader.cpp tests/cApiHeaderCheck.c include/rasm/handle.h src/core/handle.cpp src/platform/paths.cpp src/CMakeLists.txt cmake/RasmInstall.cmake examples/22_c_api/main.c tests/cApiTests.cpp tests/cApiHandleTests.cpp tests/c_api/ctypes_smoke.py tools/check_install.py">
+<meta name="rasm-sources" content="include/rasm/rasm_c.h src/c/cApi.h src/c/cApi.cpp src/c/cRenderer.cpp src/c/cScene.cpp src/c/cInput.cpp src/c/cViews.cpp src/c/cAnimation.cpp src/c/cTiles.cpp src/c/cLoader.cpp src/c/cGraph.cpp src/c/cResources.cpp examples/33_c_render_graph/main.c tests/cApiHeaderCheck.c include/rasm/handle.h src/core/handle.cpp src/platform/paths.cpp src/CMakeLists.txt cmake/RasmInstall.cmake examples/22_c_api/main.c tests/cApiTests.cpp tests/cApiHandleTests.cpp tests/c_api/ctypes_smoke.py tools/check_install.py">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -43,6 +43,7 @@
     <li>A struct that may grow starts with its <b>size</b>, so an old program and a new library agree on what each one knows.</li>
     <li>No exception crosses the line: errors become <b>codes</b> and a per-thread <b>last error</b>.</li>
     <li>Memory stays with whoever made it: inputs are borrowed for the call, outputs go into the caller's buffers.</li>
+    <li>A <b>callback</b> is a C function pointer and a <code>user_data</code>; what the library hands it lives only during the call, on the caller's thread, and it must return normally.</li>
     <li>A version number and the rule "only add at the end" keep old binaries working.</li>
   </ul>
 </div>
@@ -296,13 +297,62 @@
   </div>
 </div>
 
-<h2 id="symbols"><span class="n">8</span>One library, one set of names</h2>
+<h2 id="callbacks"><span class="n">8</span>Callbacks: the library calls you</h2>
+
+<p>Some work happens inside the library, at a time only the library knows: a render pass records its commands while the library builds the frame. The caller gives a <b>callback</b>: a plain C function pointer and a <code>void* user_data</code>, which the library passes back on every call. Each language can make such a pointer: Python's <samp>ctypes.CFUNCTYPE</samp>, C#'s <samp>Marshal.GetFunctionPointerForDelegate</samp> or <samp>[UnmanagedCallersOnly]</samp>, Rust's <code>extern "C" fn</code>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Time goes to the right. Your code calls execute; the library records the frame; twice it calls your pass callback, which records commands through a handle. The handle is valid only while a callback runs; before, between and after, a call with it is refused. Everything runs on the thread that called execute.">
+    <text x="20" y="22" class="small t-faint">time →</text>
+    <text x="20" y="62" class="small">your code</text>
+    <text x="20" y="132" class="small">library</text>
+    <text x="20" y="200" class="small">command handle</text>
+    <rect x="120" y="42" width="90" height="34" rx="5" class="cpu"/><text x="165" y="63" class="mid small">your loop</text>
+    <line x1="200" y1="76" x2="200" y2="108" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="194" y="98" class="end small mono">execute(graph)</text>
+    <rect x="200" y="112" width="440" height="34" rx="5" class="shader"/>
+    <text x="250" y="133" class="small">records the frame</text>
+    <rect x="285" y="42" width="140" height="34" rx="5" class="cpu"/><text x="355" y="58" class="mid small">pass A</text><text x="355" y="71" class="mid small mono">callback(ud, cmd)</text>
+    <rect x="455" y="42" width="140" height="34" rx="5" class="cpu"/><text x="525" y="58" class="mid small">pass B</text><text x="525" y="71" class="mid small mono">callback(ud, cmd)</text>
+    <line x1="295" y1="112" x2="295" y2="79" class="arrow" marker-end="url(#ah)"/>
+    <line x1="415" y1="76" x2="415" y2="109" class="arrow" marker-end="url(#ah)"/>
+    <line x1="465" y1="112" x2="465" y2="79" class="arrow" marker-end="url(#ah)"/>
+    <line x1="585" y1="76" x2="585" y2="109" class="arrow" marker-end="url(#ah)"/>
+    <line x1="640" y1="112" x2="650" y2="79" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="650" y="42" width="90" height="34" rx="5" class="cpu"/><text x="695" y="63" class="mid small">your loop</text>
+    <line x1="120" y1="196" x2="285" y2="196" class="dashed"/>
+    <rect x="285" y="182" width="140" height="28" rx="4" class="mem"/><text x="355" y="200" class="mid small">valid</text>
+    <line x1="425" y1="196" x2="455" y2="196" class="dashed"/>
+    <rect x="455" y="182" width="140" height="28" rx="4" class="mem"/><text x="525" y="200" class="mid small">valid</text>
+    <line x1="595" y1="196" x2="740" y2="196" class="dashed"/>
+    <text x="210" y="226" class="mid small t-hot">refused</text>
+    <text x="440" y="226" class="mid small t-hot">refused</text>
+    <text x="660" y="226" class="mid small t-hot">refused</text>
+  </svg>
+  <figcaption>One call of <samp>execute</samp>: the library calls back into your code once per pass, on your thread, and the command handle it gives is live only inside that call. A kept handle used later is refused, not a crash.</figcaption>
+</figure>
+
+<p>A callback crosses the line in the other direction, so the same rules hold the other way round, and a few more:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Rule</th><th>Why</th></tr>
+  <tr><td>The callback returns normally: no C++ exception, no <samp>longjmp</samp>, no Rust panic leaves it.</td><td>The library's own frames sit between the caller's: unwinding through them skips its cleanup. Rust's <samp>catch_unwind</samp> and Python's ctypes (which prints the exception and returns) stop it at the line.</td></tr>
+  <tr><td>Handles given to the callback live only during the call.</td><td>A command list belongs to the frame being recorded. The library marks it live before the call and dead after, so a stale handle is a refused call.</td></tr>
+  <tr><td>The callback runs on the thread that made the outer call, inside it.</td><td>No hidden threads: a binding with a global lock (Python's GIL) already holds it.</td></tr>
+  <tr><td>Calls that would start a frame, change what is being recorded or free the library are refused inside a callback.</td><td><b>Re-entrancy</b>: the library is in the middle of a call. A flag set around the outer call turns such a call into an error code.</td></tr>
+  <tr><td>The function pointer and <code>user_data</code> stay valid as long as the library may call them.</td><td>A garbage collector frees a delegate or a <samp>CFUNCTYPE</samp> object nobody references: keep it beside the object that holds the callback.</td></tr>
+  <tr><td>The callback's own calls report errors like any call.</td><td>The outer call can then report that something failed while it ran.</td></tr>
+</table>
+</div>
+
+<h2 id="symbols"><span class="n">9</span>One library, one set of names</h2>
 
 <p>A shared library for bindings is usually built from static libraries, so it holds the whole C++ engine and every dependency. Only the C functions should leave it: everything else is hidden. Windows exports only what is marked <code>__declspec(dllexport)</code>; on macOS a linker list (<code>-exported_symbol,_mylib_*</code>) and on Linux <code>--exclude-libs,ALL</code> with hidden visibility do the same. Hidden symbols cannot clash with another copy of the same third-party library in the host process.</p>
 
 <p>The library must also find its own files. A relative path resolved against the <i>executable</i> points beside <samp>python.exe</samp> under Python. So the library resolves relative paths against <b>its own folder</b> (the module that holds the code: <code>GetModuleHandleExW</code> with an address on Windows, <code>dladdr</code> on POSIX), and its data, such as shaders, is installed beside it.</p>
 
-<h2 id="versions"><span class="n">9</span>Versions</h2>
+<h2 id="versions"><span class="n">10</span>Versions</h2>
 
 <div class="callout rule">
   <strong>Within one major version, only add at the end</strong>
@@ -316,7 +366,7 @@
 
 <p>The header carries its version as <code>major &lt;&lt; 16 | minor</code>, and the library reports its own. The creation call takes the caller's version and refuses a different major version, or a newer minor one: that program may call functions or set fields this library does not have. An old minor version is fine; that is what the size fields are for.</p>
 
-<h2 id="pitfalls"><span class="n">10</span>Pitfalls</h2>
+<h2 id="pitfalls"><span class="n">11</span>Pitfalls</h2>
 
 <dl class="pitfalls">
   <div><dt>A binding crashes in a call that works from C</dt><dd>Its struct does not match the header: a missing field, a 1-byte <code>bool</code>, a wrong order. Copy every field in order, and test the binding in CI.</dd></div>
@@ -324,10 +374,12 @@
   <div><dt>The process aborts with "terminate called"</dt><dd>An exception left a C function. Wrap every entry point in a <code>try</code> that catches everything.</dd></div>
   <div><dt>A heap corruption on free</dt><dd>One side freed the other side's memory. Pair every create with the library's destroy.</dd></div>
   <div><dt>The library finds no data files under Python</dt><dd>Relative paths resolved against the executable. Resolve them against the library's own folder.</dd></div>
+  <div><dt>A callback crashes after a while, from Python or C#</dt><dd>The garbage collector freed the callback object, and the library called a dangling pointer. Keep the object as long as the library holds the function.</dd></div>
+  <div><dt>A command recorded later lands in the wrong frame</dt><dd>A handle the callback got was kept and used after the call. Use what a callback gets only inside it.</dd></div>
   <div><dt>Two copies of a library in one process mix their functions</dt><dd>Both export the same names. Link one, and export only your own prefix.</dd></div>
 </dl>
 
-<h2 id="in-rasm"><span class="n">11</span>In RASM</h2>
+<h2 id="in-rasm"><span class="n">12</span>In RASM</h2>
 
 <p>RASM's facade is <code>include/rasm/rasm_c.h</code>, one header over two shared libraries: <code>rasm_c</code> (the renderer, the <code>Engine</code> and the <code>AssetLoader</code>) and <code>rasm_c_renderer</code> (the renderer alone). The C layer is <code>src/c/</code>; the reference is <a href="../api/c-api.html">the C API page</a>.</p>
 
@@ -371,7 +423,8 @@
   <tr><td>Enums and booleans</td><td><code>uint32_t</code></td><td>The same. A <code>static_assert</code> in <code>src/c/cApi.cpp</code> ties every C constant to its C++ enum value, so a reordered C++ enum fails the build.</td></tr>
   <tr><td>Growing structs</td><td>a size field and init functions</td><td>The same: <code>rasm_renderer_config</code>, <code>rasm_engine_config</code>, <code>rasm_asset_loader_config</code>, <code>rasm_light_desc</code>, <code>rasm_material_desc</code>, <code>rasm_texture_desc</code>, <code>rasm_scene_environment</code>, <code>rasm_camera_projection</code>; in 1.1 also <code>rasm_view</code>, <code>rasm_input_event</code>, <code>rasm_camera_input</code>, <code>rasm_camera_controller</code>, <code>rasm_window_desc</code>, <code>rasm_window_info</code>, <code>rasm_render_target_desc</code>, <code>rasm_animation_play</code> and the stats. The sizes of the version that added a struct are the smallest a caller may pass.</td></tr>
   <tr><td>Errors</td><td>codes and a per-thread last error</td><td><code>rasm_result</code>, <code>rasm_get_last_error</code>, and <code>rasm_set_log_callback</code>. RASM's <code>spdlog::error</code> lines feed the last error too.</td></tr>
-  <tr><td>Versions</td><td>refuse another major, or a newer minor</td><td>The same, in <code>rasm_renderer_create</code> and <code>rasm_engine_create</code>: <code>RASM_ERROR_VERSION</code>. 1.1 appended windows, input, views, render targets, camera helpers, animation and stats to 1.0. 1.2 appended positions in doubles: new small structs (<code>rasm_dvec3</code>, <code>rasm_transform_d</code>) with new functions beside the float ones, since a small struct never grows, and fields at the end of the sized structs (<code>position_d</code>, <code>track_ball_center_d</code>) that add to the float field, so a 1.1 program, whose size stops before them, gets the float position plus 0. 1.3 appended tile streaming: an opaque <code>rasm_tile_streamer</code>, a handle <code>rasm_tile</code>, new sized structs, and <code>max_bindless_textures</code> at the end of <code>rasm_renderer_config</code>, so an older program's renderer gets the default. 1.4 appended terrain tiles: a new sized struct <code>rasm_terrain_tile_desc</code>, two small ones, two formats and a material type at the ends of their enums, and <code>terrain</code> at the end of <code>rasm_material_desc</code>, so an older program's material update keeps the material's terrain. 1.5 appended meshes built on any thread and vector features: two opaque objects (<code>rasm_mesh_build</code>, <code>rasm_vector_geometry</code>), three sized structs, a material type and <code>vector</code> at the end of <code>rasm_material_desc</code>. 1.6 appended fonts and labels: an opaque <code>rasm_font_atlas</code>, a handle <code>rasm_font</code>, two sized structs (<code>rasm_label_desc</code> read as an array that steps by the first element's size), a format, and <code>font</code> at the end of <code>rasm_material_desc</code>, after <code>vector</code>, so an older program's material update keeps the material's font. 1.7 appended picking: a handle <code>rasm_pick</code>, two sized structs (<code>rasm_pick_hit</code> written as an array that steps by the first element's size, so a newer library fills only the fields an older program knows) and a format. 1.8 appended orthographic controls and reference grids: two sized structs (<code>rasm_camera_buttons</code>, <code>rasm_grid</code>), an enum, and <code>pan_start</code>, <code>pan_end</code> and <code>pointer</code> at the end of <code>rasm_camera_input</code>, so a 1.7 program's input has no pan and zooms at the view's centre. <code>rasm_camera_controller</code> gained <code>track_ball_style</code> and <code>track_ball_up</code>, and <code>rasm_input_event</code> <code>dx</code> and <code>dy</code>, at their ends. Three behaviours changed with it: a trackball orbits as a turntable by default, its wheel scales the radius by 0.9 a step instead of subtracting it, and the default button map pans with the right and middle buttons and Shift + left, where every button orbited before; <code>rasm_set_camera_buttons</code> with every button <code>RASM_CAMERA_DRAG_ORBIT</code> brings the old drag back.</td></tr>
+  <tr><td>Versions</td><td>refuse another major, or a newer minor</td><td>The same, in <code>rasm_renderer_create</code> and <code>rasm_engine_create</code>: <code>RASM_ERROR_VERSION</code>. 1.1 appended windows, input, views, render targets, camera helpers, animation and stats to 1.0. 1.2 appended positions in doubles: new small structs (<code>rasm_dvec3</code>, <code>rasm_transform_d</code>) with new functions beside the float ones, since a small struct never grows, and fields at the end of the sized structs (<code>position_d</code>, <code>track_ball_center_d</code>) that add to the float field, so a 1.1 program, whose size stops before them, gets the float position plus 0. 1.3 appended tile streaming: an opaque <code>rasm_tile_streamer</code>, a handle <code>rasm_tile</code>, new sized structs, and <code>max_bindless_textures</code> at the end of <code>rasm_renderer_config</code>, so an older program's renderer gets the default. 1.4 appended terrain tiles: a new sized struct <code>rasm_terrain_tile_desc</code>, two small ones, two formats and a material type at the ends of their enums, and <code>terrain</code> at the end of <code>rasm_material_desc</code>, so an older program's material update keeps the material's terrain. 1.5 appended meshes built on any thread and vector features: two opaque objects (<code>rasm_mesh_build</code>, <code>rasm_vector_geometry</code>), three sized structs, a material type and <code>vector</code> at the end of <code>rasm_material_desc</code>. 1.6 appended fonts and labels: an opaque <code>rasm_font_atlas</code>, a handle <code>rasm_font</code>, two sized structs (<code>rasm_label_desc</code> read as an array that steps by the first element's size), a format, and <code>font</code> at the end of <code>rasm_material_desc</code>, after <code>vector</code>, so an older program's material update keeps the material's font. 1.7 appended picking: a handle <code>rasm_pick</code>, two sized structs (<code>rasm_pick_hit</code> written as an array that steps by the first element's size, so a newer library fills only the fields an older program knows) and a format. 1.8 appended orthographic controls and reference grids: two sized structs (<code>rasm_camera_buttons</code>, <code>rasm_grid</code>), an enum, and <code>pan_start</code>, <code>pan_end</code> and <code>pointer</code> at the end of <code>rasm_camera_input</code>, so a 1.7 program's input has no pan and zooms at the view's centre. <code>rasm_camera_controller</code> gained <code>track_ball_style</code> and <code>track_ball_up</code>, and <code>rasm_input_event</code> <code>dx</code> and <code>dy</code>, at their ends. Three behaviours changed with it: a trackball orbits as a turntable by default, its wheel scales the radius by 0.9 a step instead of subtracting it, and the default button map pans with the right and middle buttons and Shift + left, where every button orbited before; <code>rasm_set_camera_buttons</code> with every button <code>RASM_CAMERA_DRAG_ORBIT</code> brings the old drag back. 1.17 appended the render graph: opaque <code>rasm_render_graph</code> and <code>rasm_commands</code>, handles <code>rasm_buffer</code>, <code>rasm_pipeline</code> and <code>rasm_shadow</code>, a callback type, six sized structs, and seven fields at the end of <code>rasm_render_target_desc</code> (<code>swapchain_scale</code> to <code>cube</code>), so a 1.16 program's target keeps one color, no depth and one sample.</td></tr>
+  <tr><td>Callbacks</td><td>a function pointer, <code>user_data</code>, handles live during the call</td><td><code>rasm_pass_callback</code> of a pass of a <code>rasm_render_graph</code> (1.17), called from <code>rasm_render_graph_execute</code> on its thread. Its <code>rasm_commands</code> is one object per graph, made with it, marked active only during the call: a <code>rasm_cmd_</code> call outside it, or one that does not fit the pass, returns <code>RASM_ERROR_INVALID_ARGUMENT</code>. While a graph records, <code>rasm_render</code>, <code>rasm_render_views</code>, graph changes, resizing or destroying a render target, destroying a buffer or a texture, windows and destroying the renderer are refused (<code>checkNotRecording</code>). A refused call inside a callback makes <code>execute</code> return <code>RASM_ERROR_FAILED</code>. Destroying the renderer detaches its graphs: their calls fail, and <code>rasm_render_graph_destroy</code> still frees them.</td></tr>
   <tr><td>Arrays of sized structs</td><td>step by the first element's size</td><td><code>rasm_render_views</code> does, and refuses an element of another size. Input events go the other way one at a time, by index, so the library never writes past an array of a size it does not know.</td></tr>
   <tr><td>Exports</td><td>only the C names</td><td>Only <code>rasm_*</code>; <code>tools/check_install.py</code> checks the export tables in CI.</td></tr>
   <tr><td>Data files</td><td>beside the library</td><td>Relative paths resolve against the folder of the binary that holds RASM: the executable for a static C++ program, the shared library for the C API (<code>setBaseModule</code> in <code>src/platform/paths.cpp</code>). The install puts <samp>shaders/</samp> beside the libraries.</td></tr>
@@ -389,11 +442,13 @@
   <tr><td>Scenes, entities, meshes, materials, textures, lights, cameras</td><td><code>src/c/cScene.cpp</code></td></tr>
   <tr><td>Windows, input events, camera controllers, rigs and input states</td><td><code>src/c/cInput.cpp</code></td></tr>
   <tr><td>Views and render targets</td><td><code>src/c/cViews.cpp</code></td></tr>
+  <tr><td>The render graph, pass callbacks and commands</td><td><code>src/c/cGraph.cpp</code></td></tr>
+  <tr><td>Buffers, pipelines, bindless slots, GPU timers</td><td><code>src/c/cResources.cpp</code></td></tr>
   <tr><td>Animation and morph weights</td><td><code>src/c/cAnimation.cpp</code></td></tr>
   <tr><td>Engine and asset loader (<code>rasm_c</code> only)</td><td><code>src/c/cLoader.cpp</code></td></tr>
   <tr><td>The two shared libraries, their exports</td><td><code>src/CMakeLists.txt</code>; install in <code>cmake/RasmInstall.cmake</code></td></tr>
   <tr><td>Tests</td><td><code>tests/cApiTests.cpp</code> (links only <code>rasm_c</code>), <code>tests/cApiHandleTests.cpp</code>, <code>tests/cApiHeaderCheck.c</code> (C99 and C11), <code>tests/c_api/ctypes_smoke.py</code>, <code>tools/check_install.py</code></td></tr>
-  <tr><td>The example</td><td><code>examples/22_c_api/main.c</code></td></tr>
+  <tr><td>The examples</td><td><code>examples/22_c_api/main.c</code>; <code>examples/33_c_render_graph/main.c</code> (a frame of its own with C passes)</td></tr>
 </table>
 </div>
 
@@ -403,6 +458,7 @@
     <li>Change <code>rasm_c.h</code> only by adding at the end, and bump <code>RASM_C_API_VERSION_MINOR</code> when you do.</li>
     <li>A new field of a C++ config or desc that C shows goes at the end of its C struct, into the <code>toC</code> and <code>toCpp</code> conversions in <code>src/c/cApi.cpp</code>, and into <code>tests/c_api/ctypes_smoke.py</code>'s copy of the struct.</li>
     <li>Every entry point is a function try block that ends with <code>RASM_C_CATCH</code>, and uses only types from <code>rasm_c.h</code> in its signature.</li>
+    <li>A new entry point that starts a frame, changes a graph or frees what a frame uses calls <code>checkNotRecording</code>.</li>
     <li>A new value of a C++ enum that C shows gets a C constant and its <code>static_assert</code>.</li>
   </ul>
 </div>
