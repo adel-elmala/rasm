@@ -263,7 +263,10 @@ ResolveOutput resolveFrag(ResolveVertex input)
     if (colormapAt == POINT_OUT_OF_RANGE)
         color = float4(0.0);
     if (color.a <= 0.0)
+    {
         discard;
+        return (ResolveOutput)0;
+    }
     ResolveOutput output;
     output.color            = color;
 #if defined(RASM_MOTION_VECTORS)

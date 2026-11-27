@@ -1464,7 +1464,9 @@ namespace
         {.name = "export_labels_single", .build = buildLabels, .sameAs = "export_labels", .exportTile = 4096},
         {.name = "export_weighted", .build = buildWeighted,    .exportTile = 128},
         {.name = "export_weighted_single", .build = buildWeighted, .sameAs = "export_weighted", .exportTile = 4096},
-        // After export_weighted, whose scene left instance row 0 to a mesh, which the point resolve read (B39).
+        // B39's test, in this order: export_weighted leaves its sphere in instance row 0 and its glyph chunk first in
+        // the point pool, which the point resolve's empty pixels read as a point chunk before the fix. Run alone it
+        // passed on the old shader too.
         {.name = "export_points", .build = buildPoints,        .exportTile = 128},
         {.name = "export_points_single", .build = buildPoints, .sameAs = "export_points", .exportTile = 4096},
         {.name = "export_grid",   .build = buildGrid,          .exportTile = 128},
