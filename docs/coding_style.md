@@ -138,6 +138,8 @@ Deliberate exceptions:
 - Shaders output **linear** color. sRGB encoding is done by the attachment format.
 - Texture access checks `hasTexture(index)` before sampling, and glTF default values apply when a texture is absent.
 - `discard` demotes the lane to a helper (`OpDemoteToHelperInvocation`): the Slang session adds the `spvDemoteToHelperInvocation` capability, so every `discard` compiles to it. A demoted lane stays in its 2x2 quad, so samples and derivatives after a cut-out's `discard` keep defined values; after `OpKill` they would not (`B33`). Never write a `discard` that must end the invocation (a terminate) in a shader that samples or takes derivatives after it.
+- A demoted lane, and a helper lane, runs the code after it and does its loads. When what follows reads through values the lane's own data gives (a word of a buffer, an id, an offset), write `discard; return ...;` so it stops there, and give a helper lane outside the pass's data a value it may follow: `resolveFrag` in `pointRaster.slang` (`B39`).
+- A pointer a loop reads is valid even when the loop's count is 0: lavapipe runs a loop's body once with no lane on, and a load of a uniform address there still reads memory. A shaded view's `SceneData::sceneLightsPtr` points at the light table (row 0 is zero) when the scene has no light, and each scene's list ends with a 0 for the local loop of a scene with only global lights (`B38`).
 - Keep backend-specific code (`spirv_asm`, `vk::` attributes, raw pointers) behind small helper functions in one module, so that other targets can provide alternatives (`D12`).
 
 ## 10. Commits
