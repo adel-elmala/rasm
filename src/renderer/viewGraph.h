@@ -35,6 +35,20 @@ namespace rasm
         bool                        used                = false;    // in the list the graph was built from
     };
 
+    // The maps of a light's shadows of one size and count, kept from one graph to the next. Views of different cameras
+    // draw them in turn, each from its own camera before its scene passes read them, so a set costs its memory once
+    // whatever the number of views.
+    struct ShadowSet
+    {
+        LightHandle                 light;
+        uint32_t                    size                = 0;
+        uint32_t                    mapCount            = 0;
+        bool                        cube                = false;
+        RenderTargetHandle          maps[MAX_SHADOW_CASCADES] = {};
+        uint32_t                    number              = 0;        // names its maps: shadow_cascade_0 for 0, shadow_cascade_0_1, ... for the others
+        std::vector<CameraHandle>   cameras;                        // the cameras whose views draw it in the graph being built
+    };
+
     class ViewGraph
     {
     public:
@@ -42,7 +56,7 @@ namespace rasm
         void                        render(const View* views, uint32_t viewCount);
         // Lets go of its graph and of the views of this scene or camera, so they can be destroyed.
         void                        release(SceneHandle scene, CameraHandle camera);
-        // Its graph holds the scene view of this scene and camera into this target.
+        // Its graph holds the scene view of this scene and camera into this target: a view's scene target or shadow map.
         bool                        draws(SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget) const;
         // The scene target the graph draws the view into (its HDR target), or invalid when it does not draw the view.
         RenderTargetHandle          getSceneTarget(const View& view) const;
@@ -50,6 +64,7 @@ namespace rasm
     private:
         void                        build(const View* views, uint32_t viewCount);
         bool                        addView(RenderGraph& graph, const View& view, glm::uvec2 size);
+        const RenderTargetHandle*   getShadowMaps(const ShadowDesc& desc, CameraHandle camera);
         void                        destroyState(ViewState& state);
 
         Renderer&                           renderer;
@@ -58,6 +73,7 @@ namespace rasm
         std::vector<glm::uvec2>             graphSizes;             // each view's size in pixels then
         std::vector<glm::uvec2>             sizes;                  // this frame's, compared with graphSizes
         std::vector<ViewState>              states;
+        std::vector<ShadowSet>              shadowSets;
         std::vector<RenderTargetHandle>     textures;               // the view textures added so far, which later views sample
         bool                                built       = false;
         uint64_t                            exportKey   = 0;        // Exports::graphKey of the graph's export passes

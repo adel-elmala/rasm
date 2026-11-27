@@ -4,6 +4,7 @@
 #include "rasm/types.h"
 #include "rasm/handle.h"
 #include "rasm/cameraInput.h"
+#include "rasm/scene.h"
 #include "rasm/window.h"
 
 #include <cstdint>
@@ -41,7 +42,9 @@ namespace rasm
         ON,
     };
 
-    // One view of Engine::render(views, count): a camera's picture of a scene, tone mapped into its output.
+    // One view of Engine::render(views, count): a camera's picture of a scene, tone mapped into its output. Its first
+    // shadowCount shadows are drawn for it each frame, fitted to its camera (each map takes a scene view); views of one
+    // light with the same map size and count draw into one set of maps in turn.
     struct View
     {
         SceneHandle         scene;
@@ -49,6 +52,8 @@ namespace rasm
         ViewOutput          output          = {};
         ViewToggle          bloom           = ViewToggle::DEFAULT;      // DEFAULT: EngineConfig::bloom
         AntiAliasing        antiAliasing    = AntiAliasing::DEFAULT;    // DEFAULT: EngineConfig::antiAliasing
+        ShadowDesc          shadows[MAX_VIEW_SHADOWS] = {};             // lights of the scene, one shadow each
+        uint32_t            shadowCount     = 0;
 
         bool                operator==(const View&) const = default;
     };

@@ -62,7 +62,7 @@ namespace rasm
     namespace gfx { struct SceneData; }
 
     constexpr uint32_t MAX_CAMERAS          = 32;
-    constexpr uint32_t MAX_GPU_TIMERS       = 64;
+    constexpr uint32_t MAX_GPU_TIMERS       = 128;
     // Output formats the tone-map pass keeps pipelines for at once: the swapchain's and its view textures'.
     constexpr uint32_t MAX_TONE_MAP_FORMATS = 4;
 
@@ -277,6 +277,7 @@ namespace rasm
         // without a bindless slot gets one.
         uint64_t                    getUiTexture(const TextureHandle& texture);
         void                        setDebugView(DebugView view);
+        DebugView                   getDebugView() const;
         void                        setCullingFrozen(bool frozen);
         void                        setMeshletPath(MeshletPath path);
         MeshletPath                 getMeshletPath() const;
@@ -561,6 +562,7 @@ namespace rasm
         void                        addAnimationPass(RenderGraph& graph);
         void                        recordAnimation();
         void                        recordSkinning();
+        SceneShadow                 addShadowPasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const ShadowDesc& desc, const RenderTargetHandle* maps);
         bool                        addSceneViewPasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, uint32_t face, const SceneShadow* shadows, uint32_t shadowCount, bool depthOnly, const RenderTargetHandle* sampled, uint32_t sampledCount);
         uint32_t                    createSceneView(SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, uint32_t face, const SceneShadow* shadows, uint32_t shadowCount, bool depthOnly);
         void                        releaseSceneView(uint32_t view);

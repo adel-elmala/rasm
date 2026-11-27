@@ -1165,13 +1165,15 @@ namespace rasm
                     return false;
                 }
             }
-            // A directional light's cascades are fitted to the aspect ratio of the one view that reads them.
+            // A directional light's cascades are fitted to the aspect ratio of the one view of the camera that reads them.
+            // Views of other cameras may read the same maps: each draws them again from its own camera first, and the
+            // graph orders those draws after the readers before them.
             for (uint32_t heldView : graph.sceneViews)
             {
                 const SceneView &held = gpuScene->views[heldView];
-                if (!held.depthOnly && holdsShadow(held, shadow))
+                if (!held.depthOnly && held.camera == camera && holdsShadow(held, shadow))
                 {
-                    spdlog::error("addScenePasses: a shadow from addShadowPasses is read by one view only.");
+                    spdlog::error("addScenePasses: a shadow from addShadowPasses is read by one view of its camera only.");
                     return false;
                 }
             }
@@ -1200,6 +1202,13 @@ namespace rasm
     // light's cascades cover slices of the camera's view; a spot light's map looks along its cone; a point light's
     // cube is drawn by a view per face. The view that reads the shadow gets it from addScenePasses.
     SceneShadow Renderer::addShadowPasses(RenderGraph &graph, SceneHandle scene, CameraHandle camera, const ShadowDesc &desc)
+    {
+        return addShadowPasses(graph, scene, camera, desc, nullptr);
+    }
+
+    // maps: the shadow's maps, made by the caller for this light, size and count (the ViewGraph's, which views of other
+    // cameras draw too); null: new ones in the graph.
+    SceneShadow Renderer::addShadowPasses(RenderGraph &graph, SceneHandle scene, CameraHandle camera, const ShadowDesc &desc, const RenderTargetHandle *maps)
     {
         if (!isLive(camera))
         {
@@ -1231,20 +1240,36 @@ namespace rasm
             return {};
         }
 
-        // Each map, and each face of a cube, is a new view, so check for room before adding any, and leave no map
-        // without a reader.
+        SceneShadow shadow = {.light = desc.light, .mapCount = directional ? desc.cascadeCount : 1, .distance = desc.distance, .splitLambda = directional ? desc.splitLambda : 0.0f};
+        if (maps != nullptr)
+            std::copy(maps, maps + shadow.mapCount, shadow.maps);
+
+        // Each map, and each face of a cube, is a view, so check for room before adding any, and leave no map without a
+        // reader. A view another graph holds already (the same maps) needs none.
         const uint32_t viewCount = directional ? desc.cascadeCount : (type == LightType::POINT ? CUBE_FACES : 1);
+        uint32_t neededViews = viewCount;
+        for (uint32_t i = 0; maps != nullptr && i < viewCount; ++i)
+        {
+            const bool cube = type == LightType::POINT;
+            for (const SceneView &view : gpuScene->views)
+            {
+                if (view.graphs > 0 && view.depthOnly && view.scene == scene && view.camera == camera && view.renderTarget == shadow.maps[cube ? 0 : i] && view.face == (cube ? i : 0) && view.shadows[0] == shadow)
+                {
+                    --neededViews;
+                    break;
+                }
+            }
+        }
         uint32_t freeViews = 0;
         for (const SceneView &view : gpuScene->views)
             freeViews += view.graphs == 0 ? 1 : 0;
-        if (freeViews < viewCount)
+        if (freeViews < neededViews)
         {
-            spdlog::error("addShadowPasses needs {} free scene views, and {} of {} are free.", viewCount, freeViews, MAX_SCENE_VIEWS);
+            spdlog::error("addShadowPasses needs {} free scene views, and {} of {} are free.", neededViews, freeViews, MAX_SCENE_VIEWS);
             return {};
         }
 
-        SceneShadow shadow = {.light = desc.light, .mapCount = directional ? desc.cascadeCount : 1, .distance = desc.distance, .splitLambda = directional ? desc.splitLambda : 0.0f};
-        for (uint32_t i = 0; i < shadow.mapCount; ++i)
+        for (uint32_t i = 0; maps == nullptr && i < shadow.mapCount; ++i)
         {
             std::string name = "shadow_cascade_" + std::to_string(i);
             if (!directional)
@@ -1391,6 +1416,10 @@ namespace rasm
                     drawWeighted(view);
                 }
             });
+        // A shadow map starts empty for each view that draws it: the views of other cameras that share it drew theirs
+        // before (ViewGraph's shadow sets).
+        if (depthOnly)
+            graph.passes.back().clearsOutput = true;
         // See-through draws go over everything the draw passes and the sky left, so a shaded view ends with them. The
         // pass is there even while the scene has no blend run, since the graph is fixed and the scene is not. The
         // culling view's ghosts come last, and read the visibility the late pass left. Before it, the labels' anchors

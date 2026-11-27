@@ -145,6 +145,7 @@ namespace
         double fraction = 0.001;      // the test fails when more of the pixels than this differ
         bool views = false;           // drawn by Engine::render with the content's views instead of a graph
         bool secondWindow = false;    // a views test that reads the content's second window instead of the main one
+        bool viewShadows = false;     // a views test whose perspective views draw the sun's shadow, each fitted to its camera
         const char *sameAs = nullptr; // compare with this test's image of the same run instead of a golden
         bool picks = false;           // also checks the content's pick probes, and picks under the centre in the steady frames
         uint32_t exportTile = 0;      // drawn by Engine::exportView (4 samples, no bloom) in tiles of this size instead of a frame
@@ -1378,6 +1379,7 @@ namespace
         {.name = "materials",     .build = buildMaterials},
         {.name = "views",         .build = buildViews,         .views = true},
         {.name = "views_window2", .build = buildViews,         .views = true, .secondWindow = true},
+        {.name = "views_shadows", .build = buildViews,         .views = true, .viewShadows = true},
         {.name = "tile_streaming", .build = buildTiles},
         {.name = "terrain",       .build = buildTerrain},
         {.name = "vectors",       .build = buildVectors},
@@ -1705,13 +1707,16 @@ namespace
         engine.setComputePoints(test.computePoints);
 
         // A views test draws through Engine::render: the view texture first, then the split screen, the map, and the
-        // security camera in the second window.
+        // security camera in the second window. With viewShadows the perspective views draw the sun's shadow: the split
+        // screen's views share one set of maps, and the security camera's two views have a set each.
+        const rasm::ShadowDesc sunShadow = {.light = content->sun, .cascadeCount = 4, .size = 1024, .distance = 20.0f};
+        const uint32_t shadowCount = test.viewShadows ? 1 : 0;
         const rasm::View views[] = {
-            {.scene = content->scene, .camera = content->security, .output = {.target = content->viewTexture}},
-            {.scene = content->scene, .camera = camera, .output = {.rect = {.x = 0.0f, .y = 0.0f, .width = 0.5f, .height = 1.0f}}},
-            {.scene = content->scene, .camera = content->side, .output = {.rect = {.x = 0.5f, .y = 0.0f, .width = 0.5f, .height = 1.0f}}},
+            {.scene = content->scene, .camera = content->security, .output = {.target = content->viewTexture}, .shadows = {sunShadow}, .shadowCount = shadowCount},
+            {.scene = content->scene, .camera = camera, .output = {.rect = {.x = 0.0f, .y = 0.0f, .width = 0.5f, .height = 1.0f}}, .shadows = {sunShadow}, .shadowCount = shadowCount},
+            {.scene = content->scene, .camera = content->side, .output = {.rect = {.x = 0.5f, .y = 0.0f, .width = 0.5f, .height = 1.0f}}, .shadows = {sunShadow}, .shadowCount = shadowCount},
             {.scene = content->scene, .camera = content->map, .output = {.rect = {.x = 0.75f, .y = 0.0f, .width = 0.25f, .height = 0.44f}}, .bloom = rasm::ViewToggle::OFF},
-            {.scene = content->scene, .camera = content->security, .output = {.window = content->window}},
+            {.scene = content->scene, .camera = content->security, .output = {.window = content->window}, .shadows = {sunShadow}, .shadowCount = shadowCount},
         };
         // An export test draws the camera's view alone through Engine::render, with no anti-aliasing of its own.
         const rasm::View exported{.scene = content->scene, .camera = camera, .bloom = rasm::ViewToggle::OFF, .antiAliasing = rasm::AntiAliasing::NONE};
