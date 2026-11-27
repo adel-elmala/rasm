@@ -1,0 +1,66 @@
+name: Feature request
+description: Suggest a feature or a change to the API.
+title: "[Feature]: "
+labels: ["enhancement", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. Please check the [development plan](https://github.com/adel-elmala/rasm/blob/main/docs/development_plan.md) first: it may already be planned.
+        For an open-ended idea that needs discussion, the [Ideas category](https://github.com/adel-elmala/rasm/discussions/categories/ideas) of Discussions may be a better place.
+
+  - type: dropdown
+    id: audience
+    attributes:
+      label: What are you building?
+      description: Helps decide what matters most.
+      multiple: true
+      options:
+        - A game
+        - A map engine or GIS tool
+        - A visualization tool (point clouds, scientific data, CAD)
+        - Embedding RASM in another application or engine
+        - Bindings for another language (through the C API)
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what stops you today?
+      placeholder: I want to ... but RASM ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Your proposal
+      description: What you would like RASM to do. An API sketch is welcome but not needed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Other ways to solve it, inside or outside RASM, and how other engines handle it.
+
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Would you like to work on it?
+      options:
+        - "No"
+        - Yes, with some guidance
+        - Yes, I can write the whole change
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Links, screenshots, papers, ...
