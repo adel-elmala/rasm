@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Render Graphs · RASM</title>
 <meta name="description" content="How render graphs (frame graphs) work: passes that declare reads and writes, the dependency graph, Kahn's topological sort, culling unused passes, automatic barriers and layout transitions, transient resources and memory aliasing, async compute, and what RASM's render graph does and does not do.">
-<meta name="rasm-sources" content="include/rasm/render/renderGraph.h src/renderer/renderGraph.cpp src/rhi/memoryAliasing.h src/rhi/memoryAliasing.cpp tests/memoryAliasingTests.cpp src/rhi/textureStates.h src/rhi/textureStates.cpp src/rhi/renderContext.cpp src/renderer/renderer.cpp tests/renderGraphTests.cpp tests/textureStatesTests.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp src/renderer/viewGraph.cpp src/renderer/inspector.cpp">
+<meta name="rasm-sources" content="include/rasm/render/renderGraph.h src/renderer/renderGraph.cpp src/rhi/memoryAliasing.h src/rhi/memoryAliasing.cpp tests/memoryAliasingTests.cpp src/rhi/textureStates.h src/rhi/textureStates.cpp src/rhi/renderContext.cpp src/renderer/renderer.cpp tests/renderGraphTests.cpp tests/textureStatesTests.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp src/renderer/viewGraph.cpp src/renderer/inspector.cpp src/c/cGraph.cpp examples/33_c_render_graph/main.c">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -1283,7 +1283,8 @@ auto previous = engine.getBindlessTextureIndex(engine.getPreviousRenderTargetTex
   <tr><td>Render targets and history</td><td><code>RenderContext::createRenderTarget</code> in <code>src/rhi/renderContext.cpp</code>; <code>Renderer::getRenderTargetTexture</code>, <code>Renderer::getPreviousRenderTargetTexture</code>, <code>Renderer::getRenderTargetDepthTexture</code> in <code>src/renderer/renderer.cpp</code>; <code>RenderContext::clearNewHistory</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
   <tr><td>Debugging</td><td><code>RenderGraph::dump</code> in <code>src/renderer/renderGraph.cpp</code>: the passes in run order and a lifetime table. <kbd>F3</kbd> logs it for the graph of <code>Renderer::render</code> (<code>Renderer::pollEvents</code> sets <code>graphDumpRequested</code>, <code>Renderer::render</code> hands it to <code>ViewGraph::render</code>)</td></tr>
   <tr><td>Tests</td><td><code>tests/renderGraphTests.cpp</code> (sort, checks, buffer barriers, per-frame buffers, lifetimes, the dump), <code>tests/memoryAliasingTests.cpp</code>, <code>tests/textureStatesTests.cpp</code></td></tr>
-  <tr><td>Examples</td><td><code>examples/01_render_graph/main.cpp</code>, <code>examples/04_compute/main.cpp</code>, <code>examples/20_views/main.cpp</code> (the graph of a list of views)</td></tr>
+  <tr><td>From C</td><td><code>rasm_render_graph_add_pass</code> and the <code>rasm_cmd_</code> functions in <code>src/c/cGraph.cpp</code>: a pass's resources as a list in place of the setup lambda, and a C callback in place of the execute lambda (<a href="../api/c-api.html#graph">C API</a>, <a href="stable-c-abi.html#callbacks">callbacks</a>)</td></tr>
+  <tr><td>Examples</td><td><code>examples/01_render_graph/main.cpp</code>, <code>examples/04_compute/main.cpp</code>, <code>examples/20_views/main.cpp</code> (the graph of a list of views), <code>examples/33_c_render_graph/main.c</code> (a graph built from C)</td></tr>
 </table>
 </div>
 
