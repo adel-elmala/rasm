@@ -8,11 +8,20 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 struct rasm_renderer
 {
+                                        rasm_renderer() = default;
+                                        rasm_renderer(const rasm_renderer&) = delete;
+    rasm_renderer&                      operator=(const rasm_renderer&) = delete;
+                                        ~rasm_renderer();                       // detaches its graphs while the renderer still lives
+
     rasm::Renderer*                     renderer        = nullptr;
     std::unique_ptr<rasm::Renderer>     owned;                                  // null for an engine's renderer
+    std::vector<rasm_render_graph*>     graphs;                                 // the live graphs made on it
+    std::vector<uint8_t>                pipelineTypes;                          // by pipeline index: rasm_create_pipeline's type + 1, 0 for none
+    uint32_t                            recording       = 0;                    // inside rasm_render_graph_execute
 };
 
 struct rasm_image
@@ -103,6 +112,8 @@ namespace rasm::c
     inline FontHandle       toCpp(rasm_font h)              { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
     inline PickHandle       toCpp(rasm_pick h)              { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
     inline ExportHandle     toCpp(rasm_export h)            { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
+    inline BufferHandle     toCpp(rasm_buffer h)            { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
+    inline PipelineHandle   toCpp(rasm_pipeline h)          { return {unpackIndex(h.id), unpackGeneration(h.id)}; }
 
     inline rasm_scene       toC(SceneHandle h)              { return {packHandle(h.index, h.generation)}; }
     inline rasm_entity      toC(EntityHandle h)             { return {packHandle(h.index, h.generation)}; }
@@ -119,6 +130,8 @@ namespace rasm::c
     inline rasm_font        toC(FontHandle h)               { return {packHandle(h.index, h.generation)}; }
     inline rasm_pick        toC(PickHandle h)               { return {packHandle(h.index, h.generation)}; }
     inline rasm_export      toC(ExportHandle h)             { return {packHandle(h.index, h.generation)}; }
+    inline rasm_buffer      toC(BufferHandle h)             { return {packHandle(h.index, h.generation)}; }
+    inline rasm_pipeline    toC(PipelineHandle h)           { return {packHandle(h.index, h.generation)}; }
 
     inline glm::vec2        toCpp(const rasm_vec2& v)       { return {v.x, v.y}; }
     inline glm::vec3        toCpp(const rasm_vec3& v)       { return {v.x, v.y, v.z}; }
@@ -198,6 +211,13 @@ namespace rasm::c
     bool                    checkEnum(uint32_t value, uint32_t count, const char* function, const char* name);
     // The config's enum fields.
     bool                    checkRendererConfig(const rasm_renderer_config& config, const char* function);
+    // False, with an error, while one of the renderer's graphs records (rasm_render_graph_execute): the call would start
+    // a frame, change a graph or free what the frame uses.
+    bool                    checkNotRecording(const rasm_renderer* renderer, const char* function);
+    // A sized rasm_render_target_desc, its defaults past the caller's size, as the C++ desc.
+    bool                    readRenderTargetDesc(const rasm_render_target_desc* desc, RenderTargetDesc& target, const char* function);
+    rasm_render_target_desc getRenderTargetDefaults();
+
     // A pointer the call needs: false, with an error, for NULL.
     bool                    checkPointer(const void* pointer, const char* function, const char* name);
     // A handle the call acts on: false, with an error, for 0, which names no object.
@@ -257,6 +277,13 @@ namespace rasm::c
 
     constexpr size_t        EXPORT_DESC_SIZE_1_16           = offsetof(rasm_export_desc, tile_size) + sizeof(uint32_t);
     constexpr size_t        EXPORT_PROGRESS_SIZE_1_16       = offsetof(rasm_export_progress, fraction) + sizeof(float);
+
+    constexpr size_t        PASS_DESC_SIZE_1_17             = offsetof(rasm_pass_desc, user_data) + sizeof(void*);
+    constexpr size_t        PASS_INFO_SIZE_1_17             = offsetof(rasm_pass_info, height) + sizeof(uint32_t);
+    constexpr size_t        SHADOW_DESC_SIZE_1_17           = offsetof(rasm_shadow_desc, split_lambda) + sizeof(float);
+    constexpr size_t        VIEW_OUTPUT_SIZE_1_17           = offsetof(rasm_view_output, window) + sizeof(rasm_window);
+    constexpr size_t        BUFFER_DESC_SIZE_1_17           = offsetof(rasm_buffer_desc, staged) + sizeof(rasm_bool);
+    constexpr size_t        PIPELINE_DESC_SIZE_1_17         = offsetof(rasm_pipeline_desc, topology) + sizeof(rasm_primitive_topology);
 
 }
 

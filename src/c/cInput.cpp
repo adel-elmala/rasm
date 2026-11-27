@@ -175,7 +175,7 @@ try
     Renderer *r = c::getRenderer(renderer, __func__);
     rasm_window_desc values = {.native = c::toC(NativeWindow{})};
     if (r == nullptr || !c::readSized(desc, c::WINDOW_DESC_SIZE_1_1, &values, sizeof(values), __func__, "desc") ||
-        !c::checkEnum(values.native.type, RASM_NATIVE_WINDOW_TYPE_METAL + 1, __func__, "desc->native.type"))
+        !c::checkEnum(values.native.type, RASM_NATIVE_WINDOW_TYPE_METAL + 1, __func__, "desc->native.type") || !c::checkNotRecording(renderer, __func__))
         return {};
     WindowDesc windowDesc = {.width = values.width, .height = values.height, .native = c::toCpp(values.native), .hidden = values.hidden != 0};
     if (values.title != nullptr)
@@ -190,6 +190,8 @@ try
     Renderer *r = c::getRenderer(renderer, __func__);
     if (r == nullptr || !c::checkHandle(window.id, __func__, "window"))
         return RASM_ERROR_INVALID_ARGUMENT;
+    if (!c::checkNotRecording(renderer, __func__))
+        return RASM_ERROR_FAILED;
     const c::CallErrors errors;
     r->removeWindow(c::toCpp(window));
     return errors.result();

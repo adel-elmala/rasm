@@ -24,7 +24,7 @@
 
 // NOLINTBEGIN(readability-identifier-naming): C names, snake_case with the rasm_ prefix, as C APIs and their bindings expect
 #define RASM_C_API_VERSION_MAJOR    1
-#define RASM_C_API_VERSION_MINOR    16
+#define RASM_C_API_VERSION_MINOR    17
 #define RASM_C_API_VERSION          (((uint32_t)RASM_C_API_VERSION_MAJOR << 16) | (uint32_t)RASM_C_API_VERSION_MINOR)
 
 #if defined(_WIN32)
@@ -864,6 +864,13 @@ typedef struct rasm_render_target_desc
     rasm_format                     format;
     rasm_vec4                       clear_color;
     rasm_bool                       readable;
+    float                           swapchain_scale;                           /* 1.17: above 0, the main window's pixel size times this (not width and height), following its resizes */
+    rasm_format                     depth_format;                              /* 1.17: UNKNOWN by default: no depth */
+    rasm_format                     more_color_formats[3];                     /* 1.17: colors 1 to 3 after format; the first UNKNOWN ends them */
+    uint32_t                        samples;                                   /* 1.17: per pixel, 1 (the default), 2, 4 or 8 */
+    rasm_bool                       history;                                   /* 1.17: a copy per frame slot, so a pass reads the frame before's */
+    rasm_bool                       storage;                                   /* 1.17: colors only, which compute passes write as storage images */
+    rasm_bool                       cube;                                      /* 1.17: depth only and square: a cube of 6 faces */
 } rasm_render_target_desc;
 
 typedef struct rasm_animation_play
@@ -1379,6 +1386,203 @@ typedef struct rasm_point_cloud_info
     rasm_bool                       compressed;                                /* LAZ */
 } rasm_point_cloud_info;
 
+/* 1.17: the render graph (rasm/render/renderGraph.h). A graph is a list of passes, RASM's own and the application's;
+ * rasm_render_graph_execute runs one frame of it. Each pass of the application names the resources it reads and writes
+ * (the graph orders the passes and places the barriers from them) and a C function the graph calls while it records
+ * the frame, which records the pass's commands through a rasm_commands. */
+typedef struct rasm_render_graph    rasm_render_graph;
+typedef struct rasm_commands        rasm_commands;                             /* valid only during the pass callback it was given to */
+typedef struct rasm_buffer          { uint64_t id; } rasm_buffer;
+typedef struct rasm_pipeline        { uint64_t id; } rasm_pipeline;            /* lives as long as its renderer; the same desc gives the same pipeline */
+typedef struct rasm_shadow          { uint64_t id; } rasm_shadow;              /* a light's shadow maps in one graph, valid with that graph only */
+
+#define RASM_MAX_COLOR_ATTACHMENTS  4
+#define RASM_PUSH_CONSTANTS_SIZE    16                                          /* bytes every pipeline's shaders see as push constants */
+#define RASM_SCENE_COLOR_FORMAT     RASM_FORMAT_R16G16B16A16_SFLOAT             /* the scene passes' HDR color */
+#define RASM_MOTION_FORMAT          RASM_FORMAT_R16G16_SFLOAT                   /* a scene target's second color, for TAA */
+#define RASM_INVALID_INDEX          0xFFFFFFFFu                                 /* no bindless slot, no GPU timer */
+
+typedef uint32_t                    rasm_pass_type;
+enum
+{
+    RASM_PASS_TYPE_GRAPHICS         = 0,        /* draws into the render target or the window it writes */
+    RASM_PASS_TYPE_COMPUTE          = 1,        /* dispatches; writes buffers, textures and storage render targets */
+    RASM_PASS_TYPE_ASYNC_COMPUTE    = 2,        /* a compute pass on the compute queue, beside the graphics work; no render target */
+};
+
+typedef uint32_t                    rasm_pass_access;
+enum
+{
+    RASM_PASS_ACCESS_READ_TEXTURE                   = 0,
+    RASM_PASS_ACCESS_READ_BUFFER                    = 1,
+    RASM_PASS_ACCESS_READ_RENDER_TARGET             = 2,    /* its colors, sampled */
+    RASM_PASS_ACCESS_READ_PREVIOUS_RENDER_TARGET    = 3,    /* the colors a history target had the frame before */
+    RASM_PASS_ACCESS_READ_PREVIOUS_BUFFER           = 4,    /* what the frame before wrote: adds no order in this frame */
+    RASM_PASS_ACCESS_READ_DEPTH                     = 5,    /* its depth, sampled */
+    RASM_PASS_ACCESS_WRITE_TEXTURE                  = 6,
+    RASM_PASS_ACCESS_WRITE_BUFFER                   = 7,
+    RASM_PASS_ACCESS_WRITE_RENDER_TARGET            = 8,    /* face: of a cube target; one written target per pass */
+    RASM_PASS_ACCESS_WRITE_SWAPCHAIN                = 9,    /* id: a window, 0 the main one; the pass is skipped in a frame the window has no image */
+};
+
+/* One resource of a pass: id is the handle's id (a rasm_texture, rasm_buffer, rasm_render_target or rasm_window). */
+typedef struct rasm_pass_resource
+{
+    rasm_pass_access                access;
+    uint32_t                        face;
+    uint64_t                        id;
+} rasm_pass_resource;
+
+/* Called during rasm_render_graph_execute, on its thread, once each frame the pass runs. It records the pass's commands
+ * with the rasm_cmd_ functions and may call the queries (rasm_get_bindless_texture_index, rasm_get_render_target_color,
+ * ...), but no function that starts a frame, changes a graph or destroys the renderer: those fail while a graph
+ * records. It must return normally: no C++ exception, longjmp or Rust panic may leave it. */
+typedef void (RASM_CALL* rasm_pass_callback)(void* user_data, rasm_commands* commands);
+
+typedef struct rasm_pass_desc
+{
+    uint32_t                        size;
+    const char*                     name;                                      /* copied; also its GPU timer's name */
+    rasm_pass_type                  type;
+    const rasm_pass_resource*       resources;                                 /* read during the call */
+    uint32_t                        resource_count;
+    rasm_pass_callback              execute;                                   /* NULL: a pass that records nothing (a graphics pass still clears what it writes) */
+    void*                           user_data;                                 /* given to execute; must stay valid as long as the graph */
+} rasm_pass_desc;
+
+/* What a pass callback draws into: the size of its render target or window, in pixels. */
+typedef struct rasm_pass_info
+{
+    uint32_t                        size;
+    rasm_pass_type                  type;
+    uint32_t                        width;                                     /* 0 for a compute pass that writes no render target */
+    uint32_t                        height;
+} rasm_pass_info;
+
+/* rasm_render_graph_add_shadow_passes's maps (ShadowDesc in C++). */
+typedef struct rasm_shadow_desc
+{
+    uint32_t                        size;
+    rasm_light                      light;                                     /* a directional, spot or point light of the scene */
+    uint32_t                        cascade_count;                             /* directional lights, 1 to 4; 4 by default */
+    uint32_t                        map_size;                                  /* pixels; 2048 by default */
+    float                           distance;                                  /* from the camera (directional) or the light; 50 by default */
+    float                           split_lambda;                              /* directional lights; 0.7 by default */
+} rasm_shadow_desc;
+
+/* Where the tone-map pass draws (ViewOutput in C++). */
+typedef struct rasm_view_output
+{
+    uint32_t                        size;
+    rasm_view_rect                  rect;                                      /* all of it by default */
+    rasm_render_target              target;                                    /* set: into this target, one color and no depth */
+    rasm_window                     window;                                    /* without a target: this window; 0 the main one */
+} rasm_view_output;
+
+typedef uint32_t                    rasm_buffer_usage;
+enum
+{
+    RASM_BUFFER_USAGE_INDEX          = 0,
+    RASM_BUFFER_USAGE_INDIRECT       = 1,       /* draw and dispatch arguments */
+    RASM_BUFFER_USAGE_UNIFORM        = 2,
+    RASM_BUFFER_USAGE_STORAGE        = 3,
+    RASM_BUFFER_USAGE_DEVICE_ADDRESS = 4,       /* read and written through its address only */
+    RASM_BUFFER_USAGE_TRANSFER       = 5,       /* only a copy source or destination: no device address */
+};
+
+/* Every buffer but a TRANSFER one has a device address, which shaders read through push constants. */
+typedef struct rasm_buffer_desc
+{
+    uint32_t                        size;
+    const char*                     name;
+    rasm_buffer_usage               usage;                                     /* STORAGE by default */
+    uint64_t                        byte_size;
+    rasm_bool                       host_visible;                              /* mapped: rasm_write_buffer writes it at once */
+    rasm_bool                       host_readable;                             /* host-visible, in cached memory, for rasm_read_buffer */
+    rasm_bool                       staged;                                    /* filled once and big: never mapped on a discrete GPU */
+} rasm_buffer_desc;
+
+typedef uint32_t                    rasm_pipeline_type;
+enum
+{
+    RASM_PIPELINE_TYPE_GRAPHICS     = 0,
+    RASM_PIPELINE_TYPE_COMPUTE      = 1,
+};
+
+typedef uint32_t                    rasm_blend_mode;
+enum
+{
+    RASM_BLEND_MODE_NONE                = 0,
+    RASM_BLEND_MODE_PREMULTIPLIED_ALPHA = 1,
+    RASM_BLEND_MODE_ADDITIVE            = 2,
+    RASM_BLEND_MODE_WEIGHTED            = 3,
+    RASM_BLEND_MODE_WEIGHTED_MOTION     = 4,
+    RASM_BLEND_MODE_ADDITIVE_COLOR      = 5,
+};
+
+typedef uint32_t                    rasm_primitive_topology;
+enum
+{
+    RASM_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST  = 0,
+    RASM_PRIMITIVE_TOPOLOGY_LINE_LIST      = 1,
+    RASM_PRIMITIVE_TOPOLOGY_POINT_LIST     = 2,
+    RASM_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP = 3,
+    RASM_PRIMITIVE_TOPOLOGY_LINE_STRIP     = 4,
+};
+
+typedef uint32_t                    rasm_cull_mode;
+enum
+{
+    RASM_CULL_MODE_NONE             = 0,
+    RASM_CULL_MODE_FRONT            = 1,
+    RASM_CULL_MODE_BACK             = 2,
+};
+
+typedef uint32_t                    rasm_sampler_type;
+enum
+{
+    RASM_SAMPLER_TYPE_LINEAR_REPEAT           = 0,
+    RASM_SAMPLER_TYPE_LINEAR_MIRRORED_REPEAT  = 1,
+    RASM_SAMPLER_TYPE_LINEAR_CLAMP            = 2,
+    RASM_SAMPLER_TYPE_NEAREST_REPEAT          = 3,
+    RASM_SAMPLER_TYPE_NEAREST_MIRRORED_REPEAT = 4,
+    RASM_SAMPLER_TYPE_NEAREST_CLAMP           = 5,
+};
+
+/* Flags of rasm_cmd_memory_barrier. */
+typedef uint32_t                    rasm_pipeline_stage;
+#define RASM_PIPELINE_STAGE_COMPUTE     1u
+#define RASM_PIPELINE_STAGE_GRAPHICS    2u
+#define RASM_PIPELINE_STAGE_HOST        4u
+
+/* A shader stage: an entry point of the desc's Slang source, or of its own SPIR-V when the desc has no source. */
+typedef struct rasm_shader_stage
+{
+    const char*                     entry_point;                               /* NULL: vertMain, fragMain or compMain in source; main in SPIR-V */
+    const void*                     spirv;
+    uint64_t                        spirv_size;                                /* bytes, a multiple of 4 */
+} rasm_shader_stage;
+
+/* A pipeline sees RASM's bindless set (set 0: binding 0 the sampled textures, binding 1 the storage images) and
+ * RASM_PUSH_CONSTANTS_SIZE bytes of push constants, and has no vertex input: shaders read their data through buffer
+ * device addresses. Depth is reversed-Z (near 1, far 0; the test passes greater or equal). */
+typedef struct rasm_pipeline_desc
+{
+    uint32_t                        size;
+    const char*                     name;
+    rasm_pipeline_type              type;
+    const char*                     source;                                    /* Slang, NUL-terminated; NULL: each stage's spirv */
+    rasm_shader_stage               vertex;
+    rasm_shader_stage               fragment;
+    rasm_shader_stage               compute;
+    rasm_render_target              target;                                    /* graphics: draws into targets with its formats and samples */
+    rasm_window                     window;                                    /* graphics without a target: this window's format, no depth; 0 the main one */
+    rasm_blend_mode                 blend_mode;                                /* NONE by default */
+    rasm_bool                       depth_test;                                /* true by default */
+    rasm_bool                       depth_write;                               /* true by default */
+    rasm_primitive_topology         topology;                                  /* TRIANGLE_LIST by default */
+} rasm_pipeline_desc;
+
 typedef void (RASM_CALL* rasm_log_callback)(void* user_data, rasm_log_level level, const char* message);
 
 /* The library */
@@ -1733,6 +1937,75 @@ RASM_C_API rasm_export      RASM_CALL rasm_export_view(rasm_renderer* renderer, 
 RASM_C_API rasm_result      RASM_CALL rasm_get_export_progress(rasm_renderer* renderer, rasm_export export_handle, rasm_export_progress* progress);
 RASM_C_API rasm_result      RASM_CALL rasm_cancel_export(rasm_renderer* renderer, rasm_export export_handle);
 RASM_C_API rasm_result      RASM_CALL rasm_take_export(rasm_renderer* renderer, rasm_export export_handle, rasm_image* image);
+
+/* Added in 1.17: the render graph and custom passes. rasm_render_graph_execute is a whole frame, as rasm_render is:
+ * input, the passes in their order, submit and present. A target from rasm_render_graph_create_render_target belongs
+ * to the graph and goes with it; one without history or readable is transient and shares memory with others. A
+ * rasm_shadow names a light's maps for rasm_render_graph_add_scene_passes of the same graph. Destroying the renderer
+ * (or the engine) detaches its graphs: calls on them then fail, and rasm_render_graph_destroy still frees them. */
+RASM_C_API rasm_result      RASM_CALL rasm_pass_desc_init(rasm_pass_desc* desc, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_shadow_desc_init(rasm_shadow_desc* desc, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_view_output_init(rasm_view_output* output, uint32_t size);
+RASM_C_API rasm_result      RASM_CALL rasm_render_graph_create(rasm_renderer* renderer, rasm_render_graph** graph);
+RASM_C_API void             RASM_CALL rasm_render_graph_destroy(rasm_render_graph* graph);
+RASM_C_API rasm_render_target RASM_CALL rasm_render_graph_create_render_target(rasm_render_graph* graph, const rasm_render_target_desc* desc);
+RASM_C_API rasm_result      RASM_CALL rasm_render_graph_add_pass(rasm_render_graph* graph, const rasm_pass_desc* desc);
+RASM_C_API rasm_shadow      RASM_CALL rasm_render_graph_add_shadow_passes(rasm_render_graph* graph, rasm_scene scene, rasm_camera camera, const rasm_shadow_desc* desc);
+RASM_C_API rasm_result      RASM_CALL rasm_render_graph_add_scene_passes(rasm_render_graph* graph, rasm_scene scene, rasm_camera camera, rasm_render_target target, const rasm_shadow* shadows, uint32_t shadow_count, const rasm_render_target* sampled, uint32_t sampled_count);
+RASM_C_API rasm_render_target RASM_CALL rasm_render_graph_add_msaa_resolve_pass(rasm_render_graph* graph, rasm_render_target source, rasm_camera camera);
+RASM_C_API rasm_render_target RASM_CALL rasm_render_graph_add_taa_pass(rasm_render_graph* graph, rasm_render_target source, rasm_camera camera);
+RASM_C_API rasm_render_target RASM_CALL rasm_render_graph_add_bloom_passes(rasm_render_graph* graph, rasm_render_target source, rasm_camera camera);
+RASM_C_API rasm_result      RASM_CALL rasm_render_graph_add_tone_map_pass(rasm_render_graph* graph, rasm_render_target source, rasm_camera camera, rasm_render_target bloom, const rasm_view_output* output);
+RASM_C_API rasm_result      RASM_CALL rasm_render_graph_add_ui_pass(rasm_render_graph* graph, const rasm_render_target* shown, uint32_t shown_count);
+RASM_C_API rasm_result      RASM_CALL rasm_render_graph_compile(rasm_render_graph* graph);
+RASM_C_API rasm_result      RASM_CALL rasm_render_graph_execute(rasm_render_graph* graph, rasm_camera camera);
+RASM_C_API uint32_t         RASM_CALL rasm_render_graph_dump(rasm_render_graph* graph, char* buffer, uint32_t capacity);
+
+/* Added in 1.17: commands, only inside a pass callback, with the rasm_commands it was given. A call that does not fit the
+ * pass (a draw in a compute pass, a dispatch in a graphics pass, no pipeline bound, push constants past
+ * RASM_PUSH_CONSTANTS_SIZE) records nothing and returns RASM_ERROR_INVALID_ARGUMENT. Each pass starts with no pipeline,
+ * the viewport and scissor over all of its output and RASM_CULL_MODE_NONE. Binding a pipeline binds RASM's bindless set
+ * too. A GPU timer's milliseconds come with rasm_get_gpu_timer_ms a few frames later. */
+RASM_C_API rasm_result      RASM_CALL rasm_cmd_get_info(rasm_commands* commands, rasm_pass_info* info);
+RASM_C_API rasm_result      RASM_CALL rasm_cmd_bind_pipeline(rasm_commands* commands, rasm_pipeline pipeline);
+RASM_C_API rasm_result      RASM_CALL rasm_cmd_push_constants(rasm_commands* commands, const void* data, uint32_t size, uint32_t offset);
+RASM_C_API rasm_result      RASM_CALL rasm_cmd_set_viewport(rasm_commands* commands, float x, float y, float width, float height, float min_depth, float max_depth);
+RASM_C_API rasm_result      RASM_CALL rasm_cmd_set_scissor(rasm_commands* commands, int32_t x, int32_t y, uint32_t width, uint32_t height);
+RASM_C_API rasm_result      RASM_CALL rasm_cmd_set_cull_mode(rasm_commands* commands, rasm_cull_mode cull_mode);
+RASM_C_API rasm_result      RASM_CALL rasm_cmd_draw(rasm_commands* commands, uint32_t vertex_count, uint32_t instance_count);
+RASM_C_API rasm_result      RASM_CALL rasm_cmd_bind_index_buffer(rasm_commands* commands, rasm_buffer buffer, uint64_t offset, rasm_format index_format);
+RASM_C_API rasm_result      RASM_CALL rasm_cmd_draw_indexed(rasm_commands* commands, uint32_t index_count, uint32_t instance_count, uint32_t vertex_offset, uint32_t first_index, uint32_t first_instance);
+RASM_C_API rasm_result      RASM_CALL rasm_cmd_draw_indexed_indirect(rasm_commands* commands, rasm_buffer buffer, uint64_t offset, uint32_t draw_count, uint32_t stride);
+RASM_C_API rasm_result      RASM_CALL rasm_cmd_draw_indexed_indirect_count(rasm_commands* commands, rasm_buffer buffer, uint64_t offset, rasm_buffer count_buffer, uint64_t count_offset, uint32_t max_draw_count, uint32_t stride);
+RASM_C_API rasm_result      RASM_CALL rasm_cmd_dispatch(rasm_commands* commands, uint32_t group_count_x, uint32_t group_count_y, uint32_t group_count_z);
+RASM_C_API rasm_result      RASM_CALL rasm_cmd_dispatch_indirect(rasm_commands* commands, rasm_buffer buffer, uint64_t offset);
+RASM_C_API rasm_result      RASM_CALL rasm_cmd_memory_barrier(rasm_commands* commands, rasm_pipeline_stage before, rasm_pipeline_stage after);
+RASM_C_API uint32_t         RASM_CALL rasm_cmd_begin_gpu_timer(rasm_commands* commands, const char* name);
+RASM_C_API rasm_result      RASM_CALL rasm_cmd_end_gpu_timer(rasm_commands* commands, uint32_t timer);
+
+/* Added in 1.17: buffers, pipelines, bindless slots and GPU timers. rasm_write_buffer writes a host-visible buffer at
+ * once (a frame in flight may still read it: keep one per frame slot, or write only what no frame reads) and a
+ * device-local one through the next frame's uploads, in order with the frames. A render target's textures change with
+ * the frame slot: ask for them every frame, in the pass callback, where _color is what this frame writes and
+ * _previous_color what the frame before wrote. The GPU timers are the last measured frame's, and the first call turns
+ * measuring on. */
+RASM_C_API rasm_result      RASM_CALL rasm_buffer_desc_init(rasm_buffer_desc* desc, uint32_t size);
+RASM_C_API rasm_buffer      RASM_CALL rasm_create_buffer(rasm_renderer* renderer, const rasm_buffer_desc* desc);
+RASM_C_API rasm_result      RASM_CALL rasm_destroy_buffer(rasm_renderer* renderer, rasm_buffer buffer);
+RASM_C_API rasm_result      RASM_CALL rasm_write_buffer(rasm_renderer* renderer, rasm_buffer buffer, const void* data, uint64_t size, uint64_t offset);
+RASM_C_API rasm_result      RASM_CALL rasm_read_buffer(rasm_renderer* renderer, rasm_buffer buffer, void* data, uint64_t size, uint64_t offset);
+RASM_C_API uint64_t         RASM_CALL rasm_get_buffer_device_address(rasm_renderer* renderer, rasm_buffer buffer);
+RASM_C_API rasm_result      RASM_CALL rasm_pipeline_desc_init(rasm_pipeline_desc* desc, uint32_t size);
+RASM_C_API rasm_pipeline    RASM_CALL rasm_create_pipeline(rasm_renderer* renderer, const rasm_pipeline_desc* desc);
+RASM_C_API uint32_t         RASM_CALL rasm_get_bindless_texture_index(rasm_renderer* renderer, rasm_texture texture);
+RASM_C_API uint32_t         RASM_CALL rasm_add_bindless_texture(rasm_renderer* renderer, rasm_texture texture, rasm_sampler_type sampler);
+RASM_C_API rasm_texture     RASM_CALL rasm_get_render_target_color(rasm_renderer* renderer, rasm_render_target target, uint32_t attachment);
+RASM_C_API rasm_texture     RASM_CALL rasm_get_previous_render_target_color(rasm_renderer* renderer, rasm_render_target target, uint32_t attachment);
+RASM_C_API rasm_texture     RASM_CALL rasm_get_render_target_depth(rasm_renderer* renderer, rasm_render_target target);
+RASM_C_API uint32_t         RASM_CALL rasm_get_render_target_storage_index(rasm_renderer* renderer, rasm_render_target target, uint32_t attachment);
+RASM_C_API uint32_t         RASM_CALL rasm_get_gpu_timer_count(rasm_renderer* renderer);
+RASM_C_API uint32_t         RASM_CALL rasm_get_gpu_timer_name(rasm_renderer* renderer, uint32_t index, char* buffer, uint32_t capacity);
+RASM_C_API float            RASM_CALL rasm_get_gpu_timer_ms(rasm_renderer* renderer, uint32_t index);
 
 #ifdef __cplusplus
 }

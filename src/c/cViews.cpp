@@ -3,22 +3,56 @@
 #include "rasm/renderer.h"
 #include "rasm/view.h"
 
+#include <cmath>
 #include <cstring>
 #include <string>
 
 using namespace rasm;
 
-namespace
-{
-    // One color for the tone map to draw a view into, cleared to opaque black.
-    rasm_render_target_desc getTargetDefaults()
-    {
-        return {.size = sizeof(rasm_render_target_desc), .format = RASM_FORMAT_R8G8B8A8_SRGB, .clear_color = {0.0f, 0.0f, 0.0f, 1.0f}};
-    }
-}
-
 namespace rasm::c
 {
+    // One color for the tone map to draw a view into, cleared to opaque black.
+    rasm_render_target_desc getRenderTargetDefaults()
+    {
+        return {.size = sizeof(rasm_render_target_desc), .format = RASM_FORMAT_R8G8B8A8_SRGB, .clear_color = {0.0f, 0.0f, 0.0f, 1.0f}, .samples = 1};
+    }
+
+    bool readRenderTargetDesc(const rasm_render_target_desc *desc, RenderTargetDesc &target, const char *function)
+    {
+        rasm_render_target_desc values = getRenderTargetDefaults();
+        if (!readSized(desc, RENDER_TARGET_DESC_SIZE_1_1, &values, sizeof(values), function, "desc"))
+            return false;
+        constexpr uint32_t FORMAT_COUNT = RASM_FORMAT_R32G32B32A32_UINT + 1;
+        if (!checkEnum(values.format, FORMAT_COUNT, function, "desc->format") || !checkEnum(values.depth_format, FORMAT_COUNT, function, "desc->depth_format"))
+            return false;
+        for (const rasm_format format : values.more_color_formats)
+        {
+            if (!checkEnum(format, FORMAT_COUNT, function, "desc->more_color_formats"))
+                return false;
+        }
+        if (!(values.swapchain_scale >= 0.0f) || !std::isfinite(values.swapchain_scale))
+        {
+            reportError(function, "desc->swapchain_scale must be 0 or more.");
+            return false;
+        }
+        target = {.name = values.name != nullptr ? values.name : "",
+                  .width = values.width,
+                  .height = values.height,
+                  .swapchainScale = values.swapchain_scale,
+                  .colorFormats = {static_cast<Format>(values.format)},
+                  .depthFormat = static_cast<Format>(values.depth_format),
+                  .clearColor = toCpp(values.clear_color),
+                  .history = values.history != 0,
+                  .cube = values.cube != 0,
+                  .storage = values.storage != 0,
+                  .samples = values.samples,
+                  .readable = values.readable != 0};
+        // The colors after format, up to the first UNKNOWN.
+        for (uint32_t i = 0; values.format != RASM_FORMAT_UNKNOWN && i + 1 < MAX_COLOR_ATTACHMENTS && values.more_color_formats[i] != RASM_FORMAT_UNKNOWN; ++i)
+            target.colorFormats[i + 1] = static_cast<Format>(values.more_color_formats[i]);
+        return true;
+    }
+
     bool readViews(const rasm_view *views, uint32_t viewCount, View *converted, const char *function)
     {
         uint32_t stride = 0;
@@ -56,7 +90,7 @@ RASM_C_CATCH_RESULT
 rasm_result RASM_CALL rasm_render_target_desc_init(rasm_render_target_desc *desc, uint32_t size)
 try
 {
-    const rasm_render_target_desc defaults = getTargetDefaults();
+    const rasm_render_target_desc defaults = c::getRenderTargetDefaults();
     return c::initSized(desc, size, c::RENDER_TARGET_DESC_SIZE_1_1, &defaults, sizeof(defaults), __func__, "desc");
 }
 RASM_C_CATCH_RESULT
@@ -68,6 +102,8 @@ try
     Renderer *r = c::getRenderer(renderer, __func__);
     if (r == nullptr || (view_count > 0 && !c::checkPointer(views, __func__, "views")))
         return RASM_ERROR_INVALID_ARGUMENT;
+    if (!c::checkNotRecording(renderer, __func__))
+        return RASM_ERROR_FAILED;
     if (view_count > MAX_SCENE_VIEWS)
     {
         c::reportError(__func__, ("view_count " + std::to_string(view_count) + " is more than RASM_MAX_VIEWS.").c_str());
@@ -96,21 +132,10 @@ rasm_render_target RASM_CALL rasm_create_render_target(rasm_renderer *renderer, 
 try
 {
     Renderer *r = c::getRenderer(renderer, __func__);
-    rasm_render_target_desc values = getTargetDefaults();
-    if (r == nullptr || !c::readSized(desc, c::RENDER_TARGET_DESC_SIZE_1_1, &values, sizeof(values), __func__, "desc"))
+    RenderTargetDesc target;
+    if (r == nullptr || !c::readRenderTargetDesc(desc, target, __func__))
         return {};
-    if (values.format != RASM_FORMAT_R8G8B8A8_SRGB && values.format != RASM_FORMAT_R8G8B8A8_UNORM && values.format != RASM_FORMAT_R16G16B16A16_SFLOAT)
-    {
-        c::reportError(__func__, "desc->format must be RASM_FORMAT_R8G8B8A8_SRGB (a picture), RASM_FORMAT_R8G8B8A8_UNORM or RASM_FORMAT_R16G16B16A16_SFLOAT.");
-        return {};
-    }
-    // A view texture: one color, no depth, one sample.
-    return c::toC(r->createRenderTarget({.name = values.name != nullptr ? values.name : "",
-                                         .width = values.width,
-                                         .height = values.height,
-                                         .colorFormats = {static_cast<Format>(values.format)},
-                                         .clearColor = c::toCpp(values.clear_color),
-                                         .readable = values.readable != 0}));
+    return c::toC(r->createRenderTarget(target));
 }
 RASM_C_CATCH({})
 
@@ -120,6 +145,8 @@ try
     Renderer *r = c::getRenderer(renderer, __func__);
     if (r == nullptr || !c::checkHandle(target.id, __func__, "target"))
         return RASM_ERROR_INVALID_ARGUMENT;
+    if (!c::checkNotRecording(renderer, __func__))
+        return RASM_ERROR_FAILED;
     return r->resizeRenderTarget(c::toCpp(target), width, height) ? RASM_OK : RASM_ERROR_FAILED;
 }
 RASM_C_CATCH_RESULT
@@ -130,6 +157,8 @@ try
     Renderer *r = c::getRenderer(renderer, __func__);
     if (r == nullptr || !c::checkHandle(target.id, __func__, "target"))
         return RASM_ERROR_INVALID_ARGUMENT;
+    if (!c::checkNotRecording(renderer, __func__))
+        return RASM_ERROR_FAILED;
     const c::CallErrors errors;
     r->destroyRenderTarget(c::toCpp(target));
     return errors.result();
