@@ -472,6 +472,8 @@
 
 <p>A chunk is a mesh made by <code>buildPointCloudChunk</code>, on any thread, and uploaded by <code>Renderer::createMesh</code>. An entity draws it with a <code>MaterialType::POINTS</code> material, whose <code>PointMaterial</code> gives the size, the shape, the colors and the density. The entity's transform places the chunk; culling, render space far from the origin and picking work as for any entity. Each view sends its small, dense chunks to the compute path where the GPU has 64-bit buffer atomics (<code>shaderBufferInt64Atomics</code>); <code>RendererConfig::computePoints</code> or <code>Renderer::setComputePoints(false)</code> draws every point by triangles.</p>
 
+<div class="callout"><strong>Pixel sizes in an export</strong> Sizes given in pixels are multiplied by <code>SceneData::pixelScale</code>: 1 in every view, an export's <code>ExportDesc::pixelScale</code> in a <a href="tiled-export.html">tiled export</a>, which also divides the LOD's pixels per unit by it. Sizes in metres do not change.</div>
+
 <figure class="diagram">
   <svg viewBox="0 0 760 250" role="img" aria-label="Any thread: buildPointCloudChunk quantizes, sorts and writes the chunk's words. The renderer's thread: createMesh puts them in the point pool and a geometry row. GPU, each view: the cull pass picks the prefix count per chunk (selectPointCount) and writes the draw with 3 indices a point; the point run's pipeline, points.slang, draws one triangle a point and cuts it to its shape.">
     <rect x="20" y="40" width="200" height="80" rx="6" class="cpu"/>

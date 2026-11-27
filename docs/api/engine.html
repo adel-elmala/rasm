@@ -66,6 +66,7 @@
   <tr><td><a href="#isReadbackReady"><code>isReadbackReady</code></a> / <a href="#takeReadback"><code>takeReadback</code></a></td><td>is the copy done, take its pixels</td><td>this page</td></tr>
   <tr><td><a href="#pick"><code>pick</code></a> / <a href="#isPickReady"><code>isPickReady</code></a> / <a href="#takePick"><code>takePick</code></a></td><td>what is under a pixel or a rect of a view: entity, feature, world position</td><td>this page</td></tr>
   <tr><td><a href="#isAlive"><code>isAlive</code></a></td><td>is an entity (a pick's, say) still there</td><td>this page</td></tr>
+  <tr><td><a href="#exportView"><code>exportView</code></a> / <a href="#getExportProgress"><code>getExportProgress</code></a> / <a href="#takeExport"><code>takeExport</code></a> / <a href="#cancelExport"><code>cancelExport</code></a></td><td>a still of a view at any size (8K, 16K, a poster) in tiles, to a PNG or EXR file</td><td>this page</td></tr>
   <tr><td><a href="#getFrameStats"><code>getFrameStats</code></a></td><td>frame times, draws, memory</td><td>this page</td></tr>
   <tr><td><a href="#beginGpuTimer"><code>beginGpuTimer</code></a> / <a href="#endGpuTimer"><code>endGpuTimer</code></a></td><td>time your own GPU work</td><td>this page</td></tr>
   <tr><td><a href="#queryMemoryStats"><code>queryMemoryStats</code></a></td><td>GPU memory budget and use</td><td>this page</td></tr>
@@ -1712,6 +1713,88 @@ struct PickHit
   <pre class="sig">bool isAlive(EntityHandle entity) const;</pre>
   <div class="body">
     <p>False for an entity that was destroyed, or a handle that never named one. A pick's answer comes frames after its frame, so its entity may be gone.</p>
+  </div>
+</div>
+
+<h3 id="export">Exporting a still at any size</h3>
+<p>An export draws a view far larger than the window, or than the device's largest image, in tiles with an off-center projection, and writes it to a file as it goes (<a href="../guides/tiled-export.html">Tiled offscreen export</a>). It runs in the frames of <a href="#render"><code>render</code></a>, one jittered sample of one tile a frame, after your views, so the application keeps running and polls its progress.</p>
+<pre><code>rasm::ExportDesc desc{.width = 15360, .height = 8640, .path = "poster.png", .format = rasm::ExportFormat::PNG16, .pixelScale = 4.0f};
+const rasm::ExportHandle poster = engine.exportView(view, desc);
+while (engine.getExportProgress(poster).state == rasm::ExportState::RUNNING)
+    engine.render(&amp;view, 1);
+rasm::ReadbackImage none;
+engine.takeExport(poster, none);</code></pre>
+
+<div class="api" id="exportView">
+  <pre class="sig">ExportHandle exportView(const View&amp; view, const ExportDesc&amp; desc);</pre>
+  <div class="body">
+    <p>Starts a still of <code>view</code> (its scene, camera, <code>bloom</code> and <code>antiAliasing</code>; its <code>output</code> is not used) at <code>desc.width</code> × <code>desc.height</code>. It starts with the next frame of <code>render</code>, after the exports before it. The camera is copied then, so yours may move; the scene must hold still (hold your animation time). While it runs, a <a href="#TileStreamer"><code>TileStreamer</code></a> of the scene counts the export's view in its screen error, waits until its cut is in, then changes nothing drawn until the last tile. Each tile takes <code>desc.samples</code> frames (plus one survey frame per tile when the scene has labels or weighted surfaces). Returns an invalid handle, with an error, for a bad scene or camera, an empty size, <code>samples</code> outside 1 to <code>MAX_EXPORT_SAMPLES</code>, a <code>pixelScale</code> not above 0, <code>toneMap</code> false with a PNG, an in-memory image that does not fit, or a device whose largest image cannot hold a tile and its guard. An application with its own render graph runs exports by calling <code>render(nullptr, 0)</code> between its frames.</p>
+  </div>
+</div>
+
+<div class="api" id="ExportDesc">
+  <pre class="sig">constexpr uint32_t              DEFAULT_EXPORT_TILE_SIZE    = 2048;
+constexpr uint32_t              MAX_EXPORT_SAMPLES          = 256;
+
+enum class ExportFormat
+{
+    PNG8,
+    PNG16,
+    EXR_HALF,
+    EXR_FLOAT,
+};
+
+struct ExportDesc
+{
+    uint32_t                    width           = 0;
+    uint32_t                    height          = 0;
+    std::string                 path;                       // UTF-8; empty: kept in memory for takeExport
+    ExportFormat                format          = ExportFormat::PNG8;
+    uint32_t                    samples         = 16;       // jittered frames averaged per pixel, 1 to MAX_EXPORT_SAMPLES (a square count is a stratified grid)
+    float                       pixelScale      = 1.0f;     // output pixels per pixel of every size given in pixels (lines, text, points, the grid) and of the LOD error
+    bool                        toneMap         = true;     // false: the scene's linear HDR color (exposure and bloom, no AgX), for an EXR only
+    bool                        transparent     = false;    // no sky or background: alpha is what covers each pixel
+    bool                        msaa            = false;    // also the view's MSAA in each sample (the samples already smooth edges)
+    uint32_t                    tileSize        = 0;        // 0: DEFAULT_EXPORT_TILE_SIZE; smaller tiles use less memory and cost more guard band
+};</pre>
+  <div class="body">
+    <p>A PNG is sRGB with straight alpha (8 or 16 bits a channel, written through one deflate stream); an EXR is linear, premultiplied, channels A, B, G, R in half or float, ZIP compressed. Without a <code>path</code> the image stays in memory: <code>PNG8</code> as an <code>RGBA8_SRGB</code> <a href="#takeReadback"><code>ReadbackImage</code></a>, the others as <code>RGBA32_FLOAT</code>, linear and premultiplied. A file is written a row of tiles at a time on a thread of its own, so memory holds at most three bands (image width × tile height each: one being written, one waiting, one filling) and a few tiles: about 0.7 GB for a 16K PNG16 with 2048-pixel tiles. <code>samples</code> replaces TAA: each pixel is the mean of that many frames moved by sub-pixel offsets. <code>pixelScale</code> 4 with an image four times the window's width gives the window's look, four times sharper; 1 keeps every size in output pixels. Bloom keeps its reach in output pixels at any <code>pixelScale</code>. With <code>transparent</code> there is no sky, the background is alpha 0 and the bloom adds only over what covers a pixel; a PNG's color where alpha is below 1e-6 is 0. Tiles are cut on a grid of 64 pixels, each drawn with a guard band of 64 pixels (384 with bloom) on its inner sides, so screen-space effects match a single render.</p>
+  </div>
+</div>
+
+<div class="api" id="getExportProgress">
+  <pre class="sig">enum class ExportState
+{
+    RUNNING,                                                // waiting for the scene to settle, or drawing its tiles
+    DONE,
+    FAILED,
+};
+
+struct ExportProgress
+{
+    ExportState                 state           = ExportState::FAILED;
+    uint32_t                    tilesDone       = 0;        // written to the file, or into the image
+    uint32_t                    tileCount       = 0;
+    float                       fraction        = 0.0f;     // of the export's frames, 0 to 1
+};
+
+ExportProgress getExportProgress(ExportHandle exportHandle) const;</pre>
+  <div class="body">
+    <p>Never waits. <code>DONE</code> once the last tile is written and the file closed. An unknown, cancelled or taken handle gives <code>FAILED</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="takeExport">
+  <pre class="sig">bool takeExport(ExportHandle exportHandle, ReadbackImage&amp; image);</pre>
+  <div class="body">
+    <p>For a <code>DONE</code> export: moves its image into <code>image</code> (an export to a file gives an empty image) and forgets the export. False while it runs or when it failed. Its camera copy, targets and buffers go with the next frame of <code>render</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="cancelExport">
+  <pre class="sig">bool cancelExport(ExportHandle exportHandle);</pre>
+  <div class="body">
+    <p>Stops a running export (the file it was writing is removed) or forgets a finished one. False for an unknown handle.</p>
   </div>
 </div>
 

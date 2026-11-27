@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tile Streaming · RASM</title>
 <meta name="description" content="How a map engine or an open world keeps a large set of tiles streaming in and out under a GPU memory budget: a tree of tiles, the screen-space error and the cut, hysteresis, a parent that stands in for children that are not ready, the residency cache and its eviction order, bounded work per frame, and how RASM does it.">
-<meta name="rasm-sources" content="include/rasm/tileStreamer.h src/scene/tileStreamer.cpp src/scene/tileResidency.h src/scene/tileResidency.cpp examples/24_map_tiles/main.cpp src/c/cTiles.cpp include/rasm/rasm_c.h examples/22_c_api/main.c tests/tileResidencyTests.cpp examples/29_point_streaming/main.cpp">
+<meta name="rasm-sources" content="include/rasm/tileStreamer.h src/scene/tileStreamer.cpp src/scene/tileResidency.h src/scene/tileResidency.cpp examples/24_map_tiles/main.cpp src/c/cTiles.cpp include/rasm/rasm_c.h examples/22_c_api/main.c tests/tileResidencyTests.cpp examples/29_point_streaming/main.cpp src/renderer/export.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -399,6 +399,8 @@
 <h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
 
 <p><code>TileStreamer</code> (<code>include/rasm/tileStreamer.h</code>, in the <code>rasm::renderer</code> library) keeps one scene's tiles under a byte budget. The application owns its tree and what a tile is; the streamer owns the budget, the residency, the eviction order, the limits per frame and what is drawn. The two talk through handles and arrays, with no callbacks, so the <a href="stable-c-abi.html">C API</a> has the same calls (<code>rasm_tile_streamer_*</code>).</p>
+
+<div class="callout"><strong>Exports</strong> While an <a href="tiled-export.html">export</a> of the scene runs, <code>TileStreamer::setViews</code> adds its view (the whole image's size, errors in its pixel-scaled pixels) to the views the screen error takes, so the application's cut loads the detail the export needs. The export waits until the streamer has nothing loading or changing, and from its first tile to its last <code>TileStreamer::update</code> only polls the loads: nothing drawn is shown, hidden or dropped (<code>isExportFrozen</code>), so every tile shows the same tiles. <code>examples/24_map_tiles --export-check</code> checks it.</div>
 
 <div class="legend">
   <span><i class="cpu"></i>the application</span>

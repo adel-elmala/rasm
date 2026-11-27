@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tiled Offscreen Export · RASM</title>
+<meta name="description" content="Render a still far larger than the GPU's biggest image: cut it in tiles drawn with an off-center projection, keep every effect that reads neighbour pixels or the whole screen the same in every tile (guard bands, a survey pass, a frozen scene), anti-alias by accumulating jittered samples, scale pixel sizes with the output, and stream the tiles to a PNG or EXR file with bounded memory; and how RASM does each.">
+<meta name="rasm-sources" content="include/rasm/export.h include/rasm/renderer.h include/rasm/rasm_c.h src/renderer/export.cpp src/renderer/export.h src/renderer/imageWriter.cpp src/renderer/imageWriter.h src/renderer/gpuScene.cpp src/renderer/weightedBlend.cpp src/renderer/viewGraph.cpp src/renderer/labelPlacement.cpp src/renderer/uberMaterialTypes.h src/renderer/pipelineWarmup.cpp src/scene/tileStreamer.cpp src/c/cExport.cpp shaders/passes/export.slang shaders/lib/agx.slang shaders/passes/sky.slang shaders/passes/grid.slang shaders/lib/vector.slang shaders/lib/points.slang shaders/lib/core.slang examples/32_export/main.cpp examples/exampleExport.h examples/24_map_tiles/main.cpp tests/exportTests.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/tiled-export.js"></script>
+</head>
+<body data-root="../" data-page="guides/tiled-export.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-light" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head light"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>Tiled offscreen export</h1>
+<p class="lead">A poster, a print or a figure for a paper needs a still image much larger than the screen: 8K, 16K, or 40 000 pixels across. One render of that size does not fit. The GPU has a largest image (often 16 384 or 32 768 pixels a side), and the targets of a 16K frame need gigabytes. A <b>tiled export</b> draws the image in pieces with the same camera, and stitches them so well that nobody can see where one tile ends. This page explains how, and the <a href="#in-rasm">last part</a> shows RASM's version.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>Each tile is the same camera with an <b>off-center projection</b>: a clip-space scale and shift that maps the tile's rect of the image to the whole target. It works for perspective and orthographic cameras alike.</li>
+    <li>Sizes in pixels need no change: the scale of the projection and the smaller viewport cancel.</li>
+    <li>Anything that reads <b>neighbour pixels</b> (a blur, a hole fill) needs a <b>guard band</b>: each tile is drawn larger than it is kept.</li>
+    <li>Anything decided for the <b>whole screen</b> (label placement, label visibility, a depth range for weights, a streaming cut) is decided once for the whole image, not per tile.</li>
+    <li>Temporal anti-aliasing has no history across tiles. A still instead <b>averages N jittered frames</b> per tile: supersampling.</li>
+    <li>A huge image is never whole in memory: finished rows of tiles <b>stream</b> to the file.</li>
+  </ul>
+</div>
+
+<h2 id="problem"><span class="n">1</span>Why one render does not fit</h2>
+<p>An image is limited twice: by the largest image the device makes, and by memory. A frame needs more than its final pixels: an HDR color, a depth, a bloom chain, sometimes MSAA samples.</p>
+
+<div class="stats">
+  <div><b>0.5 GB</b><span>16K RGBA8, final pixels only</span><small>15 360 × 8 640 × 4 B</small></div>
+  <div><b>1.6 GB</b><span>its HDR color and depth</span><small>8 + 4 B a pixel, before the bloom chain</small></div>
+  <div><b>6.4 GB</b><span>the same with 4× MSAA</span><small>samples multiply the color and depth</small></div>
+  <div><b>32 768</b><span>a common largest image side</span><small>a 40 000 px poster does not fit at all</small></div>
+</div>
+
+<h2 id="tiles"><span class="n">2</span>Tiles with an off-center projection</h2>
+<p>Cut the image into a grid. Each tile is drawn into a target of its own size, with the full camera. Only the projection changes: after the camera's projection, a <b>clip-space transform</b> stretches the tile's rect of the image to cover the whole target. Seen from above, each tile is a narrow slice of the camera's frustum, off to one side.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="Left: a camera's frustum seen from above, cut into four slices, one per tile column; the second slice is highlighted. Right: the image cut into a 4 by 3 grid of tiles, the same tile highlighted, and the clip-space transform that maps its rect to the whole target: scale W over R, then shift.">
+    <text x="20" y="24" class="title">the frustum from above</text>
+    <circle cx="190" cy="236" r="7" class="box"/>
+    <text x="190" y="260" class="mid small">camera</text>
+    <path d="M190,236 L40,50 M190,236 L340,50" class="arrow"/>
+    <path d="M40,50 H340" class="surface"/>
+    <path d="M190,236 L115,50 M190,236 L190,50 M190,236 L265,50" class="arrow dashed"/>
+    <path d="M190,236 L115,50 L190,50 Z" class="accent o-50"/>
+    <text x="152" y="42" class="mid small t-hot">tile 1</text>
+    <text x="78" y="42" class="mid small t-faint">tile 0</text>
+    <text x="228" y="42" class="mid small t-faint">tile 2</text>
+    <text x="302" y="42" class="mid small t-faint">tile 3</text>
+    <text x="400" y="24" class="title">the image, cut in tiles</text>
+    <rect x="400" y="40" width="320" height="180" class="paper"/>
+    <path d="M480,40 V220 M560,40 V220 M640,40 V220 M400,100 H720 M400,160 H720" class="grid"/>
+    <rect x="480" y="100" width="80" height="60" class="accent o-50"/>
+    <text x="520" y="134" class="mid small">tile</text>
+    <text x="400" y="244" class="small">clip'.x = clip.x · W / R + shift · clip.w</text>
+    <text x="400" y="262" class="small">shift = (W − 2 r) / R − 1, the same for y</text>
+  </svg>
+  <figcaption>The camera, its matrices and its world never change. Each tile's target holds R pixels, from pixel r of the W-pixel image. The scale stretches R pixels to the target; the shift moves pixel r to its left edge. Because the shift is multiplied by w, the same matrix works for a perspective camera (w = depth) and an orthographic one (w = 1).</figcaption>
+</figure>
+
+<p>Drag the point and pick a tile: the point lands on the same pixel of the image whether it is drawn whole or in the tile.</p>
+<figure class="lab" data-lab="tile-window" data-title="Draw a point in a tile">
+  <figcaption>Move the point and change the tile. The pixel it falls on in the tile, plus the tile's offset, is its pixel in the whole image: the tile is the same picture, only cut.</figcaption>
+</figure>
+
+<h3>Sizes in pixels need no tile math</h3>
+<p>Lines, text and points are sized in pixels. A shader turns a size in pixels into a clip-space offset with the viewport size, and a size in metres into pixels with the projection's scale. In a tile both factors change, by the same amount, and cancel:</p>
+<div class="formula">
+  <p class="eq">offset = pixels / (viewport / 2) · w</p>
+  <p class="eq">world size of a pixel = 2 w / (P<sub>11</sub> · viewport height)</p>
+  <dl><dt>P<sub>11</sub></dt><dd>grows by W / R in a tile</dd><dt>viewport</dt><dd>shrinks from W to R pixels</dd></dl>
+</div>
+<p>A 3-pixel line is 3 pixels wide in every tile, and a label is the same size everywhere.</p>
+
+<h2 id="neighbours"><span class="n">3</span>What reads neighbour pixels: guard bands</h2>
+<p>A pass that reads pixels around its own sees the tile's edge where the whole image has more pixels. A blur clamps at the edge and darkens or brightens there; a hole fill finds no neighbour. The seam shows on every tile border.</p>
+<p>The fix is a <b>guard band</b>: draw each tile larger than you keep it, with at least the effect's reach on every inner side. Keep only the middle. At the image's own edges there is no guard: there the whole image ends too, and its passes clamp at the same place.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="A render rect drawn around a kept tile: the kept tile in the middle, the guard band around it on the inner sides, and the neighbour tile whose pixels the guard repeats. A blur's reach fits inside the guard.">
+    <rect x="160" y="30" width="300" height="150" class="zone"/>
+    <rect x="220" y="60" width="180" height="90" class="accent o-50"/>
+    <text x="310" y="110" class="mid">kept tile</text>
+    <text x="170" y="48" class="small">guard band (drawn, dropped)</text>
+    <rect x="400" y="60" width="180" height="90" class="paper o-75"/>
+    <text x="520" y="110" class="mid small t-faint">next tile</text>
+    <path d="M400,165 H460" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="465" y="170" class="small t-hot">a blur's reach: inside the guard</text>
+    <text x="160" y="22" class="small">render rect = tile + guard</text>
+  </svg>
+  <figcaption>The neighbour's pixels near the border are drawn twice: once kept in their own tile, once as guard here. A multi-level effect such as a bloom pyramid also needs each tile's origin on its coarsest grid: with 6 halvings, a multiple of 64 pixels, so the tile's level texels sit where the whole image's do.</figcaption>
+</figure>
+
+<figure class="lab" data-lab="guard-band" data-title="Grow the guard band">
+  <figcaption>A row of pixels with three bright spots, blurred. The top curve is the whole row blurred at once; the bottom one is the row cut in tiles, each blurred with its guard and kept in the middle. Make the blur wider than the guard and a seam appears at the tile borders.</figcaption>
+</figure>
+
+<h2 id="whole"><span class="n">4</span>What the whole screen decides</h2>
+<p>Some decisions use the whole screen at once. Made per tile, they change from tile to tile, and a label or a color jumps at a border. Each is made once, for the whole image:</p>
+
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two labels near a tile border: placed per tile, both tiles place a different one; placed once, one label crosses the border whole.">
+      <path d="M120,10 V120" class="arrow dashed"/>
+      <rect x="70" y="50" width="100" height="22" class="accent o-50"/>
+      <text x="120" y="66" class="mid small">Harbour</text>
+      <text x="120" y="100" class="mid small t-faint">tile border</text>
+    </svg>
+    <h4>Label placement</h4>
+    <p>Placed once on the whole image's pixels, so each label is in one place and crosses borders whole.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A label's anchor tested against the depth in the one tile that holds it; the other tiles take its answer.">
+      <path d="M120,10 V120" class="arrow dashed"/>
+      <circle cx="80" cy="80" r="5" class="hot"/>
+      <text x="80" y="104" class="mid small">anchor</text>
+      <text x="180" y="70" class="mid small t-faint">takes its answer</text>
+    </svg>
+    <h4>Label visibility</h4>
+    <p>A <b>survey</b> draws each tile once and tests each anchor in the tile that holds it. The tiles then use that answer.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The depth range of see-through draws: the union over all tiles, the same for every tile.">
+      <rect x="30" y="40" width="80" height="16" class="zone"/>
+      <rect x="90" y="64" width="100" height="16" class="zone"/>
+      <rect x="30" y="92" width="160" height="16" class="accent o-50"/>
+      <text x="200" y="104" class="small">union</text>
+    </svg>
+    <h4>Ranges over the screen</h4>
+    <p>A depth range for <a href="weighted-oit.html">weighted transparency</a> is the union the survey found over all tiles, fixed before the first tile.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A streaming cut: tiles of a map at several levels of detail, frozen while the export runs.">
+      <rect x="30" y="30" width="90" height="80" class="paper"/>
+      <path d="M75,30 V110 M30,70 H120" class="grid"/>
+      <rect x="130" y="30" width="80" height="80" class="paper"/>
+      <text x="170" y="74" class="mid small">frozen</text>
+    </svg>
+    <h4>What is drawn</h4>
+    <p>Streaming, LOD and animation must not change between tiles. LODs use the whole image's camera; the drawn set of streamed tiles is frozen while the export runs.</p>
+  </div>
+</div>
+
+<h2 id="aa"><span class="n">5</span>Anti-aliasing a still: accumulate samples</h2>
+<p><a href="taa.html">TAA</a> blends each frame with the history of the frames before. In an export the frame before is another tile, so the history is useless. A still has time instead: draw each tile N times, each time moved by a different sub-pixel offset (the <b>jitter</b>), and average. This is <b>supersampling</b>: every pixel is the box-filtered mean of N samples, with no ghosting and no blur from a history.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 170" role="img" aria-label="One pixel with 16 sample positions in a 4 by 4 grid; an edge crosses it, 6 samples are inside, so the pixel takes 6 sixteenths of the surface's color.">
+    <rect x="40" y="20" width="130" height="130" class="paper"/>
+    <path d="M40,150 L170,40" class="surface"/>
+    <g class="o-75">
+      <circle cx="56" cy="36" r="4" class="box"/><circle cx="89" cy="36" r="4" class="box"/><circle cx="121" cy="36" r="4" class="box"/><circle cx="154" cy="36" r="4" class="box"/>
+      <circle cx="56" cy="69" r="4" class="box"/><circle cx="89" cy="69" r="4" class="box"/><circle cx="121" cy="69" r="4" class="box"/><circle cx="154" cy="69" r="4" class="hot"/>
+      <circle cx="56" cy="101" r="4" class="box"/><circle cx="89" cy="101" r="4" class="box"/><circle cx="121" cy="101" r="4" class="hot"/><circle cx="154" cy="101" r="4" class="hot"/>
+      <circle cx="56" cy="134" r="4" class="hot"/><circle cx="89" cy="134" r="4" class="hot"/><circle cx="121" cy="134" r="4" class="hot"/><circle cx="154" cy="134" r="4" class="hot"/>
+    </g>
+    <text x="200" y="50" class="small">16 samples a pixel: the centres of a 4 × 4 grid</text>
+    <text x="200" y="72" class="small">7 are under the surface: the pixel is 7/16 surface, 9/16 background</text>
+    <text x="200" y="94" class="small">the same offsets in every tile: the samples form one grid over the image</text>
+    <text x="200" y="116" class="small">sum in floats, then divide by N; encode at the end</text>
+  </svg>
+  <figcaption>Each sample is a full frame of the tile, so it costs N frames a tile. A square count gives a stratified grid (even coverage); other counts use a low-discrepancy sequence. MSAA can still run inside each sample, but N samples already smooth the edges, so it mostly adds cost.</figcaption>
+</figure>
+
+<h2 id="scale"><span class="n">6</span>Pixel sizes at a higher resolution</h2>
+<p>An export four times wider than the screen raises a question: should a 2-pixel line stay 2 pixels (a thin line on a poster), or become 8 (the same look as on screen, sharper)? Both are useful, so it is a setting: a <b>pixel scale</b> s multiplies every size given in pixels, and the level of detail is chosen in those larger pixels too.</p>
+
+<div class="split">
+  <div>
+    <h4>s = 1: native pixels</h4>
+    <svg viewBox="0 0 320 120" role="img" aria-label="A 4K export at pixel scale 1: lines and text keep their size in pixels, so they look thin and small on the larger image.">
+      <rect x="10" y="10" width="300" height="100" class="paper"/>
+      <path d="M30,90 C120,30 200,100 290,40" class="arrow"/>
+      <text x="160" y="40" class="mid small">Harbour</text>
+    </svg>
+    <p>Lines and text keep their pixels: thin on a large image, the most detail.</p>
+  </div>
+  <div>
+    <h4>s = 4: the screen's look</h4>
+    <svg viewBox="0 0 320 120" role="img" aria-label="The same export at pixel scale 4: lines and text are four times wider, like a zoomed screenshot but sharp.">
+      <rect x="10" y="10" width="300" height="100" class="paper"/>
+      <path d="M30,90 C120,30 200,100 290,40" class="arrow thick"/>
+      <text x="160" y="44" class="mid big">Harbour</text>
+    </svg>
+    <p>Everything sized in pixels is s times larger: a zoomed screenshot, but sharp.</p>
+  </div>
+</div>
+<p>A blur sized in pixels, such as bloom, is the exception in many engines: its reach comes from the number of pyramid levels, so scaling it means more levels and an s times wider guard band.</p>
+
+<h2 id="stream"><span class="n">7</span>Streaming tiles to the file</h2>
+<p>Image files are written row by row. The tiles of one row of tiles (a <b>band</b>) fill a buffer one image wide; when the last tile of the band is in, the band goes to a writer thread, which compresses and writes it. The next row of tiles waits while a band is already waiting for the writer, so memory holds at most three bands (one being written, one waiting, one filling) and a few tiles, not the image.</p>
+
+<ol class="flow">
+  <li class="gpu">GPU: the tile's last sample writes its finished pixels to a CPU-readable buffer</li>
+  <li class="cpu">CPU, two frames later: copy the tile's rows into the band</li>
+  <li class="mem">band full: hand it to the writer thread</li>
+  <li class="cpu">writer: filter, deflate, write the rows; the next band fills meanwhile</li>
+</ol>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Format</th><th>Values</th><th>Alpha</th><th>Use</th></tr>
+  <tr><td>PNG, 8 bits</td><td>sRGB-encoded display colors</td><td>straight</td><td>the web, slides</td></tr>
+  <tr><td>PNG, 16 bits</td><td>sRGB-encoded, 65 536 steps</td><td>straight</td><td>print: no banding in soft gradients</td></tr>
+  <tr><td>EXR, half or float</td><td>linear; display colors, or the scene's HDR light before tone mapping</td><td>premultiplied</td><td>compositing, grading</td></tr>
+</table>
+</div>
+
+<p>A transparent background needs care at edges. The renderer's colors are premultiplied by coverage, which an EXR keeps. A PNG stores straight color, so the exporter divides by alpha; where alpha is nearly 0 it writes black instead of a color divided by almost nothing, which would show as bright fringes.</p>
+
+<h2 id="pitfalls"><span class="n">8</span>Pitfalls</h2>
+<dl class="pitfalls">
+  <div><dt>A bright or dark line along every tile border</dt><dd>A pass reads past the tile: the guard band is smaller than its reach, or the tiles are not aligned to the effect's coarsest grid.</dd></div>
+  <div><dt>The sky or a grid repeats in every tile</dt><dd>A shader rebuilds view rays from the projection's diagonal only and ignores its off-center terms. Use the full inverse, or add the offset terms.</dd></div>
+  <div><dt>A label shows in one tile and is missing in the next</dt><dd>Placement or visibility was decided per tile. Decide it once for the image.</dd></div>
+  <div><dt>Content differs between tiles</dt><dd>The scene changed during the export: an animation ran, a stream loaded new detail, an LOD was chosen per tile. Hold the scene still and choose LODs with the whole image's camera.</dd></div>
+  <div><dt>Bright fringes around a transparent PNG</dt><dd>Straight color divided by a tiny alpha. Write 0 below a small alpha.</dd></div>
+  <div><dt>An export that eats all memory</dt><dd>The whole image is kept before it is written. Stream bands.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
+<p><a href="../api/engine.html#exportView"><code>Renderer::exportView</code></a> starts an export of a <a href="multiple-views.html">view</a>. It runs in the frames of <code>Renderer::render</code>, after the application's views: each frame draws one sample of one tile, so the application keeps its frame rate and polls <a href="../api/engine.html#getExportProgress"><code>getExportProgress</code></a>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="The phases of an export over frames: settle, survey (one frame per tile), drain (two frames), tiles (samples frames per tile), flush. Below, what one tile frame draws: the scene passes into the render rect, the MSAA resolve and bloom if the view has them, then the Export pass, which tone maps, sums the sample and on the last one writes the tile out.">
+    <rect x="20" y="30" width="110" height="40" class="box cpu"/><text x="75" y="55" class="mid small">settle</text>
+    <rect x="140" y="30" width="130" height="40" class="box gpu"/><text x="205" y="55" class="mid small">survey: 1 / tile</text>
+    <rect x="280" y="30" width="80" height="40" class="box"/><text x="320" y="55" class="mid small">drain: 2</text>
+    <rect x="370" y="30" width="260" height="40" class="box gpu"/><text x="500" y="55" class="mid small">tiles: samples frames / tile</text>
+    <rect x="640" y="30" width="100" height="40" class="box cpu"/><text x="690" y="55" class="mid small">flush</text>
+    <text x="20" y="20" class="small t-faint">loads, streams quiet</text>
+    <text x="142" y="20" class="small t-faint">labels, weighted span</text>
+    <text x="640" y="20" class="small t-faint">last bands written</text>
+    <rect x="20" y="110" width="170" height="40" class="box gpu"/><text x="105" y="135" class="mid small">scene passes, render rect</text>
+    <rect x="210" y="110" width="140" height="40" class="box gpu"/><text x="280" y="135" class="mid small">MSAA resolve, bloom</text>
+    <rect x="370" y="110" width="170" height="40" class="box shader"/><text x="455" y="135" class="mid small">Export pass: AgX, sum</text>
+    <rect x="560" y="110" width="180" height="40" class="box mem"/><text x="650" y="135" class="mid small">output buffer (last sample)</text>
+    <path d="M190,130 H208" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <path d="M350,130 H368" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <path d="M540,130 H558" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="20" y="180" class="small">one frame of the tiles phase; its scene view takes the tile's clip matrix and jitter</text>
+    <text x="20" y="198" class="small">the output buffer is read two frames later, after the frame's fence, into the band</text>
+  </svg>
+  <figcaption>An export is a hidden view in the view graph, with a copy of the camera made when it starts and a target of one render rect. Exports run one after another.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>This page</th><th>RASM</th></tr>
+  <tr><td>tiles, off-center projection</td><td><code>getExportLayout</code>, <code>getExportTile</code>, <code>getExportTileClip</code>: tiles of <code>ExportDesc::tileSize</code> (<code>DEFAULT_EXPORT_TILE_SIZE</code>, 2048), the image rounded up to <code>EXPORT_ALIGNMENT</code> (64), one render rect size for every tile, moved back inside the image at its edges</td></tr>
+  <tr><td>guard band</td><td><code>EXPORT_GUARD</code> (64) without bloom; <code>EXPORT_BLOOM_GUARD</code> (384) with it: the bloom's reach is 189 pixels down its 6 levels and 186 back up</td></tr>
+  <tr><td>rays through an off-center window</td><td><code>shaders/passes/sky.slang</code> and <code>grid.slang</code> add the projection's offset terms (<code>projection[i][2]</code>), which also hold TAA's jitter</td></tr>
+  <tr><td>placement, visibility, ranges for the whole image</td><td>labels are placed on the whole image (<code>placeViewLabels</code> with the image's size); the survey's probes test each anchor in its tile only, at once (<code>getExportLabelProbe</code>), and the tiles keep the fades; the weighted span is the union of the survey's words (<code>gatherExportWeightedWords</code>)</td></tr>
+  <tr><td>a still scene</td><td>the camera is copied at the start; a <a href="tile-streaming.html"><code>TileStreamer</code></a> of the scene counts the export's view in its screen error, and changes nothing drawn from the survey to the last tile (<code>isExportFrozen</code>); the application holds its animation time still</td></tr>
+  <tr><td>accumulation</td><td><code>ExportDesc::samples</code> (16): <code>getExportJitter</code> gives a 4 × 4 grid, the Export pass sums into an RGBA32F buffer; TAA is off and MSAA too unless <code>ExportDesc::msaa</code></td></tr>
+  <tr><td>pixel scale</td><td><code>ExportDesc::pixelScale</code> → <code>SceneData::pixelScale</code>: widths, text, points, the grid's lines, label cells; the LOD's pixels per unit are divided by it. Bloom keeps its reach in output pixels (<code>D55</code>)</td></tr>
+  <tr><td>streaming, formats, alpha</td><td><code>ImageWriter</code> on its own thread, at most <code>EXPORT_MAX_QUEUED_BANDS</code> bands waiting; <code>ExportFormat</code>: PNG8, PNG16, EXR_HALF, EXR_FLOAT; without a path the image stays in memory for <code>takeExport</code></td></tr>
+</table>
+</div>
+
+<h3>Code map</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>File</th><th>What</th></tr>
+  <tr><td><code>include/rasm/export.h</code></td><td><code>ExportDesc</code>, <code>ExportFormat</code>, <code>ExportProgress</code></td></tr>
+  <tr><td><code>src/renderer/export.cpp</code></td><td>the layout, the jitter, the phases (<code>updateExports</code>, <code>finishExportSubmit</code>), the Export pass, the bands (<code>readExports</code>)</td></tr>
+  <tr><td><code>shaders/passes/export.slang</code></td><td>tone map (<code>shaders/lib/agx.slang</code>, shared with the tone-map pass), premultiply, sum, encode</td></tr>
+  <tr><td><code>src/renderer/imageWriter.cpp</code></td><td>streaming PNG (one deflate stream) and EXR (ZIP blocks of 16 lines) on a thread</td></tr>
+  <tr><td><code>src/renderer/gpuScene.cpp</code></td><td><code>prepareSceneView</code> and <code>placeViewLabels</code> for an export's view</td></tr>
+  <tr><td><code>examples/32_export</code></td><td>exports a scene with every screen-space effect, and checks tiles against one tile; <code>examples/24_map_tiles --export-check</code> does it while streaming</td></tr>
+</table>
+</div>
+
+<div class="callout rule"><strong>Rules to keep</strong> A pass that reads pixels around its own must reach less than the guard band, or the guard must grow. A shader that rebuilds a ray from the projection must use its offset terms. Anything decided per view for the whole screen must take the export's whole image (<code>ExportViewFrame</code>), not the tile.</div>
+
+<p>Further reading: the <a href="headless-readback.html">headless readback</a> guide (the copies back to the CPU), <a href="bloom.html">bloom</a>, <a href="taa.html">TAA</a>, and the OpenEXR file layout document.</p>
+
+<nav class="page-nav"></nav>
+</main>
+</div>
+</body>
+</html>

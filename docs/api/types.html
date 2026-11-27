@@ -126,6 +126,7 @@ struct Handle
   <tr><td><code>TileHandle</code></td><td>a tile record of a <a href="engine.html#TileStreamer">TileStreamer</a>: <a href="engine.html#TileStreamer">createTile</a></td></tr>
   <tr><td><code>ReadbackHandle</code></td><td>a copy of an image to the CPU, done a few frames later: <a href="engine.html#readFrame">readFrame</a>, <a href="engine.html#readTexture">readTexture</a></td></tr>
   <tr><td><code>PickHandle</code></td><td>a question about a view's pixels, answered a few frames later: <a href="engine.html#pick">pick</a>, <a href="engine.html#takePick">takePick</a></td></tr>
+  <tr><td><code>ExportHandle</code></td><td>a still of a view at any size, drawn over many frames: <a href="engine.html#exportView">exportView</a>, <a href="engine.html#getExportProgress">getExportProgress</a></td></tr>
   <tr><td><code>DescriptorSetLayoutHandle</code></td><td>a descriptor set layout: <a href="low-level.html#createBindlessDescriptorSetLayout">createBindlessDescriptorSetLayout</a></td></tr>
   <tr><td><code>DescriptorPoolHandle</code></td><td>a descriptor pool: <a href="low-level.html#createDescriptorPool">createDescriptorPool</a></td></tr>
   <tr><td><code>DescriptorSetHandle</code></td><td>a descriptor set: <a href="low-level.html#allocateDescriptorSet">allocateDescriptorSet</a>; the engine's one from <a href="low-level.html#getBindlessDescriptorSet">getBindlessDescriptorSet</a></td></tr>

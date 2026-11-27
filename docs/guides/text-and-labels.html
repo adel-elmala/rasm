@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Text and Labels · RASM</title>
 <meta name="description" content="How a map engine draws text: glyphs stored as signed distances so they stay sharp at any size, a halo from the same distances, text laid out from a font's metrics and kerning, labels anchored in the world but sized on the screen, placed each frame by priority so they never overlap, hidden by depth, sharp under MSAA and TAA. Then how RASM does it.">
-<meta name="rasm-sources" content="include/rasm/text.h include/rasm/vector.h include/rasm/assetLoader.h include/rasm/material.h include/rasm/mesh.h src/scene/text.cpp src/scene/vector.cpp src/assets/fontLoad.cpp src/assets/meshBuild.h src/renderer/labelPlacement.h src/renderer/labelPlacement.cpp src/renderer/gpuScene.cpp shaders/lib/vector.slang shaders/passes/rasm.slang shaders/passes/labelDepth.slang src/c/cText.cpp src/c/cVector.cpp src/c/cLoader.cpp include/rasm/rasm_c.h examples/25_vector_map/main.cpp tests/textTests.cpp tests/labelPlacementTests.cpp">
+<meta name="rasm-sources" content="include/rasm/text.h include/rasm/vector.h include/rasm/assetLoader.h include/rasm/material.h include/rasm/mesh.h src/scene/text.cpp src/scene/vector.cpp src/assets/fontLoad.cpp src/assets/meshBuild.h src/renderer/labelPlacement.h src/renderer/labelPlacement.cpp src/renderer/gpuScene.cpp shaders/lib/vector.slang shaders/passes/rasm.slang shaders/passes/labelDepth.slang src/c/cText.cpp src/c/cVector.cpp src/c/cLoader.cpp include/rasm/rasm_c.h examples/25_vector_map/main.cpp tests/textTests.cpp tests/labelPlacementTests.cpp src/renderer/export.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -307,6 +307,8 @@
 <h2 id="in-rasm"><span class="n">11</span>In RASM</h2>
 
 <p>Labels are vector features (<a href="vector-rendering.html">Vector lines, polygons and points</a>): a mesh built by <code>addVectorLabels</code> and drawn with a <code>MaterialType::VECTOR</code> material whose <code>VectorMaterial::font</code> names a font. Its <code>width</code> is the text's size, its <code>outlineColor</code> and <code>outlineWidth</code> the halo. So labels go through the GPU culling, the blend sort, MSAA and TAA like the other vectors, and are a <a href="tile-streaming.html">TileStreamer</a> tile's content like any mesh. What is new is the font atlas and the placement each view runs on the CPU.</p>
+
+<div class="callout"><strong>Exports</strong> An <a href="tiled-export.html">export</a> places its labels once, on the whole image's pixels, with the text, the halo, the depth bias and the collision cells times its pixel scale (<code>placeLabels</code> takes the cell size), and with no fade. A survey frame per tile tests each anchor in the one tile that keeps it, at once; the tiles then keep those fades, so a label that crosses a tile border is drawn whole in both.</div>
 
 <div class="legend">
   <span><i class="cpu"></i>any thread</span>
