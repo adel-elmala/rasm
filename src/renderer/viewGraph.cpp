@@ -128,33 +128,49 @@ namespace rasm
     {
         ZoneScoped;
 
-        for (ViewState &state : states)
-            state.used = false;
-        for (ShadowSet &set : shadowSets)
-            set.cameras.clear();
-        textures.clear();
         static_assert(MAX_SCENE_VIEWS <= 32);
         const uint32_t heldBefore = getHeldSceneViews(*renderer.gpuScene);
+        // A view that fails may have added some of its passes (its shadows), so the graph is built again from the start
+        // without it: no map is drawn for no reader, and the scene views it took are free for the views after it.
+        std::vector<bool> leftOut(viewCount, false);
         RenderGraph next = renderer.createRenderGraph();
-        for (uint32_t i = 0; i < viewCount; ++i)
+        for (bool complete = false; !complete;)
         {
-            const View &view = views[i];
-            bool repeated = false;
-            for (uint32_t j = 0; j < i; ++j)
-                repeated = repeated || (views[j].camera == view.camera && views[j].output.target == view.output.target && isSameWindow(views[j].output.window, view.output.window));
-            if (repeated)
+            complete = true;
+            next = renderer.createRenderGraph();
+            for (ViewState &state : states)
+                state.used = false;
+            for (ShadowSet &set : shadowSets)
+                set.cameras.clear();
+            textures.clear();
+            for (uint32_t i = 0; i < viewCount && complete; ++i)
             {
-                spdlog::error("render: view {} has the camera and output of an earlier view; it is left out.", i);
-                continue;
+                const View &view = views[i];
+                bool repeated = false;
+                for (uint32_t j = 0; j < i; ++j)
+                    repeated = repeated || (views[j].camera == view.camera && views[j].output.target == view.output.target && isSameWindow(views[j].output.window, view.output.window));
+                if (leftOut[i])
+                    continue;
+                if (repeated)
+                {
+                    spdlog::error("render: view {} has the camera and output of an earlier view; it is left out.", i);
+                    leftOut[i] = true;
+                    continue;
+                }
+                // A window closed or a texture destroyed between frames is a normal change: the view draws nothing.
+                if (sizes[i].x == 0 || sizes[i].y == 0)
+                {
+                    spdlog::info("render: view {} (camera {}) has no pixels (a removed window, a destroyed target, or an empty rect); it is left out.", i, view.camera.index);
+                    leftOut[i] = true;
+                    continue;
+                }
+                if (!addView(next, view, sizes[i]))
+                {
+                    spdlog::error("render: view {} (camera {}) could not be added; it is left out this frame and until the list changes.", i, view.camera.index);
+                    leftOut[i] = true;
+                    complete = false;
+                }
             }
-            // A window closed or a texture destroyed between frames is a normal change: the view draws nothing.
-            if (sizes[i].x == 0 || sizes[i].y == 0)
-            {
-                spdlog::info("render: view {} (camera {}) has no pixels (a removed window, a destroyed target, or an empty rect); it is left out.", i, view.camera.index);
-                continue;
-            }
-            if (!addView(next, view, sizes[i]))
-                spdlog::error("render: view {} (camera {}) could not be added; it is left out this frame and until the list changes.", i, view.camera.index);
         }
         // An export whose view failed is failed: the next frame builds the graph again without it.
         const bool exportAdded = renderer.addExportPasses(next, textures.data(), static_cast<uint32_t>(textures.size()));
@@ -181,7 +197,7 @@ namespace rasm
         // The views kept from the graph before, and their shadows, are the same scene views: their culling history,
         // Hi-Z and label fades go on.
         const uint32_t held = getHeldSceneViews(*renderer.gpuScene);
-        spdlog::info("render: the views' graph holds {} scene views, {} of them new.", std::popcount(held), std::popcount(held & ~heldBefore));
+        spdlog::debug("render: the views' graph holds {} scene views, {} of them new.", std::popcount(held), std::popcount(held & ~heldBefore));
         graphViews.assign(views, views + viewCount);
         graphSizes = sizes;
         built = true;

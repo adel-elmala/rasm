@@ -1132,6 +1132,8 @@ namespace rasm::c
         return {.mouse = capture.mouse ? RASM_TRUE : RASM_FALSE, .keyboard = capture.keyboard ? RASM_TRUE : RASM_FALSE, .text = capture.text ? RASM_TRUE : RASM_FALSE};
     }
 
+    // Without the shadows: they sit behind a pointer the caller's view gives, which readViews checks and reads (and
+    // toC gives the defaults, none).
     View toCpp(const rasm_view &view)
     {
         return {.scene = toCpp(view.scene),

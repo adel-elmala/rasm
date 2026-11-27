@@ -201,6 +201,12 @@ namespace rasm
             return true;
         }
 
+        // The same light and maps: a scene view of such a shadow is kept when only its distance or split changes.
+        bool sameShadowMaps(const SceneShadow &a, const SceneShadow &b)
+        {
+            return a.light == b.light && a.mapCount == b.mapCount && std::equal(a.maps, a.maps + MAX_SHADOW_CASCADES, b.maps);
+        }
+
         bool holdsShadow(const SceneView &view, const SceneShadow &shadow)
         {
             return std::find(view.shadows, view.shadows + view.shadowCount, shadow) != view.shadows + view.shadowCount;
@@ -1253,7 +1259,7 @@ namespace rasm
             const bool cube = type == LightType::POINT;
             for (const SceneView &view : gpuScene->views)
             {
-                if (view.graphs > 0 && view.depthOnly && view.scene == scene && view.camera == camera && view.renderTarget == shadow.maps[cube ? 0 : i] && view.face == (cube ? i : 0) && view.shadows[0] == shadow)
+                if (view.graphs > 0 && view.depthOnly && view.scene == scene && view.camera == camera && view.renderTarget == shadow.maps[cube ? 0 : i] && view.face == (cube ? i : 0) && sameShadowMaps(view.shadows[0], shadow))
                 {
                     --neededViews;
                     break;
@@ -1284,8 +1290,19 @@ namespace rasm
         for (uint32_t i = 0; i < viewCount; ++i)
         {
             const bool cube = type == LightType::POINT;
+            const size_t firstPass = graph.passes.size();
             if (!addSceneViewPasses(graph, scene, camera, shadow.maps[cube ? 0 : i], cube ? i : 0, &shadow, 1, true, nullptr, 0))
                 return {};
+            // The caller's maps may hold another view's depth from earlier in the frame (the ViewGraph's shadow sets):
+            // the first pass that draws each one clears it.
+            for (size_t p = firstPass; maps != nullptr && p < graph.passes.size(); ++p)
+            {
+                if (!graph.passes[p].compute && graph.passes[p].outputRenderTarget == shadow.maps[cube ? 0 : i])
+                {
+                    graph.passes[p].clearsOutput = true;
+                    break;
+                }
+            }
         }
         return shadow;
     }
@@ -1416,10 +1433,6 @@ namespace rasm
                     drawWeighted(view);
                 }
             });
-        // A shadow map starts empty for each view that draws it: the views of other cameras that share it drew theirs
-        // before (ViewGraph's shadow sets).
-        if (depthOnly)
-            graph.passes.back().clearsOutput = true;
         // See-through draws go over everything the draw passes and the sky left, so a shaded view ends with them. The
         // pass is there even while the scene has no blend run, since the graph is fixed and the scene is not. The
         // culling view's ghosts come last, and read the visibility the late pass left. Before it, the labels' anchors
@@ -1516,7 +1529,7 @@ namespace rasm
         return true;
     }
 
-    // A view lives while a graph holds it, so graphs built for the same scene, camera, target, face and shadows share
+    // A view lives while a graph holds it, so graphs built for the same scene, camera, target, face and shadow maps share
     // it. Its buffers start small and grow in prepareSceneView under the same handles.
     uint32_t Renderer::createSceneView(SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget, uint32_t face, const SceneShadow *shadows, uint32_t shadowCount, bool depthOnly)
     {
@@ -1532,8 +1545,11 @@ namespace rasm
                 continue;
             }
             if (view.scene == scene && view.camera == camera && view.renderTarget == renderTarget && view.face == face && view.shadowCount == shadowCount &&
-                std::equal(view.shadows, view.shadows + MAX_VIEW_SHADOWS, viewShadows))
+                std::equal(view.shadows, view.shadows + MAX_VIEW_SHADOWS, viewShadows, sameShadowMaps))
             {
+                // A new distance or split takes effect at once: only the ViewGraph's kept maps are shared between
+                // graphs, and its old graph does not run again.
+                std::copy(viewShadows, viewShadows + MAX_VIEW_SHADOWS, view.shadows);
                 ++view.graphs;
                 return i;
             }

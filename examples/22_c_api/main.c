@@ -640,13 +640,13 @@ int main(int argc, char **argv)
     rasm_engine_destroy(engine);
     if (args.headless && !written)
     {
-            fprintf(stderr, "error: frame %u was not written to %s: %s\n", args.frames, args.out, rasm_get_last_error());
-            return 1;
+        fprintf(stderr, "error: frame %u was not written to %s: %s\n", args.frames, args.out, rasm_get_last_error());
+        return 1;
     }
     if (args.headless && !picked)
     {
-            fprintf(stderr, "error: the pick at the view's centre hit nothing: %s\n", rasm_get_last_error());
-            return 1;
+        fprintf(stderr, "error: the pick at the view's centre hit nothing: %s\n", rasm_get_last_error());
+        return 1;
     }
     return 0;
 }
