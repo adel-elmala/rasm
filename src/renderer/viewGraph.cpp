@@ -1,12 +1,14 @@
 #include "renderer/viewGraph.h"
 #include "rasm/renderer.h"
 #include "renderer/export.h"
+#include "renderer/gpuScene.h"
 #include "renderer/taa.h"
 
 #include "spdlog/spdlog.h"
 #include "tracy/Tracy.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <string>
 
 namespace rasm
@@ -41,6 +43,15 @@ namespace rasm
         bool getBloom(const View &view, const RendererConfig &config)
         {
             return view.bloom == ViewToggle::DEFAULT ? config.bloom : view.bloom == ViewToggle::ON;
+        }
+
+        // A bit per scene view a graph holds.
+        uint32_t getHeldSceneViews(const GpuScene &gpuScene)
+        {
+            uint32_t held = 0;
+            for (uint32_t i = 0; i < MAX_SCENE_VIEWS; ++i)
+                held |= gpuScene.views[i].graphs > 0 ? 1u << i : 0u;
+            return held;
         }
 
         // An invalid handle and the main window's are one window.
@@ -117,29 +128,49 @@ namespace rasm
     {
         ZoneScoped;
 
-        for (ViewState &state : states)
-            state.used = false;
-        textures.clear();
+        static_assert(MAX_SCENE_VIEWS <= 32);
+        const uint32_t heldBefore = getHeldSceneViews(*renderer.gpuScene);
+        // A view that fails may have added some of its passes (its shadows), so the graph is built again from the start
+        // without it: no map is drawn for no reader, and the scene views it took are free for the views after it.
+        std::vector<bool> leftOut(viewCount, false);
         RenderGraph next = renderer.createRenderGraph();
-        for (uint32_t i = 0; i < viewCount; ++i)
+        for (bool complete = false; !complete;)
         {
-            const View &view = views[i];
-            bool repeated = false;
-            for (uint32_t j = 0; j < i; ++j)
-                repeated = repeated || (views[j].camera == view.camera && views[j].output.target == view.output.target && isSameWindow(views[j].output.window, view.output.window));
-            if (repeated)
+            complete = true;
+            next = renderer.createRenderGraph();
+            for (ViewState &state : states)
+                state.used = false;
+            for (ShadowSet &set : shadowSets)
+                set.cameras.clear();
+            textures.clear();
+            for (uint32_t i = 0; i < viewCount && complete; ++i)
             {
-                spdlog::error("render: view {} has the camera and output of an earlier view; it is left out.", i);
-                continue;
+                const View &view = views[i];
+                bool repeated = false;
+                for (uint32_t j = 0; j < i; ++j)
+                    repeated = repeated || (views[j].camera == view.camera && views[j].output.target == view.output.target && isSameWindow(views[j].output.window, view.output.window));
+                if (leftOut[i])
+                    continue;
+                if (repeated)
+                {
+                    spdlog::error("render: view {} has the camera and output of an earlier view; it is left out.", i);
+                    leftOut[i] = true;
+                    continue;
+                }
+                // A window closed or a texture destroyed between frames is a normal change: the view draws nothing.
+                if (sizes[i].x == 0 || sizes[i].y == 0)
+                {
+                    spdlog::info("render: view {} (camera {}) has no pixels (a removed window, a destroyed target, or an empty rect); it is left out.", i, view.camera.index);
+                    leftOut[i] = true;
+                    continue;
+                }
+                if (!addView(next, view, sizes[i]))
+                {
+                    spdlog::error("render: view {} (camera {}) could not be added; it is left out this frame and until the list changes.", i, view.camera.index);
+                    leftOut[i] = true;
+                    complete = false;
+                }
             }
-            // A window closed or a texture destroyed between frames is a normal change: the view draws nothing.
-            if (sizes[i].x == 0 || sizes[i].y == 0)
-            {
-                spdlog::info("render: view {} (camera {}) has no pixels (a removed window, a destroyed target, or an empty rect); it is left out.", i, view.camera.index);
-                continue;
-            }
-            if (!addView(next, view, sizes[i]))
-                spdlog::error("render: view {} (camera {}) could not be added; it is left out this frame and until the list changes.", i, view.camera.index);
         }
         // An export whose view failed is failed: the next frame builds the graph again without it.
         const bool exportAdded = renderer.addExportPasses(next, textures.data(), static_cast<uint32_t>(textures.size()));
@@ -155,6 +186,18 @@ namespace rasm
         }
         std::erase_if(states, [](const ViewState &state)
                       { return !state.used; });
+        // A set no view draws any more goes; the release queue frees its maps once the frames in flight are done.
+        for (const ShadowSet &set : shadowSets)
+        {
+            for (uint32_t i = 0; set.cameras.empty() && i < set.mapCount; ++i)
+                renderer.destroyRenderTarget(set.maps[i]);
+        }
+        std::erase_if(shadowSets, [](const ShadowSet &set)
+                      { return set.cameras.empty(); });
+        // The views kept from the graph before, and their shadows, are the same scene views: their culling history,
+        // Hi-Z and label fades go on.
+        const uint32_t held = getHeldSceneViews(*renderer.gpuScene);
+        spdlog::debug("render: the views' graph holds {} scene views, {} of them new.", std::popcount(held), std::popcount(held & ~heldBefore));
         graphViews.assign(views, views + viewCount);
         graphSizes = sizes;
         built = true;
@@ -178,6 +221,22 @@ namespace rasm
             {
                 spdlog::error("render: a view's output target needs one color, no depth and one sample, and must not be a storage target.");
                 return false;
+            }
+        }
+        if (view.shadowCount > MAX_VIEW_SHADOWS)
+        {
+            spdlog::error("render: a view has at most {} shadows (MAX_VIEW_SHADOWS), not {}.", MAX_VIEW_SHADOWS, view.shadowCount);
+            return false;
+        }
+        for (uint32_t i = 0; i < view.shadowCount; ++i)
+        {
+            for (uint32_t j = 0; j < i; ++j)
+            {
+                if (view.shadows[j].light == view.shadows[i].light)
+                {
+                    spdlog::error("render: a view has two shadows of one light.");
+                    return false;
+                }
             }
         }
         const AntiAliasing antiAliasing = getAntiAliasing(view, config);
@@ -231,7 +290,17 @@ namespace rasm
         if (!renderer.resizeRenderTarget(state.sceneTarget, size.x, size.y) || (taa && !renderer.resizeRenderTarget(state.taaHistory, size.x, size.y)))
             return false;
 
-        if (!renderer.addScenePasses(next, view.scene, view.camera, state.sceneTarget, nullptr, 0, textures.data(), static_cast<uint32_t>(textures.size())))
+        // Its shadows first: each draws its set's maps from this view's camera, after the views before have read them.
+        SceneShadow shadows[MAX_VIEW_SHADOWS] = {};
+        for (uint32_t i = 0; i < view.shadowCount; ++i)
+        {
+            const RenderTargetHandle *maps = getShadowMaps(view.shadows[i], view.camera);
+            if (maps != nullptr)
+                shadows[i] = renderer.addShadowPasses(next, view.scene, view.camera, view.shadows[i], maps);
+            if (shadows[i].mapCount == 0)
+                return false;
+        }
+        if (!renderer.addScenePasses(next, view.scene, view.camera, state.sceneTarget, shadows, view.shadowCount, textures.data(), static_cast<uint32_t>(textures.size())))
             return false;
         RenderTargetHandle resolved = state.sceneTarget;
         if (ctx.getRenderTarget(state.sceneTarget).samples > 1)
@@ -246,6 +315,58 @@ namespace rasm
         if (view.output.target.isValid())
             textures.push_back(view.output.target);
         return true;
+    }
+
+    // The maps of a set of the light, size and count that no other view of this camera draws, made when there is none.
+    // Null on a bad light or a failed allocation.
+    const RenderTargetHandle *ViewGraph::getShadowMaps(const ShadowDesc &desc, CameraHandle camera)
+    {
+        if (!renderer.isLive(desc.light))
+        {
+            spdlog::error("render: a view's shadow needs a valid light.");
+            return nullptr;
+        }
+        const LightType type = renderer.registry.lights[desc.light.index].type;
+        const uint32_t mapCount = type == LightType::DIRECTIONAL ? desc.cascadeCount : 1;
+        const bool cube = type == LightType::POINT;
+        if (mapCount == 0 || mapCount > MAX_SHADOW_CASCADES || desc.size == 0)
+        {
+            spdlog::error("render: a view's shadow needs 1 to {} cascades and a size above 0.", MAX_SHADOW_CASCADES);
+            return nullptr;
+        }
+        for (ShadowSet &set : shadowSets)
+        {
+            if (set.light == desc.light && set.size == desc.size && set.mapCount == mapCount && set.cube == cube && std::find(set.cameras.begin(), set.cameras.end(), camera) == set.cameras.end())
+            {
+                set.cameras.push_back(camera);
+                return set.maps;
+            }
+        }
+
+        // The lowest number no other set has, so the first set's maps have the names addShadowPasses gives.
+        ShadowSet set = {.light = desc.light, .size = desc.size, .mapCount = mapCount, .cube = cube};
+        while (std::any_of(shadowSets.begin(), shadowSets.end(), [&set](const ShadowSet &other)
+                           { return other.number == set.number; }))
+            ++set.number;
+        for (uint32_t i = 0; i < mapCount; ++i)
+        {
+            std::string name = "shadow_cascade_" + std::to_string(i);
+            if (type != LightType::DIRECTIONAL)
+                name = (cube ? "shadow_cube_" : "shadow_spot_") + std::to_string(desc.light.index);
+            if (set.number > 0)
+                name += "_" + std::to_string(set.number);
+            set.maps[i] = renderer.createRenderTarget({.name = name, .width = desc.size, .height = desc.size, .depthFormat = Renderer::DEPTH_FORMAT, .cube = cube});
+            if (!set.maps[i].isValid())
+            {
+                spdlog::error("render: the maps of a view's shadow could not be made.");
+                for (uint32_t j = 0; j < i; ++j)
+                    renderer.destroyRenderTarget(set.maps[j]);
+                return nullptr;
+            }
+        }
+        set.cameras.push_back(camera);
+        shadowSets.push_back(std::move(set));
+        return shadowSets.back().maps;
     }
 
     void ViewGraph::destroyState(ViewState &state)
@@ -263,8 +384,12 @@ namespace rasm
     {
         if (built && isExportView(*renderer.exports, scene, camera, renderTarget))
             return true;
+        // A view's shadow maps are drawn by scene views of its scene and camera too.
+        const bool shadowMap = std::any_of(shadowSets.begin(), shadowSets.end(), [&](const ShadowSet &set)
+                                           { return std::find(set.maps, set.maps + set.mapCount, renderTarget) != set.maps + set.mapCount &&
+                                                    std::find(set.cameras.begin(), set.cameras.end(), camera) != set.cameras.end(); });
         return built && std::any_of(states.begin(), states.end(), [&](const ViewState &state)
-                                    { return state.used && state.scene == scene && state.camera == camera && state.sceneTarget == renderTarget; });
+                                    { return state.used && state.scene == scene && state.camera == camera && (state.sceneTarget == renderTarget || shadowMap); });
     }
 
     RenderTargetHandle ViewGraph::getSceneTarget(const View &view) const

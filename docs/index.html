@@ -66,7 +66,9 @@
   <tr><td>smooth edges, thin lines and highlights over frames</td><td><a href="api/engine.html#addTaaPass">addTaaPass</a>, <a href="api/camera.html#resetCameraHistory">resetCameraHistory</a></td></tr>
   <tr><td>make bright lights glow</td><td><a href="api/engine.html#addBloomPasses">addBloomPasses</a>, <a href="api/camera.html#setCameraBloomStrength">setCameraBloomStrength</a></td></tr>
   <tr><td>light a scene with a sky photo, show the sky behind it</td><td><a href="api/scene.html#loadEnvironment">loadEnvironment</a>, <a href="api/scene.html#setSceneEnvironment">setSceneEnvironment</a></td></tr>
-  <tr><td>add shadows to a scene</td><td><a href="api/engine.html#addScenePasses">addScenePasses</a></td></tr>
+  <tr><td>add shadows to a scene</td><td><a href="api/engine.html#View">View::shadows</a>, <a href="api/engine.html#addScenePasses">addScenePasses</a></td></tr>
+  <tr><td>give each view of a split screen, a map or an editor its own shadows</td><td><a href="api/engine.html#View">View::shadows</a>, <a href="api/c-api.html#rasm_render_views">rasm_view's shadows</a> from C</td></tr>
+  <tr><td>show debug views or a GPU buffer from C, Python, C#, Rust or Zig</td><td><a href="api/c-api.html#rasm_set_debug_view">rasm_set_debug_view</a>, <a href="api/c-api.html#rasm_set_inspection">rasm_set_inspection</a></td></tr>
   <tr><td>play a glTF model's animations</td><td><a href="api/scene.html#animation">playAnimation and setAnimationTime</a></td></tr>
   <tr><td>play a skinned glTF character (joints and weights)</td><td><a href="api/scene.html#animation">playAnimation and setAnimationTime</a></td></tr>
   <tr><td>blend a glTF mesh between shapes (morph targets), from a clip or from the application</td><td><a href="api/scene.html#morph-targets">setMorphWeights</a></td></tr>

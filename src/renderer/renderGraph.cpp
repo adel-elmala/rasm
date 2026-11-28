@@ -759,7 +759,7 @@ namespace rasm
     }
 
     // Passes that draw to one target run in the order they were added, so the first clears it, and each later one loads
-    // what the one before drew, depth included, which that one must then store. So must the pass before a depth read.
+    // what the one before drew, depth included, which that one must then store, unless it clears its output itself. So must the pass before a depth read.
     // The swapchain has no depth, so its passes load only color. Each face of a cube is a target of its own here, but
     // a pass's barrier covers the whole cube, so only the cube's first pass of the frame may drop it (firstWrite).
     void RenderGraph::assignAttachmentOps(const std::vector<uint32_t> &order)
@@ -789,7 +789,7 @@ namespace rasm
                 pass.attachmentOps.firstWrite = first;
                 previous = &it->second.faces[pass.outputFace];
             }
-            if (*previous != NO_PASS)
+            if (*previous != NO_PASS && !pass.clearsOutput)
             {
                 pass.attachmentOps.loadColor = true;
                 pass.attachmentOps.loadDepth = !pass.writesSwapchain;

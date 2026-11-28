@@ -26,7 +26,8 @@
  * with 1 when one fails or the frame was not written.
  *
  * Flags, as the C++ examples take them: --headless, --frames N (60), --out <file.png> (frame.png), --fixed-step,
- * --wait-for-loads, --no-cache, and --dump (print the graph's passes).
+ * --wait-for-loads, --no-cache, --dump (print the graph's passes), and --debug-view none|normals|uvs|overdraw|lods|
+ * culling|light-count|meshlets (1.18: the scene passes draw that debug view).
  */
 
 #define WIDTH 1280
@@ -45,6 +46,7 @@ typedef struct ExampleArgs
     int waitForLoads;
     int noCache;
     int dump;
+    rasm_debug_view debugView;
     unsigned frames;
     const char *out;
 } ExampleArgs;
@@ -87,8 +89,11 @@ typedef struct App
 
 static ExampleArgs parseArgs(int argc, char **argv)
 {
-    ExampleArgs args = {0, 0, 0, 0, 0, 60, "frame.png"};
+    /* --debug-view's names, in the order of the rasm_debug_view constants. */
+    static const char *const debugViews[] = {"none", "normals", "uvs", "overdraw", "lods", "culling", "light-count", "meshlets"};
+    ExampleArgs args = {0, 0, 0, 0, 0, RASM_DEBUG_VIEW_NONE, 60, "frame.png"};
     int i;
+    rasm_debug_view view;
     for (i = 1; i < argc; ++i)
     {
         if (strcmp(argv[i], "--headless") == 0)
@@ -108,6 +113,12 @@ static ExampleArgs parseArgs(int argc, char **argv)
         }
         else if (i + 1 < argc && strcmp(argv[i], "--out") == 0)
             args.out = argv[++i];
+        else if (i + 1 < argc && strcmp(argv[i], "--debug-view") == 0)
+        {
+            ++i;
+            for (view = RASM_DEBUG_VIEW_NONE; view <= RASM_DEBUG_VIEW_MESHLETS; ++view)
+                args.debugView = strcmp(argv[i], debugViews[view]) == 0 ? view : args.debugView;
+        }
     }
     return args;
 }
@@ -627,6 +638,9 @@ int main(int argc, char **argv)
     renderer = rasm_engine_get_renderer(engine);
     loader = rasm_engine_get_asset_loader(engine);
     app.renderer = renderer;
+    /* 1.18: the scene passes draw the debug view, as the RASM window's View does. */
+    if (rasm_set_debug_view(renderer, args.debugView) != RASM_OK || rasm_get_debug_view(renderer) != args.debugView)
+        return fail("rasm_set_debug_view");
 
     /* The scene: the helmet on a checker ground under a low sun, lit by a sunset. */
     scene = rasm_create_scene(renderer);

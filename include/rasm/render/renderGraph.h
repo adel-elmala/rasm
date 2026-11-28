@@ -44,6 +44,7 @@ namespace rasm
         bool                                writesSwapchain     = false;
         WindowHandle                        window;                     // the swapchain's window: the main one when the graph has a renderer
         bool                                encodedSwapchain    = false;    // draws the swapchain through its UNORM view (AttachmentOps::encodedColor): the UI pass
+        bool                                clearsOutput        = false;    // clears its output face whatever drew it before in the frame: a shadow view's first pass, on maps other views draw too
 
         // For Sorting
         uint32_t                inDegree = 0;

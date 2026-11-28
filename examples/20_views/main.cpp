@@ -33,10 +33,13 @@
 // A second window (Engine::addWindow; not with --bench) shows an orbit camera that turns around the scene; drag in it to turn it
 // yourself. Closing it is an event (InputEventType::WINDOW_CLOSE): the example removes it, and N opens it again. Closing
 // the main window quits.
+// The window's perspective views and the TV draw the sun's shadow (View::shadows), each fitted to its own camera; the
+// map draws none.
 // --layout 1|2|3 picks the first one (2); --bench measures that layout's GPU time (exampleBench.h); --async-compute
-// culls on the compute queue (EngineConfig::asyncCompute). A headless run plays a script first, so the checks of
-// verify-change cover the changes too: layout 3, then 1, then --layout's from frame 40, the TV's texture at a new size
-// from frame 30, and the second window removed at frame 25 while a view still names it and opened again at frame 35.
+// culls on the compute queue (EngineConfig::asyncCompute); --no-shadows draws no shadows; --msaa draws the side camera
+// with MSAA 4x instead of TAA. A headless run plays a script first, so the checks of verify-change cover the changes
+// too: layout 3, then 1, then --layout's from frame 40, the TV's texture at a new size from frame 30, and the second
+// window removed at frame 25 while a view still names it and opened again at frame 35.
 // Each change builds the frame's graph again; the views that stay keep their culling and TAA history. The second
 // window is an offscreen image under --headless, and its last frame goes to <out>_window2.png.
 
@@ -189,8 +192,14 @@ int main(int argc, char **argv)
             layout = std::clamp(std::atoi(argv[i + 1]), 1, 3);
     }
     bool asyncCompute = false;
+    bool shadows = true;
+    bool msaa = false;
     for (int i = 1; i < argc; ++i)
+    {
         asyncCompute = asyncCompute || std::strcmp(argv[i], "--async-compute") == 0;
+        shadows = shadows && std::strcmp(argv[i], "--no-shadows") != 0;
+        msaa = msaa || std::strcmp(argv[i], "--msaa") == 0;
+    }
 
     rasm::EngineConfig config = {
         .appName = "example_20",
@@ -254,6 +263,8 @@ int main(int argc, char **argv)
 
     const rasm::LightHandle sun = engine.createLight(rasm::LightType::DIRECTIONAL, glm::vec3(1.0f, 0.85f, 0.7f), glm::vec3(0.0f), glm::normalize(glm::vec3(0.5f, -0.8f, -0.4f)), 2.5f, 0.0f);
     engine.addLightToScene(scene, sun);
+    const rasm::ShadowDesc sunShadow = {.light = sun, .cascadeCount = 4, .size = 2048, .distance = 30.0f};
+    const rasm::ShadowDesc tvShadow = {.light = sun, .cascadeCount = 2, .size = 1024, .distance = 20.0f};
 
     ViewCamera main = createViewCamera(engine, glm::vec3(0.0f, 2.2f, 7.0f), glm::vec3(0.0f, 1.0f, 0.0f));
     ViewCamera side = createViewCamera(engine, glm::vec3(7.0f, 2.5f, 2.0f), glm::vec3(0.0f, 1.0f, 0.0f));
@@ -361,17 +372,21 @@ int main(int argc, char **argv)
 
         // The view texture first, so the views after it show this frame's picture; then the window's views, a later
         // rect over an earlier one, the map last.
+        // The window's perspective views draw the sun's shadow in four cascades fitted to their own camera, into one
+        // set of maps they share in turn. The TV's small picture takes two smaller cascades (a set of its own), and
+        // the map none.
+        const uint32_t shadowCount = shadows ? 1 : 0;
         views.clear();
-        views.push_back({.scene = scene, .camera = security, .output = {.target = tv}, .bloom = rasm::ViewToggle::OFF, .antiAliasing = rasm::AntiAliasing::NONE});
-        views.push_back({.scene = scene, .camera = main.camera, .output = {.rect = rects.rects[0]}});
+        views.push_back({.scene = scene, .camera = security, .output = {.target = tv}, .bloom = rasm::ViewToggle::OFF, .antiAliasing = rasm::AntiAliasing::NONE, .shadows = {tvShadow}, .shadowCount = shadowCount});
+        views.push_back({.scene = scene, .camera = main.camera, .output = {.rect = rects.rects[0]}, .shadows = {sunShadow}, .shadowCount = shadowCount});
         if (rects.shown[1])
-            views.push_back({.scene = scene, .camera = side.camera, .output = {.rect = rects.rects[1]}});
+            views.push_back({.scene = scene, .camera = side.camera, .output = {.rect = rects.rects[1]}, .antiAliasing = msaa ? rasm::AntiAliasing::MSAA_4X : rasm::AntiAliasing::DEFAULT, .shadows = {sunShadow}, .shadowCount = shadowCount});
         if (rects.shown[3])
-            views.push_back({.scene = scene, .camera = security, .output = {.rect = rects.rects[3]}});
+            views.push_back({.scene = scene, .camera = security, .output = {.rect = rects.rects[3]}, .shadows = {sunShadow}, .shadowCount = shadowCount});
         views.push_back({.scene = scene, .camera = map, .output = {.rect = rects.rects[2]}, .bloom = rasm::ViewToggle::OFF, .antiAliasing = rasm::AntiAliasing::NONE});
         // The second window's one view, which sees the TV too. A removed window's view may stay listed: it draws nothing.
         if (second.isValid())
-            views.push_back({.scene = scene, .camera = orbit.camera, .output = {.window = second}});
+            views.push_back({.scene = scene, .camera = orbit.camera, .output = {.window = second}, .shadows = {sunShadow}, .shadowCount = shadowCount});
         engine.render(views.data(), static_cast<uint32_t>(views.size()));
         addBenchFrame(bench, engine.getFrameStats());
     }

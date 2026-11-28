@@ -155,9 +155,11 @@
     uint32_t    size         = 2048;
     float       distance     = 50.0f;
     float       splitLambda  = 0.7f;
+
+    bool        operator==(const ShadowDesc&amp;) const = default;
 };</pre>
   <div class="body">
-    <p>What <a href="engine.html#addShadowPasses"><code>addShadowPasses</code></a> makes: a light's shadow. A directional light gets <a href="../guides/cascaded-shadows.html">cascaded shadow maps</a>, a spot light one perspective map along its cone, a point light a cube map (<a href="../guides/local-light-shadows.html">Spot and point light shadows</a>).</p>
+    <p>What <a href="engine.html#addShadowPasses"><code>addShadowPasses</code></a> makes, and what a <a href="engine.html#View"><code>View</code></a> lists in <code>shadows</code>: a light's shadow. A directional light gets <a href="../guides/cascaded-shadows.html">cascaded shadow maps</a>, a spot light one perspective map along its cone, a point light a cube map (<a href="../guides/local-light-shadows.html">Spot and point light shadows</a>).</p>
     <dl>
       <dt>light</dt><dd>The light to shadow, of any <a href="#LightType"><code>LightType</code></a>. It must be in the scene's lights to be shadowed: one taken out of the scene casts no shadow.</dd>
       <dt>cascadeCount</dt><dd>Directional lights only: maps, 1 to <code>MAX_SHADOW_CASCADES</code> (4). Each is one slice of the camera's view and one scene view. More cascades: sharper far shadows, more passes. A spot light has one map, a point light one cube of 6 faces (6 scene views).</dd>

@@ -66,6 +66,9 @@ int main(void)
     rasm_pipeline_desc pipelineDesc;
     rasm_buffer_desc bufferDesc;
     rasm_render_graph *graph = NULL;
+    rasm_shadow_desc viewShadow;
+    rasm_inspection inspection;
+    char inspected[16];
 
     if (rasm_get_version() != RASM_C_API_VERSION)
         return 1;
@@ -177,6 +180,16 @@ int main(void)
     if (rasm_render_graph_create(NULL, &graph) != RASM_ERROR_INVALID_ARGUMENT || graph != NULL || rasm_render_graph_add_pass(graph, &passDesc) != RASM_ERROR_INVALID_ARGUMENT ||
         rasm_cmd_draw(NULL, 3, 1) != RASM_ERROR_INVALID_ARGUMENT || RASM_PUSH_CONSTANTS_SIZE != 16 || sizeof(rasm_pass_resource) != 16)
         return 32;
+    if (rasm_shadow_desc_init(&viewShadow, sizeof(viewShadow)) != RASM_OK || rasm_view_init(&views[0], sizeof(views[0])) != RASM_OK || views[0].shadow_count != 0 || views[0].shadows != NULL)
+        return 33;
+    views[0].shadows = &viewShadow;
+    views[0].shadow_count = 1;
+    if (rasm_render_views(NULL, views, 1) != RASM_ERROR_INVALID_ARGUMENT || rasm_set_debug_view(NULL, RASM_DEBUG_VIEW_NORMALS) != RASM_ERROR_INVALID_ARGUMENT ||
+        rasm_get_debug_view(NULL) != RASM_DEBUG_VIEW_NONE || rasm_set_culling_frozen(NULL, RASM_TRUE) != RASM_ERROR_INVALID_ARGUMENT || rasm_get_meshlet_path(NULL) != RASM_MESHLET_PATH_AUTO)
+        return 34;
+    if (rasm_inspection_init(&inspection, sizeof(inspection)) != RASM_OK || inspection.exposure != 1.0f || inspection.target != NULL || rasm_set_inspection(NULL, &inspection) != RASM_ERROR_INVALID_ARGUMENT ||
+        rasm_get_inspection(NULL, &inspection, inspected, sizeof(inspected)) != 0 || RASM_MAX_VIEW_SHADOWS != 4 || RASM_INSPECT_KIND_LIGHT_CLUSTERS != 3)
+        return 35;
     printf("rasm_c.h %u.%u compiles as C (__STDC_VERSION__ %ld) and links rasm_c_renderer.\n", RASM_C_API_VERSION_MAJOR, RASM_C_API_VERSION_MINOR, (long)__STDC_VERSION__);
     return 0;
 }

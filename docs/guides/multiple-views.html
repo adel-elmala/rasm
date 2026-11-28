@@ -249,12 +249,14 @@
 <p>Each view runs the whole scene pipeline: culling, the depth pyramid, the draws, the transparent pass, its post effects and the tone map. Part of that cost is fixed per view. The rest grows with the view's pixels, so cutting one window into parts moves pixels around but adds only the fixed part.</p>
 
 <div class="stats">
-  <div><b>1.27 ms</b><span>3 views: the main camera in the whole window, a map in the corner, a 320 × 180 view texture</span><small>layout 1</small></div>
-  <div><b>1.50 ms</b><span>4 views: split screen in two halves, the map and the view texture</span><small>layout 2</small></div>
-  <div><b>1.42 ms</b><span>5 views: four quarters and the view texture</span><small>layout 3</small></div>
+  <div><b>1.32 ms</b><span>3 views: the main camera in the whole window, a map in the corner, a 320 × 180 view texture</span><small>layout 1; 2.31 ms with shadows</small></div>
+  <div><b>1.55 ms</b><span>4 views: split screen in two halves, the map and the view texture</span><small>layout 2; 3.25 ms with shadows</small></div>
+  <div><b>1.46 ms</b><span>5 views: four quarters and the view texture</span><small>layout 3; 3.80 ms with shadows</small></div>
 </div>
 
 <p>Measured in RASM's example below, 1920 × 1080, Release, on an RTX 3060, with TAA and bloom on the big views and neither on the map. Four quarters cost less than two halves here: one quarter is the map, without TAA and bloom, so fewer pixels go through them. A small view (a map, a mirror) is cheap: skip its bloom and TAA, and it costs mostly the fixed part.</p>
+
+<p>Shadows are part of the fixed cost, and they are per view: each shadowed view draws its own cascades, since they are fitted to its camera. In the example each perspective view draws the sun in four 2048 × 2048 cascades (the TV two of 1024): about 0.6 ms per view with four cascades, 0.4 ms for the TV, whatever the view's size. Give a small view fewer and smaller cascades, or none.</p>
 
 <h2 id="input"><span class="n">8</span>Input per view</h2>
 
@@ -407,6 +409,59 @@ const rasm::View views[] = {
 };
 engine.render(views, 4);</code></pre>
 
+<h3>Shadows per view</h3>
+
+<p>A view's <code>shadows</code> (up to <code>MAX_VIEW_SHADOWS</code>, 4) are <code>ShadowDesc</code>s of lights of its scene. <code>ViewGraph::addView</code> adds <code>addShadowPasses</code> for each one before the view's scene passes. Cascades and LODs follow the view's own camera (<a href="cascaded-shadows.html">Cascaded shadow maps</a>), so views of different cameras never share the maps' contents. They share the maps' memory: one set per light, map size and map count, whatever the number of views. Each view draws the set in turn, as the picture shows.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 290" role="img" aria-label="Left: the scene from above with two cameras, A looking up and B looking left; each frustum is cut into its own four cascades. Right: one frame on a time line. One set of four shadow maps holds A's cascades first, then B's. A's cascade passes clear and draw the maps from camera A, A's scene passes read them, then B's cascade passes clear and draw them from camera B, and B's scene passes read them. The graph orders B's draws after A's readers, a write after a read.">
+    <text x="20" y="24" class="title">from above: each camera's own cascades</text>
+    <polygon points="90,250 70,220 110,220" class="mem o-75"/>
+    <polygon points="70,220 50,175 130,175 110,220" class="mem o-50"/>
+    <polygon points="50,175 25,110 155,110 130,175" class="mem o-25"/>
+    <polygon points="25,110 10,50 170,50 155,110" class="mem o-25"/>
+    <circle cx="90" cy="256" r="6" class="solid"/>
+    <text x="104" y="268" class="small">camera A</text>
+    <polygon points="250,170 222,150 222,190" class="mem o-75 dashed"/>
+    <polygon points="222,150 190,128 190,212 222,190" class="mem o-50 dashed"/>
+    <polygon points="190,128 170,114 170,226 190,212" class="mem o-25 dashed"/>
+    <circle cx="256" cy="170" r="6" class="solid"/>
+    <text x="256" y="196" class="mid small">camera B</text>
+
+    <text x="290" y="24" class="title">one frame: one set of maps, drawn in turn</text>
+    <rect x="290" y="38" width="450" height="40" rx="4" class="mem"/>
+    <line x1="515" y1="38" x2="515" y2="78" class="arrow dashed"/>
+    <text x="402" y="54" class="mid mono small">shadow_cascade_0 .. 3</text>
+    <text x="402" y="70" class="mid small">holds A's cascades</text>
+    <text x="628" y="54" class="mid small">4 maps, 2048 x 2048, D32: 64 MiB</text>
+    <text x="628" y="70" class="mid small">then B's cascades</text>
+
+    <rect x="290" y="112" width="105" height="48" rx="6" class="gpu"/>
+    <text x="342" y="132" class="mid small">A: Cascade 0-3</text>
+    <text x="342" y="150" class="mid small">clear, draw</text>
+    <rect x="405" y="112" width="105" height="48" rx="6" class="gpu"/>
+    <text x="457" y="132" class="mid small">A: scene passes</text>
+    <text x="457" y="150" class="mid small">read the maps</text>
+    <rect x="520" y="112" width="105" height="48" rx="6" class="gpu"/>
+    <text x="572" y="132" class="mid small">B: Cascade 0-3</text>
+    <text x="572" y="150" class="mid small">clear, draw</text>
+    <rect x="635" y="112" width="105" height="48" rx="6" class="gpu"/>
+    <text x="687" y="132" class="mid small">B: scene passes</text>
+    <text x="687" y="150" class="mid small">read the maps</text>
+    <line x1="342" y1="110" x2="342" y2="80" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="457" y1="80" x2="457" y2="110" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="572" y1="110" x2="572" y2="80" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="687" y1="80" x2="687" y2="110" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <path d="M457,162 V178 H572 V164" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="514" y="196" class="mid small t-hot">write after read: the graph runs B's draws after A's readers</text>
+
+    <line x1="290" y1="228" x2="740" y2="228" class="arrow" marker-end="url(#ah)"/>
+    <text x="290" y="248" class="small">the frame's graphics queue, in order</text>
+    <text x="290" y="268" class="small">A view without shadows adds no pass and no map.</text>
+  </svg>
+  <figcaption>Every reader of A's maps (Scene 1, Scene 2, Transparent, and the Hi-Z of A's own cascades) runs before B's first cascade pass, which clears the map (<code>Pass::clearsOutput</code>) instead of loading A's depth. Two views of one camera (the TV and a window rect of the security camera) get a set each; so do views whose map size or cascade count differ.</figcaption>
+</figure>
+
 <h3>Where RASM follows the textbook, and where it differs</h3>
 
 <div class="table-wrap">
@@ -421,7 +476,8 @@ engine.render(views, 4);</code></pre>
   <tr><td>This frame or last</td><td>after the writer: this frame</td><td><code>render</code> makes each view's scene passes read the view textures listed before it (<code>addScenePasses</code>'s <code>sampled</code>) and the UI pass read them all (<code>addUiPass</code>'s <code>shown</code>), so they run after the writers. A material that samples its own view's texture, or a later one's, sees the last frame.</td></tr>
   <tr><td>History by key</td><td>camera and output</td><td><code>ViewState</code> keys on the camera and <code>ViewOutput::target</code> (the rect is not part of it). It keeps the HDR target, the TAA history and its <code>TaaState</code>; the scene view lives on because the new graph holds it before the old one lets go. Two views with one key: the second is left out with an error.</td></tr>
   <tr><td>Resize</td><td>a short wait for the frames in flight</td><td><code>Renderer::resizeRenderTarget</code> waits for the values both queues signaled last, only when the size in pixels changes, and keeps the texture handles and bindless slots (<code>RenderTarget::version</code> counts the new textures, so TAA starts over). A window resize waits for the device to be idle.</td></tr>
-  <tr><td>Limits</td><td>—</td><td><code>MAX_SCENE_VIEWS</code> (32) scene views, shadow maps included; <code>MAX_CAMERAS</code> (32). A view past the limit is left out with an error.</td></tr>
+  <tr><td>Shadows</td><td>—</td><td><code>View::shadows</code> and <code>View::shadowCount</code>: each view draws its shadows from its own camera, into a <code>ShadowSet</code> the <code>ViewGraph</code> keeps across graphs (one per light, map size and map count; a second view of the same camera gets its own), so a list change, or a new <code>distance</code> or <code>splitLambda</code>, keeps the shadow scene views, their Hi-Z and the label fades of the shaded views. A set no view uses any more is destroyed through the release queue. <code>exportView</code> draws no shadows (<code>D58</code>).</td></tr>
+  <tr><td>Limits</td><td>—</td><td><code>MAX_SCENE_VIEWS</code> (32) scene views, shadow maps included (a view with four cascades takes five, <code>D20</code>); <code>MAX_CAMERAS</code> (32). A view past the limit is left out with an error.</td></tr>
   <tr><td>Input</td><td>one rect each</td><td><code>getInputArea(window, rect)</code> gives the <code>InputArea</code> for a view's <code>CameraInputState</code> (<a href="camera-controllers.html#who-drives">Camera controllers</a>). The built-in controller moves the camera of the first view in the window.</td></tr>
   <tr><td>Windows</td><td>a swapchain each, one submit</td><td><code>Renderer::addWindow(WindowDesc)</code>: an SDL window, the application's (<code>WindowDesc::native</code>, <code>NATIVE</code>) or an offscreen image (<code>HEADLESS</code>), at most <code>MAX_WINDOWS</code> − 1 (7). <code>RenderContext::createSwapchain</code> makes the main window's swapchain on the device's surface and another's on a surface of its own (<code>vkGetPhysicalDeviceSurfaceSupportKHR</code> on the graphics queue). <code>beginFrame</code> acquires each window that can show (<code>Renderer::WindowFrame</code>); <code>SubmitInfo::waitsForSwapchainImage</code> and <code>presentsSwapchainImage</code> cover every acquired window, through <code>SubmitDesc::acquireSwapchains</code> and <code>presentSwapchains</code>; <code>endFrame</code> clears a window no pass drew and presents each. <code>PassBuilder::writeSwapchain(window)</code> makes each window's image a resource of its own; the graph skips a pass whose window has no image. <code>removeWindow</code> waits for the device to be idle; a view that still names the window is left out. <code>InputEvent::window</code> tags every event, and closing a window other than the main one is <code>InputEventType::WINDOW_CLOSE</code>. <code>readFrame(window)</code> copies a window's image.</td></tr>
 </table>
@@ -438,9 +494,10 @@ engine.render(views, 4);</code></pre>
   <tr><td>Readers of view textures</td><td><code>Renderer::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code>; <code>Renderer::addUiPass</code> in <code>src/renderer/ui.cpp</code></td></tr>
   <tr><td>Kept TAA history</td><td><code>TaaState</code>, <code>getTaaHistoryDesc</code> in <code>src/renderer/taa.h</code>; the private <code>Renderer::addTaaPass</code> with a history in <code>src/renderer/taa.cpp</code></td></tr>
   <tr><td>Resize and clear</td><td><code>Renderer::resizeRenderTarget</code> in <code>src/renderer/renderer.cpp</code>; <code>RenderContext::resizeRenderTarget</code> and <code>createAttachments</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
-  <tr><td>Tests</td><td><code>tests/viewTests.cpp</code> (rects and input areas); the <samp>views</samp> and <samp>views_window2</samp> image tests in <code>tests/image/imageTests.cpp</code></td></tr>
+  <tr><td>Shadows per view</td><td><code>ShadowSet</code>, <code>ViewGraph::getShadowMaps</code> in <code>src/renderer/viewGraph.cpp</code>; the private <code>Renderer::addShadowPasses</code> with the set's maps in <code>src/renderer/gpuScene.cpp</code>; <code>Pass::clearsOutput</code> and <code>RenderGraph::assignAttachmentOps</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
+  <tr><td>Tests</td><td><code>tests/viewTests.cpp</code> (rects and input areas); the <samp>views</samp>, <samp>views_window2</samp> and <samp>views_shadows</samp> image tests in <code>tests/image/imageTests.cpp</code></td></tr>
   <tr><td>Windows</td><td><code>Renderer::addWindow</code>, <code>removeWindow</code>, <code>getWindow</code>, <code>updateSwapchain</code>, <code>beginFrame</code>, <code>endFrame</code> in <code>src/renderer/renderer.cpp</code>; <code>RenderContext::createSwapchain</code>, <code>destroySwapchain</code>, <code>submit</code> in <code>src/rhi/renderContext.cpp</code>; <code>VulkanDevice::createSwapchain</code>, <code>VulkanSwapchain</code>, <code>VulkanQueue::submit</code> in <code>src/rhi/vulkan/</code>; <code>SdlPlatform::pollEvents</code> in <code>src/platform/sdlPlatform.cpp</code></td></tr>
-  <tr><td>Example</td><td><code>examples/20_views/main.cpp</code>: keys 1, 2, 3 for the layouts, N to open the second window again, <samp>--bench</samp> for the numbers above; <code>examples/19_embedding/main.cpp</code>: the application's second window</td></tr>
+  <tr><td>Example</td><td><code>examples/20_views/main.cpp</code>: keys 1, 2, 3 for the layouts, N to open the second window again, <samp>--bench</samp> for the numbers above (<samp>--no-shadows</samp> without the shadows, <samp>--msaa</samp> for MSAA in the side view); <code>examples/19_embedding/main.cpp</code>: the application's second window</td></tr>
 </table>
 </div>
 
@@ -451,6 +508,7 @@ engine.render(views, 4);</code></pre>
     <li>A frame with the same list and sizes compares and runs: no graph build, no heap allocation (the <samp>views</samp> image test counts them).</li>
     <li>A view texture is not transient and starts cleared: any pass may sample it at any point of the frame.</li>
     <li>Resizing a target waits only for the frames in flight, and only when its size in pixels changes.</li>
+    <li>A view's shadows are drawn from its own camera, right before its scene passes; its first pass on each map clears it, and the graph orders it after every reader of the view before.</li>
   </ul>
 </div>
 

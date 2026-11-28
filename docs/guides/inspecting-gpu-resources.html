@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Inspecting GPU resources · RASM</title>
 <meta name="description" content="How a renderer shows its own render targets, depth buffers, Hi-Z levels and light clusters while it runs: copy each one right after the pass that last writes it, before a later pass or an aliased target changes it, and turn its numbers into a picture (linear depth from reversed-Z, motion as a hue, counts as heat). And how GPU tables can be shown field by field from the shader compiler's reflection.">
-<meta name="rasm-sources" content="src/renderer/inspector.cpp src/renderer/inspector.h shaders/passes/inspect.slang shaders/lib/heat.slang shaders/lib/core.slang src/renderer/renderGraph.cpp include/rasm/render/renderGraph.h src/renderer/shaderCompiler.cpp src/renderer/shaderCompiler.h src/renderer/gpuTable.cpp src/renderer/gpuTable.h src/renderer/engineUi.cpp src/renderer/ui.cpp src/renderer/uberMaterialTypes.h include/rasm/types.h include/rasm/renderer.h src/renderer/renderer.cpp examples/09_gltf_materials/main.cpp examples/11_many_lights/main.cpp">
+<meta name="rasm-sources" content="src/c/cDebug.cpp src/renderer/inspector.cpp src/renderer/inspector.h shaders/passes/inspect.slang shaders/lib/heat.slang shaders/lib/core.slang src/renderer/renderGraph.cpp include/rasm/render/renderGraph.h src/renderer/shaderCompiler.cpp src/renderer/shaderCompiler.h src/renderer/gpuTable.cpp src/renderer/gpuTable.h src/renderer/engineUi.cpp src/renderer/ui.cpp src/renderer/uberMaterialTypes.h include/rasm/types.h include/rasm/renderer.h src/renderer/renderer.cpp examples/09_gltf_materials/main.cpp examples/11_many_lights/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -347,7 +347,7 @@
 
 <h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
 
-<p>The RASM window (<kbd>F1</kbd>, with <code>EngineConfig::ui</code>) has a <b>Buffers</b> section and a <b>GPU tables</b> section. An application can pick from code with <code>Renderer::setInspection</code> and an <code>Inspection</code>. <code>examples/09_gltf_materials</code> and <code>examples/11_many_lights</code> take <samp>--inspect &lt;target&gt; &lt;color|depth|hiz|clusters&gt; &lt;n&gt;</samp>, and 09 also <samp>--inspect-rows</samp>.</p>
+<p>The RASM window (<kbd>F1</kbd>, with <code>EngineConfig::ui</code>) has a <b>Buffers</b> section and a <b>GPU tables</b> section. An application can pick from code with <code>Renderer::setInspection</code> and an <code>Inspection</code>, or from C (1.18) with <code>rasm_set_inspection</code> and a sized <code>rasm_inspection</code>, whose target name the call copies; <code>rasm_get_inspection</code> gives the pick back. <code>examples/09_gltf_materials</code> and <code>examples/11_many_lights</code> take <samp>--inspect &lt;target&gt; &lt;color|depth|hiz|clusters&gt; &lt;n&gt;</samp>, and 09 also <samp>--inspect-rows</samp>.</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 300" role="img" aria-label="Each frame, RenderGraph::execute first calls Renderer::updateInspectPass. While the Buffers section is open it lists the graph's targets and scene views, finds the pick, and if the graph's pass is not Inspect of that resource, removes the old one and adds a compute pass that reads the resource and writes the inspect storage target, which the UI pass also reads. compile then moves the Inspect pass right after the last pass it depends on. On the GPU: the writer, the graph's barrier, Inspect with inspectMain writing the 1024 by 1024 target, a barrier, then later the UI pass draws it with ImGui::Image.">
@@ -415,7 +415,7 @@
 <div class="table-wrap">
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
-  <tr><td>API</td><td><code>Renderer::setInspection</code>, <code>Renderer::getInspection</code> in <code>src/renderer/renderer.cpp</code>; <code>Inspection</code>, <code>InspectKind</code> in <code>include/rasm/types.h</code></td></tr>
+  <tr><td>API</td><td><code>Renderer::setInspection</code>, <code>Renderer::getInspection</code> in <code>src/renderer/renderer.cpp</code>; <code>rasm_set_inspection</code>, <code>rasm_get_inspection</code> in <code>src/c/cDebug.cpp</code>; <code>Inspection</code>, <code>InspectKind</code> in <code>include/rasm/types.h</code></td></tr>
   <tr><td>Listing, the pass, the sections</td><td><code>updateInspectPass</code>, <code>recordInspect</code>, <code>drawBuffersSection</code>, <code>drawTablesSection</code> in <code>src/renderer/inspector.cpp</code></td></tr>
   <tr><td>Placement in the graph</td><td><code>RenderGraph::compile</code>, <code>RenderGraph::removePass</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
   <tr><td>Shader</td><td><code>shaders/passes/inspect.slang</code>, <code>shaders/lib/heat.slang</code></td></tr>

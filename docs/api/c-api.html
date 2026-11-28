@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>C API · RASM</title>
 <meta name="description" content="RASM from C and from other languages: the rasm_c and rasm_c_renderer shared libraries, rasm_c.h, its ABI rules (versions, sized structs, handles, errors, memory, threads), every function, and the map from the C++ API.">
-<meta name="rasm-sources" content="include/rasm/rasm_c.h src/c/cGlyphs.cpp src/c/cApi.h src/c/cApi.cpp src/c/cRenderer.cpp src/c/cScene.cpp src/c/cInput.cpp src/c/cViews.cpp src/c/cGraph.cpp src/c/cResources.cpp src/c/cAnimation.cpp src/c/cTiles.cpp src/c/cTerrain.cpp src/c/cVector.cpp src/c/cText.cpp src/c/cLoader.cpp src/CMakeLists.txt cmake/RasmInstall.cmake cmake/rasmConfig.cmake.in examples/22_c_api/main.c examples/33_c_render_graph/main.c tests/cApiTests.cpp tests/c_api/ctypes_smoke.py tests/consumer/CMakeLists.txt tools/check_install.py src/platform/paths.cpp include/rasm/handle.h">
+<meta name="rasm-sources" content="src/c/cDebug.cpp include/rasm/rasm_c.h src/c/cGlyphs.cpp src/c/cApi.h src/c/cApi.cpp src/c/cRenderer.cpp src/c/cScene.cpp src/c/cInput.cpp src/c/cViews.cpp src/c/cGraph.cpp src/c/cResources.cpp src/c/cAnimation.cpp src/c/cTiles.cpp src/c/cTerrain.cpp src/c/cVector.cpp src/c/cText.cpp src/c/cLoader.cpp src/CMakeLists.txt cmake/RasmInstall.cmake cmake/rasmConfig.cmake.in examples/22_c_api/main.c examples/33_c_render_graph/main.c tests/cApiTests.cpp tests/c_api/ctypes_smoke.py tests/consumer/CMakeLists.txt tools/check_install.py src/platform/paths.cpp include/rasm/handle.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -458,6 +458,7 @@ rasm_result      rasm_destroy_render_target(rasm_renderer* renderer, rasm_render
 rasm_texture     rasm_get_render_target_texture(rasm_renderer* renderer, rasm_render_target target);</pre>
   <div class="body">
     <p>1.1. <a href="engine.html#render-views"><code>render(views, count)</code></a> and <a href="../guides/multiple-views.html">Many views of one scene</a>. <code>rasm_view</code> is <code>View</code>, flat: <code>scene</code>, <code>camera</code>, <code>rect</code> (a <code>rasm_view_rect</code>, fractions from the top-left corner), <code>target</code> (a view texture), <code>window</code> (0: the main one), <code>bloom</code> (<code>RASM_VIEW_TOGGLE_DEFAULT</code>, <code>RASM_VIEW_TOGGLE_OFF</code>, <code>RASM_VIEW_TOGGLE_ON</code>) and <code>anti_aliasing</code>. Its init is the whole main window with the config's settings. Every element of <code>views</code> has the first one's <code>size</code>; there are at most <code>RASM_MAX_VIEWS</code>. The library turns them into C++ views in an array on its stack, so a frame allocates nothing.</p>
+    <p>1.18 adds <code>shadow_count</code> (0 to <code>RASM_MAX_VIEW_SHADOWS</code>, 4; 0 by default) and <code>shadows</code>, a pointer to that many sized <code>rasm_shadow_desc</code>s (each the first one's <code>size</code>), which the call reads and does not keep: <code>View::shadows</code>. Each view draws them fitted to its own camera, before its scene passes; views of different cameras draw one set of maps in turn (<a href="../guides/multiple-views.html#in-rasm">Shadows per view</a>). A 1.17 view, shorter, has none. <code>rasm_export_view</code> draws no shadows (<code>D58</code>).</p>
     <p>A view texture is a <code>rasm_render_target</code>: <code>rasm_render_target_desc</code> is <code>{size, name, width, height, format, clear_color, readable}</code>, one color and no depth, <code>RASM_FORMAT_R8G8B8A8_SRGB</code> by default (a picture), cleared to opaque black. Its <code>rasm_get_render_target_texture</code> is one texture handle for its whole life, kept across a resize: give it to a material.</p>
     <pre><code>rasm_view views[2];
 rasm_view_init(&amp;views[0], sizeof(views[0]));
@@ -468,6 +469,11 @@ rasm_view_init(&amp;views[1], sizeof(views[1]));
 views[1].scene = scene;
 views[1].camera = camera;
 rasm_render_views(renderer, views, 2);</code></pre>
+    <pre><code>rasm_shadow_desc sun;
+rasm_shadow_desc_init(&amp;sun, sizeof(sun));
+sun.light = sunLight;
+views[1].shadows = &amp;sun;
+views[1].shadow_count = 1;</code></pre>
   </div>
 </div>
 
@@ -873,6 +879,26 @@ float            rasm_get_gpu_timer_ms(rasm_renderer* renderer, uint32_t index);
   </div>
 </div>
 
+<div class="api" id="rasm_set_debug_view">
+  <pre class="sig">rasm_result      rasm_set_debug_view(rasm_renderer* renderer, rasm_debug_view view);
+rasm_debug_view  rasm_get_debug_view(rasm_renderer* renderer);
+rasm_result      rasm_set_culling_frozen(rasm_renderer* renderer, rasm_bool frozen);
+rasm_result      rasm_set_meshlet_path(rasm_renderer* renderer, rasm_meshlet_path path);
+rasm_meshlet_path rasm_get_meshlet_path(rasm_renderer* renderer);</pre>
+  <div class="body">
+    <p>1.18. <a href="engine.html#setDebugView"><code>setDebugView</code></a> and <code>getDebugView</code> (<code>RASM_DEBUG_VIEW_NONE</code>, <code>RASM_DEBUG_VIEW_NORMALS</code>, <code>RASM_DEBUG_VIEW_UVS</code>, <code>RASM_DEBUG_VIEW_OVERDRAW</code>, <code>RASM_DEBUG_VIEW_LODS</code>, <code>RASM_DEBUG_VIEW_CULLING</code>, <code>RASM_DEBUG_VIEW_LIGHT_COUNT</code>, <code>RASM_DEBUG_VIEW_MESHLETS</code>), <code>setCullingFrozen</code>, and <code>setMeshletPath</code> and <code>getMeshletPath</code> (the <code>rasm_meshlet_path</code> constants of the config). A value past the last constant is refused. See <a href="../guides/debug-views.html">Debug views</a>; <code>examples/33_c_render_graph</code> takes <samp>--debug-view normals</samp>.</p>
+  </div>
+</div>
+
+<div class="api" id="rasm_set_inspection">
+  <pre class="sig">rasm_result      rasm_inspection_init(rasm_inspection* inspection, uint32_t size);
+rasm_result      rasm_set_inspection(rasm_renderer* renderer, const rasm_inspection* inspection);
+uint32_t         rasm_get_inspection(rasm_renderer* renderer, rasm_inspection* inspection, char* target_buffer, uint32_t capacity);</pre>
+  <div class="body">
+    <p>1.18. <a href="engine.html#setInspection"><code>setInspection</code></a> and <code>getInspection</code>: what the RASM window's Buffers section shows (<a href="../guides/inspecting-gpu-resources.html">Inspecting GPU resources</a>); it needs the UI. <code>rasm_inspection</code> is sized and is <code>Inspection</code>: <code>target</code> (a render target's name; NULL or empty: nothing), <code>kind</code> (<code>RASM_INSPECT_KIND_COLOR</code>, <code>RASM_INSPECT_KIND_DEPTH</code>, <code>RASM_INSPECT_KIND_HIZ</code>, <code>RASM_INSPECT_KIND_LIGHT_CLUSTERS</code>), <code>attachment</code>, <code>face</code>, <code>level</code> (<code>RASM_INSPECT_TILES</code> for the screen tiles), <code>sample</code> (<code>RASM_INSPECT_ALL_SAMPLES</code>), <code>channel</code>, <code>exposure</code>, <code>depth_range</code> and <code>entity</code>. <code>rasm_set_inspection</code> copies the name. <code>rasm_get_inspection</code> fills the struct, copies the name into <code>target_buffer</code> by the <code>snprintf</code> rule, points <code>target</code> at it, and returns the name's whole length.</p>
+  </div>
+</div>
+
 <h2 id="graph"><span class="n">5</span>Your own frame: the render graph</h2>
 
 <p>In place of <code>rasm_render</code>, a program can build the frame itself (1.17): a <code>rasm_render_graph</code> with RASM's passes and its own. Each pass of its own lists the resources it reads and writes, and gives a C function the graph calls while it records the frame. <code>examples/33_c_render_graph</code> builds this one:</p>
@@ -984,6 +1010,8 @@ while (rasm_running(renderer))
   <tr><td><code>FontAtlas</code></td><td><code>rasm_font_atlas</code>, an object made by <code>rasm_build_font_atlas</code> or <code>rasm_asset_loader_load_font</code>, destroyed by <code>rasm_font_atlas_destroy</code></td></tr>
   <tr><td><code>RenderGraph</code>, <code>addPass(name, setup, execute)</code></td><td><code>rasm_render_graph</code>; <code>rasm_render_graph_add_pass</code> with a <code>rasm_pass_desc</code>: the resources as a list, the execute lambda as a <code>rasm_pass_callback</code> and <code>user_data</code></td></tr>
   <tr><td><code>RenderContext&amp;</code> and the frame's command buffer in a pass</td><td>the <code>rasm_commands*</code> the callback gets, for the <code>rasm_cmd_</code> functions</td></tr>
+  <tr><td><code>View::shadows</code>, <code>View::shadowCount</code></td><td><code>rasm_view</code>'s <code>shadows</code> pointer and <code>shadow_count</code>, read during the call</td></tr>
+  <tr><td><code>setInspection</code>, <code>Inspection::target</code> (<code>std::string</code>)</td><td><code>rasm_set_inspection</code> with a <code>const char*</code> it copies; <code>rasm_get_inspection</code> by the <code>snprintf</code> rule</td></tr>
   <tr><td><code>addShadowPasses</code>, <code>SceneShadow</code></td><td><code>rasm_render_graph_add_shadow_passes</code>, a graph-local <code>rasm_shadow</code></td></tr>
   <tr><td><code>createPipeline(name, source, target)</code>, <code>createComputePipeline</code></td><td><code>rasm_create_pipeline</code> with a <code>rasm_pipeline_desc</code>, which also takes SPIR-V, a blend mode, depth and a topology</td></tr>
   <tr><td><code>FrameStats::gpuTimers</code></td><td><code>rasm_get_gpu_timer_count</code>, <code>rasm_get_gpu_timer_name</code>, <code>rasm_get_gpu_timer_ms</code></td></tr>
@@ -991,7 +1019,7 @@ while (rasm_running(renderer))
 </table>
 </div>
 
-<p>C++ only, for now: shadows in <code>rasm_render_views</code> (as <code>render(views, count)</code> draws none), the debug views and the buffer inspector, Dear ImGui and <code>setUiCallback</code>, per-frame buffer pairs in a pass (<code>FrameBuffers</code>), and the rest of <code>RenderContext</code> (descriptor sets, fences, submits, copies). The development plan keeps them as the next parts of its open item.</p>
+<p>C++ only, for now: Dear ImGui and <code>setUiCallback</code>, per-frame buffer pairs in a pass (<code>FrameBuffers</code>), and the rest of <code>RenderContext</code> (descriptor sets, fences, submits, copies). The development plan keeps them as the next parts of its open item.</p>
 
 </main>
 </div>

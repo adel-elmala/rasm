@@ -1,7 +1,7 @@
 """Drive the RASM C API from Python with ctypes, as a language binding does: no C compiler, only the shared library.
 
 It makes a headless renderer, a red quad in front of a camera and a sun, and renders a few frames: one view with
-rasm_render, then the last frame two views with rasm_render_views, the whole image and a small one in the top-right
+rasm_render, then the last frame two views with rasm_render_views (each with the sun's shadow, 1.18), the whole image and a small one in the top-right
 corner. The quad and the cameras stand 6370 km from the origin, in Earth-centred coordinates, placed with the 1.2 calls
 in doubles, which give the positions back bit for bit. It copies the last two frames back and checks their pixels: red
 in the middle of every view, the background at the top-left corner. Then it builds a frame of its own with the render graph (1.17): the scene passes and the tone map into a
@@ -10,7 +10,8 @@ and blue swapped, so the quad comes out blue. The callback reads the target's te
 callback, checks that a history target's copies swap each frame, and that a call that would start a frame is refused
 while the graph records; a rasm_commands kept past its callback is refused too, and a graph whose renderer was
 destroyed fails cleanly. With --slangc, the pass's pipeline is made from SPIR-V that slangc compiles from the same
-source, which checks the SPIR-V path of rasm_create_pipeline. The structs below mirror include/rasm/rasm_c.h field by field.
+source, which checks the SPIR-V path of rasm_create_pipeline. The 1.18 debug calls (the debug view, frozen culling,
+the meshlet path, the inspection) are set and read back. The structs below mirror include/rasm/rasm_c.h field by field.
 
     python tests/c_api/ctypes_smoke.py <path to rasm_c.dll / librasm_c.dylib / librasm_c.so>
         [--shader-dir DIR] [--frames N] [--out frame.png] [--validation] [--slangc PATH]
@@ -27,7 +28,7 @@ import sys
 import tempfile
 from ctypes import CFUNCTYPE, POINTER, Structure, byref, c_char_p, c_double, c_float, c_int32, c_uint32, c_uint64, c_uint8, c_void_p
 
-API_VERSION = (1 << 16) | 17
+API_VERSION = (1 << 16) | 18
 OK = 0
 TRUE = 1
 LOG_LEVEL_ERROR = 4
@@ -130,9 +131,21 @@ class ViewRect(Structure):
     _fields_ = [("x", c_float), ("y", c_float), ("width", c_float), ("height", c_float)]
 
 
+class ShadowDesc(Structure):
+    _fields_ = [("size", c_uint32), ("light", Handle), ("cascade_count", c_uint32), ("map_size", c_uint32),
+                ("distance", c_float), ("split_lambda", c_float)]
+
+
 class View(Structure):
     _fields_ = [("size", c_uint32), ("scene", Handle), ("camera", Handle), ("rect", ViewRect), ("target", Handle),
-                ("window", Handle), ("bloom", c_uint32), ("anti_aliasing", c_uint32)]
+                ("window", Handle), ("bloom", c_uint32), ("anti_aliasing", c_uint32), ("shadow_count", c_uint32),
+                ("shadows", POINTER(ShadowDesc))]
+
+
+class Inspection(Structure):
+    _fields_ = [("size", c_uint32), ("target", c_char_p), ("kind", c_uint32), ("attachment", c_uint32), ("face", c_uint32),
+                ("level", c_uint32), ("sample", c_uint32), ("channel", c_uint32), ("exposure", c_float),
+                ("depth_range", c_float), ("entity", Handle)]
 
 
 class RenderTargetDesc(Structure):
@@ -204,6 +217,15 @@ def declare(lib):
         "rasm_render": (None, [c_void_p, Handle, Handle]),
         "rasm_view_init": (c_int32, [POINTER(View), c_uint32]),
         "rasm_render_views": (c_int32, [c_void_p, POINTER(View), c_uint32]),
+        "rasm_shadow_desc_init": (c_int32, [POINTER(ShadowDesc), c_uint32]),
+        "rasm_set_debug_view": (c_int32, [c_void_p, c_uint32]),
+        "rasm_get_debug_view": (c_uint32, [c_void_p]),
+        "rasm_set_culling_frozen": (c_int32, [c_void_p, c_uint32]),
+        "rasm_set_meshlet_path": (c_int32, [c_void_p, c_uint32]),
+        "rasm_get_meshlet_path": (c_uint32, [c_void_p]),
+        "rasm_inspection_init": (c_int32, [POINTER(Inspection), c_uint32]),
+        "rasm_set_inspection": (c_int32, [c_void_p, POINTER(Inspection)]),
+        "rasm_get_inspection": (c_uint32, [c_void_p, POINTER(Inspection), ctypes.c_char_p, c_uint32]),
         "rasm_create_scene": (Handle, [c_void_p]),
         "rasm_create_mesh": (Handle, [c_void_p, POINTER(Vertex), c_uint32, POINTER(c_uint32), c_uint32, POINTER(c_uint32)]),
         "rasm_create_material": (Handle, [c_void_p, c_uint32, POINTER(Handle), c_uint32, c_uint32]),
@@ -472,7 +494,8 @@ def main():
         light.direction = Vec3(0.0, 0.0, -1.0)
         light.intensity = 3.0
         light.range = 0.0
-        check(lib.rasm_add_light_to_scene(renderer, scene, lib.rasm_create_light(renderer, byref(light))) == OK, "the light", lib)
+        sun = lib.rasm_create_light(renderer, byref(light))
+        check(lib.rasm_add_light_to_scene(renderer, scene, sun) == OK, "the light", lib)
 
         projection = CameraProjection()
         lib.rasm_camera_projection_init(byref(projection), ctypes.sizeof(projection))
@@ -531,6 +554,44 @@ def main():
         check(views[1].camera.id != 0, "the second camera", lib)
         check(lib.rasm_set_camera_transform_d(renderer, views[1].camera, byref(eye_far)) == OK, "the second camera, far", lib)
         views[1].rect = ViewRect(0.75, 0.0, 0.25, 0.25)
+        # 1.18: both views draw the sun's shadow, each fitted to its own camera, into one set of maps in turn.
+        shadows = (ShadowDesc * 5)()
+        for shadow in shadows:
+            check(lib.rasm_shadow_desc_init(byref(shadow), ctypes.sizeof(shadow)) == OK, "rasm_shadow_desc_init", lib)
+            shadow.light = sun
+            shadow.cascade_count = 2
+            shadow.map_size = 512
+        for view in views:
+            view.shadow_count = 1
+            view.shadows = shadows
+        # More shadows than RASM_MAX_VIEW_SHADOWS are refused before anything is drawn.
+        expected = len(errors)
+        views[0].shadow_count = 5
+        check(lib.rasm_render_views(renderer, views, 2) == ERROR_INVALID_ARGUMENT, "a view with 5 shadows is refused", lib)
+        check(b"RASM_MAX_VIEW_SHADOWS" in lib.rasm_get_last_error(), "the refused shadows say why", lib)
+        del errors[expected:]
+        views[0].shadow_count = 1
+
+        # 1.18: the debug toggles go and come back, and the inspection keeps its own copy of the target's name.
+        check(lib.rasm_set_debug_view(renderer, 1) == OK and lib.rasm_get_debug_view(renderer) == 1, "rasm_set_debug_view NORMALS", lib)
+        check(lib.rasm_set_debug_view(renderer, 0) == OK and lib.rasm_get_debug_view(renderer) == 0, "rasm_set_debug_view NONE", lib)
+        check(lib.rasm_set_culling_frozen(renderer, TRUE) == OK and lib.rasm_set_culling_frozen(renderer, 0) == OK, "rasm_set_culling_frozen", lib)
+        path = lib.rasm_get_meshlet_path(renderer)
+        check(lib.rasm_set_meshlet_path(renderer, path) == OK and lib.rasm_get_meshlet_path(renderer) == path, "rasm_set_meshlet_path", lib)
+        inspection = Inspection()
+        check(lib.rasm_inspection_init(byref(inspection), ctypes.sizeof(inspection)) == OK, "rasm_inspection_init", lib)
+        name = ctypes.create_string_buffer(b"scene_hdr")
+        inspection.target = ctypes.cast(name, c_char_p)
+        inspection.exposure = 2.0
+        check(lib.rasm_set_inspection(renderer, byref(inspection)) == OK, "rasm_set_inspection", lib)
+        name.value = b"changed"
+        back = Inspection()
+        lib.rasm_inspection_init(byref(back), ctypes.sizeof(back))
+        buffer = ctypes.create_string_buffer(6)
+        length = lib.rasm_get_inspection(renderer, byref(back), buffer, 6)
+        check(length == 9 and buffer.value == b"scene" and back.exposure == 2.0, f"rasm_get_inspection, got {length} {buffer.value} {back.exposure}", lib)
+        inspection.target = None
+        check(lib.rasm_set_inspection(renderer, byref(inspection)) == OK, "rasm_set_inspection of nothing", lib)
 
         # Frame N - 1 is one view through rasm_render, frame N two through rasm_render_views.
         single_readback = Handle()

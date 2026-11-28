@@ -106,7 +106,45 @@ namespace rasm::c
             if (!readSized(element, VIEW_SIZE_1_1, &values, sizeof(values), function, "view") || !checkView(values, function))
                 return false;
             converted[i] = toCpp(values);
+            // 1.18: the shadows, an array that steps by its first element's size too.
+            if (values.shadow_count > MAX_VIEW_SHADOWS || (values.shadow_count > 0 && values.shadows == nullptr))
+            {
+                reportError(function, ("views[" + std::to_string(i) + "] has " + std::to_string(values.shadow_count) + " shadows: at most RASM_MAX_VIEW_SHADOWS, and not NULL.").c_str());
+                return false;
+            }
+            uint32_t shadowStride = 0;
+            if (values.shadow_count > 0)
+                std::memcpy(&shadowStride, values.shadows, sizeof(shadowStride));
+            for (uint32_t s = 0; s < values.shadow_count; ++s)
+            {
+                const auto *shadow = reinterpret_cast<const uint8_t *>(values.shadows) + static_cast<size_t>(s) * shadowStride;
+                uint32_t shadowSize = 0;
+                std::memcpy(&shadowSize, shadow, sizeof(shadowSize));
+                if (shadowSize != shadowStride)
+                {
+                    reportError(function, ("views[" + std::to_string(i) + "].shadows[" + std::to_string(s) + "].size is not the first shadow's.").c_str());
+                    return false;
+                }
+                if (!readShadowDesc(reinterpret_cast<const rasm_shadow_desc *>(shadow), converted[i].shadows[s], function, "view->shadows[]"))
+                    return false;
+            }
+            converted[i].shadowCount = values.shadow_count;
         }
+        return true;
+    }
+
+    rasm_shadow_desc getShadowDescDefaults()
+    {
+        const ShadowDesc shadow = {};
+        return {.size = sizeof(rasm_shadow_desc), .cascade_count = shadow.cascadeCount, .map_size = shadow.size, .distance = shadow.distance, .split_lambda = shadow.splitLambda};
+    }
+
+    bool readShadowDesc(const rasm_shadow_desc *desc, ShadowDesc &shadow, const char *function, const char *name)
+    {
+        rasm_shadow_desc values = getShadowDescDefaults();
+        if (!readSized(desc, SHADOW_DESC_SIZE_1_17, &values, sizeof(values), function, name) || !checkHandle(values.light.id, function, (std::string(name) + "->light").c_str()))
+            return false;
+        shadow = {.light = toCpp(values.light), .cascadeCount = values.cascade_count, .size = values.map_size, .distance = values.distance, .splitLambda = values.split_lambda};
         return true;
     }
 }

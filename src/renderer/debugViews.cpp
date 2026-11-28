@@ -28,6 +28,11 @@ namespace rasm
             ++camera.historyResets;
     }
 
+    DebugView Renderer::getDebugView() const
+    {
+        return debugView;
+    }
+
     void Renderer::setCullingFrozen(bool frozen)
     {
         cullingFrozen = frozen;

@@ -929,7 +929,7 @@ rasm::PipelineHandle overlay = ctx.createPipeline(desc);</code></pre>
                        const std::string&amp; name);</pre>
   <div class="body">
     <p>Writes a start timestamp into the frame's command buffer and returns a timer id. Call it between <code>beginFrame</code> and <code>endFrame</code>, with <code>getCurrentFrameResources().commandBuffer</code>. The graph already times every pass by its name, so use this for a part of a pass.</p>
-    <p>Returns <code>UINT32_MAX</code> (which <code>endGpuTimer</code> ignores) when nothing is measured: the stats overlay is off and <code>getFrameStats</code> was never called, the GPU has no timestamps, or the frame already used all timers. A frame has <code>MAX_GPU_TIMERS</code> (64) timers: one for the whole frame, and 63 for the passes and your timers together. The first time they run out, a warning is logged.</p>
+    <p>Returns <code>UINT32_MAX</code> (which <code>endGpuTimer</code> ignores) when nothing is measured: the stats overlay is off and <code>getFrameStats</code> was never called, the GPU has no timestamps, or the frame already used all timers. A frame has <code>MAX_GPU_TIMERS</code> (256) timers: one for the whole frame, and 255 for the passes and your timers together. The first time they run out, a warning is logged.</p>
   </div>
 </div>
 

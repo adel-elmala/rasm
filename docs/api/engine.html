@@ -52,7 +52,7 @@
   <tr><td><a href="#addUiPass"><code>addUiPass</code></a></td><td>draw the ImGui windows over the image</td><td>this page</td></tr>
   <tr><td><a href="#setUiCallback"><code>setUiCallback</code></a></td><td>your own ImGui windows, every frame</td><td>this page</td></tr>
   <tr><td><a href="#getUiTexture"><code>getUiTexture</code></a></td><td>a texture as an <code>ImTextureID</code> for <code>ImGui::Image</code></td><td>this page</td></tr>
-  <tr><td><a href="#setDebugView"><code>setDebugView</code></a></td><td>show normals, UVs, overdraw, LODs, culling, light counts or meshlets</td><td>this page</td></tr>
+  <tr><td><a href="#setDebugView"><code>setDebugView</code></a>, <a href="#setDebugView"><code>getDebugView</code></a></td><td>show normals, UVs, overdraw, LODs, culling, light counts or meshlets</td><td>this page</td></tr>
   <tr><td><a href="#setCullingFrozen"><code>setCullingFrozen</code></a></td><td>keep the culling of one frame while the camera moves</td><td>this page</td></tr>
   <tr><td><a href="#setMeshletPath"><code>setMeshletPath</code></a>, <a href="#setMeshletPath"><code>getMeshletPath</code></a></td><td>cull and draw big meshes by meshlets, or whole</td><td>this page</td></tr>
   <tr><td><a href="#setComputePoints"><code>setComputePoints</code></a>, <a href="#setComputePoints"><code>getComputePoints</code></a></td><td>small points by the compute path, or every point by triangles</td><td>this page</td></tr>
@@ -396,6 +396,7 @@ if (!engine.running())
       <li>Views draw in list order: a later view's rect goes over an earlier one, and a view's scene passes see this frame's picture of the view textures listed before it (the views before it, and its own, see the last frame's).</li>
       <li>A view keeps its HDR target, its culling history (Hi-Z, visibility) and its TAA history while its camera and <code>output.target</code> stay in the list, wherever it is in the list. Another view's insertion, removal or move does not reset it.</li>
       <li>The graph is built again only when the list or a view's size in pixels changes; a frame with the same list and sizes allocates nothing. A view that changed size makes its targets again at the new size (<a href="#resizeRenderTarget"><code>resizeRenderTarget</code></a>: one wait for the frames in flight).</li>
+      <li>A view with <code>shadows</code> draws them before its scene passes, fitted to its own camera. Views of different cameras draw one set of maps per light, map size and count in turn, so the maps' memory does not grow with the views; each view's maps still take scene views (<code>MAX_SCENE_VIEWS</code>). A view without shadows costs what it did before.</li>
       <li>The camera of the first view in the window (no <code>output.target</code>) takes the built-in controller, through <code>beginFrame</code>; a list of view textures only gives it the first view's camera. <a href="camera.html#setCameraController"><code>CameraController::Type::NONE</code></a> turns it off. Give each other view's camera its own input with <a href="#getInputArea"><code>getInputArea</code></a>.</li>
     </ul>
     <dl>
@@ -419,11 +420,17 @@ engine.render(views.data(), static_cast&lt;uint32_t&gt;(views.size()));</code></
     ViewOutput          output          = {};
     ViewToggle          bloom           = ViewToggle::DEFAULT;      // DEFAULT: EngineConfig::bloom
     AntiAliasing        antiAliasing    = AntiAliasing::DEFAULT;    // DEFAULT: EngineConfig::antiAliasing
+    ShadowDesc          shadows[MAX_VIEW_SHADOWS] = {};             // lights of the scene, one shadow each
+    uint32_t            shadowCount     = 0;
 
     bool                operator==(const View&amp;) const = default;
 };</pre>
   <div class="body">
     <p>One view of <a href="#render-views"><code>render(views, count)</code></a>, in <code>rasm/view.h</code>. <code>bloom</code> and <code>antiAliasing</code> override the engine's settings for this view: a small map skips bloom and TAA and costs less. A change of <code>antiAliasing</code> makes the view's targets again, so its TAA history starts over.</p>
+    <p>The first <code>shadowCount</code> of <code>shadows</code> (up to <code>MAX_VIEW_SHADOWS</code>, 4, of different lights) are <a href="scene.html#ShadowDesc"><code>ShadowDesc</code></a>s the view draws as <a href="#addShadowPasses"><code>addShadowPasses</code></a> does, each frame, from its camera: cascades fitted to its frustum and LODs from its camera. A changed list builds the graph again. <a href="#exportView"><code>exportView</code></a> draws no shadows (<code>D58</code>). How the maps are shared: <a href="../guides/multiple-views.html#in-rasm">Shadows per view</a>.</p>
+    <pre><code>// From examples/20_views/main.cpp: the sun's shadow in four cascades, fitted to the main camera.
+const rasm::ShadowDesc sunShadow = {.light = sun, .cascadeCount = 4, .size = 2048, .distance = 30.0f};
+views.push_back({.scene = scene, .camera = main.camera, .output = {.rect = rects.rects[0]}, .shadows = {sunShadow}, .shadowCount = shadowCount});</code></pre>
   </div>
 </div>
 
@@ -1149,7 +1156,7 @@ for (uint32_t i = 0; i &lt; stats.gpuTimerCount; ++i)
       <dt>cpuFrameMs</dt><dd>Time between the last two frames on the CPU, in ms. Capped at 100 ms. Updated every frame, even when not measuring.</dd>
       <dt>gpuFrameMs</dt><dd>GPU time of the frame on the graphics queue, in ms: from the frame's start to the latest end of a timer there. Timers on the compute queue are left out, because the timestamps of two queues may not share a clock. 0 on a GPU without timestamps.</dd>
       <dt>uploadGpuMs</dt><dd>GPU time of the upload copies whose batches finished since the last frame, in ms, on the queue each ran on (the graphics queue, or the transfer queue for a load's). The stats overlay and the RASM window show it as uploads. Updated every frame, even when not measuring; 0 on a queue without timestamps.</dd>
-      <dt>gpuTimers</dt><dd>One <code>GpuTimer</code> per pass (graphics or compute, the <a href="#addScenePasses">scene passes</a> included) and per timer of your own, in the order they were recorded. The <a href="#addBloomPasses">bloom passes</a> share one, <code>Bloom</code>. Room for <code>MAX_GPU_TIMERS - 1</code> (63).</dd>
+      <dt>gpuTimers</dt><dd>One <code>GpuTimer</code> per pass (graphics or compute, the <a href="#addScenePasses">scene passes</a> included) and per timer of your own, in the order they were recorded. The <a href="#addBloomPasses">bloom passes</a> share one, <code>Bloom</code>. Room for <code>MAX_GPU_TIMERS - 1</code> (255).</dd>
       <dt>gpuTimerCount</dt><dd>How many entries of <code>gpuTimers</code> are filled.</dd>
       <dt>draws</dt><dd>Draws of all scene views the frame drew, before culling (one per sub-mesh of each entity).</dd>
       <dt>drawsVisible</dt><dd>Draws that passed culling: inside the view, and with occlusion culling also not hidden. Draws of a view drawn without culling all count.</dd>
@@ -1190,7 +1197,7 @@ for (uint32_t i = 0; i &lt; stats.gpuTimerCount; ++i)
       <dt>name</dt><dd>Label in the stats.</dd>
       <dt>returns</dt><dd>The timer id, or <code>UINT32_MAX</code> when nothing is measured: measuring is off, the GPU has no timestamps, or the frame used all its timers (a warning is logged once).</dd>
     </dl>
-    <p>A frame has <code>MAX_GPU_TIMERS</code> (64) timers: one for the whole frame, and 63 for passes and your timers together. Begin and end a timer in the same pass, so both timestamps are on one queue.</p>
+    <p>A frame has <code>MAX_GPU_TIMERS</code> (256) timers: one for the whole frame, and 255 for passes and your timers together. Begin and end a timer in the same pass, so both timestamps are on one queue.</p>
   </div>
 </div>
 
@@ -1316,9 +1323,10 @@ engine.addUiPass(graph);</code></pre>
 </div>
 
 <div class="api" id="setDebugView">
-  <pre class="sig">void setDebugView(DebugView view);</pre>
+  <pre class="sig">void setDebugView(DebugView view);
+DebugView getDebugView() const;</pre>
   <div class="body">
-    <p>Every shaded scene view draws <code>view</code> from the next frame on, until you set <code>DebugView::NONE</code> again. A debug view replaces the shading in the scene passes; the tone map then shows the values as they are (or a count as a heat color), without exposure, and the bloom passes dispatch nothing. MSAA and TAA stay on, so edges are smooth, and a new view starts TAA's history over. Shadow maps are drawn as usual. A value outside the enum logs an error and changes nothing.</p>
+    <p>Every shaded scene view draws <code>view</code> from the next frame on, until you set <code>DebugView::NONE</code> again. A debug view replaces the shading in the scene passes; the tone map then shows the values as they are (or a count as a heat color), without exposure, and the bloom passes dispatch nothing. MSAA and TAA stay on, so edges are smooth, and a new view starts TAA's history over. Shadow maps are drawn as usual. A value outside the enum logs an error and changes nothing. <code>getDebugView</code> returns the last view set.</p>
     <p>The debug views' shaders go to the shader workers when <code>setDebugView</code> first chooses one; until they are ready the scene is drawn shaded, so the frames go on and nothing is missing (<a href="../guides/shader-warmup.html#asks-first">Shader warm-up</a>). <code>waitForLoads</code> waits for them. With <code>DebugView::NONE</code> nothing of it runs: the normal shaders have no debug branch.</p>
     <pre><code>// From examples/15_debug_ui/main.cpp: --debug-view overdraw
 for (int i = 1; i + 1 &lt; argc; ++i)

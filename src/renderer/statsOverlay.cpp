@@ -16,7 +16,9 @@ namespace rasm
         constexpr uint32_t MAX_TEXT_COLUMNS = 40;
         // Frame, GPU and its timers (one is kept for culling), Draws, Culled, Triangles, two LOD lines, LOD draws
         // (8 counts of up to 8 characters wrap at most twice), Lights, Dropped, VRAM and Allocated.
-        constexpr uint32_t MAX_TEXT_ROWS = 2 + (MAX_GPU_TIMERS - 1) + 3 + 2 + 3 + 2 + 2;
+        // The shader reads the row count from 8 bits (statsOverlay.slang), so a frame with more than about 240 timers
+        // loses its last lines.
+        constexpr uint32_t MAX_TEXT_ROWS = std::min(2 + (MAX_GPU_TIMERS - 1) + 3 + 2 + 3 + 2 + 2, 255u);
         // Slow enough for the numbers to be read.
         constexpr float TEXT_REFRESH = 0.25f;
 

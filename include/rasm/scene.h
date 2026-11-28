@@ -48,6 +48,8 @@ namespace rasm
         uint32_t                    size                                = 2048;
         float                       distance                            = 50.0f;    // from the camera (directional), or from the light
         float                       splitLambda                         = 0.7f;     // directional lights
+
+        bool                        operator==(const ShadowDesc&) const = default;
     };
 
     struct SceneShadow

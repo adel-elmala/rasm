@@ -69,6 +69,8 @@ namespace rasm::c
         constexpr uint32_t asNumber(Backend value) { return static_cast<uint32_t>(value); }
         constexpr uint32_t asNumber(AntiAliasing value) { return static_cast<uint32_t>(value); }
         constexpr uint32_t asNumber(MeshletPath value) { return static_cast<uint32_t>(value); }
+        constexpr uint32_t asNumber(DebugView value) { return static_cast<uint32_t>(value); }
+        constexpr uint32_t asNumber(InspectKind value) { return static_cast<uint32_t>(value); }
         constexpr uint32_t asNumber(MaterialType value) { return static_cast<uint32_t>(value); }
         constexpr uint32_t asNumber(PbrSlot value) { return static_cast<uint32_t>(value); }
         constexpr uint32_t asNumber(PbrParam value) { return static_cast<uint32_t>(value); }
@@ -328,6 +330,12 @@ namespace rasm::c
         static_assert(RASM_CAMERA_CONTROLLER_TYPE_FREE_FLY == asNumber(CameraController::Type::FREE_FLY));
         static_assert(RASM_CAMERA_CONTROLLER_TYPE_NONE == asNumber(CameraController::Type::NONE));
         static_assert(RASM_MAX_MESH_LODS == MAX_MESH_LODS && RASM_ALL_ANIMATION_CLIPS == ALL_ANIMATION_CLIPS && RASM_MAX_VIEWS == MAX_SCENE_VIEWS);
+        static_assert(RASM_MAX_VIEW_SHADOWS == MAX_VIEW_SHADOWS && RASM_INSPECT_ALL_SAMPLES == INSPECT_ALL_SAMPLES && RASM_INSPECT_TILES == INSPECT_TILES);
+        static_assert(RASM_DEBUG_VIEW_NONE == asNumber(DebugView::NONE) && RASM_DEBUG_VIEW_NORMALS == asNumber(DebugView::NORMALS) && RASM_DEBUG_VIEW_UVS == asNumber(DebugView::UVS));
+        static_assert(RASM_DEBUG_VIEW_OVERDRAW == asNumber(DebugView::OVERDRAW) && RASM_DEBUG_VIEW_LODS == asNumber(DebugView::LODS) && RASM_DEBUG_VIEW_CULLING == asNumber(DebugView::CULLING));
+        static_assert(RASM_DEBUG_VIEW_LIGHT_COUNT == asNumber(DebugView::LIGHT_COUNT) && RASM_DEBUG_VIEW_MESHLETS == asNumber(DebugView::MESHLETS));
+        static_assert(RASM_INSPECT_KIND_COLOR == asNumber(InspectKind::COLOR) && RASM_INSPECT_KIND_DEPTH == asNumber(InspectKind::DEPTH));
+        static_assert(RASM_INSPECT_KIND_HIZ == asNumber(InspectKind::HIZ) && RASM_INSPECT_KIND_LIGHT_CLUSTERS == asNumber(InspectKind::LIGHT_CLUSTERS));
 
         // rasm_create_mesh copies the caller's vertices as they are.
         static_assert(sizeof(rasm_vertex) == sizeof(Vertex));
@@ -1124,6 +1132,8 @@ namespace rasm::c
         return {.mouse = capture.mouse ? RASM_TRUE : RASM_FALSE, .keyboard = capture.keyboard ? RASM_TRUE : RASM_FALSE, .text = capture.text ? RASM_TRUE : RASM_FALSE};
     }
 
+    // Without the shadows: they sit behind a pointer the caller's view gives, which readViews checks and reads (and
+    // toC gives the defaults, none).
     View toCpp(const rasm_view &view)
     {
         return {.scene = toCpp(view.scene),
