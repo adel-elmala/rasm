@@ -8,6 +8,7 @@
 #include "renderer/uberMaterialTypes.h"
 
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "spdlog/spdlog.h"
 #include "tracy/Tracy.hpp"
 
@@ -145,15 +146,67 @@ namespace rasm
         return capacity;
     }
 
+    UiLayout getUiLayout()
+    {
+        return {.version = IMGUI_VERSION,
+                .io = sizeof(ImGuiIO),
+                .style = sizeof(ImGuiStyle),
+                .vec2 = sizeof(ImVec2),
+                .vec4 = sizeof(ImVec4),
+                .drawVert = sizeof(ImDrawVert),
+                .drawIdx = sizeof(ImDrawIdx)};
+    }
+
+    std::string findUiLayoutMismatch(const UiLayout &rasm, const UiLayout &other, const char *owner)
+    {
+        if (other.version != rasm.version)
+            return std::string("Dear ImGui is ") + other.version + " in " + owner + " copy and " + rasm.version + " in RASM's: use the same version.";
+        const struct
+        {
+            const char *name;
+            uint64_t rasm;
+            uint64_t other;
+        } sizes[] = {{"ImGuiIO", rasm.io, other.io},
+                     {"ImGuiStyle", rasm.style, other.style},
+                     {"ImVec2", rasm.vec2, other.vec2},
+                     {"ImVec4", rasm.vec4, other.vec4},
+                     {"ImDrawVert", rasm.drawVert, other.drawVert},
+                     {"ImDrawIdx", rasm.drawIdx, other.drawIdx}};
+        for (const auto &size : sizes)
+        {
+            if (size.other != size.rasm)
+                return std::string(size.name) + " is " + std::to_string(size.other) + " bytes in " + owner + " copy of Dear ImGui and " + std::to_string(size.rasm) +
+                       " in RASM's: both need the same imconfig.h and defines (IMGUI_DISABLE_OBSOLETE_FUNCTIONS, ImDrawIdx, IMGUI_USE_WCHAR32).";
+        }
+        return {};
+    }
+
     // Startup with RendererConfig::ui: the context, its input from the engine's InputEvents and the pipeline. The font atlas is made by the
     // first frame's texture requests. A failure leaves the UI off and the engine running.
     bool Renderer::createUi()
     {
-        IMGUI_CHECKVERSION();
+        // In place of IMGUI_CHECKVERSION, which asserts: the library's version, and where its code puts the context's
+        // members, measured against the layout RASM's code was compiled with. They differ when the application links a
+        // Dear ImGui built with other defines (IMGUI_DISABLE_OBSOLETE_FUNCTIONS) than RASM's headers had.
+        ImGuiContext *context = ImGui::CreateContext();
+        const UiLayout layout = getUiLayout();
+        UiLayout library = layout;
+        library.version = ImGui::GetVersion();
+        // ImGuiContext holds IO and then PlatformIO, so the distance between them is sizeof(ImGuiIO), with its padding.
+        const ptrdiff_t libraryDistance = reinterpret_cast<const char *>(&ImGui::GetPlatformIO()) - reinterpret_cast<const char *>(&ImGui::GetIO());
+        const ptrdiff_t rasmDistance = reinterpret_cast<const char *>(&context->PlatformIO) - reinterpret_cast<const char *>(&context->IO);
+        library.io = static_cast<uint64_t>(static_cast<ptrdiff_t>(layout.io) + libraryDistance - rasmDistance);
+        const std::string mismatch = findUiLayoutMismatch(layout, library, "the linked library's");
+        if (!mismatch.empty())
+        {
+            ImGui::DestroyContext(context);
+            spdlog::error("The UI stays off: {}", mismatch);
+            return false;
+        }
         ui = std::make_unique<Ui>();
         // The Buffers section's state.
         inspector = std::make_unique<Inspector>();
-        ui->context = ImGui::CreateContext();
+        ui->context = context;
         ImGuiIO &io = ImGui::GetIO();
         // No imgui.ini in the working directory (principle 5), and nothing that carries over between runs.
         io.IniFilename = nullptr;
@@ -380,6 +433,11 @@ namespace rasm
             return;
         }
         ui->callback = std::move(callback);
+    }
+
+    ImGuiContext *Renderer::getUiContext() const
+    {
+        return ui ? ui->context : nullptr;
     }
 
     // A loaded texture that no material samples yet gets its bindless slot here, as a material would give it.

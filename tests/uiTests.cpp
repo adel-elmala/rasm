@@ -3,10 +3,13 @@
 #include "doctest/doctest.h"
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 // The UI exists only in a rasm built with Dear ImGui (RASM_IMGUI).
 #if defined(RASM_IMGUI)
+
+#include "imgui.h"
 
 TEST_CASE("UI scissor: a clip rectangle becomes framebuffer pixels")
 {
@@ -58,6 +61,36 @@ TEST_CASE("UI buffers grow in powers of two from their minimum")
     CHECK(rasm::growUiCapacity(65536, 65536) == 65536);
     CHECK(rasm::growUiCapacity(65537, 65536) == 131072);
     CHECK(rasm::growUiCapacity(1000000, 65536) == 1048576);
+}
+
+TEST_CASE("UI layout: two copies of Dear ImGui share a context only with the same version and struct sizes")
+{
+    const rasm::UiLayout rasmLayout = rasm::getUiLayout();
+    CHECK(rasmLayout.version == IMGUI_VERSION);
+    CHECK(rasmLayout.drawIdx == 2);
+    CHECK(rasm::findUiLayoutMismatch(rasmLayout, rasmLayout, "the caller's").empty());
+
+    SUBCASE("another version is named first")
+    {
+        rasm::UiLayout other = rasmLayout;
+        other.version = "1.92.5";
+        other.io += 8;
+        CHECK(rasm::findUiLayoutMismatch(rasmLayout, other, "the caller's") == "Dear ImGui is 1.92.5 in the caller's copy and " + rasmLayout.version + " in RASM's: use the same version.");
+    }
+    SUBCASE("a struct of another size, as with IMGUI_DISABLE_OBSOLETE_FUNCTIONS on one side only")
+    {
+        rasm::UiLayout other = rasmLayout;
+        other.io = rasmLayout.io + 32;
+        const std::string mismatch = rasm::findUiLayoutMismatch(rasmLayout, other, "the caller's");
+        CHECK(mismatch.find("ImGuiIO is " + std::to_string(rasmLayout.io + 32) + " bytes in the caller's copy of Dear ImGui and " + std::to_string(rasmLayout.io) + " in RASM's") == 0);
+        CHECK(mismatch.find("IMGUI_DISABLE_OBSOLETE_FUNCTIONS") != std::string::npos);
+    }
+    SUBCASE("32-bit indices")
+    {
+        rasm::UiLayout other = rasmLayout;
+        other.drawIdx = 4;
+        CHECK(rasm::findUiLayoutMismatch(rasmLayout, other, "the caller's").find("ImDrawIdx is 4 bytes") == 0);
+    }
 }
 
 #endif
