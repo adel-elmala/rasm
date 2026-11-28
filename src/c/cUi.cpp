@@ -73,7 +73,8 @@ RASM_C_CATCH(nullptr)
 rasm_result RASM_CALL rasm_get_imgui_allocator_functions(rasm_imgui_alloc_func *alloc_func, rasm_imgui_free_func *free_func, void **user_data)
 try
 {
-    if (!c::checkPointer(alloc_func, __func__, "alloc_func") || !c::checkPointer(free_func, __func__, "free_func") || !c::checkPointer(user_data, __func__, "user_data"))
+    if (!c::checkPointer(static_cast<const void *>(alloc_func), __func__, "alloc_func") || !c::checkPointer(static_cast<const void *>(free_func), __func__, "free_func") ||
+        !c::checkPointer(static_cast<const void *>(user_data), __func__, "user_data"))
         return RASM_ERROR_INVALID_ARGUMENT;
 #if defined(RASM_IMGUI)
     ImGuiMemAllocFunc alloc = nullptr;

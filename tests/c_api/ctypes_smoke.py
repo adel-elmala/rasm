@@ -472,6 +472,12 @@ def start_ui(lib, renderer, scene, camera, errors, imgui, window):
     """Checks the 1.19 calls and sets a Python UI callback; with cimgui, the callback draws a window at window (x, y, w, h)."""
     number = c_uint32()
     version = lib.rasm_get_imgui_version(byref(number))
+    if version is None:
+        # A RASM built without Dear ImGui (RASM_IMGUI=OFF): the UI calls fail, and there is nothing to draw.
+        before = len(errors)
+        check(lib.rasm_set_ui_callback(renderer, UiCallback(), None) == ERROR_FAILED, "rasm_set_ui_callback fails without Dear ImGui", lib)
+        del errors[before:]
+        return None
     check(version == IMGUI_VERSION and number.value == 19261, f"rasm_get_imgui_version, got {version} {number.value}", lib)
     check(lib.rasm_check_imgui_layout(IMGUI_VERSION, *IMGUI_SIZES) == OK, "rasm_check_imgui_layout with Dear ImGui 1.92.6's sizes", lib)
     before = len(errors)
@@ -696,6 +702,8 @@ def main():
         imgui = load_cimgui(args.cimgui) if args.cimgui else None
         ui_window = (8.0, height - 72.0, 150.0, 60.0)
         ui_checks = start_ui(lib, renderer, scene, camera, errors, imgui, ui_window)
+        if ui_checks is None:
+            imgui = None
 
         # Frame N - 1 is one view through rasm_render, frame N two through rasm_render_views.
         single_readback = Handle()
@@ -729,7 +737,8 @@ def main():
                 check(lib.rasm_image_write_png(image, os.path.abspath(args.out).encode("utf-8")) == OK, "rasm_image_write_png", lib)
         finally:
             lib.rasm_image_destroy(image)
-        check(lib.rasm_set_ui_callback(renderer, UiCallback(), None) == OK, "rasm_set_ui_callback(NULL) removes it", lib)
+        if ui_checks is not None:
+            check(lib.rasm_set_ui_callback(renderer, UiCallback(), None) == OK, "rasm_set_ui_callback(NULL) removes it", lib)
     finally:
         lib.rasm_renderer_destroy(renderer)
     if imgui:
@@ -762,9 +771,10 @@ def main():
     check(graph_checks["frames"] >= 2 and graph_checks["history"] == 0 and graph_checks["commands"] == 0, f"the pass callback's checks: {graph_checks['history']} history, {graph_checks['commands']} command errors", lib)
     check(graph_checks["refused"] == 3, f"a call that starts a frame, and commands that do not fit, are refused in a pass callback: {graph_checks['refused']} of 3", lib)
     # Every frame ran the UI callback: the frames above, and the graph's.
-    print(f"{ui_checks['frames']} Python UI callbacks" + (" drawing with cimgui" if imgui else ""))
-    check(ui_checks["frames"] == 2 * args.frames and ui_checks["refused"] == 2,
-          f"the UI callback ran {ui_checks['frames']} times in {2 * args.frames} frames, {ui_checks['refused']} of 2 calls refused in it", lib)
+    if ui_checks is not None:
+        print(f"{ui_checks['frames']} Python UI callbacks" + (" drawing with cimgui" if imgui else ""))
+        check(ui_checks["frames"] == 2 * args.frames, f"the UI callback ran {ui_checks['frames']} times in {2 * args.frames} frames", lib)
+        check(ui_checks["refused"] == 2, f"a call that starts a frame, and rasm_set_ui_callback, are refused in the UI callback: {ui_checks['refused']} of 2", lib)
     if imgui:
         title = pixel(int(ui_window[0] + ui_window[2]) - 10, int(ui_window[1]) + 6)
         print(f"cimgui window title bar {title}")

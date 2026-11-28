@@ -668,9 +668,14 @@ static int checkFrame(const App *app, const rasm_image *image, unsigned frames)
      * numbers. */
     pixel = (const uint8_t *)data.pixels + ((size_t)(UI_Y + 6) * data.width + UI_X + UI_WIDTH - 12) * 4;
     printf("UI: %u frames, the title bar is (%u, %u, %u), the vignette %.2f.\n", app->uiFrames, pixel[0], pixel[1], pixel[2], app->gradeParams.vignette);
-    if (app->uiFrames != frames || abs(pixel[0] - 41) > 3 || abs(pixel[1] - 74) > 3 || abs(pixel[2] - 122) > 3)
+    if (app->uiFrames != frames)
     {
-        fprintf(stderr, "error: the UI callback ran %u times in %u frames, and the title bar is not (41, 74, 122).\n", app->uiFrames, frames);
+        fprintf(stderr, "error: the UI callback ran %u times in %u frames.\n", app->uiFrames, frames);
+        ok = 0;
+    }
+    if (abs(pixel[0] - 41) > 3 || abs(pixel[1] - 74) > 3 || abs(pixel[2] - 122) > 3)
+    {
+        fprintf(stderr, "error: the window's title bar is (%u, %u, %u), not (41, 74, 122).\n", pixel[0], pixel[1], pixel[2]);
         ok = 0;
     }
     /* The scripted click near the slider's left end, from the frames' middle on. */
@@ -801,6 +806,7 @@ int main(int argc, char **argv)
         fail("sharing Dear ImGui with cimgui");
         rasm_render_graph_destroy(graph);
         rasm_engine_destroy(engine);
+        igSetCurrentContext(NULL);
         return 1;
     }
 #endif

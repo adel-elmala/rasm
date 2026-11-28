@@ -27,7 +27,8 @@ file(CONFIGURE OUTPUT "${rasm_cimgui_shim}/imgui/imgui.h" CONTENT "#include <img
 file(CONFIGURE OUTPUT "${rasm_cimgui_shim}/imgui/imgui_internal.h" CONTENT "#include <imgui_internal.h>\n")
 
 add_library(rasm_cimgui SHARED "${rasm_cimgui_source_SOURCE_DIR}/cimgui.cpp")
-set_target_properties(rasm_cimgui PROPERTIES OUTPUT_NAME cimgui SKIP_LINTING ON)
+# Third-party code: no clang-tidy (SKIP_LINTING needs CMake 3.27, so the tidy command is cleared too).
+set_target_properties(rasm_cimgui PROPERTIES OUTPUT_NAME cimgui SKIP_LINTING ON CXX_CLANG_TIDY "")
 target_include_directories(rasm_cimgui PRIVATE "${rasm_cimgui_shim}")
 target_include_directories(rasm_cimgui SYSTEM INTERFACE "${rasm_cimgui_source_SOURCE_DIR}")
 target_link_libraries(rasm_cimgui PRIVATE imgui::imgui)

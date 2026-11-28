@@ -185,9 +185,10 @@ namespace rasm
     // first frame's texture requests. A failure leaves the UI off and the engine running.
     bool Renderer::createUi()
     {
-        // In place of IMGUI_CHECKVERSION, which asserts: the library's version, and where its code puts the context's
-        // members, measured against the layout RASM's code was compiled with. They differ when the application links a
-        // Dear ImGui built with other defines (IMGUI_DISABLE_OBSOLETE_FUNCTIONS) than RASM's headers had.
+        // In place of IMGUI_CHECKVERSION, which asserts: the library's version and the sizes its code uses, measured
+        // against the layout RASM's code was compiled with. They differ when the application links a Dear ImGui built
+        // with other defines (IMGUI_DISABLE_OBSOLETE_FUNCTIONS, ImDrawIdx) than RASM's headers had. ImGuiStyle has no
+        // member after it the library gives, so its size is not measured; ImVec2 and ImVec4 are always 2 and 4 floats.
         ImGuiContext *context = ImGui::CreateContext();
         const UiLayout layout = getUiLayout();
         UiLayout library = layout;
@@ -196,6 +197,17 @@ namespace rasm
         const ptrdiff_t libraryDistance = reinterpret_cast<const char *>(&ImGui::GetPlatformIO()) - reinterpret_cast<const char *>(&ImGui::GetIO());
         const ptrdiff_t rasmDistance = reinterpret_cast<const char *>(&context->PlatformIO) - reinterpret_cast<const char *>(&context->IO);
         library.io = static_cast<uint64_t>(static_cast<ptrdiff_t>(layout.io) + libraryDistance - rasmDistance);
+        {
+            // The library's code writes a rectangle, 4 vertices and 6 indices, into a draw list of its own types: how
+            // far its write pointers move gives its sizeof(ImDrawVert) and sizeof(ImDrawIdx). ImDrawList itself holds
+            // only pointers to them, so it has one layout either way.
+            ImDrawList probe(ImGui::GetDrawListSharedData());
+            probe._ResetForNewFrame();
+            probe.PrimReserve(6, 4);
+            probe.PrimRect(ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), 0);
+            library.drawVert = static_cast<uint64_t>(reinterpret_cast<const char *>(probe._VtxWritePtr) - reinterpret_cast<const char *>(probe.VtxBuffer.Data)) / 4;
+            library.drawIdx = static_cast<uint64_t>(reinterpret_cast<const char *>(probe._IdxWritePtr) - reinterpret_cast<const char *>(probe.IdxBuffer.Data)) / 6;
+        }
         const std::string mismatch = findUiLayoutMismatch(layout, library, "the linked library's");
         if (!mismatch.empty())
         {
