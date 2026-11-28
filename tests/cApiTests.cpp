@@ -18,6 +18,9 @@
 
 #include "doctest/doctest.h"
 #include "glm/gtc/quaternion.hpp"
+#if defined(RASM_IMGUI)
+#include "imgui.h"
+#endif
 
 #include <cmath>
 #include <fstream>
@@ -1335,3 +1338,45 @@ TEST_CASE("the 1.18 view shadows and inspection start from the C++ defaults, and
     char name[8];
     CHECK(rasm_get_inspection(nullptr, &inspection, name, sizeof(name)) == 0);
 }
+
+#if defined(RASM_IMGUI)
+// The test has Dear ImGui's headers, so its sizes are a binding's built with RASM's imconfig.h.
+TEST_CASE("the 1.19 UI calls give RASM's Dear ImGui, and the layout check names the first difference")
+{
+    CHECK(RASM_C_API_VERSION_MINOR >= 19);
+    uint32_t versionNum = 0;
+    const char *version = rasm_get_imgui_version(&versionNum);
+    REQUIRE(version != nullptr);
+    CHECK(std::string(version) == IMGUI_VERSION);
+    CHECK(versionNum == IMGUI_VERSION_NUM);
+    CHECK(rasm_get_imgui_version(nullptr) == version);
+
+    CHECK(rasm_check_imgui_layout(IMGUI_VERSION, sizeof(ImGuiIO), sizeof(ImGuiStyle), sizeof(ImVec2), sizeof(ImVec4), sizeof(ImDrawVert), sizeof(ImDrawIdx)) == RASM_OK);
+    CHECK(rasm_check_imgui_layout("1.91.0", sizeof(ImGuiIO), sizeof(ImGuiStyle), sizeof(ImVec2), sizeof(ImVec4), sizeof(ImDrawVert), sizeof(ImDrawIdx)) == RASM_ERROR_FAILED);
+    CHECK(contains(rasm_get_last_error(), "Dear ImGui is 1.91.0 in the caller's copy"));
+    // ImGuiIO with the obsolete fields RASM's build leaves out (IMGUI_DISABLE_OBSOLETE_FUNCTIONS).
+    CHECK(rasm_check_imgui_layout(IMGUI_VERSION, sizeof(ImGuiIO) + 32, sizeof(ImGuiStyle), sizeof(ImVec2), sizeof(ImVec4), sizeof(ImDrawVert), sizeof(ImDrawIdx)) ==
+          RASM_ERROR_FAILED);
+    CHECK(contains(rasm_get_last_error(), "ImGuiIO is"));
+    CHECK(contains(rasm_get_last_error(), "IMGUI_DISABLE_OBSOLETE_FUNCTIONS"));
+    CHECK(rasm_check_imgui_layout(IMGUI_VERSION, sizeof(ImGuiIO), sizeof(ImGuiStyle), sizeof(ImVec2), sizeof(ImVec4), sizeof(ImDrawVert), 4) == RASM_ERROR_FAILED);
+    CHECK(contains(rasm_get_last_error(), "ImDrawIdx is 4 bytes"));
+    CHECK(rasm_check_imgui_layout(nullptr, 0, 0, 0, 0, 0, 0) == RASM_ERROR_INVALID_ARGUMENT);
+
+    rasm_imgui_alloc_func allocFunc = nullptr;
+    rasm_imgui_free_func freeFunc = nullptr;
+    void *allocUserData = &versionNum;
+    REQUIRE(rasm_get_imgui_allocator_functions(&allocFunc, &freeFunc, &allocUserData) == RASM_OK);
+    REQUIRE(allocFunc != nullptr);
+    REQUIRE(freeFunc != nullptr);
+    void *memory = allocFunc(64, allocUserData);
+    CHECK(memory != nullptr);
+    freeFunc(memory, allocUserData);
+    CHECK(rasm_get_imgui_allocator_functions(nullptr, &freeFunc, &allocUserData) == RASM_ERROR_INVALID_ARGUMENT);
+
+    CHECK(rasm_set_ui_callback(nullptr, nullptr, nullptr) == RASM_ERROR_INVALID_ARGUMENT);
+    CHECK(contains(rasm_get_last_error(), "renderer is NULL"));
+    CHECK(rasm_get_imgui_context(nullptr) == nullptr);
+    CHECK(rasm_get_ui_texture(nullptr, rasm_texture{0}) == 0);
+}
+#endif

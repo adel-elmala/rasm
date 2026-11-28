@@ -43,8 +43,24 @@ struct rasm_renderer
     std::vector<rasm_render_graph*>     graphs;                                 // the live graphs made on it
     std::vector<rasm::c::PipelineInfo>  pipelines;                              // by pipeline index
     std::vector<rasm::c::BufferInfo>    buffers;                                // by buffer index
-    uint32_t                            recording       = 0;                    // inside rasm_render_graph_execute
+    uint32_t                            recording       = 0;                    // inside a pass or UI callback's frame
+    rasm_ui_callback                    uiCallback      = nullptr;
+    void*                               uiUserData      = nullptr;
 };
+
+namespace rasm::c
+{
+    // Around the calls back into the application while a frame records: checkNotRecording refuses the calls that
+    // would break the frame.
+    struct Recording
+    {
+        rasm_renderer&                  renderer;
+        explicit                        Recording(rasm_renderer& owner) : renderer(owner) { ++renderer.recording; }
+                                        ~Recording() { --renderer.recording; }
+                                        Recording(const Recording&) = delete;
+        Recording&                      operator=(const Recording&) = delete;
+    };
+}
 
 struct rasm_image
 {
@@ -237,8 +253,8 @@ namespace rasm::c
     bool                    checkEnum(uint32_t value, uint32_t count, const char* function, const char* name);
     // The config's enum fields.
     bool                    checkRendererConfig(const rasm_renderer_config& config, const char* function);
-    // False, with an error, while one of the renderer's graphs records (rasm_render_graph_execute): the call would start
-    // a frame, change a graph or free what the frame uses.
+    // False, with an error, while the renderer records a frame and calls back (rasm_render_graph_execute's pass callbacks,
+    // the UI callback): the call would start a frame, change a graph or free what the frame uses.
     bool                    checkNotRecording(const rasm_renderer* renderer, const char* function);
     // A sized rasm_render_target_desc, its defaults past the caller's size, as the C++ desc.
     bool                    readRenderTargetDesc(const rasm_render_target_desc* desc, RenderTargetDesc& target, const char* function);
