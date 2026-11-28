@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Two Copies of One Library · RASM</title>
+<meta name="description" content="A static library linked into two modules of one process is two copies, each with its own globals. How the copies share one state object: hand over the pointer, share the allocator, and check that both were built with the same struct layout, as Dear ImGui's version check does.">
+<meta name="rasm-sources" content="src/c/cUi.cpp src/renderer/ui.cpp src/renderer/ui.h include/rasm/rasm_c.h ports/imgui/portfile.cmake cmake/RasmCimgui.cmake examples/33_c_render_graph/main.c">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/library-copies.js"></script>
+</head>
+<body data-root="../" data-page="guides/library-copies.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Foundations</p>
+<h1>Two copies of one library</h1>
+<p class="lead">A static library is copied into every module that links it: an executable, and each shared library (DLL). Two modules of one process that link the same library hold <b>two copies</b> of its code and of its globals. This page shows what that breaks, and the three things the copies must share to work on one object: its pointer, the allocator, and the struct layout. The <a href="#in-rasm">last part</a> shows how a language binding draws Dear ImGui windows into RASM's frame this way.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>Each copy has its <b>own globals</b>: a "current object" pointer, an allocator, caches. Setting one copy's global does not set the other's.</li>
+    <li>The object itself lives on the heap, so both copies can use it once the second copy is <b>given its pointer</b>.</li>
+    <li>Memory one copy allocates, the other may free. Both must use the <b>same allocator</b>, or a free goes to the wrong heap.</li>
+    <li>Both copies must agree on <b>every struct's layout</b>: the same version and the same compile-time options. A different option moves fields, and the second copy reads the wrong bytes.</li>
+    <li>A <b>version and size check</b> at the start turns a layout mismatch into a clear error instead of memory corruption. It catches only what it measures.</li>
+  </ul>
+</div>
+
+<h2 id="problem"><span class="n">1</span>One library, two copies</h2>
+
+<p>Look at one process. A shared library links a UI library statically and makes the UI's state object. A second module, a language binding, links the same UI library statically too.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="One process with two modules. Module A holds copy A of the library's code and globals: its current-object pointer points to the state object on the heap, and its allocator is malloc of A. Module B holds copy B: its current-object pointer is null and its allocator is malloc of B. The state object on the heap is one.">
+    <rect x="10" y="10" width="740" height="280" rx="8" class="zone"/>
+    <text x="24" y="32" class="title">one process</text>
+    <rect x="30" y="46" width="300" height="150" rx="6" class="cpu"/>
+    <text x="180" y="68" class="mid title">module A (a shared library)</text>
+    <text x="46" y="94" class="small">copy A of the library's code</text>
+    <rect x="46" y="106" width="268" height="76" rx="4" class="paper"/>
+    <text x="58" y="126" class="small t-faint">copy A's globals</text>
+    <text x="58" y="148" class="small mono">current  = 0x5a10</text>
+    <text x="58" y="168" class="small mono">allocate = malloc of A</text>
+    <rect x="430" y="46" width="300" height="150" rx="6" class="cpu"/>
+    <text x="580" y="68" class="mid title">module B (a binding)</text>
+    <text x="446" y="94" class="small">copy B of the same code</text>
+    <rect x="446" y="106" width="268" height="76" rx="4" class="paper"/>
+    <text x="458" y="126" class="small t-faint">copy B's globals</text>
+    <text x="458" y="148" class="small mono t-bad">current  = NULL</text>
+    <text x="458" y="168" class="small mono">allocate = malloc of B</text>
+    <rect x="250" y="226" width="260" height="50" rx="6" class="mem"/>
+    <text x="380" y="248" class="mid title">the state object</text>
+    <text x="380" y="266" class="mid small">on the heap, at 0x5a10</text>
+    <path d="M180,196 C180,224 210,246 246,250" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <path d="M580,196 C580,224 550,246 514,250" class="arrow bad dashed" marker-end="url(#ah-bad)"/>
+    <text x="592" y="230" class="small t-bad">no pointer to it</text>
+  </svg>
+  <figcaption>The two copies run the same code on different globals. Module B's calls see no current object: the library stops with an assert, or reads through a null pointer.</figcaption>
+</figure>
+
+<p>Nothing here is wrong in the link step. Each module is complete on its own, and the linker gives each one the library's code it needs. The problem shows only when the two modules work on <b>one</b> object.</p>
+
+<h2 id="share"><span class="n">2</span>What the copies must share</h2>
+
+<p>The object can be shared, because it is plain memory. What cannot be shared are the globals: each copy reads its own. So module A hands over what copy B needs, and copy B sets its own globals from it, before its first call:</p>
+
+<ol class="flow">
+  <li class="cpu"><b>Check</b> that B's copy is the same version and has the same struct sizes as A's.</li>
+  <li class="mem"><b>Allocator</b> B's allocate and free functions become A's.</li>
+  <li class="cpu"><b>Current object</b> B's "current" pointer becomes A's object.</li>
+  <li class="gpu"><b>Call</b> B's code now works on the shared object, and so does A's.</li>
+</ol>
+
+<p>The order matters. The check comes first, because a copy with another layout must not touch the object at all. The allocator comes before any call that can allocate.</p>
+
+<h2 id="allocator"><span class="n">3</span>One allocator for both</h2>
+
+<p>The object grows while both copies use it: B's call adds a window, A's call later frees it. Each copy allocates with its own global allocator, and on Windows each module can have its own C runtime, with its own heap.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Copy B allocates a block in heap B. Later copy A frees it into heap A, which never gave it out: the heap is corrupted.">
+      <rect x="10" y="20" width="130" height="90" rx="6" class="mem"/>
+      <text x="75" y="40" class="mid small title">heap A</text>
+      <rect x="180" y="20" width="130" height="90" rx="6" class="mem"/>
+      <text x="245" y="40" class="mid small title">heap B</text>
+      <rect x="214" y="58" width="62" height="24" rx="3" class="solid"/>
+      <text x="245" y="74" class="mid small">block</text>
+      <text x="245" y="102" class="mid small">B allocates</text>
+      <path d="M214,70 C170,70 150,84 112,84" class="arrow bad dashed" marker-end="url(#ah-bad)"/>
+      <text x="75" y="102" class="mid small t-bad">A frees it here</text>
+    </svg>
+    <h4>Two allocators: a free goes to the wrong heap</h4>
+    <p>The heap gets a block it never gave out. The program crashes later, somewhere else, or corrupts memory without a sign.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Both copies call A's allocate and free functions, so every block comes from heap A and goes back to heap A.">
+      <rect x="95" y="20" width="130" height="90" rx="6" class="mem"/>
+      <text x="160" y="40" class="mid small title">heap A</text>
+      <rect x="129" y="58" width="62" height="24" rx="3" class="solid"/>
+      <text x="160" y="74" class="mid small">block</text>
+      <text x="40" y="60" class="mid small">copy B</text>
+      <text x="280" y="60" class="mid small">copy A</text>
+      <path d="M40,68 C40,80 90,78 126,72" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <path d="M280,68 C280,80 230,78 194,72" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <text x="160" y="102" class="mid small t-ok">A's allocate and free</text>
+    </svg>
+    <h4>One allocator: every block comes back home</h4>
+    <p>B takes A's functions (and their user data) before its first call. Which copy allocates and which frees no longer matters.</p>
+  </div>
+</div>
+
+<h2 id="layout"><span class="n">4</span>The same layout, byte for byte</h2>
+
+<p>Copy B reads the object with its own idea of where each field is. That idea comes from the headers and the options B was compiled with. A compile-time option that adds a field, or changes a type, moves every field after it.</p>
+
+<p>A real case, Dear ImGui 1.92.6 on a 64-bit machine. Its option <samp>IMGUI_DISABLE_OBSOLETE_FUNCTIONS</samp> removes four old fields from the end of <samp>ImGuiIO</samp>: a float and three pointers, 32 bytes with padding. The state object (<samp>ImGuiContext</samp>) holds <samp>ImGuiIO</samp> near its start, so everything after it moves by 32 bytes:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 236" role="img" aria-label="Two bars show the start of the context in each copy. Copy A, built with the old fields: IO from byte 40 to 3072, then PlatformIO at 3072, Style at 3168. Copy B, built without them: IO from 40 to 3040, PlatformIO at 3040, Style at 3136. An arrow shows copy B reading Style at 3136, which in copy A's object is the end of PlatformIO.">
+    <text x="10" y="22" class="small t-faint">bytes from the start of the context →</text>
+    <text x="10" y="62" class="title">copy A</text>
+    <text x="10" y="78" class="small">old fields on</text>
+    <rect x="110" y="46" width="5" height="34" class="paper"/>
+    <rect x="115" y="46" width="352" height="34" class="cpu"/>
+    <text x="291" y="68" class="mid">ImGuiIO, 3032 B</text>
+    <rect x="467" y="46" width="11" height="34" class="mem"/>
+    <rect x="478" y="46" width="150" height="34" class="gpu"/>
+    <text x="553" y="68" class="mid small">ImGuiStyle</text>
+    <rect x="628" y="46" width="117" height="34" class="paper"/>
+    <text x="686" y="68" class="mid small t-faint">the rest …</text>
+    <rect x="463" y="40" width="4" height="46" class="accent"/>
+    <text x="440" y="100" class="end small">old fields, 32 B</text>
+
+    <text x="10" y="162" class="title">copy B</text>
+    <text x="10" y="178" class="small">old fields off</text>
+    <rect x="110" y="146" width="5" height="34" class="paper"/>
+    <rect x="115" y="146" width="348" height="34" class="cpu"/>
+    <text x="289" y="168" class="mid">ImGuiIO, 3000 B</text>
+    <rect x="463" y="146" width="11" height="34" class="mem"/>
+    <rect x="474" y="146" width="150" height="34" class="gpu"/>
+    <text x="549" y="168" class="mid small">ImGuiStyle</text>
+    <rect x="624" y="146" width="121" height="34" class="paper"/>
+    <text x="684" y="168" class="mid small t-faint">the rest …</text>
+
+    <path d="M474,144 C474,118 474,100 474,84" class="arrow bad" marker-end="url(#ah-bad)"/>
+    <text x="484" y="124" class="small t-bad">B reads Style at 3136:</text>
+    <text x="484" y="138" class="small t-bad">in A's object, PlatformIO's end</text>
+    <text x="110" y="214" class="small">PlatformIO (96 B, amber) sits between IO and Style: at 3072 in A, at 3040 in B. Every later field is 32 bytes off.</text>
+  </svg>
+  <figcaption>Bytes to scale up to the style; the whole context is 10840 bytes in copy A and 10808 in copy B. Copy B's code is right for copy B's headers. It is wrong for an object copy A made.</figcaption>
+</figure>
+
+<p>Such a mismatch does not crash at once. Copy B writes a style color into the platform callbacks, or reads a window list from the middle of another field. The crash, if one comes, comes later and far away. Try it:</p>
+
+<figure class="lab" data-lab="copy-layout" data-title="Two copies, one context">
+  <figcaption>Turn the old fields on or off in each copy, and pick the field copy B reads. Find the settings that make B read the right bytes, and see what the check says for the others.</figcaption>
+</figure>
+
+<h2 id="check"><span class="n">5</span>Check before the first call</h2>
+
+<p>The fix is a check at the start, before copy B touches the object. Copy B passes what it was compiled with, and the library compares it with its own numbers:</p>
+
+<div class="formula">
+  <p class="eq">version<sub>B</sub> = version<sub>A</sub></p>
+  <p class="eq">sizeof(T)<sub>B</sub> = sizeof(T)<sub>A</sub>, for each T in the list</p>
+  <dl>
+    <dt>version</dt><dd>the version string from the headers, compiled into each copy</dd>
+    <dt>T</dt><dd>the structs whose size shows an option: the IO and style structs, the vector types, the vertex and index types</dd>
+  </dl>
+</div>
+
+<p>Dear ImGui's own <samp>IMGUI_CHECKVERSION</samp> is this check. It passes the version and six sizes to <samp>DebugCheckVersionAndDataLayout</samp>, which asserts on the first difference. Across a library boundary an assert is the wrong answer: the caller may be another language, and a release build has no asserts. So a check for the other copy <b>returns an error</b> that names the first difference.</p>
+
+<div class="callout warn">
+  <strong>A check sees only what it measures</strong>
+  <p>Six sizes do not prove that every struct matches. An option that changes a struct not in the list, with no effect on the sizes in it, passes the check and still breaks. The rule stays: the same version, built with the same configuration file and the same defines. The check catches the common mistakes, such as the old-fields option or a 32-bit index type.</p>
+</div>
+
+<h2 id="variants"><span class="n">6</span>Other ways to avoid two copies</h2>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Both modules call one shared library that holds the only copy and its globals.">
+      <rect x="20" y="16" width="80" height="34" rx="5" class="cpu"/><text x="60" y="38" class="mid small">module A</text>
+      <rect x="140" y="16" width="80" height="34" rx="5" class="cpu"/><text x="180" y="38" class="mid small">module B</text>
+      <rect x="60" y="84" width="120" height="34" rx="5" class="ok"/><text x="120" y="106" class="mid small">library.dll</text>
+      <line x1="60" y1="50" x2="100" y2="82" class="arrow" marker-end="url(#ah)"/>
+      <line x1="180" y1="50" x2="140" y2="82" class="arrow" marker-end="url(#ah)"/>
+    </svg>
+    <h4>One shared copy</h4>
+    <p>Build the library as a shared library and link both modules to it. One copy, one set of globals.</p>
+    <p class="cost">Every user must ship the same build of it; a C++ interface across it has no stable ABI.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Module A exports C functions that wrap the library. Module B calls only those functions and links no copy of its own.">
+      <rect x="20" y="16" width="200" height="50" rx="5" class="cpu"/><text x="120" y="36" class="mid small">module A: library + C wrapper</text>
+      <text x="120" y="54" class="mid small mono">ui_begin(), ui_slider() …</text>
+      <rect x="70" y="90" width="100" height="30" rx="5" class="cpu"/><text x="120" y="110" class="mid small">module B</text>
+      <line x1="120" y1="90" x2="120" y2="68" class="arrow" marker-end="url(#ah)"/>
+    </svg>
+    <h4>A wrapper in the first module</h4>
+    <p>Module A exports C functions for the whole library, and B calls those. One copy again.</p>
+    <p class="cost">Hundreds of functions to keep stable, and the binding's own wrapper goes unused.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Module A hands module B a pointer to the object, the allocator and its version and sizes. Module B checks them and then uses its own copy on the shared object.">
+      <rect x="20" y="16" width="80" height="34" rx="5" class="cpu"/><text x="60" y="38" class="mid small">module A</text>
+      <rect x="140" y="16" width="80" height="34" rx="5" class="cpu"/><text x="180" y="38" class="mid small">module B</text>
+      <line x1="100" y1="33" x2="136" y2="33" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <text x="120" y="70" class="mid small">pointer, allocator,</text>
+      <text x="120" y="86" class="mid small">version and sizes</text>
+      <rect x="70" y="96" width="100" height="26" rx="5" class="mem"/><text x="120" y="114" class="mid small">one object</text>
+    </svg>
+    <h4>Hand over the state (this page)</h4>
+    <p>Two copies stay, and share the object. Each module keeps the library it was built with.</p>
+    <p class="cost">Both copies must be the same version and configuration; the check guards it.</p>
+  </div>
+</div>
+
+<h2 id="pitfalls"><span class="n">7</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>The second module's first call asserts "no current context"</dt><dd>Its copy's current-object global is still null. Set it from the pointer the first module gives, in that copy.</dd></div>
+  <div><dt>A crash in free, in a frame long after the UI call</dt><dd>The copies use different allocators, and one frees what the other allocated. Give the second copy the first one's allocate and free functions before its first call.</dd></div>
+  <div><dt>Strange values in fields that were never written</dt><dd>The copies were built with different options or versions, so a field sits at another offset in each. Build both with the same configuration, and run the check first.</dd></div>
+  <div><dt>It works in Debug and breaks in Release</dt><dd>The library's own check asserts, and the assert is compiled out in Release. Use a check that returns an error.</dd></div>
+  <div><dt>It worked until one dependency update</dt><dd>One copy moved to a new version, the other did not. Pin both to one version, and update them together.</dd></div>
+  <div><dt>A crash after the first module unloads or destroys the object</dt><dd>The second copy still points to it. Clear its current pointer when the owner destroys the object.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">8</span>In RASM</h2>
+
+<p>RASM links Dear ImGui statically: into an application with <code>rasm::rasm</code>, and into the C API's shared libraries <code>rasm_c</code> and <code>rasm_c_renderer</code>. A language binding brings its own Dear ImGui: cimgui (C, and the base of ImGui.NET and imgui-rs), or the binding's own build. So a C program or a binding is exactly the two-copies case, and RASM ships no ImGui wrapper of its own. The binding's copy draws into RASM's context through C API 1.19 (<a href="../api/c-api.html#imgui">Dear ImGui from another language</a>):</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Left: rasm_c holds RASM and its copy of Dear ImGui, whose current context is the renderer's context. Right: the binding, for example cimgui, holds its own copy. The application calls rasm_check_imgui_layout, then sets the binding's allocator from rasm_get_imgui_allocator_functions and its current context from rasm_get_imgui_context. Each frame, RASM calls the UI callback between NewFrame and Render, and the callback's ImGui calls through the binding draw into the shared context, which RASM's UI pass draws.">
+    <rect x="10" y="20" width="330" height="190" rx="8" class="cpu"/>
+    <text x="175" y="42" class="mid title">rasm_c (C API shared library)</text>
+    <rect x="26" y="56" width="298" height="60" rx="5" class="paper"/>
+    <text x="40" y="76" class="small">RASM: buildUi in beginFrame</text>
+    <text x="40" y="96" class="small mono">NewFrame → your callback → Render</text>
+    <rect x="26" y="126" width="298" height="70" rx="5" class="paper"/>
+    <text x="40" y="146" class="small">RASM's copy of Dear ImGui 1.92.6</text>
+    <text x="40" y="166" class="small mono">GImGui → context</text>
+    <text x="40" y="186" class="small mono">allocator: RASM's malloc</text>
+
+    <rect x="420" y="20" width="330" height="190" rx="8" class="cpu"/>
+    <text x="585" y="42" class="mid title">the binding (cimgui, ImGui.NET, …)</text>
+    <rect x="436" y="56" width="298" height="60" rx="5" class="paper"/>
+    <text x="450" y="76" class="small">your UI callback</text>
+    <text x="450" y="96" class="small mono">igBegin, igSliderFloat, igEnd</text>
+    <rect x="436" y="126" width="298" height="70" rx="5" class="paper"/>
+    <text x="450" y="146" class="small">its own copy of Dear ImGui 1.92.6</text>
+    <text x="450" y="166" class="small mono">GImGui → the same context</text>
+    <text x="450" y="186" class="small mono">allocator: RASM's malloc</text>
+
+    <path d="M340,96 H432" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="386" y="88" class="mid small">calls</text>
+    <rect x="270" y="238" width="220" height="48" rx="6" class="mem"/>
+    <text x="380" y="258" class="mid title">ImGuiContext</text>
+    <text x="380" y="276" class="mid small">windows, draw lists, fonts</text>
+    <path d="M180,196 C180,240 220,256 266,260" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <path d="M590,196 C590,240 540,256 494,260" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="604" y="244" class="small">set once, at start:</text>
+    <text x="604" y="262" class="small mono">rasm_get_imgui_context</text>
+    <text x="604" y="280" class="small mono">…_allocator_functions</text>
+  </svg>
+  <figcaption>Two copies of Dear ImGui, one context. <code>rasm_check_imgui_layout</code> runs first; the UI pass then draws what both copies built (<a href="immediate-mode-ui.html#in-rasm">the UI in RASM</a>).</figcaption>
+</figure>
+
+<h3>Where RASM follows the page, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>The object</td><td>a state object on the heap</td><td>The renderer's <code>ImGuiContext</code>: <code>Renderer::getUiContext</code>, from C <code>rasm_get_imgui_context</code> (null while the UI is off).</td></tr>
+  <tr><td>Allocator</td><td>the first copy's</td><td><code>rasm_get_imgui_allocator_functions</code> gives RASM's copy's <code>ImGui::GetAllocatorFunctions</code>; the binding passes them to its own <samp>SetAllocatorFunctions</samp> (cimgui: <samp>igSetAllocatorFunctions</samp>).</td></tr>
+  <tr><td>Check</td><td>version and sizes, an error instead of an assert</td><td><code>rasm_check_imgui_layout(version, io, style, vec2, vec4, drawVert, drawIdx)</code>: the six sizes of <samp>IMGUI_CHECKVERSION</samp>, compared by <code>findUiLayoutMismatch</code>; <code>RASM_ERROR_FAILED</code> names the first difference. <code>rasm_get_imgui_version</code> gives <samp>IMGUI_VERSION</samp> and <samp>IMGUI_VERSION_NUM</samp>.</td></tr>
+  <tr><td>Configuration</td><td>the same options on both sides</td><td>RASM's Dear ImGui is vcpkg's port with one change (<code>ports/imgui</code>): <samp>IMGUI_DISABLE_OBSOLETE_FUNCTIONS</samp> in its <samp>imconfig.h</samp>. cimgui's headers are generated with it, so stock cimgui, ImGui.NET and imgui-rs match. 16-bit <samp>ImDrawIdx</samp>, 16-bit <samp>ImWchar</samp>.</td></tr>
+  <tr><td>Static C++ users</td><td>—</td><td>An application of the installed <code>rasm::rasm</code> links the Dear ImGui of its own vcpkg, which must be built the same way. <code>createUi</code> measures the linked library against RASM's headers: its version, where it puts the context's <samp>IO</samp> and <samp>PlatformIO</samp> (the size of <samp>ImGuiIO</samp>), and how far its own code moves a draw list's write pointers for one rectangle (the sizes of <samp>ImDrawVert</samp> and <samp>ImDrawIdx</samp>). On a difference it logs both sizes and keeps the UI off, with no assert. RASM makes its context current nowhere yet (<code>D59</code>).</td></tr>
+  <tr><td>When the copy draws</td><td>after it is set up</td><td>Only inside the UI callback (<code>rasm_set_ui_callback</code>), between RASM's <samp>NewFrame</samp> and <samp>Render</samp>, on the thread that renders, with the rules of a callback (<a href="stable-c-abi.html#callbacks">Callbacks</a>).</td></tr>
+</table>
+</div>
+
+<div class="stats">
+  <div><b>3000 B</b><span><samp>ImGuiIO</samp> in RASM's Dear ImGui and in cimgui 1.92.6</span><small>3032 B with the old fields</small></div>
+  <div><b>6</b><span>sizes the check compares, plus the version</span><small>IO, style, vec2, vec4, vertex, index</small></div>
+  <div><b>0</b><span>ImGui functions RASM exports</span><small>the binding brings them</small></div>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The C calls</td><td><code>src/c/cUi.cpp</code>: <code>rasm_set_ui_callback</code>, <code>rasm_get_ui_texture</code>, <code>rasm_get_imgui_context</code>, <code>rasm_get_imgui_allocator_functions</code>, <code>rasm_get_imgui_version</code>, <code>rasm_check_imgui_layout</code></td></tr>
+  <tr><td>The check</td><td><code>UiLayout</code>, <code>getUiLayout</code>, <code>findUiLayoutMismatch</code> in <code>src/renderer/ui.cpp</code>; the start-up check in <code>Renderer::createUi</code></td></tr>
+  <tr><td>RASM's Dear ImGui</td><td><code>ports/imgui/portfile.cmake</code></td></tr>
+  <tr><td>A binding's copy</td><td><code>cmake/RasmCimgui.cmake</code> (cimgui at its 1.92.6 commit, a shared library of its own, only with <code>RASM_C_IMGUI_EXAMPLE</code>)</td></tr>
+  <tr><td>Example</td><td><code>examples/33_c_render_graph/main.c</code> (<code>shareImGui</code>, <code>drawUi</code>); <code>tests/c_api/ctypes_smoke.py</code> does the same from Python</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>RASM's Dear ImGui and cimgui's headers agree: the same version, and <samp>IMGUI_DISABLE_OBSOLETE_FUNCTIONS</samp> on both. A new Dear ImGui means a new cimgui commit in <code>cmake/RasmCimgui.cmake</code> and a new copy of the vcpkg port in <code>ports/imgui</code>.</li>
+    <li>A layout mismatch is an error message, never an assert: <code>createUi</code> keeps the UI off, <code>rasm_check_imgui_layout</code> returns <code>RASM_ERROR_FAILED</code>.</li>
+    <li>RASM's libraries never link cimgui; only the example and the tests do.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Omar Cornut, <i>Dear ImGui</i>, <samp>docs/FAQ.md</samp> ("How can I use Dear ImGui across DLL boundaries?") and the comments at <samp>SetAllocatorFunctions</samp> in <samp>imgui.h</samp>.</li>
+  <li><i>cimgui</i>, its <samp>README.md</samp> on how its headers are generated.</li>
+  <li><a href="stable-c-abi.html">A stable C ABI</a>, <a href="immediate-mode-ui.html">Immediate-mode UI</a>, <a href="struct-layout.html">Struct layout rules</a>.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

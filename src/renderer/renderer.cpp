@@ -1259,6 +1259,11 @@ namespace rasm
     {
         return 0;
     }
+
+    ImGuiContext *Renderer::getUiContext() const
+    {
+        return nullptr;
+    }
 #endif
 
     bool Renderer::running() const

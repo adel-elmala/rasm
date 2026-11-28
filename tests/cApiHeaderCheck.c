@@ -12,6 +12,12 @@ static void RASM_CALL recordNothing(void *userData, rasm_commands *commands)
     rasm_cmd_draw(commands, 3, 1);
 }
 
+/* A UI callback: a binding's ImGui calls would go here. */
+static void RASM_CALL drawUi(void *userData)
+{
+    (void)userData;
+}
+
 int main(void)
 {
     rasm_renderer_config config;
@@ -68,6 +74,12 @@ int main(void)
     rasm_render_graph *graph = NULL;
     rasm_shadow_desc viewShadow;
     rasm_inspection inspection;
+    const char *imguiVersion = NULL;
+    uint32_t imguiVersionNum = 0;
+    rasm_imgui_alloc_func imguiAlloc = NULL;
+    rasm_imgui_free_func imguiFree = NULL;
+    void *imguiUserData = NULL;
+    rasm_texture uiTexture = {0};
     char inspected[16];
 
     if (rasm_get_version() != RASM_C_API_VERSION)
@@ -190,6 +202,14 @@ int main(void)
     if (rasm_inspection_init(&inspection, sizeof(inspection)) != RASM_OK || inspection.exposure != 1.0f || inspection.target != NULL || rasm_set_inspection(NULL, &inspection) != RASM_ERROR_INVALID_ARGUMENT ||
         rasm_get_inspection(NULL, &inspection, inspected, sizeof(inspected)) != 0 || RASM_MAX_VIEW_SHADOWS != 4 || RASM_INSPECT_KIND_LIGHT_CLUSTERS != 3)
         return 35;
+    if (rasm_set_ui_callback(NULL, drawUi, NULL) != RASM_ERROR_INVALID_ARGUMENT || rasm_get_imgui_context(NULL) != NULL || rasm_get_ui_texture(NULL, uiTexture) != 0 ||
+        rasm_check_imgui_layout(NULL, 0, 0, 0, 0, 0, 0) != RASM_ERROR_INVALID_ARGUMENT)
+        return 36;
+    /* With Dear ImGui (RASM_IMGUI) the library has a version and allocators; without, neither. */
+    imguiVersion = rasm_get_imgui_version(&imguiVersionNum);
+    if (rasm_get_imgui_allocator_functions(&imguiAlloc, &imguiFree, &imguiUserData) != (imguiVersion != NULL ? RASM_OK : RASM_ERROR_FAILED) || (imguiVersion != NULL) != (imguiAlloc != NULL) ||
+        (imguiVersion != NULL) != (imguiVersionNum != 0))
+        return 37;
     printf("rasm_c.h %u.%u compiles as C (__STDC_VERSION__ %ld) and links rasm_c_renderer.\n", RASM_C_API_VERSION_MAJOR, RASM_C_API_VERSION_MINOR, (long)__STDC_VERSION__);
     return 0;
 }

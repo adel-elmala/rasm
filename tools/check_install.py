@@ -11,7 +11,8 @@
    The C++ ones find their dependencies in the build's vcpkg_installed folder.
 3. The C libraries export only rasm_* functions, import no Vulkan loader, and rasm_c_renderer holds no SDL3 or libktx.
 4. --ctypes: tests/c_api/ctypes_smoke.py renders with the installed rasm_c from Python, with no shader_dir: the
-   shaders installed beside the library must be found. It needs a Vulkan device.
+   shaders installed beside the library must be found. It needs a Vulkan device. When the build has cimgui
+   (RASM_C_IMGUI_EXAMPLE), its UI callback draws a window with it.
 
 Exit code 0 when everything passes.
 """
@@ -148,6 +149,10 @@ def main():
         slangc = glob.glob(os.path.join(REPO, "build", args.preset, "vcpkg_installed", "*", "tools", "shader-slang", "slangc*"))
         if slangc:
             command += ["--slangc", slangc[0]]
+        # The build's cimgui, a second copy of Dear ImGui: the Python UI callback draws into RASM's context with it.
+        cimgui = glob.glob(os.path.join(build, "examples", "cimgui.dll" if sys.platform == "win32" else "libcimgui.*"))
+        if cimgui:
+            command += ["--cimgui", cimgui[0]]
         # The validation layer prints through vk-bootstrap's messenger, not RASM's log, so its lines are read here.
         print("+ " + " ".join(command), flush=True)
         result = subprocess.run(command, capture_output=True, text=True, errors="replace")

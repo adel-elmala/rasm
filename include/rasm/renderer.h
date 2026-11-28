@@ -33,6 +33,8 @@
 #include <unordered_set>
 #include <vector>
 
+struct ImGuiContext;
+
 namespace rasm
 {
 
@@ -276,6 +278,9 @@ namespace rasm
         // The ImTextureID that shows a sampled texture with ImGui::Image, or 0 while the texture loads. A loaded texture
         // without a bindless slot gets one.
         uint64_t                    getUiTexture(const TextureHandle& texture);
+        // The renderer's Dear ImGui context, or null while the UI is off. Another copy of Dear ImGui (a binding's, a
+        // DLL's) draws into it after its own SetCurrentContext and SetAllocatorFunctions with ImGui::GetAllocatorFunctions'.
+        ImGuiContext*               getUiContext() const;
         void                        setDebugView(DebugView view);
         DebugView                   getDebugView() const;
         void                        setCullingFrozen(bool frozen);

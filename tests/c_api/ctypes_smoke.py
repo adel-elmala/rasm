@@ -13,8 +13,15 @@ destroyed fails cleanly. With --slangc, the pass's pipeline is made from SPIR-V 
 source, which checks the SPIR-V path of rasm_create_pipeline. The 1.18 debug calls (the debug view, frozen culling,
 the meshlet path, the inspection) are set and read back. The structs below mirror include/rasm/rasm_c.h field by field.
 
+The UI (1.19): the renderer runs with the UI on and a UI callback that is a Python function. It checks Dear ImGui's
+version and the layout check (the sizes a binding mirrors, then a wrong version and a wrong index size, which fail with
+the reason), that a call that would start a frame or change the callback is refused inside it, and that it runs every
+frame. With --cimgui, a cimgui shared library (built with RASM_C_IMGUI_EXAMPLE) is a second copy of Dear ImGui: Python
+gives it RASM's allocator and context, draws a window with it from the callback, and the window's title bar is checked
+in the last frame.
+
     python tests/c_api/ctypes_smoke.py <path to rasm_c.dll / librasm_c.dylib / librasm_c.so>
-        [--shader-dir DIR] [--frames N] [--out frame.png] [--validation] [--slangc PATH]
+        [--shader-dir DIR] [--frames N] [--out frame.png] [--validation] [--slangc PATH] [--cimgui PATH]
 
 Without --shader-dir the library looks for its shaders beside itself, where `cmake --install` puts them.
 Exit code 0 when the picture is right.
@@ -26,9 +33,9 @@ import os
 import subprocess
 import sys
 import tempfile
-from ctypes import CFUNCTYPE, POINTER, Structure, byref, c_char_p, c_double, c_float, c_int32, c_uint32, c_uint64, c_uint8, c_void_p
+from ctypes import CFUNCTYPE, POINTER, Structure, byref, c_bool, c_char_p, c_double, c_float, c_int32, c_uint32, c_uint64, c_uint8, c_void_p
 
-API_VERSION = (1 << 16) | 18
+API_VERSION = (1 << 16) | 19
 OK = 0
 TRUE = 1
 LOG_LEVEL_ERROR = 4
@@ -50,6 +57,15 @@ PASS_ACCESS_WRITE_SWAPCHAIN = 9
 LogCallback = CFUNCTYPE(None, c_void_p, c_uint32, c_char_p)
 # rasm_pass_callback: the user data and the pass's rasm_commands, valid only during the call.
 PassCallback = CFUNCTYPE(None, c_void_p, c_void_p)
+# rasm_ui_callback: the user data.
+UiCallback = CFUNCTYPE(None, c_void_p)
+
+# What a binding mirrors of Dear ImGui 1.92.6, built as RASM's (IMGUI_DISABLE_OBSOLETE_FUNCTIONS, 16-bit indices), on a
+# 64-bit platform: sizeof ImGuiIO, ImGuiStyle, ImVec2, ImVec4, ImDrawVert, ImDrawIdx, as cimgui.h has them.
+IMGUI_VERSION = b"1.92.6"
+IMGUI_SIZES = (3000, 1296, 8, 16, 20, 2)
+# ImGui's dark style's TitleBgActive, as the sRGB numbers the UI draws.
+TITLE_BAR = (41, 74, 122)
 
 
 class Handle(Structure):
@@ -226,6 +242,11 @@ def declare(lib):
         "rasm_inspection_init": (c_int32, [POINTER(Inspection), c_uint32]),
         "rasm_set_inspection": (c_int32, [c_void_p, POINTER(Inspection)]),
         "rasm_get_inspection": (c_uint32, [c_void_p, POINTER(Inspection), ctypes.c_char_p, c_uint32]),
+        "rasm_set_ui_callback": (c_int32, [c_void_p, UiCallback, c_void_p]),
+        "rasm_get_imgui_context": (c_void_p, [c_void_p]),
+        "rasm_get_imgui_allocator_functions": (c_int32, [POINTER(c_void_p), POINTER(c_void_p), POINTER(c_void_p)]),
+        "rasm_get_imgui_version": (c_char_p, [POINTER(c_uint32)]),
+        "rasm_check_imgui_layout": (c_int32, [c_char_p] + [c_uint64] * 6),
         "rasm_create_scene": (Handle, [c_void_p]),
         "rasm_create_mesh": (Handle, [c_void_p, POINTER(Vertex), c_uint32, POINTER(c_uint32), c_uint32, POINTER(c_uint32)]),
         "rasm_create_material": (Handle, [c_void_p, c_uint32, POINTER(Handle), c_uint32, c_uint32]),
@@ -420,6 +441,88 @@ def draw_graph(lib, renderer, scene, camera, frames, errors, slangc):
     return graph, readback, counts
 
 
+class ImVec2(Structure):
+    _fields_ = [("x", c_float), ("y", c_float)]
+
+
+def load_cimgui(path):
+    """cimgui's functions that the UI callback calls: its own copy of Dear ImGui, which knows no context yet."""
+    if sys.platform == "win32":
+        os.add_dll_directory(os.path.dirname(os.path.abspath(path)))
+    imgui = ctypes.CDLL(os.path.abspath(path))
+    signatures = {
+        "igGetVersion": (c_char_p, []),
+        "igGetCurrentContext": (c_void_p, []),
+        "igSetCurrentContext": (None, [c_void_p]),
+        "igSetAllocatorFunctions": (None, [c_void_p, c_void_p, c_void_p]),
+        "igSetNextWindowPos": (None, [ImVec2, c_int32, ImVec2]),
+        "igSetNextWindowSize": (None, [ImVec2, c_int32]),
+        "igBegin": (c_bool, [c_char_p, c_void_p, c_int32]),
+        "igTextUnformatted": (None, [c_char_p, c_char_p]),
+        "igEnd": (None, []),
+    }
+    for name, (restype, argtypes) in signatures.items():
+        function = getattr(imgui, name)
+        function.restype = restype
+        function.argtypes = argtypes
+    return imgui
+
+
+def start_ui(lib, renderer, scene, camera, errors, imgui, window):
+    """Checks the 1.19 calls and sets a Python UI callback; with cimgui, the callback draws a window at window (x, y, w, h)."""
+    number = c_uint32()
+    version = lib.rasm_get_imgui_version(byref(number))
+    if version is None:
+        # A RASM built without Dear ImGui (RASM_IMGUI=OFF): the UI calls fail, and there is nothing to draw.
+        before = len(errors)
+        check(lib.rasm_set_ui_callback(renderer, UiCallback(), None) == ERROR_FAILED, "rasm_set_ui_callback fails without Dear ImGui", lib)
+        del errors[before:]
+        return None
+    check(version == IMGUI_VERSION and number.value == 19261, f"rasm_get_imgui_version, got {version} {number.value}", lib)
+    check(lib.rasm_check_imgui_layout(IMGUI_VERSION, *IMGUI_SIZES) == OK, "rasm_check_imgui_layout with Dear ImGui 1.92.6's sizes", lib)
+    before = len(errors)
+    check(lib.rasm_check_imgui_layout(b"1.92.5", *IMGUI_SIZES) == ERROR_FAILED and b"1.92.5 in the caller's copy" in lib.rasm_get_last_error(),
+          "rasm_check_imgui_layout names another version", lib)
+    check(lib.rasm_check_imgui_layout(IMGUI_VERSION, *IMGUI_SIZES[:5], 4) == ERROR_FAILED and b"ImDrawIdx is 4 bytes" in lib.rasm_get_last_error(),
+          "rasm_check_imgui_layout names a 32-bit ImDrawIdx", lib)
+    del errors[before:]
+    context = lib.rasm_get_imgui_context(renderer)
+    check(context is not None, "rasm_get_imgui_context", lib)
+    if imgui:
+        check(imgui.igGetVersion() == IMGUI_VERSION, f"cimgui's Dear ImGui is {imgui.igGetVersion()}", lib)
+        check(imgui.igGetCurrentContext() is None, "cimgui's copy starts with no context of its own", lib)
+        alloc, free, user_data = c_void_p(), c_void_p(), c_void_p()
+        check(lib.rasm_get_imgui_allocator_functions(byref(alloc), byref(free), byref(user_data)) == OK and alloc.value and free.value,
+              "rasm_get_imgui_allocator_functions", lib)
+        imgui.igSetAllocatorFunctions(alloc, free, user_data)
+        imgui.igSetCurrentContext(context)
+
+    counts = {"frames": 0, "refused": 0}
+
+    def draw(user_data):
+        if counts["frames"] == 0:
+            first = len(errors)
+            lib.rasm_render(renderer, scene, camera)
+            if len(errors) == first + 1 and b"recording" in lib.rasm_get_last_error():
+                counts["refused"] += 1
+            if lib.rasm_set_ui_callback(renderer, UiCallback(), None) == ERROR_FAILED:
+                counts["refused"] += 1
+            del errors[first:]
+        counts["frames"] += 1
+        if imgui:
+            x, y, w, h = window
+            imgui.igSetNextWindowPos(ImVec2(x, y), 1, ImVec2(0.0, 0.0))
+            imgui.igSetNextWindowSize(ImVec2(w, h), 1)
+            if imgui.igBegin(b"Python", None, 0):
+                imgui.igTextUnformatted(b"cimgui from ctypes", None)
+            imgui.igEnd()
+
+    # The callback object must live as long as it is set: it is kept in the returned counts.
+    counts["callback"] = UiCallback(draw)
+    check(lib.rasm_set_ui_callback(renderer, counts["callback"], None) == OK, "rasm_set_ui_callback with a Python function", lib)
+    return counts
+
+
 def check(condition, what, lib):
     if not condition:
         error = lib.rasm_get_last_error().decode("utf-8", "replace")
@@ -434,6 +537,7 @@ def main():
     parser.add_argument("--out")
     parser.add_argument("--validation", action="store_true")
     parser.add_argument("--slangc", help="also make the pass's pipeline from SPIR-V that this slangc compiles")
+    parser.add_argument("--cimgui", help="a cimgui shared library: the UI callback draws a window with it")
     args = parser.parse_args()
 
     library = os.path.abspath(args.library)
@@ -461,6 +565,7 @@ def main():
     config.window_height = height
     config.enable_validation = TRUE if args.validation else 0
     config.cache_dir = None
+    config.ui = TRUE
     if args.shader_dir:
         config.shader_dir = os.path.abspath(args.shader_dir).encode("utf-8")
     renderer = c_void_p()
@@ -593,6 +698,13 @@ def main():
         inspection.target = None
         check(lib.rasm_set_inspection(renderer, byref(inspection)) == OK, "rasm_set_inspection of nothing", lib)
 
+        # 1.19: a Python UI callback, drawing with cimgui when given one, in the bottom-left corner.
+        imgui = load_cimgui(args.cimgui) if args.cimgui else None
+        ui_window = (8.0, height - 72.0, 150.0, 60.0)
+        ui_checks = start_ui(lib, renderer, scene, camera, errors, imgui, ui_window)
+        if ui_checks is None:
+            imgui = None
+
         # Frame N - 1 is one view through rasm_render, frame N two through rasm_render_views.
         single_readback = Handle()
         readback = Handle()
@@ -625,8 +737,13 @@ def main():
                 check(lib.rasm_image_write_png(image, os.path.abspath(args.out).encode("utf-8")) == OK, "rasm_image_write_png", lib)
         finally:
             lib.rasm_image_destroy(image)
+        if ui_checks is not None:
+            check(lib.rasm_set_ui_callback(renderer, UiCallback(), None) == OK, "rasm_set_ui_callback(NULL) removes it", lib)
     finally:
         lib.rasm_renderer_destroy(renderer)
+    if imgui:
+        # The context went with the renderer.
+        imgui.igSetCurrentContext(None)
     # The renderer took its graph's passes with it: calls on the graph fail, and destroying it frees it.
     expected = len(errors)
     check(lib.rasm_render_graph_compile(graph) == ERROR_INVALID_ARGUMENT, "a graph whose renderer was destroyed refuses calls", lib)
@@ -653,6 +770,15 @@ def main():
     check(swapped[2] > swapped[1] + 50 and swapped[2] > swapped[0] + 50, f"the Python pass swapped red and blue, got {swapped}", lib)
     check(graph_checks["frames"] >= 2 and graph_checks["history"] == 0 and graph_checks["commands"] == 0, f"the pass callback's checks: {graph_checks['history']} history, {graph_checks['commands']} command errors", lib)
     check(graph_checks["refused"] == 3, f"a call that starts a frame, and commands that do not fit, are refused in a pass callback: {graph_checks['refused']} of 3", lib)
+    # Every frame ran the UI callback: the frames above, and the graph's.
+    if ui_checks is not None:
+        print(f"{ui_checks['frames']} Python UI callbacks" + (" drawing with cimgui" if imgui else ""))
+        check(ui_checks["frames"] == 2 * args.frames, f"the UI callback ran {ui_checks['frames']} times in {2 * args.frames} frames", lib)
+        check(ui_checks["refused"] == 2, f"a call that starts a frame, and rasm_set_ui_callback, are refused in the UI callback: {ui_checks['refused']} of 2", lib)
+    if imgui:
+        title = pixel(int(ui_window[0] + ui_window[2]) - 10, int(ui_window[1]) + 6)
+        print(f"cimgui window title bar {title}")
+        check(all(abs(a - b) <= 3 for a, b in zip(title, TITLE_BAR)), f"cimgui's window from Python is drawn, its title bar {title}", lib)
     check(not errors, "RASM logged errors: " + " | ".join(errors), lib)
     print(f"OK: {os.path.basename(library)} {lib.rasm_get_version() >> 16}.{lib.rasm_get_version() & 0xFFFF} "
           f"drew {args.frames} frames from Python, 6370 km from the origin")

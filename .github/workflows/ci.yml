@@ -93,8 +93,9 @@ jobs:
           echo "VCPKG_ROOT=$root" >> "$GITHUB_ENV"
           echo "VCPKG_BINARY_SOURCES=clear;files,$cache,readwrite" >> "$GITHUB_ENV"
 
+      # RASM_C_IMGUI_EXAMPLE downloads cimgui (cmake/RasmCimgui.cmake) for 33_c_render_graph's window and the ctypes run.
       - name: Configure ${{ matrix.debug }}
-        run: cmake --preset ${{ matrix.debug }}
+        run: cmake --preset ${{ matrix.debug }} -DRASM_C_IMGUI_EXAMPLE=ON
 
       - name: Build ${{ matrix.debug }}
         run: cmake --build --preset ${{ matrix.debug }}
@@ -126,7 +127,7 @@ jobs:
       - name: Configure ${{ matrix.release }}
         id: configure-release
         if: ${{ !cancelled() }}
-        run: cmake --preset ${{ matrix.release }}
+        run: cmake --preset ${{ matrix.release }} -DRASM_C_IMGUI_EXAMPLE=ON
 
       - name: Build ${{ matrix.release }}
         id: build-release
@@ -167,6 +168,16 @@ jobs:
       - name: Image tests
         if: ${{ !cancelled() && steps.lavapipe.outcome == 'success' }}
         run: python tools/image_tests.py --lavapipe --preset ${{ matrix.release }}
+
+      # C API 1.19 from C: cimgui, a copy of Dear ImGui of its own, draws a window into RASM's context from a UI
+      # callback, and a scripted click moves its slider. The example checks the frame and exits with 1 on a failure.
+      - name: C UI example on lavapipe
+        if: ${{ !cancelled() && steps.lavapipe.outcome == 'success' }}
+        run: |
+          dir=build/${{ matrix.release }}/examples
+          $dir/33_c_render_graph --headless --frames 20 --fixed-step --wait-for-loads --out $dir/c_ui.png 2>&1 | tee $dir/c_ui.log
+          test "${PIPESTATUS[0]}" = 0
+          if grep -E "\[(ERROR|WARNING): Validation\]" $dir/c_ui.log; then exit 1; fi
 
       # An application's view of the release build: install it, build C++ consumers of rasm::renderer and rasm::rasm and
       # a C consumer of the C API's shared libraries (with no vcpkg), check what those libraries export and import, and on

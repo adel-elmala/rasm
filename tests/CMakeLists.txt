@@ -85,6 +85,12 @@ if (RASM_C_API)
     target_compile_definitions(rasm_c_tests PRIVATE RASM_TEST_GOLDEN_DIR="${PROJECT_SOURCE_DIR}/tests/golden/lavapipe"
                                                     RASM_TEST_C_LIBRARY_NAME="$<TARGET_FILE_NAME:rasm_c>"
                                                     RASM_TEST_FONT="${PROJECT_SOURCE_DIR}/assets/fonts/Roboto-Medium.ttf")
+    # Dear ImGui's headers only, as a binding has them: the UI calls' sizes to check against rasm_c's.
+    if (RASM_IMGUI)
+        find_package(imgui CONFIG REQUIRED)
+        target_include_directories(rasm_c_tests PRIVATE $<TARGET_PROPERTY:imgui::imgui,INTERFACE_INCLUDE_DIRECTORIES>)
+        target_compile_definitions(rasm_c_tests PRIVATE RASM_IMGUI)
+    endif()
     rasm_copy_runtime_dlls(rasm_c_tests)
     add_test(NAME rasm_c_tests COMMAND rasm_c_tests)
 

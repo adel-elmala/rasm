@@ -52,6 +52,7 @@
   <tr><td><a href="#addUiPass"><code>addUiPass</code></a></td><td>draw the ImGui windows over the image</td><td>this page</td></tr>
   <tr><td><a href="#setUiCallback"><code>setUiCallback</code></a></td><td>your own ImGui windows, every frame</td><td>this page</td></tr>
   <tr><td><a href="#getUiTexture"><code>getUiTexture</code></a></td><td>a texture as an <code>ImTextureID</code> for <code>ImGui::Image</code></td><td>this page</td></tr>
+  <tr><td><a href="#getUiContext"><code>getUiContext</code></a></td><td>the Dear ImGui context, for another copy of ImGui (a DLL, a binding)</td><td>this page</td></tr>
   <tr><td><a href="#setDebugView"><code>setDebugView</code></a>, <a href="#setDebugView"><code>getDebugView</code></a></td><td>show normals, UVs, overdraw, LODs, culling, light counts or meshlets</td><td>this page</td></tr>
   <tr><td><a href="#setCullingFrozen"><code>setCullingFrozen</code></a></td><td>keep the culling of one frame while the camera moves</td><td>this page</td></tr>
   <tr><td><a href="#setMeshletPath"><code>setMeshletPath</code></a>, <a href="#setMeshletPath"><code>getMeshletPath</code></a></td><td>cull and draw big meshes by meshlets, or whole</td><td>this page</td></tr>
@@ -1254,6 +1255,7 @@ engine.endGpuTimer(commandBuffer, timer);</code></pre>
 <div class="callout rule">
   <strong>One ImGui for the whole program</strong>
   <p>rasm links Dear ImGui PUBLIC, as a static library (vcpkg's plain <code>imgui</code> port, with no backend: RASM feeds it input and draws it), and owns the context. <code>find_package(rasm)</code> finds it for you and links it into your program, so your code includes <samp>imgui.h</samp> and calls <code>ImGui::</code> functions on that same library. Do not build or link a second copy of ImGui (another version, or its source files in your project): that gives two contexts, or two definitions of the same functions.</p>
+  <p>RASM's Dear ImGui is built with <samp>IMGUI_DISABLE_OBSOLETE_FUNCTIONS</samp> (the overlay port <code>ports/imgui</code>), so ImGui's old names are gone: use the current ones. An application of an installed RASM links the ImGui of its own vcpkg, which must be the same version built the same way, with that define in its <samp>imconfig.h</samp>. When it is not, the engine logs which struct size differs and starts with the UI off; it never asserts.</p>
 </div>
 
 <div class="api" id="setUiCallback">
@@ -1301,6 +1303,13 @@ engine.addUiPass(graph);</code></pre>
     <p>The <code>ImTextureID</code> that shows a sampled texture with <code>ImGui::Image</code>: its bindless slot, plus a bit that says whether its format is sRGB. The image shows the texture's stored colors either way. A loaded texture that no material samples yet gets a bindless slot here. Returns 0, which ImGui draws as nothing, while the texture still loads or for an invalid handle.</p>
     <pre><code>if (engine.isLoaded(albedo))
     ImGui::Image(ImTextureRef(engine.getUiTexture(albedo)), ImVec2(256.0f, 256.0f));</code></pre>
+  </div>
+</div>
+
+<div class="api" id="getUiContext">
+  <pre class="sig">ImGuiContext* getUiContext() const;</pre>
+  <div class="body">
+    <p>The renderer's Dear ImGui context, or null while the UI is off. Your own <code>ImGui::</code> calls already use it. Another copy of Dear ImGui in the process, in a DLL or a language binding, draws into it after its own <samp>SetCurrentContext</samp> with this pointer and <samp>SetAllocatorFunctions</samp> with the values of <samp>ImGui::GetAllocatorFunctions</samp> (<a href="../guides/library-copies.html">Two copies of one library</a>). From C: <a href="c-api.html#imgui"><code>rasm_get_imgui_context</code></a>.</p>
   </div>
 </div>
 

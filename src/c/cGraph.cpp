@@ -57,15 +57,6 @@ namespace
         ActiveCommands(const ActiveCommands &) = delete;
         ActiveCommands &operator=(const ActiveCommands &) = delete;
     };
-
-    struct Recording
-    {
-        rasm_renderer &renderer;
-        explicit Recording(rasm_renderer &owner) : renderer(owner) { ++renderer.recording; }
-        ~Recording() { --renderer.recording; }
-        Recording(const Recording &) = delete;
-        Recording &operator=(const Recording &) = delete;
-    };
 }
 
 namespace
@@ -304,7 +295,7 @@ namespace rasm::c
     {
         if (renderer != nullptr && renderer->recording > 0)
         {
-            reportError(function, "a render graph of this renderer is recording: call it outside the pass callbacks.");
+            reportError(function, "this renderer is recording a frame: call it outside the pass and UI callbacks.");
             return false;
         }
         return true;
@@ -591,7 +582,7 @@ try
         return RASM_ERROR_INVALID_ARGUMENT;
     const c::CallErrors errors;
     {
-        const Recording recording(*g->owner);
+        const c::Recording recording(*g->owner);
         g->graph->execute(c::toCpp(camera));
     }
     return errors.result();

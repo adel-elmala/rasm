@@ -24,7 +24,7 @@
 
 // NOLINTBEGIN(readability-identifier-naming): C names, snake_case with the rasm_ prefix, as C APIs and their bindings expect
 #define RASM_C_API_VERSION_MAJOR    1
-#define RASM_C_API_VERSION_MINOR    18
+#define RASM_C_API_VERSION_MINOR    19
 #define RASM_C_API_VERSION          (((uint32_t)RASM_C_API_VERSION_MAJOR << 16) | (uint32_t)RASM_C_API_VERSION_MINOR)
 
 #if defined(_WIN32)
@@ -1628,6 +1628,17 @@ typedef struct rasm_inspection
     rasm_entity                     entity;                                    /* the GPU tables' rows of this entity; 0: none */
 } rasm_inspection;
 
+/* Called each frame between Dear ImGui's NewFrame and Render, on the thread that renders, during rasm_render,
+ * rasm_render_views or rasm_render_graph_execute, before the scene goes to the GPU: its scene changes show in that
+ * frame. It draws with a binding's own Dear ImGui that shares RASM's context (rasm_get_imgui_context) and may call the
+ * queries and scene changes, but no function that starts a frame, changes a graph or destroys what the frame uses:
+ * those fail while the renderer records. It must return normally. */
+typedef void (RASM_CALL* rasm_ui_callback)(void* user_data);
+
+/* Dear ImGui's ImGuiMemAllocFunc and ImGuiMemFreeFunc. */
+typedef void* (*rasm_imgui_alloc_func)(size_t size, void* user_data);
+typedef void (*rasm_imgui_free_func)(void* pointer, void* user_data);
+
 typedef void (RASM_CALL* rasm_log_callback)(void* user_data, rasm_log_level level, const char* message);
 
 /* The library */
@@ -2069,6 +2080,22 @@ RASM_C_API rasm_meshlet_path RASM_CALL rasm_get_meshlet_path(rasm_renderer* rend
 RASM_C_API rasm_result      RASM_CALL rasm_inspection_init(rasm_inspection* inspection, uint32_t size);
 RASM_C_API rasm_result      RASM_CALL rasm_set_inspection(rasm_renderer* renderer, const rasm_inspection* inspection);
 RASM_C_API uint32_t         RASM_CALL rasm_get_inspection(rasm_renderer* renderer, rasm_inspection* inspection, char* target_buffer, uint32_t capacity);
+
+/* Added in 1.19: the UI. They need the UI (rasm_renderer_config's ui) and fail without it. RASM ships no Dear ImGui
+ * wrapper: a binding brings its own (cimgui, ImGui.NET, imgui-rs), of RASM's version (rasm_get_imgui_version) and
+ * built with the same imconfig.h and defines (IMGUI_DISABLE_OBSOLETE_FUNCTIONS, the 16-bit ImDrawIdx). Before its
+ * first ImGui call it checks that with rasm_check_imgui_layout (IMGUI_CHECKVERSION's sizes; RASM_ERROR_FAILED names
+ * the first difference), then calls its own SetAllocatorFunctions with rasm_get_imgui_allocator_functions' and
+ * SetCurrentContext with rasm_get_imgui_context's, so its copy of ImGui draws into RASM's frame. A NULL callback
+ * removes it. rasm_get_ui_texture gives the ImTextureID that shows a texture with ImGui's Image, or 0 while it loads.
+ * rasm_get_imgui_version writes IMGUI_VERSION_NUM to *version_num when it is not NULL and returns IMGUI_VERSION, a
+ * string that lives as long as the library, or NULL in a build without Dear ImGui. */
+RASM_C_API rasm_result      RASM_CALL rasm_set_ui_callback(rasm_renderer* renderer, rasm_ui_callback callback, void* user_data);
+RASM_C_API uint64_t         RASM_CALL rasm_get_ui_texture(rasm_renderer* renderer, rasm_texture texture);
+RASM_C_API void*            RASM_CALL rasm_get_imgui_context(rasm_renderer* renderer);
+RASM_C_API rasm_result      RASM_CALL rasm_get_imgui_allocator_functions(rasm_imgui_alloc_func* alloc_func, rasm_imgui_free_func* free_func, void** user_data);
+RASM_C_API const char*      RASM_CALL rasm_get_imgui_version(uint32_t* version_num);
+RASM_C_API rasm_result      RASM_CALL rasm_check_imgui_layout(const char* version, uint64_t io_size, uint64_t style_size, uint64_t vec2_size, uint64_t vec4_size, uint64_t draw_vert_size, uint64_t draw_idx_size);
 
 #ifdef __cplusplus
 }

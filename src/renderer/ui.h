@@ -42,6 +42,18 @@ namespace rasm
         uint64_t                        indexBytes          = 0;
     };
 
+    // What IMGUI_CHECKVERSION compares: two copies of Dear ImGui share a context only when these are the same.
+    struct UiLayout
+    {
+        std::string                     version;                                // IMGUI_VERSION
+        uint64_t                        io                  = 0;                // sizeof(ImGuiIO)
+        uint64_t                        style               = 0;
+        uint64_t                        vec2                = 0;
+        uint64_t                        vec4                = 0;
+        uint64_t                        drawVert            = 0;
+        uint64_t                        drawIdx             = 0;
+    };
+
     struct Ui
     {
         ImGuiContext*                                   context                         = nullptr;
@@ -68,6 +80,10 @@ namespace rasm
     uint64_t                            growUiCapacity(uint64_t size, uint64_t minimum);
     // The heat colors of a count (lib/heat.slang) as a row of swatches, in the current ImGui window.
     void                                drawHeatKey();
+    // The layout RASM's code was compiled with.
+    UiLayout                            getUiLayout();
+    // "" when other is RASM's layout, else the first difference, naming other's copy as owner ("the caller's").
+    std::string                         findUiLayoutMismatch(const UiLayout& rasm, const UiLayout& other, const char* owner);
 
 }
 // clang-format on

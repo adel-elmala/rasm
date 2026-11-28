@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>C API · RASM</title>
 <meta name="description" content="RASM from C and from other languages: the rasm_c and rasm_c_renderer shared libraries, rasm_c.h, its ABI rules (versions, sized structs, handles, errors, memory, threads), every function, and the map from the C++ API.">
-<meta name="rasm-sources" content="src/c/cDebug.cpp include/rasm/rasm_c.h src/c/cGlyphs.cpp src/c/cApi.h src/c/cApi.cpp src/c/cRenderer.cpp src/c/cScene.cpp src/c/cInput.cpp src/c/cViews.cpp src/c/cGraph.cpp src/c/cResources.cpp src/c/cAnimation.cpp src/c/cTiles.cpp src/c/cTerrain.cpp src/c/cVector.cpp src/c/cText.cpp src/c/cLoader.cpp src/CMakeLists.txt cmake/RasmInstall.cmake cmake/rasmConfig.cmake.in examples/22_c_api/main.c examples/33_c_render_graph/main.c tests/cApiTests.cpp tests/c_api/ctypes_smoke.py tests/consumer/CMakeLists.txt tools/check_install.py src/platform/paths.cpp include/rasm/handle.h">
+<meta name="rasm-sources" content="src/c/cDebug.cpp src/c/cUi.cpp cmake/RasmCimgui.cmake include/rasm/rasm_c.h src/c/cGlyphs.cpp src/c/cApi.h src/c/cApi.cpp src/c/cRenderer.cpp src/c/cScene.cpp src/c/cInput.cpp src/c/cViews.cpp src/c/cGraph.cpp src/c/cResources.cpp src/c/cAnimation.cpp src/c/cTiles.cpp src/c/cTerrain.cpp src/c/cVector.cpp src/c/cText.cpp src/c/cLoader.cpp src/CMakeLists.txt cmake/RasmInstall.cmake cmake/rasmConfig.cmake.in examples/22_c_api/main.c examples/33_c_render_graph/main.c tests/cApiTests.cpp tests/c_api/ctypes_smoke.py tests/consumer/CMakeLists.txt tools/check_install.py src/platform/paths.cpp include/rasm/handle.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -39,7 +39,7 @@
     <li>A call that can fail returns a <code>rasm_result</code> (<code>RASM_OK</code> is 0), or a 0 handle. <code>rasm_get_last_error</code> says why, for this thread.</li>
     <li>No exception, no C++ type and no allocator crosses the boundary. Your memory stays yours; the library's stays the library's.</li>
     <li>A frame of your own: a <code>rasm_render_graph</code> with RASM's passes and yours, each a C function the graph calls with a <code>rasm_commands</code> that is valid only during the call (<a href="#graph">the render graph</a>).</li>
-    <li>Not in C yet: shadows in <code>rasm_render_views</code>, the debug views, the buffer inspector and Dear ImGui (<a href="#map">C++ only</a>).</li>
+    <li>Dear ImGui windows from C or a binding: RASM calls your UI callback each frame, and your binding's own Dear ImGui (cimgui, ImGui.NET, imgui-rs) draws into RASM's context (<a href="#imgui">Dear ImGui from another language</a>).</li>
   </ul>
 </div>
 
@@ -899,6 +899,27 @@ uint32_t         rasm_get_inspection(rasm_renderer* renderer, rasm_inspection* i
   </div>
 </div>
 
+<div class="api" id="rasm_set_ui_callback">
+  <pre class="sig">typedef void (RASM_CALL* rasm_ui_callback)(void* user_data);
+rasm_result      rasm_set_ui_callback(rasm_renderer* renderer, rasm_ui_callback callback, void* user_data);
+uint64_t         rasm_get_ui_texture(rasm_renderer* renderer, rasm_texture texture);
+void*            rasm_get_imgui_context(rasm_renderer* renderer);</pre>
+  <div class="body">
+    <p>1.19. <a href="engine.html#setUiCallback"><code>setUiCallback</code></a>, <code>getUiTexture</code> and <code>getUiContext</code>; they need the UI (<code>rasm_renderer_config</code>'s <code>ui</code>) and fail with <code>RASM_ERROR_FAILED</code> without it. The callback runs each frame between Dear ImGui's <samp>NewFrame</samp> and <samp>Render</samp>, inside <code>rasm_render</code>, <code>rasm_render_views</code> or <code>rasm_render_graph_execute</code>, on their thread, before the scene goes to the GPU, so what it changes shows in that frame. It has the rules of a <a href="#callback-rules">pass callback</a>: the queries and scene changes work, the calls that start a frame, change a graph or destroy what the frame uses are refused (the frame's call then returns <code>RASM_ERROR_FAILED</code>), and so is <code>rasm_set_ui_callback</code> itself. A NULL callback removes it. <code>rasm_get_ui_texture</code> gives the <samp>ImTextureID</samp> that shows a texture with ImGui's <samp>Image</samp>, or 0 while it loads. <code>rasm_get_imgui_context</code> gives the renderer's <samp>ImGuiContext*</samp>, or NULL while the UI is off.</p>
+  </div>
+</div>
+
+<div class="api" id="rasm_check_imgui_layout">
+  <pre class="sig">typedef void* (*rasm_imgui_alloc_func)(size_t size, void* user_data);
+typedef void (*rasm_imgui_free_func)(void* pointer, void* user_data);
+rasm_result      rasm_get_imgui_allocator_functions(rasm_imgui_alloc_func* alloc_func, rasm_imgui_free_func* free_func, void** user_data);
+const char*      rasm_get_imgui_version(uint32_t* version_num);
+rasm_result      rasm_check_imgui_layout(const char* version, uint64_t io_size, uint64_t style_size, uint64_t vec2_size, uint64_t vec4_size, uint64_t draw_vert_size, uint64_t draw_idx_size);</pre>
+  <div class="body">
+    <p>1.19. What a binding's own Dear ImGui needs to draw into RASM's context (<a href="#imgui">below</a>). <code>rasm_get_imgui_allocator_functions</code> gives the allocator of RASM's copy (<samp>ImGui::GetAllocatorFunctions</samp>). <code>rasm_get_imgui_version</code> returns <samp>IMGUI_VERSION</samp>, a string that lives as long as the library, and writes <samp>IMGUI_VERSION_NUM</samp> when <code>version_num</code> is not NULL. <code>rasm_check_imgui_layout</code> takes the binding's version string and the six sizes of <samp>IMGUI_CHECKVERSION</samp> (<samp>ImGuiIO</samp>, <samp>ImGuiStyle</samp>, <samp>ImVec2</samp>, <samp>ImVec4</samp>, <samp>ImDrawVert</samp>, <samp>ImDrawIdx</samp>) and returns <code>RASM_OK</code> when they are RASM's, else <code>RASM_ERROR_FAILED</code> with the first difference in <code>rasm_get_last_error</code>, such as "ImGuiIO is 3032 bytes in the caller's copy of Dear ImGui and 3000 in RASM's". It never asserts. In a RASM built without Dear ImGui (<code>RASM_IMGUI=OFF</code>) the three fail, and the version is NULL.</p>
+  </div>
+</div>
+
 <h2 id="graph"><span class="n">5</span>Your own frame: the render graph</h2>
 
 <p>In place of <code>rasm_render</code>, a program can build the frame itself (1.17): a <code>rasm_render_graph</code> with RASM's passes and its own. Each pass of its own lists the resources it reads and writes, and gives a C function the graph calls while it records the frame. <code>examples/33_c_render_graph</code> builds this one:</p>
@@ -987,7 +1008,44 @@ while (rasm_running(renderer))
 </table>
 </div>
 
-<h2 id="map"><span class="n">6</span>From C++ to C</h2>
+<h2 id="imgui"><span class="n">6</span>Dear ImGui from another language</h2>
+
+<p>RASM ships no ImGui wrapper. Your binding brings its own Dear ImGui (cimgui for C, and the cimgui-based ImGui.NET or imgui-rs), which is a second copy of the library with its own globals. Before its first ImGui call it checks that copy, then gives it RASM's allocator and context; from then on its calls in the UI callback draw into RASM's frame. Why each step is needed: <a href="../guides/library-copies.html">Two copies of one library</a>.</p>
+
+<pre><code>/* Once, after the renderer starts with rasm_renderer_config's ui on. */
+rasm_imgui_alloc_func allocFunc;
+rasm_imgui_free_func freeFunc;
+void *allocData;
+if (rasm_check_imgui_layout(igGetVersion(), sizeof(ImGuiIO), sizeof(ImGuiStyle), sizeof(ImVec2), sizeof(ImVec4), sizeof(ImDrawVert), sizeof(ImDrawIdx)) != RASM_OK)
+    return fail(rasm_get_last_error());
+rasm_get_imgui_allocator_functions(&amp;allocFunc, &amp;freeFunc, &amp;allocData);
+igSetAllocatorFunctions(allocFunc, freeFunc, allocData);
+igSetCurrentContext(rasm_get_imgui_context(renderer));
+rasm_set_ui_callback(renderer, drawUi, &amp;app);
+
+/* Each frame, between NewFrame and Render. */
+static void RASM_CALL drawUi(void *userData)
+{
+    App *app = (App *)userData;
+    if (igBegin("Grade", NULL, 0))
+        igSliderFloat("Vignette", &amp;app-&gt;vignette, 0.0f, 1.0f, "%.2f", 0);
+    igEnd();
+}</code></pre>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Rule</th><th>Why, and what happens when it breaks</th></tr>
+  <tr><td>The same Dear ImGui version as RASM's: <code>rasm_get_imgui_version</code>, 1.92.6 today.</td><td>Structs change between versions. <code>rasm_check_imgui_layout</code> returns <code>RASM_ERROR_FAILED</code> and names both versions.</td></tr>
+  <tr><td>The same <samp>imconfig.h</samp> and defines: <samp>IMGUI_DISABLE_OBSOLETE_FUNCTIONS</samp> on, the default 16-bit <samp>ImDrawIdx</samp>, no <samp>IMGUI_USE_WCHAR32</samp>.</td><td>A define adds or resizes fields, and every field after them moves (<a href="../guides/library-copies.html#layout">the layout</a>). The check names the first struct whose size differs. cimgui's headers are generated with obsolete functions off, as RASM builds Dear ImGui, so a stock cimgui of the same version passes. A define the six sizes do not show passes the check and still breaks: build with the same configuration.</td></tr>
+  <tr><td>RASM's allocator, set before the binding's first ImGui call.</td><td>Either copy may free what the other allocated. With two allocators a free goes to the wrong heap: a crash later, somewhere else.</td></tr>
+  <tr><td>RASM's context as the binding's current one, and ImGui calls only inside the UI callback.</td><td>Outside it, no frame is open. After the renderer is destroyed the context is gone: set the binding's current context to NULL.</td></tr>
+  <tr><td>Keep the callback and <code>user_data</code> alive while it is set.</td><td>Python: keep the <samp>CFUNCTYPE</samp> object; C#: keep the delegate.</td></tr>
+</table>
+</div>
+
+<p><code>examples/33_c_render_graph</code>, built with <code>-DRASM_C_IMGUI_EXAMPLE=ON</code>, draws a window with sliders through cimgui this way, and a headless run clicks a slider through <code>rasm_add_input_event</code> and checks the window's pixels. <code>tests/c_api/ctypes_smoke.py</code> sets a Python UI callback, and with <samp>--cimgui</samp> draws through the cimgui shared library from Python.</p>
+
+<h2 id="map"><span class="n">7</span>From C++ to C</h2>
 
 <div class="table-wrap">
 <table>
@@ -1012,6 +1070,8 @@ while (rasm_running(renderer))
   <tr><td><code>RenderContext&amp;</code> and the frame's command buffer in a pass</td><td>the <code>rasm_commands*</code> the callback gets, for the <code>rasm_cmd_</code> functions</td></tr>
   <tr><td><code>View::shadows</code>, <code>View::shadowCount</code></td><td><code>rasm_view</code>'s <code>shadows</code> pointer and <code>shadow_count</code>, read during the call</td></tr>
   <tr><td><code>setInspection</code>, <code>Inspection::target</code> (<code>std::string</code>)</td><td><code>rasm_set_inspection</code> with a <code>const char*</code> it copies; <code>rasm_get_inspection</code> by the <code>snprintf</code> rule</td></tr>
+  <tr><td><code>setUiCallback(std::function)</code>, then <code>ImGui::</code> calls</td><td><code>rasm_set_ui_callback</code> with a <code>rasm_ui_callback</code> and <code>user_data</code>; the binding's own Dear ImGui, on <code>rasm_get_imgui_context</code> and <code>rasm_get_imgui_allocator_functions</code></td></tr>
+  <tr><td><code>getUiTexture</code>, <code>getUiContext</code>, <samp>IMGUI_CHECKVERSION</samp></td><td><code>rasm_get_ui_texture</code>, <code>rasm_get_imgui_context</code>, <code>rasm_check_imgui_layout</code></td></tr>
   <tr><td><code>addShadowPasses</code>, <code>SceneShadow</code></td><td><code>rasm_render_graph_add_shadow_passes</code>, a graph-local <code>rasm_shadow</code></td></tr>
   <tr><td><code>createPipeline(name, source, target)</code>, <code>createComputePipeline</code></td><td><code>rasm_create_pipeline</code> with a <code>rasm_pipeline_desc</code>, which also takes SPIR-V, a blend mode, depth and a topology</td></tr>
   <tr><td><code>FrameStats::gpuTimers</code></td><td><code>rasm_get_gpu_timer_count</code>, <code>rasm_get_gpu_timer_name</code>, <code>rasm_get_gpu_timer_ms</code></td></tr>
@@ -1019,7 +1079,7 @@ while (rasm_running(renderer))
 </table>
 </div>
 
-<p>C++ only, for now: Dear ImGui and <code>setUiCallback</code>, per-frame buffer pairs in a pass (<code>FrameBuffers</code>), and the rest of <code>RenderContext</code> (descriptor sets, fences, submits, copies). The development plan keeps them as the next parts of its open item.</p>
+<p>C++ only: per-frame buffer pairs in a pass (<code>FrameBuffers</code>), and the rest of <code>RenderContext</code> (descriptor sets, fences, submits, copies), which a pass callback does through the <code>rasm_cmd_</code> functions and buffers.</p>
 
 </main>
 </div>

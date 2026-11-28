@@ -219,7 +219,7 @@ if (RASM_C_API)
     # Linked into the shared libraries, so their code must be position independent where that is not the default.
     set_target_properties(rasm_renderer rasm PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-    add_library(rasm_c_objects OBJECT "c/cApi.cpp" "c/cRenderer.cpp" "c/cScene.cpp" "c/cInput.cpp" "c/cViews.cpp" "c/cAnimation.cpp" "c/cTiles.cpp" "c/cTerrain.cpp" "c/cVector.cpp" "c/cText.cpp" "c/cPicking.cpp" "c/cPointCloud.cpp" "c/cGlyphs.cpp" "c/cExport.cpp" "c/cGraph.cpp" "c/cResources.cpp" "c/cDebug.cpp")
+    add_library(rasm_c_objects OBJECT "c/cApi.cpp" "c/cRenderer.cpp" "c/cScene.cpp" "c/cInput.cpp" "c/cViews.cpp" "c/cAnimation.cpp" "c/cTiles.cpp" "c/cTerrain.cpp" "c/cVector.cpp" "c/cText.cpp" "c/cPicking.cpp" "c/cPointCloud.cpp" "c/cGlyphs.cpp" "c/cExport.cpp" "c/cGraph.cpp" "c/cResources.cpp" "c/cDebug.cpp" "c/cUi.cpp")
     target_link_libraries(rasm_c_objects PRIVATE rasm_renderer spdlog::spdlog)
 
     add_library(rasm_c_renderer SHARED)
