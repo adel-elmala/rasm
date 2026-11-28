@@ -70,9 +70,9 @@
     <rect x="250" y="226" width="260" height="50" rx="6" class="mem"/>
     <text x="380" y="248" class="mid title">the state object</text>
     <text x="380" y="266" class="mid small">on the heap, at 0x5a10</text>
-    <path d="M200,150 C200,200 260,210 300,224" class="arrow mem" marker-end="url(#ah-mem)"/>
-    <path d="M620,186 C620,214 560,226 514,240" class="arrow bad dashed" marker-end="url(#ah-bad)"/>
-    <text x="596" y="232" class="small t-bad">no pointer to it</text>
+    <path d="M180,196 C180,224 210,246 246,250" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <path d="M580,196 C580,224 550,246 514,250" class="arrow bad dashed" marker-end="url(#ah-bad)"/>
+    <text x="592" y="230" class="small t-bad">no pointer to it</text>
   </svg>
   <figcaption>The two copies run the same code on different globals. Module B's calls see no current object: the library stops with an assert, or reads through a null pointer.</figcaption>
 </figure>
@@ -85,9 +85,9 @@
 
 <ol class="flow">
   <li class="cpu"><b>Check</b> that B's copy is the same version and has the same struct sizes as A's.</li>
-  <li class="mem"><b>Allocator</b>: B's allocate and free functions become A's.</li>
-  <li class="cpu"><b>Current object</b>: B's "current" pointer becomes A's object.</li>
-  <li class="gpu"><b>Call</b>: B's code now works on the shared object, and so does A's.</li>
+  <li class="mem"><b>Allocator</b> B's allocate and free functions become A's.</li>
+  <li class="cpu"><b>Current object</b> B's "current" pointer becomes A's object.</li>
+  <li class="gpu"><b>Call</b> B's code now works on the shared object, and so does A's.</li>
 </ol>
 
 <p>The order matters. The check comes first, because a copy with another layout must not touch the object at all. The allocator comes before any call that can allocate.</p>
@@ -181,7 +181,8 @@
 <p>The fix is a check at the start, before copy B touches the object. Copy B passes what it was compiled with, and the library compares it with its own numbers:</p>
 
 <div class="formula">
-  <p class="eq">ok = version<sub>B</sub> = version<sub>A</sub> and sizeof(T)<sub>B</sub> = sizeof(T)<sub>A</sub> for each T in the list</p>
+  <p class="eq">version<sub>B</sub> = version<sub>A</sub></p>
+  <p class="eq">sizeof(T)<sub>B</sub> = sizeof(T)<sub>A</sub>, for each T in the list</p>
   <dl>
     <dt>version</dt><dd>the version string from the headers, compiled into each copy</dd>
     <dt>T</dt><dd>the structs whose size shows an option: the IO and style structs, the vector types, the vertex and index types</dd>
@@ -280,9 +281,9 @@
     <text x="380" y="276" class="mid small">windows, draw lists, fonts</text>
     <path d="M180,196 C180,240 220,256 266,260" class="arrow mem" marker-end="url(#ah-mem)"/>
     <path d="M590,196 C590,240 540,256 494,260" class="arrow mem" marker-end="url(#ah-mem)"/>
-    <text x="640" y="244" class="small">set once, at start:</text>
-    <text x="640" y="262" class="small mono">rasm_get_imgui_context</text>
-    <text x="640" y="280" class="small mono">…_allocator_functions</text>
+    <text x="604" y="244" class="small">set once, at start:</text>
+    <text x="604" y="262" class="small mono">rasm_get_imgui_context</text>
+    <text x="604" y="280" class="small mono">…_allocator_functions</text>
   </svg>
   <figcaption>Two copies of Dear ImGui, one context. <code>rasm_check_imgui_layout</code> runs first; the UI pass then draws what both copies built (<a href="immediate-mode-ui.html#in-rasm">the UI in RASM</a>).</figcaption>
 </figure>

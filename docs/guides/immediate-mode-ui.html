@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Immediate-mode UI · RASM</title>
 <meta name="description" content="How an immediate-mode UI like Dear ImGui works: the UI is code that runs every frame, widgets append triangles to draw lists, draw commands carry a clip rectangle and a texture, one atlas holds the font, and the renderer turns it all into indexed draws with scissors. Input capture, sRGB blending of UI colors, and how RASM draws Dear ImGui through its own RHI.">
-<meta name="rasm-sources" content="src/renderer/ui.cpp src/renderer/ui.h src/renderer/engineUi.cpp src/platform/uiPlatform.cpp src/platform/uiPlatform.h src/platform/input.h shaders/passes/ui.slang src/platform/sdlPlatform.cpp src/platform/platform.h src/renderer/renderer.cpp include/rasm/renderer.h include/rasm/types.h src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/offscreenSwapchain.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp examples/15_debug_ui/main.cpp src/renderer/inspector.cpp">
+<meta name="rasm-sources" content="src/renderer/ui.cpp src/c/cUi.cpp ports/imgui/portfile.cmake src/renderer/ui.h src/renderer/engineUi.cpp src/platform/uiPlatform.cpp src/platform/uiPlatform.h src/platform/input.h shaders/passes/ui.slang src/platform/sdlPlatform.cpp src/platform/platform.h src/renderer/renderer.cpp include/rasm/renderer.h include/rasm/types.h src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/offscreenSwapchain.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp examples/15_debug_ui/main.cpp src/renderer/inspector.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -341,7 +341,8 @@
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>Library</td><td>an immediate-mode UI</td><td>Dear ImGui from vcpkg (the <code>imgui</code> port, no backends), behind the CMake option <code>RASM_IMGUI</code>. One context, owned by the engine; the application's <code>ImGui::</code> calls use it.</td></tr>
+  <tr><td>Library</td><td>an immediate-mode UI</td><td>Dear ImGui from vcpkg (the <code>imgui</code> port, no backends, with <samp>IMGUI_DISABLE_OBSOLETE_FUNCTIONS</samp> on through the overlay <code>ports/imgui</code>), behind the CMake option <code>RASM_IMGUI</code>. One context, owned by the engine (<code>Renderer::getUiContext</code>); the application's <code>ImGui::</code> calls use it. At start-up <code>createUi</code> checks that the linked library lays the context out as RASM's headers do, and keeps the UI off with an error naming the size that differs.</td></tr>
+  <tr><td>Other languages</td><td>—</td><td>A C program or a binding draws with its own Dear ImGui (cimgui, ImGui.NET, imgui-rs) into RASM's context: <code>rasm_check_imgui_layout</code>, then RASM's allocator and context, then ImGui calls in the <code>rasm_set_ui_callback</code> callback. RASM ships no ImGui wrapper. See <a href="library-copies.html">Two copies of one library</a> and <a href="../api/c-api.html#imgui">the C API</a>.</td></tr>
   <tr><td>Input</td><td>events to the library, capture flags</td><td><code>processUiEvent</code> in <code>src/platform/uiPlatform.cpp</code> turns each <code>InputEvent</code> into ImGui's <code>AddKeyEvent</code> (with the modifiers first), <code>AddMousePosEvent</code>, <code>AddMouseButtonEvent</code>, <code>AddMouseWheelEvent</code>, <code>AddInputCharacter</code> and <code>AddFocusEvent</code>. Cursor shapes, the clipboard and starting text input go to the <code>Platform</code> (<code>updateUiPlatform</code>); the SDL platform does them, a NATIVE or headless one leaves them to the application. <code>newUiPlatformFrame</code> sets the display to the window's size in points and the framebuffer scale to its pixels per point. With or without a window, ImGui's time step is the engine's <code>deltaTime</code>, so <code>EngineConfig::fixedDeltaTime</code> steps it too. <code>Renderer::pollEvents</code> keeps the mouse, the W/A/S/D keys and, while typing, Escape and F1–F3 from the camera and the engine.</td></tr>
   <tr><td>When it is built</td><td>between input and drawing</td><td>In <code>beginFrame</code>, after the slot's fence wait and before <code>syncGpuScene</code>, so the callback's changes show in the same frame. Only while the RASM window is shown or a callback is set; otherwise nothing runs.</td></tr>
   <tr><td>Buffers</td><td>vertex and index buffers</td><td>Host-visible <code>UI Vertices</code> and <code>UI Indices</code> per frame slot, written with <code>fillBuffer</code>. They grow to the next power of two and are never made per frame.</td></tr>
@@ -373,12 +374,13 @@
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>Setup, frame, draws</td><td><code>createUi</code>, <code>buildUi</code>, <code>drawUi</code>, <code>drawUiFallback</code>, <code>addUiPass</code> in <code>src/renderer/ui.cpp</code></td></tr>
+  <tr><td>Layout check, C</td><td><code>getUiLayout</code>, <code>findUiLayoutMismatch</code> in <code>src/renderer/ui.cpp</code>; the C calls in <code>src/c/cUi.cpp</code></td></tr>
   <tr><td>State</td><td><code>Ui</code>, <code>UiDraw</code> in <code>src/renderer/ui.h</code></td></tr>
   <tr><td>RASM window</td><td><code>drawEngineWindow</code> in <code>src/renderer/engineUi.cpp</code>: the stats, the forced LOD, the <a href="debug-views.html">debug views</a> and Freeze culling, the graph dump</td></tr>
   <tr><td>Input, scale</td><td><code>src/platform/uiPlatform.cpp</code>, used by <code>Renderer::pollEvents</code></td></tr>
   <tr><td>Shader</td><td><code>shaders/passes/ui.slang</code>, <code>gfx::UiPushConstants</code></td></tr>
   <tr><td>UNORM view</td><td><code>VulkanSwapchain::getEncodedFormat</code>, <code>OffscreenSwapchain::getEncodedFormat</code>, <code>AttachmentOps::encodedColor</code></td></tr>
-  <tr><td>Example</td><td><code>examples/15_debug_ui/main.cpp</code></td></tr>
+  <tr><td>Example</td><td><code>examples/15_debug_ui/main.cpp</code>; from C through cimgui, <code>examples/33_c_render_graph/main.c</code> (<code>RASM_C_IMGUI_EXAMPLE</code>)</td></tr>
 </table>
 </div>
 
@@ -389,6 +391,7 @@
     <li>A UI texture is never changed in place: a change makes a new texture, and the old one is freed only when the fence says no submitted frame draws with it.</li>
     <li>ImGui gets its input only from <code>InputEvent</code>s, through <code>processUiEvent</code>; no ImGui platform backend runs, so every platform and the application feed it the same way.</li>
     <li>With the UI off, nothing of it may run: no context, no pass, no buffers.</li>
+    <li>RASM's Dear ImGui keeps the layout of cimgui's headers: the same version, <samp>IMGUI_DISABLE_OBSOLETE_FUNCTIONS</samp> on, 16-bit indices. A layout mismatch is an error message, never an assert.</li>
   </ul>
 </div>
 
