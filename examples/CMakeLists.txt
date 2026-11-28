@@ -42,6 +42,12 @@ if (RASM_C_API)
     # Its own frame from C: RASM's passes and three of its own, through the render graph.
     rasm_add_example(33_c_render_graph rasm::c)
     set_target_properties(33_c_render_graph PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    # 1.19: a Dear ImGui window drawn from C through cimgui, a copy of Dear ImGui of its own that shares RASM's context.
+    if (RASM_C_IMGUI_EXAMPLE)
+        include(RasmCimgui)
+        target_link_libraries(33_c_render_graph PRIVATE rasm_cimgui)
+        target_compile_definitions(33_c_render_graph PRIVATE RASM_C_IMGUI_EXAMPLE)
+    endif()
     if (UNIX AND NOT APPLE)
         target_link_libraries(33_c_render_graph PRIVATE m)
     endif()

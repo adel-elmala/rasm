@@ -20,6 +20,11 @@ option(RASM_BUILD_EXAMPLES "Build the example applications" ${PROJECT_IS_TOP_LEV
 option(RASM_BUILD_TESTS "Build the unit tests" ${PROJECT_IS_TOP_LEVEL})
 option(RASM_INSTALL "Generate the install and export rules" ${PROJECT_IS_TOP_LEVEL})
 option(RASM_C_API "Build the C API's shared libraries, rasm_c and rasm_c_renderer (include/rasm/rasm_c.h)" ${PROJECT_IS_TOP_LEVEL})
+# Downloads cimgui (cmake/RasmCimgui.cmake) for 33_c_render_graph's window from C; never part of RASM's libraries.
+option(RASM_C_IMGUI_EXAMPLE "Draw a Dear ImGui window from C in 33_c_render_graph, through a cimgui built for it (downloaded)" OFF)
+if (RASM_C_IMGUI_EXAMPLE AND NOT (RASM_C_API AND RASM_IMGUI AND RASM_BUILD_EXAMPLES))
+    message(FATAL_ERROR "RASM_C_IMGUI_EXAMPLE needs RASM_C_API, RASM_IMGUI and RASM_BUILD_EXAMPLES")
+endif()
 # C for the C API's example and header checks, which compile as C. The libraries themselves are C++.
 if (RASM_C_API AND (RASM_BUILD_EXAMPLES OR RASM_BUILD_TESTS))
     enable_language(C)

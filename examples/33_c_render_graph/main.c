@@ -5,6 +5,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(RASM_C_IMGUI_EXAMPLE)
+#define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
+#include "cimgui.h"
+#endif
+
 /*
  * A frame built from C with the render graph (C API 1.17), compiled as C99.
  *
@@ -21,9 +26,14 @@
  *                        and the histogram drawn as bars in the bottom-left corner. Its parameters are more than the
  *                        16 bytes of push constants, so they sit in a buffer whose address goes in the push constants.
  *
- * RASM's UI pass draws last. A headless run checks the frame: the bins add up to the image's pixels, the histogram's
- * panel has its color, every Adapt pass read the target its last frame wrote, and the C passes have GPU timers. It exits
- * with 1 when one fails or the frame was not written.
+ * RASM's UI pass draws last. Built with RASM_C_IMGUI_EXAMPLE (CMake), a UI callback (1.19) draws a window with sliders
+ * for the vignette and the tint through cimgui, a C binding of Dear ImGui with its own copy of the library: it checks
+ * that copy's layout against RASM's (rasm_check_imgui_layout), takes RASM's allocator and context, and draws into
+ * RASM's frame. Headless, a script clicks the Vignette slider halfway through the run, through RASM's input events.
+ *
+ * A headless run checks the frame: the bins add up to the image's pixels, the histogram's panel has its color, every
+ * Adapt pass read the target its last frame wrote, the C passes have GPU timers, and with cimgui the UI callback ran
+ * every frame, the window's title bar has its color and the click moved the slider. It exits with 1 when one fails or the frame was not written.
  *
  * Flags, as the C++ examples take them: --headless, --frames N (60), --out <file.png> (frame.png), --fixed-step,
  * --wait-for-loads, --no-cache, --dump (print the graph's passes), and --debug-view none|normals|uvs|overdraw|lods|
@@ -85,6 +95,9 @@ typedef struct App
     unsigned adaptFrames;
     unsigned historyErrors;
     unsigned commandErrors;
+    /* What the Grade pass reads, which the UI changes, and the UI frames. */
+    GradeParams gradeParams;
+    unsigned uiFrames;
 } App;
 
 static ExampleArgs parseArgs(int argc, char **argv)
@@ -400,6 +413,68 @@ static int fail(const char *what)
     return 1;
 }
 
+#if defined(RASM_C_IMGUI_EXAMPLE)
+#define UI_WIDTH 300
+#define UI_HEIGHT 112
+#define UI_X (WIDTH - 16 - UI_WIDTH)
+#define UI_Y 16
+
+/* cimgui's copy of Dear ImGui draws into RASM's context: the same version and struct sizes, RASM's allocator (so either
+ * copy may free what the other allocated), then RASM's context as its current one. */
+static int shareImGui(rasm_renderer *renderer)
+{
+    rasm_imgui_alloc_func allocFunc = NULL;
+    rasm_imgui_free_func freeFunc = NULL;
+    void *allocData = NULL;
+    if (rasm_check_imgui_layout(igGetVersion(), sizeof(ImGuiIO), sizeof(ImGuiStyle), sizeof(ImVec2), sizeof(ImVec4), sizeof(ImDrawVert), sizeof(ImDrawIdx)) != RASM_OK)
+        return 0;
+    if (rasm_get_imgui_allocator_functions(&allocFunc, &freeFunc, &allocData) != RASM_OK || rasm_get_imgui_context(renderer) == NULL)
+        return 0;
+    /* A copy of its own: its globals start with no context, whatever RASM's copy has. */
+    if (igGetCurrentContext() != NULL)
+        return 0;
+    igSetAllocatorFunctions(allocFunc, freeFunc, allocData);
+    igSetCurrentContext(rasm_get_imgui_context(renderer));
+    printf("cimgui's Dear ImGui %s draws into RASM's context (RASM's is %s).\n", igGetVersion(), rasm_get_imgui_version(NULL));
+    return 1;
+}
+
+/* One mouse event in the main window, as an application's event loop would send it. */
+static void sendMouse(rasm_renderer *renderer, rasm_input_event_type type, float x, float y, int down)
+{
+    rasm_input_event event;
+    rasm_input_event_init(&event, sizeof(event));
+    event.type = type;
+    event.button = RASM_MOUSE_BUTTON_LEFT;
+    event.down = down ? RASM_TRUE : RASM_FALSE;
+    event.x = x;
+    event.y = y;
+    rasm_add_input_event(renderer, &event);
+}
+
+/* 1.19: called between NewFrame and Render. A changed slider rewrites the Grade pass's buffer, in order with the frames. */
+static void RASM_CALL drawUi(void *userData)
+{
+    App *app = (App *)userData;
+    const ImVec2_c position = {(float)UI_X, (float)UI_Y};
+    const ImVec2_c pivot = {0.0f, 0.0f};
+    const ImVec2_c size = {(float)UI_WIDTH, (float)UI_HEIGHT};
+    int changed = 0;
+    ++app->uiFrames;
+    igSetNextWindowPos(position, ImGuiCond_Always, pivot);
+    igSetNextWindowSize(size, ImGuiCond_Always);
+    if (igBegin("Grade (cimgui, from C)", NULL, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse))
+    {
+        changed |= igSliderFloat("Vignette", &app->gradeParams.vignette, 0.0f, 1.0f, "%.2f", 0);
+        changed |= igSliderFloat3("Tint", app->gradeParams.tint, 0.5f, 1.5f, "%.2f", 0);
+        igText("UI frames: %u", app->uiFrames);
+    }
+    igEnd();
+    if (changed && rasm_write_buffer(app->renderer, app->params, &app->gradeParams, sizeof(app->gradeParams), 0) != RASM_OK)
+        ++app->commandErrors;
+}
+#endif
+
 static rasm_render_target createTarget(rasm_render_graph *graph, const char *name, rasm_format color, rasm_format motion, rasm_format depth, int history)
 {
     rasm_render_target_desc desc;
@@ -490,7 +565,7 @@ static int buildGraph(rasm_render_graph *graph, App *app, rasm_scene scene, rasm
 static int createBuffers(App *app)
 {
     rasm_buffer_desc bufferDesc;
-    GradeParams params;
+    GradeParams *params = &app->gradeParams;
 
     rasm_buffer_desc_init(&bufferDesc, sizeof(bufferDesc));
     bufferDesc.name = "histogram_bins";
@@ -507,20 +582,20 @@ static int createBuffers(App *app)
     app->paramsAddress = rasm_get_buffer_device_address(app->renderer, app->params);
 
     /* Written once, before any frame reads it: a device-local buffer gets it with the first frame's uploads. */
-    memset(&params, 0, sizeof(params));
-    params.bins = app->binsAddress;
-    params.vignette = 0.55f;
-    params.radius = 0.45f;
-    params.targetBrightness = 0.45f;
-    params.exposureLimit = 1.25f;
-    params.tint[0] = 1.04f;
-    params.tint[1] = 1.0f;
-    params.tint[2] = 0.94f;
-    params.panelGray = PANEL_GRAY;
-    params.panelX = PANEL_X;
-    params.panelWidth = PANEL_WIDTH;
-    params.panelHeight = PANEL_HEIGHT;
-    return rasm_write_buffer(app->renderer, app->params, &params, sizeof(params), 0) == RASM_OK;
+    memset(params, 0, sizeof(*params));
+    params->bins = app->binsAddress;
+    params->vignette = 0.55f;
+    params->radius = 0.45f;
+    params->targetBrightness = 0.45f;
+    params->exposureLimit = 1.25f;
+    params->tint[0] = 1.04f;
+    params->tint[1] = 1.0f;
+    params->tint[2] = 0.94f;
+    params->panelGray = PANEL_GRAY;
+    params->panelX = PANEL_X;
+    params->panelWidth = PANEL_WIDTH;
+    params->panelHeight = PANEL_HEIGHT;
+    return rasm_write_buffer(app->renderer, app->params, params, sizeof(*params), 0) == RASM_OK;
 }
 
 /* The Grade pipeline draws into the window's format, the Adapt one into the history target's. */
@@ -545,7 +620,7 @@ static int toSrgbByte(float linear)
 }
 
 /* The headless run's checks of the last frame. */
-static int checkFrame(const App *app, const rasm_image *image)
+static int checkFrame(const App *app, const rasm_image *image, unsigned frames)
 {
     const rasm_image_data data = rasm_image_get(image);
     const uint8_t *pixel;
@@ -588,6 +663,25 @@ static int checkFrame(const App *app, const rasm_image *image)
         fprintf(stderr, "error: %u of the 4 timers of the C passes were measured.\n", found);
         ok = 0;
     }
+#if defined(RASM_C_IMGUI_EXAMPLE)
+    /* The window's title bar, right of its title: ImGui's dark style's TitleBgActive (0.16, 0.29, 0.48), drawn as sRGB
+     * numbers. */
+    pixel = (const uint8_t *)data.pixels + ((size_t)(UI_Y + 6) * data.width + UI_X + UI_WIDTH - 12) * 4;
+    printf("UI: %u frames, the title bar is (%u, %u, %u), the vignette %.2f.\n", app->uiFrames, pixel[0], pixel[1], pixel[2], app->gradeParams.vignette);
+    if (app->uiFrames != frames || abs(pixel[0] - 41) > 3 || abs(pixel[1] - 74) > 3 || abs(pixel[2] - 122) > 3)
+    {
+        fprintf(stderr, "error: the UI callback ran %u times in %u frames, and the title bar is not (41, 74, 122).\n", app->uiFrames, frames);
+        ok = 0;
+    }
+    /* The scripted click near the slider's left end, from the frames' middle on. */
+    if (frames >= 4 && app->gradeParams.vignette > 0.2f)
+    {
+        fprintf(stderr, "error: the click on the Vignette slider left it at %.2f.\n", app->gradeParams.vignette);
+        ok = 0;
+    }
+#else
+    (void)frames;
+#endif
     return ok;
 }
 
@@ -623,6 +717,9 @@ int main(int argc, char **argv)
     rendererConfig.window_height = HEIGHT;
     rendererConfig.enable_validation = RASM_TRUE;
     rendererConfig.shader_dir = RASM_EXAMPLE_SHADER_DIR;
+#if defined(RASM_C_IMGUI_EXAMPLE)
+    rendererConfig.ui = RASM_TRUE;
+#endif
     if (args.fixedStep)
         rendererConfig.fixed_delta_time = 1.0f / 60.0f;
     if (args.noCache)
@@ -698,6 +795,15 @@ int main(int argc, char **argv)
         printf("%s\n", dump);
     }
 
+#if defined(RASM_C_IMGUI_EXAMPLE)
+    if (!shareImGui(renderer) || rasm_set_ui_callback(renderer, drawUi, &app) != RASM_OK)
+    {
+        fail("sharing Dear ImGui with cimgui");
+        rasm_render_graph_destroy(graph);
+        rasm_engine_destroy(engine);
+        return 1;
+    }
+#endif
     if (args.waitForLoads)
         rasm_wait_for_loads(renderer);
     rasm_get_gpu_timer_count(renderer); /* turns the GPU timers on */
@@ -706,6 +812,16 @@ int main(int argc, char **argv)
     {
         const rasm_transform helmetAt = placed(vec3(0.0f, 0.0f, 0.0f), -0.44f + 0.01f * (float)frame, 1.0f);
         rasm_update_transform(renderer, helmetEntity, &helmetAt);
+#if defined(RASM_C_IMGUI_EXAMPLE)
+        /* Headless, a script clicks the Vignette slider near its left end: RASM's input reaches cimgui's slider. */
+        if (args.headless && frame == args.frames / 2)
+        {
+            sendMouse(renderer, RASM_INPUT_EVENT_TYPE_MOUSE_MOVE, (float)(UI_X + 20), (float)(UI_Y + 36), 0);
+            sendMouse(renderer, RASM_INPUT_EVENT_TYPE_MOUSE_BUTTON, (float)(UI_X + 20), (float)(UI_Y + 36), 1);
+        }
+        if (args.headless && frame == args.frames / 2 + 2)
+            sendMouse(renderer, RASM_INPUT_EVENT_TYPE_MOUSE_BUTTON, (float)(UI_X + 20), (float)(UI_Y + 36), 0);
+#endif
         if (args.headless && frame == args.frames)
             readback = rasm_read_frame(renderer, RASM_READBACK_FORMAT_RGBA8_SRGB);
         if (rasm_render_graph_execute(graph, camera) != RASM_OK)
@@ -717,7 +833,7 @@ int main(int argc, char **argv)
             {
                 const rasm_image_data data = rasm_image_get(image);
                 printf("Wrote frame %u to %s (%u x %u).\n", args.frames, args.out, data.width, data.height);
-                checked = checkFrame(&app, image);
+                checked = checkFrame(&app, image, frame);
             }
             break;
         }
@@ -727,6 +843,10 @@ int main(int argc, char **argv)
     rasm_render_graph_destroy(graph);
     rasm_image_destroy(image);
     rasm_engine_destroy(engine);
+#if defined(RASM_C_IMGUI_EXAMPLE)
+    /* The context went with the engine. */
+    igSetCurrentContext(NULL);
+#endif
     if (args.headless && !written)
     {
         fprintf(stderr, "error: frame %u was not written to %s: %s\n", args.frames, args.out, rasm_get_last_error());
